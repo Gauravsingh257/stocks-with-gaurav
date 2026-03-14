@@ -1,25 +1,7 @@
 # =============================================================================
-# Trading Algo — Python Dependencies
+# Trading Algo — Core Dependencies (Railway-safe, no ta-lib)
+# For full local dev (backtest, ta-lib, etc.): pip install -r requirements-full.txt
 # =============================================================================
-
-# --- Core Data & Numerical ---
-pandas>=2.1.0
-numpy>=1.24.0
-scipy>=1.11.0
-
-# --- Trading & Market Data ---
-ccxt>=4.2.0
-kiteconnect>=4.2.0
-yfinance>=0.2.30
-
-# --- Technical Analysis ---
-ta>=0.11.0
-ta-lib>=0.4.28; platform_system != "Windows"
-pandas-ta>=0.3.14b1
-mplfinance>=0.12.10
-
-# --- Backtesting ---
-backtrader>=1.9.78
 
 # --- API Framework ---
 fastapi>=0.110.0
@@ -29,48 +11,18 @@ pydantic>=2.5.0
 
 # --- Environment & Config ---
 python-dotenv>=1.0.0
-pydantic-settings>=2.1.0
-
-# --- Database ---
-sqlalchemy>=2.0.0
-aiosqlite>=0.20.0
-
-# --- AI / ML ---
-scikit-learn>=1.4.0
-xgboost>=2.0.0
-lightgbm>=4.3.0
-optuna>=3.5.0
 
 # --- Scheduling ---
 apscheduler>=3.10.0
 
-# --- Telegram ---
-python-telegram-bot>=21.0
-
-# --- Logging & Monitoring ---
-loguru>=0.7.0
-rich>=13.7.0
+# --- Trading & Market Data ---
+kiteconnect>=4.2.0
 
 # --- HTTP & Networking ---
 requests>=2.31.0
 httpx>=0.27.0
-aiohttp>=3.9.0
-
-# --- Testing ---
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-pytest-cov>=4.1.0
-pytest-mock>=3.12.0
-
-# --- Code Quality ---
-ruff>=0.3.0
-mypy>=1.8.0
-
-# --- Visualization ---
-matplotlib>=3.8.0
-plotly>=5.18.0
 
 # --- Utilities ---
 orjson>=3.9.0
-python-dateutil>=2.8.0
-pytz>=2024.1
+pandas>=2.1.0
+numpy>=1.24.0
