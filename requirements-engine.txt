@@ -12,7 +12,7 @@ kiteconnect>=4.2.0
 
 # --- Visualization (charts, OI) ---
 matplotlib>=3.8.0
-mplfinance>=0.12.10
+mplfinance>=0.12.9b0
 
 # --- Config & Env ---
 python-dotenv>=1.0.0
