@@ -7,9 +7,9 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
 Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  GO LIVE — Engine + Trades" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ("=" * 40) -ForegroundColor Cyan
+Write-Host "  GO LIVE - Engine + Trades" -ForegroundColor Cyan
+Write-Host ("=" * 40) -ForegroundColor Cyan
 Write-Host ""
 
 # Load config (BACKEND_URL, ENGINE_SERVICE)
@@ -100,7 +100,7 @@ if ($backendUrl) {
     Write-Host "      Skipped. Add BACKEND_URL to .go_live_config to enable trade sync." -ForegroundColor Gray
 }
 Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ("=" * 40) -ForegroundColor Cyan
 Write-Host "  Done." -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ("=" * 40) -ForegroundColor Cyan
 Write-Host ""
