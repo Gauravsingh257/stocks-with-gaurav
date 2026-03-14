@@ -1,3 +1,2 @@
-# Use lighter requirements for Railway — avoids ta-lib build failures
-[phases.install]
-cmds = ["pip install -r requirements-railway.txt"]
+[phases.setup]
+nixPkgs = ["python311"]
