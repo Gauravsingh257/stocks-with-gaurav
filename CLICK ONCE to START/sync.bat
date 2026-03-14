@@ -36,6 +36,6 @@ echo.
 echo === Done. Vercel and Railway will auto-deploy. ===
 echo.
 set /p SYNC="Also sync trades to cloud? (y/n): "
-if /i "%SYNC%"=="y" powershell -ExecutionPolicy Bypass -File "%~dp0sync_trades_to_cloud.ps1"
+if /i "%SYNC%"=="y" powershell -ExecutionPolicy Bypass -File "%~dp0..\sync_trades_to_cloud.ps1"
 echo.
 pause
