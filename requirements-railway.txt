@@ -1,0 +1,13 @@
+# Dashboard API only — avoids ta-lib, backtrader, etc. for Railway build
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+websockets>=12.0
+apscheduler>=3.10.0
+kiteconnect>=4.2.0
+requests>=2.31.0
+httpx>=0.27.0
+orjson>=3.9.0
+pandas>=2.1.0
+numpy>=1.24.0

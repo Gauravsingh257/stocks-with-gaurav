@@ -89,6 +89,8 @@ app.add_middleware(
         "http://localhost:3001",
         "http://127.0.0.1:3000",
         "https://*.trycloudflare.com",  # Cloudflare Tunnel
+        "https://stockswithgaurav.com",
+        "https://www.stockswithgaurav.com",
     ],
     allow_credentials = True,
     allow_methods     = ["*"],
