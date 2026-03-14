@@ -217,6 +217,16 @@ def get_signals_today():
     return {"signals": signals, "count": len(signals), "date": today_str, "source": "signal_log"}
 
 
+@router.get("/sync")
+def sync_info():
+    """Help text when sync URL is opened in browser (POST only for actual sync)."""
+    return {
+        "message": "Use POST to sync trades. Run sync_trades_to_cloud.ps1 or sync.bat (answer y to sync).",
+        "method": "POST",
+        "usage": "Invoke-RestMethod -Uri .../api/journal/sync -Method Post -Body $json -ContentType 'application/json'",
+    }
+
+
 @router.post("/sync")
 def sync_trades(
     trades: list[TradeRow],
