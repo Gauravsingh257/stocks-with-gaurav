@@ -86,17 +86,14 @@ def _get_kite_direct_data() -> dict | None:
     """
     try:
         from kiteconnect import KiteConnect
-        from kite_credentials import API_KEY
+        from config.kite_auth import get_api_key, get_access_token
 
-        token_file = os.path.join(WORKSPACE, "access_token.txt")
-        if not os.path.exists(token_file):
+        api_key = get_api_key()
+        access_token = get_access_token()
+        if not api_key or not access_token:
             return None
 
-        access_token = open(token_file).read().strip()
-        if not access_token:
-            return None
-
-        kite = KiteConnect(api_key=API_KEY)
+        kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
 
         # Fetch spot prices

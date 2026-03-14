@@ -15,7 +15,7 @@ export default function JournalPage() {
   const [offset,   setOffset  ] = useState(0);
   const [loading,  setLoading ] = useState(true);
 
-  // Filters
+  // Filters — empty = all time; or filter by running month
   const [symbol,    setSymbol   ] = useState("");
   const [setup,     setSetup    ] = useState("");
   const [result,    setResult   ] = useState("");

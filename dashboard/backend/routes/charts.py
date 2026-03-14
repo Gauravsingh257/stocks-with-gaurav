@@ -78,16 +78,15 @@ _kite_token_mtime: float = 0  # mtime of access_token.txt when _kite was created
 
 
 def _get_kite():
-    """Lazy-init a KiteConnect client. Auto-refreshes when access_token.txt changes."""
+    """Lazy-init KiteConnect. Uses KITE_ACCESS_TOKEN env or access_token.txt."""
     global _kite, _kite_token_mtime
     with _kite_lock:
         token_path = Path(_WORKSPACE) / "access_token.txt"
-
-        # Auto-detect token file change and reset cached client
-        if _kite is not None and token_path.exists():
+        # Auto-detect token file change (when not using env)
+        if _kite is not None and token_path.exists() and not os.getenv("KITE_ACCESS_TOKEN"):
             current_mtime = token_path.stat().st_mtime
             if current_mtime != _kite_token_mtime:
-                logger.info("[Charts] access_token.txt changed — refreshing Kite client")
+                logger.info("[Charts] access_token.txt changed — refreshing")
                 _kite = None
                 _token_cache.clear()
                 _ohlc_cache.clear()
@@ -96,19 +95,17 @@ def _get_kite():
             return _kite
         try:
             from kiteconnect import KiteConnect
-            from kite_credentials import API_KEY
+            from config.kite_auth import get_api_key, get_access_token
 
-            if not token_path.exists():
-                raise FileNotFoundError("access_token.txt not found")
+            api_key = get_api_key()
+            access_token = get_access_token()
+            if not api_key or not access_token:
+                raise ValueError("KITE_API_KEY and KITE_ACCESS_TOKEN (or access_token.txt) required")
 
-            access_token = token_path.read_text().strip()
-            if not access_token:
-                raise ValueError("access_token.txt is empty")
-
-            k = KiteConnect(api_key=API_KEY)
+            k = KiteConnect(api_key=api_key)
             k.set_access_token(access_token)
             _kite = k
-            _kite_token_mtime = token_path.stat().st_mtime
+            _kite_token_mtime = token_path.stat().st_mtime if token_path.exists() else 0
             logger.info("[Charts] Kite client initialised")
             return _kite
         except Exception as e:
@@ -124,7 +121,7 @@ def _reset_kite():
         _kite_token_mtime = 0
         _token_cache.clear()
         _ohlc_cache.clear()
-        logger.info("[Charts] Kite client reset — will re-init on next request")
+        logger.info("[Charts] Kite client reset")
 
 
 # ── Token cache (symbol → instrument_token) ──────────────────────────────────

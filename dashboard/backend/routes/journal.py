@@ -3,11 +3,24 @@ dashboard/backend/routes/journal.py
 Trade journal — filterable, sortable trade history from dashboard.db.
 """
 
-from fastapi import APIRouter, Query
+import os
+from fastapi import APIRouter, Query, Header, HTTPException
 from typing import Optional
+from pydantic import BaseModel
 from dashboard.backend.db import get_connection
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
+
+
+class TradeRow(BaseModel):
+    date: str
+    symbol: str
+    direction: str
+    setup: str
+    entry: Optional[float] = None
+    exit_price: Optional[float] = None
+    result: str
+    pnl_r: Optional[float] = None
 
 
 def _rows_to_dicts(rows) -> list:
@@ -152,3 +165,45 @@ def add_trade_note(trade_id: int, note: str = Query(...)):
     finally:
         conn.close()
     return {"status": "ok", "trade_id": trade_id, "note": note}
+
+
+@router.post("/sync")
+def sync_trades(
+    trades: list[TradeRow],
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
+    """
+    Upsert trades from local trade_ledger. Run sync_trades_to_cloud.ps1 to push.
+    Optional: set TRADES_SYNC_KEY env and pass X-Sync-Key header.
+    """
+    sync_key = os.getenv("TRADES_SYNC_KEY", "").strip()
+    if sync_key and x_sync_key != sync_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Sync-Key")
+
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM trades")
+        for t in trades:
+            if not (t.date and t.symbol):
+                continue
+            conn.execute(
+                """
+                INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.date.strip(),
+                    t.symbol.strip().upper(),
+                    (t.direction or "LONG")[:5].upper(),
+                    (t.setup or "").strip(),
+                    t.entry,
+                    t.exit_price,
+                    (t.result or "RUNNING")[:10].upper(),
+                    t.pnl_r,
+                ),
+            )
+        conn.commit()
+        inserted = len(trades)
+    finally:
+        conn.close()
+    return {"status": "ok", "synced": inserted}

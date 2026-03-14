@@ -16,9 +16,11 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# dashboard.db lives alongside the engine in the root workspace folder
-DB_PATH = Path(__file__).resolve().parents[3] / "dashboard.db"
-TRADE_LEDGER_PATH = Path(__file__).resolve().parents[3] / "trade_ledger_2026.csv"
+# Use DATA_DIR for persistent storage (Railway volume); else project root
+_root = Path(__file__).resolve().parents[3]
+_data_dir = Path(os.getenv("DATA_DIR", _root))
+DB_PATH = _data_dir / "dashboard.db"
+TRADE_LEDGER_PATH = _root / "trade_ledger_2026.csv"
 
 DDL = """
 -- ─────────────────────────────────────────
