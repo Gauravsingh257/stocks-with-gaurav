@@ -1,0 +1,230 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  2nd Red Candle Short Strategy v2 | NIFTY & BANKNIFTY — 5 Min
+//  ─────────────────────────────────────────────────────────────────────────
+//  LOGIC OVERVIEW
+//  ─────────────────────────────────────────────────────────────────────────
+//  1. After market open (09:15 IST), count bearish (red) candles.
+//  2. The 2nd red candle MUST form before 10:30 AM (zone cutoff).
+//  3. Mark its High & Low as the ZONE.
+//  4. ENTRY -> SHORT when a candle CLOSES below Zone Low AND all filters pass:
+//       a) Price < EMA 20        (trend filter)
+//       b) Price < VWAP          (institutional bias)
+//       c) Volume > 10-bar avg   (momentum confirmation)
+//       d) Zone Low < 9:15 candle low (opening range filter)
+//  5. SL     -> Above Zone High
+//  6. TARGET -> NIFTY: 90-110 pts (default 100) | BANKNIFTY: 250-300 pts (default 275)
+//  7. BREAKEVEN -> SL moves to entry once trade profits 40 pts (NIFTY) / 100 pts (BANKNIFTY)
+//  8. One trade per day, no new entries after 14:00 IST
+// ═══════════════════════════════════════════════════════════════════════════
+
+//@version=6
+strategy(
+     title                  = "2nd Red Candle Short v2 | NIFTY & BANKNIFTY [5min]",
+     shorttitle             = "2RC-v2",
+     overlay                = true,
+     default_qty_type       = strategy.fixed,
+     default_qty_value      = 1,
+     calc_on_every_tick     = false,
+     process_orders_on_close = true)
+
+// ════════════════════════════════════════════════════════════════
+//  ① INPUTS
+// ════════════════════════════════════════════════════════════════
+grp_inst = "── Instrument Settings ──"
+i_instrument = input.string("NIFTY", "Instrument", options=["NIFTY", "BANKNIFTY"], tooltip="Must match the chart instrument.", group=grp_inst)
+i_nifty_tp   = input.float(100, "NIFTY Target (pts)",     minval=90,  maxval=110, step=5, group=grp_inst)
+i_bnk_tp     = input.float(275, "BANKNIFTY Target (pts)", minval=250, maxval=300, step=5, group=grp_inst)
+
+grp_filters = "── Entry Filters ──"
+i_use_ema    = input.bool(true, "EMA Trend Filter (close < EMA)", tooltip="Only short when price is below the EMA — confirms bearish trend.", group=grp_filters)
+i_ema_len    = input.int(20,   "EMA Length", minval=5, maxval=50, group=grp_filters)
+i_use_vwap   = input.bool(true, "VWAP Filter (close < VWAP)", tooltip="Only short when price is below VWAP — institutional sellers in control.", group=grp_filters)
+i_use_vol    = input.bool(true, "Volume Filter (volume > avg)", tooltip="Entry candle volume must exceed the recent average.", group=grp_filters)
+i_vol_len    = input.int(10,   "Volume Avg Length", minval=5, maxval=20, group=grp_filters)
+i_use_or     = input.bool(true, "Opening Range Filter (zone low < 9:15 candle low)", tooltip="2nd red candle zone must be below the first 5-min candle low.", group=grp_filters)
+
+grp_time = "── Time Windows ──"
+i_zone_cut_hr  = input.int(10, "Zone Must Form Before - Hour (IST)",   minval=9,  maxval=12, group=grp_time)
+i_zone_cut_min = input.int(30, "Zone Must Form Before - Minute (IST)", minval=0,  maxval=59, group=grp_time)
+i_entry_cut_hr  = input.int(14, "No New Entry After - Hour (IST)",     minval=10, maxval=15, group=grp_time)
+i_entry_cut_min = input.int(0,  "No New Entry After - Minute (IST)",   minval=0,  maxval=59, group=grp_time)
+
+grp_risk = "── Risk Management ──"
+i_use_be     = input.bool(true,  "Move SL to Breakeven", tooltip="Once trade profits the activation amount, SL shifts to entry price.", group=grp_risk)
+i_be_nifty   = input.float(40,  "Breakeven Activation - NIFTY (pts)",     minval=20, maxval=80,  step=5,  group=grp_risk)
+i_be_bnk     = input.float(100, "Breakeven Activation - BANKNIFTY (pts)", minval=50, maxval=200, step=10, group=grp_risk)
+
+grp_disp = "── Display ──"
+i_show_zone = input.bool(true, "Show Zone Lines", group=grp_disp)
+i_show_ema  = input.bool(true, "Show EMA Line",   group=grp_disp)
+i_show_vwap = input.bool(true, "Show VWAP Line",  group=grp_disp)
+
+// ════════════════════════════════════════════════════════════════
+//  ② SESSION TIMING  (Indian Market: 09:15 – 15:30 IST)
+// ════════════════════════════════════════════════════════════════
+var string TZ = "Asia/Kolkata"
+
+t_open         = timestamp(TZ, year, month, dayofmonth, 9,  15, 0)
+t_mkt_close    = timestamp(TZ, year, month, dayofmonth, 15, 30, 0)
+t_zone_cutoff  = timestamp(TZ, year, month, dayofmonth, i_zone_cut_hr,  i_zone_cut_min,  0)
+t_entry_cutoff = timestamp(TZ, year, month, dayofmonth, i_entry_cut_hr, i_entry_cut_min, 0)
+
+in_session      = time >= t_open and time < t_mkt_close
+before_zone_cut = time <= t_zone_cutoff
+before_entry_cut = time < t_entry_cutoff
+new_day         = ta.change(time("D")) != 0
+
+// ════════════════════════════════════════════════════════════════
+//  ③ INDICATORS
+// ════════════════════════════════════════════════════════════════
+ema_val  = ta.ema(close, i_ema_len)
+vwap_val = ta.vwap
+vol_avg  = ta.sma(volume, i_vol_len)
+
+// ════════════════════════════════════════════════════════════════
+//  ④ PERSISTENT STATE
+// ════════════════════════════════════════════════════════════════
+var int   v_red_cnt    = 0
+var float v_zone_hi    = na
+var float v_zone_lo    = na
+var bool  v_zone_ready = false
+var bool  v_trade_done = false
+var float v_open_lo    = na      // low of the 9:15 opening candle
+var bool  v_open_set   = false
+var float v_tp_price   = na      // stored TP for breakeven update
+var bool  v_be_moved   = false   // true once SL moved to breakeven
+
+if new_day
+    v_red_cnt    := 0
+    v_zone_hi    := na
+    v_zone_lo    := na
+    v_zone_ready := false
+    v_trade_done := false
+    v_open_lo    := na
+    v_open_set   := false
+    v_tp_price   := na
+    v_be_moved   := false
+
+// Capture the low of the first 5-min candle (9:15 candle)
+if in_session and not v_open_set
+    v_open_lo  := low
+    v_open_set := true
+
+// ════════════════════════════════════════════════════════════════
+//  ⑤ IDENTIFY 2nd RED CANDLE — zone must form before cutoff
+// ════════════════════════════════════════════════════════════════
+is_red = close < open
+
+if in_session and before_zone_cut and not v_zone_ready
+    if is_red
+        v_red_cnt := v_red_cnt + 1
+        if v_red_cnt == 2
+            v_zone_hi    := high
+            v_zone_lo    := low
+            v_zone_ready := true
+
+zone_just_set = v_zone_ready and not v_zone_ready[1]
+
+// ════════════════════════════════════════════════════════════════
+//  ⑥ ENTRY FILTERS
+// ════════════════════════════════════════════════════════════════
+// EMA: close must be below EMA (bearish trend)
+f_ema  = not i_use_ema  or close < ema_val
+
+// VWAP: close must be below VWAP (institutional selling pressure)
+f_vwap = not i_use_vwap or close < vwap_val
+
+// Volume: breakout candle must have above-average volume
+f_vol  = not i_use_vol  or volume > vol_avg
+
+// Opening Range: zone low must be below the 9:15 candle low
+f_or   = not i_use_or   or (not na(v_open_lo) and v_zone_lo < v_open_lo)
+
+// ════════════════════════════════════════════════════════════════
+//  ⑦ ENTRY RULE — SHORT
+// ════════════════════════════════════════════════════════════════
+tp_pts = i_instrument == "NIFTY" ? i_nifty_tp : i_bnk_tp
+
+entry_ok = v_zone_ready
+         and not v_trade_done
+         and in_session
+         and before_entry_cut
+         and not zone_just_set
+         and close < v_zone_lo
+         and f_ema
+         and f_vwap
+         and f_vol
+         and f_or
+
+if entry_ok
+    v_tp_price   := close - tp_pts
+    v_be_moved   := false
+    strategy.entry("Short", strategy.short, comment="2RC v2 | All Filters OK")
+    strategy.exit("Exit", from_entry="Short", stop=v_zone_hi, limit=v_tp_price, comment_profit="TP +" + str.tostring(tp_pts) + "pts", comment_loss="SL Hit")
+    v_trade_done := true
+
+// ════════════════════════════════════════════════════════════════
+//  ⑧ BREAKEVEN MANAGEMENT
+//  Once low reaches entry - activation pts, move SL to entry price
+// ════════════════════════════════════════════════════════════════
+be_pts = i_instrument == "NIFTY" ? i_be_nifty : i_be_bnk
+
+if i_use_be and strategy.position_size < 0 and not v_be_moved
+    entry_p = strategy.position_avg_price
+    if low <= entry_p - be_pts
+        v_be_moved := true
+        strategy.exit("Exit", from_entry="Short", stop=entry_p, limit=v_tp_price, comment_profit="TP (BE Active)", comment_loss="Breakeven Stop")
+
+// ════════════════════════════════════════════════════════════════
+//  ⑨ VISUALS
+// ════════════════════════════════════════════════════════════════
+
+// Highlight the 2nd red candle bar
+barcolor(zone_just_set ? color.red : na, title="2nd Red Candle")
+
+// Draw zone lines once when zone is established
+if zone_just_set and i_show_zone
+    line.new(bar_index, v_zone_hi, bar_index + 1, v_zone_hi, extend=extend.right, color=color.red,    width=2, style=line.style_solid)
+    line.new(bar_index, v_zone_lo, bar_index + 1, v_zone_lo, extend=extend.right, color=color.orange, width=2, style=line.style_dashed)
+    label.new(bar_index + 1, v_zone_hi, "SL -> " + str.tostring(v_zone_hi, "#.00"),                 color=color.red,    textcolor=color.white, style=label.style_label_left, size=size.small)
+    label.new(bar_index + 1, v_zone_lo, "Close < " + str.tostring(v_zone_lo, "#.00") + " -> SHORT", color=color.orange, textcolor=color.white, style=label.style_label_left, size=size.small)
+    label.new(bar_index, high, "2nd Red\nCandle",                                                    color=color.red,    textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// EMA line
+plot(i_show_ema  ? ema_val  : na, "EMA", color=color.new(color.blue, 0), linewidth=2)
+
+// VWAP line
+plot(i_show_vwap ? vwap_val : na, "VWAP",                            color=color.new(color.purple, 0), linewidth=2)
+
+// Zone fill (subtle red background between high and low)
+p_zone_hi = plot(v_zone_ready and i_show_zone ? v_zone_hi : na, "Zone High", color=color.new(color.red, 100), editable=false)
+p_zone_lo = plot(v_zone_ready and i_show_zone ? v_zone_lo : na, "Zone Low",  color=color.new(color.red, 100), editable=false)
+fill(p_zone_hi, p_zone_lo, color=color.new(color.red, 88), title="Zone Fill")
+
+// Entry arrow
+plotshape(entry_ok, title="Short Entry", location=location.abovebar, style=shape.triangledown, color=color.new(color.red, 0), size=size.normal, text="SHORT")
+
+// Breakeven activated marker
+plotshape(i_use_be and v_be_moved and strategy.position_size < 0, title="BE Active", location=location.belowbar, style=shape.circle, color=color.new(color.yellow, 0), size=size.tiny, text="BE")
+
+// ════════════════════════════════════════════════════════════════
+//  ⑩ INFO TABLE
+// ════════════════════════════════════════════════════════════════
+if barstate.islast
+    tbl = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_color=color.gray, border_width=1, frame_color=color.gray, frame_width=1)
+    table.cell(tbl, 0, 0, "Strategy",      text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 0, "2RC Short v2",  text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 0, 1, "Instrument",    text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 1, i_instrument,    text_color=color.yellow, text_size=size.small)
+    table.cell(tbl, 0, 2, "Target",        text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(tp_pts) + " pts", text_color=color.lime, text_size=size.small)
+    table.cell(tbl, 0, 3, "EMA Filter",    text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 3, i_use_ema  ? "ON" : "OFF", text_color=i_use_ema  ? color.lime : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 4, "VWAP Filter",   text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 4, i_use_vwap ? "ON" : "OFF", text_color=i_use_vwap ? color.lime : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 5, "Vol Filter",    text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 5, i_use_vol  ? "ON" : "OFF", text_color=i_use_vol  ? color.lime : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 6, "Zone Set?",     text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 6, v_zone_ready ? "YES" : "Waiting...", text_color=v_zone_ready ? color.lime : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 7, "Trade Today",   text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 7, v_trade_done ? "DONE" : "-", text_color=v_trade_done ? color.yellow : color.gray, text_size=size.small)

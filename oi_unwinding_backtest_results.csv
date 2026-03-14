@@ -1,0 +1,86 @@
+Symbol,Date,Direction,Entry,SL,Target,Exit,Exit_Reason,R_Multiple,Score,Hold_Candles,Details
+NSE:NIFTY 50,2026-01-01 13:20,SHORT,26130.55,26151.07,26089.51,26151.07,SL,-1.0,7,1,Expansion 3.0× | Strong expansion bonus | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-02 14:30,SHORT,26285.65,26298.63,26259.69,26298.63,SL,-1.0,6,6,Expansion 2.4× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-05 10:05,LONG,26335.35,26300.84,26404.37,26300.84,SL,-1.0,5,38,Expansion 1.7× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-05 13:45,SHORT,26269.95,26286.95,26235.95,26235.95,TP,2.0,6,3,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-06 11:10,SHORT,26194.45,26215.1,26153.14,26153.14,TP,2.0005,6,1,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-07 10:50,LONG,26165.85,26140.74,26216.08,26140.74,SL,-1.0,6,5,Expansion 1.5× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-01-07 12:40,SHORT,26083.25,26100.72,26048.31,26100.72,SL,-1.0,5,4,Expansion 1.9× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-08 11:20,SHORT,25969.0,25987.01,25932.97,25987.01,SL,-1.0,6,4,Expansion 2.4× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-09 11:35,SHORT,25759.95,25786.96,25705.92,25705.92,TP,2.0004,6,12,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-09 13:40,SHORT,25683.8,25709.91,25631.57,25631.57,TP,2.0004,5,12,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-12 11:30,SHORT,25475.0,25500.18,25424.63,25500.18,SL,-1.0,6,5,Expansion 1.5× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-12 13:30,LONG,25745.25,25707.46,25820.82,25707.46,SL,-1.0,7,13,Expansion 2.8× | Strong expansion bonus | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-01-14 09:50,LONG,25742.45,25695.13,25837.09,25695.13,SL,-1.0,5,4,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-14 13:20,SHORT,25717.15,25738.89,25673.68,25673.68,TP,1.9995,5,3,Expansion 1.7× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-16 10:15,LONG,25837.1,25798.07,25915.17,25798.07,SL,-1.0,5,16,Expansion 2.4× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-16 12:25,SHORT,25752.05,25778.52,25699.1,25699.1,TP,2.0004,7,11,Expansion 3.2× | Strong expansion bonus | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-19 10:55,LONG,25548.1,25519.2,25605.9,25519.2,SL,-1.0,5,5,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-19 13:45,LONG,25576.05,25552.46,25623.23,25623.23,TP,2.0,5,4,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-20 13:30,SHORT,25394.75,25413.34,25357.57,25357.57,TP,2.0,5,6,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-21 10:40,SHORT,25029.0,25073.72,24939.57,24939.57,TP,1.9998,6,3,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-01-21 12:00,LONG,25116.65,25070.03,25209.88,25209.88,TP,1.9998,5,7,Expansion 2.0× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-22 10:25,SHORT,25291.9,25337.67,25200.36,25200.36,TP,2.0,5,15,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-23 13:15,SHORT,25148.95,25179.79,25087.28,25087.28,TP,1.9997,5,3,Expansion 2.1× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-27 09:35,LONG,25091.5,25033.12,25208.27,25033.12,SL,-1.0,6,13,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-01-27 11:40,LONG,25154.65,25104.58,25254.79,25104.58,SL,-1.0,6,2,Expansion 2.0× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-01-29 13:30,LONG,25374.05,25345.51,25431.13,25431.13,TP,2.0,6,3,Expansion 2.0× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-01-30 11:05,SHORT,25263.1,25289.62,25210.06,25289.62,SL,-1.0,6,9,Expansion 2.8× | Strong expansion bonus | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-01-30 13:00,SHORT,25276.95,25304.91,25221.03,25221.03,TP,2.0,5,3,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-01 11:05,LONG,25417.55,25387.93,25476.79,25387.93,SL,-1.0,6,2,Expansion 2.4× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-02-01 12:10,SHORT,25223.55,25291.77,25087.11,25087.11,TP,2.0,5,1,Expansion 2.2× | Trend aligned | Gap-down context
+NSE:NIFTY 50,2026-02-02 11:30,LONG,24826.75,24775.26,24929.74,24929.74,TP,2.0002,6,17,Expansion 2.7× | Strong expansion bonus | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-03 10:15,LONG,25753.35,25672.35,25915.35,25741.3,TIMEOUT,-0.1488,6,60,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-02-04 13:50,LONG,25786.25,25768.08,25822.59,25768.08,SL,-1.0,6,2,Expansion 2.1× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-02-05 11:45,SHORT,25635.05,25662.18,25580.79,25580.79,TP,2.0,5,29,Expansion 1.7× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-10 12:45,LONG,25984.15,25970.71,26011.02,25970.71,SL,-1.0,5,3,Expansion 2.3× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-11 10:15,LONG,25954.15,25921.89,26018.67,25921.89,SL,-1.0,6,28,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-02-13 13:45,SHORT,25510.3,25535.38,25460.13,25535.38,SL,-1.0,6,4,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-02-16 11:25,SHORT,25517.8,25540.01,25473.37,25540.01,SL,-1.0,5,8,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-16 14:25,LONG,25620.4,25597.71,25665.78,25665.78,TP,2.0,5,4,Expansion 2.1× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-17 10:25,LONG,25724.4,25692.3,25788.59,25692.3,SL,-1.0,5,2,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-17 11:30,LONG,25721.45,25696.22,25771.9,25696.22,SL,-1.0,6,32,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY 50,2026-02-18 09:55,SHORT,25665.45,25700.27,25595.81,25700.27,SL,-1.0,6,12,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-02-18 13:50,SHORT,25700.0,25720.86,25658.27,25720.86,SL,-1.0,6,1,Expansion 2.3× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-02-19 12:10,SHORT,25603.5,25626.5,25557.5,25626.5,SL,-1.0,6,2,Expansion 1.9× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY 50,2026-02-20 10:15,LONG,25538.05,25483.98,25646.2,25646.2,TP,2.0002,5,25,Expansion 1.9× | Trend aligned | Momentum acceleration
+NSE:NIFTY 50,2026-02-23 10:40,SHORT,25656.95,25686.89,25597.07,25686.89,SL,-1.0,5,4,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-01 13:20,SHORT,59633.85,59682.37,59536.8,59682.37,SL,-1.0,5,1,Expansion 2.1× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-02 11:30,LONG,60091.1,60051.15,60171.0,60051.15,SL,-1.0,5,36,Expansion 2.3× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-05 13:45,SHORT,59972.8,60026.38,59865.65,59865.65,TP,1.9998,6,4,Expansion 1.9× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-01-06 11:15,SHORT,60139.05,60208.35,60000.46,60208.35,SL,-1.0,6,3,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-01-07 10:50,LONG,60013.65,59950.23,60140.5,59950.23,SL,-1.0,5,4,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-07 13:25,SHORT,59789.4,59834.86,59698.47,59834.86,SL,-1.0,6,6,Expansion 2.0× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-01-08 12:00,SHORT,59620.7,59687.49,59487.11,59687.49,SL,-1.0,5,2,Expansion 1.9× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-12 12:10,LONG,59072.0,59002.11,59211.78,59211.78,TP,2.0,5,2,Expansion 2.2× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-12 13:30,LONG,59497.4,59396.3,59699.6,59396.3,SL,-1.0,5,6,Expansion 1.7× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-13 12:10,SHORT,59541.85,59604.24,59417.07,59604.24,SL,-1.0,5,3,Expansion 1.5× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-14 14:20,SHORT,59500.35,59576.51,59348.03,59576.51,SL,-1.0,5,3,Expansion 1.8× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-19 12:50,LONG,59873.1,59810.37,59998.57,59810.37,SL,-1.0,5,4,Expansion 1.5× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-19 13:45,LONG,59896.6,59831.55,60026.7,59831.55,SL,-1.0,6,1,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-01-21 10:40,SHORT,58759.4,58857.1,58564.01,58564.01,TP,1.9999,5,2,Expansion 2.5× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-21 12:00,LONG,58745.4,58616.12,59003.97,59003.97,TP,2.0001,5,8,Expansion 2.3× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-23 11:15,SHORT,59099.6,59178.6,58941.59,58941.59,TP,2.0001,6,6,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-01-23 13:15,SHORT,58881.75,58967.93,58709.39,58709.39,TP,2.0,5,3,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-27 09:35,LONG,58519.0,58350.19,58856.61,58856.61,TP,1.9999,5,25,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-27 12:50,LONG,58727.55,58613.86,58954.92,58954.92,TP,1.9999,6,23,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-01-28 13:20,SHORT,59407.2,59478.49,59264.61,59264.61,TP,2.0001,6,5,Expansion 2.8× | Strong expansion bonus | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-01-29 13:30,LONG,59898.75,59823.62,60049.02,60049.02,TP,2.0001,6,15,Expansion 1.7× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-01-30 11:05,SHORT,59786.25,59857.46,59643.84,59857.46,SL,-1.0,6,14,Expansion 2.0× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-01-30 13:05,SHORT,59613.2,59683.7,59472.21,59683.7,SL,-1.0,6,7,Expansion 2.2× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-02-01 10:20,LONG,59704.85,59609.52,59895.5,59609.52,SL,-1.0,6,16,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-02-02 12:55,LONG,58256.7,58148.62,58472.85,58148.62,SL,-1.0,5,4,Expansion 1.7× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-04 14:10,LONG,60330.3,60271.9,60447.1,60271.9,SL,-1.0,5,10,Expansion 1.8× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-05 13:25,SHORT,59980.35,60034.36,59872.33,60034.36,SL,-1.0,5,2,Expansion 2.1× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-05 14:05,SHORT,59942.55,59992.21,59843.23,59992.21,SL,-1.0,5,9,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-06 10:25,SHORT,59822.65,59917.7,59632.54,59917.7,SL,-1.0,6,14,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-02-06 13:50,LONG,59940.8,59871.4,60079.6,60079.6,TP,2.0,6,13,Expansion 1.6× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-02-10 13:15,SHORT,60700.85,60745.46,60611.64,60611.64,TP,1.9998,6,8,Expansion 1.9× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-02-13 10:45,SHORT,60354.55,60420.75,60222.16,60143.8,EOD,3.1835,6,55,Expansion 1.8× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-02-16 12:25,LONG,60622.6,60562.14,60743.53,60743.53,TP,2.0002,6,2,Expansion 1.9× | Trend aligned | Momentum acceleration | Gap-up context
+NSE:NIFTY BANK,2026-02-17 10:25,LONG,61085.2,60985.67,61284.25,60985.67,SL,-1.0,5,3,Expansion 2.0× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-17 13:05,LONG,61181.95,61122.21,61301.43,61122.21,SL,-1.0,5,2,Expansion 1.5× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-18 13:50,SHORT,61255.75,61305.87,61155.51,61305.87,SL,-1.0,5,1,Expansion 2.4× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-19 12:10,SHORT,61069.8,61126.6,60956.2,61126.6,SL,-1.0,6,2,Expansion 2.4× | Trend aligned | Momentum acceleration | Gap-down context
+NSE:NIFTY BANK,2026-02-20 10:15,LONG,61122.5,61003.1,61361.3,61003.1,SL,-1.0,5,35,Expansion 1.6× | Trend aligned | Momentum acceleration
+NSE:NIFTY BANK,2026-02-23 12:40,LONG,61180.15,61116.73,61306.98,61116.73,SL,-1.0,5,2,Expansion 1.9× | Trend aligned | Momentum acceleration

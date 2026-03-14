@@ -1,0 +1,104 @@
+# =====================================================
+# Trading Algo — .gitignore
+# =====================================================
+
+# --- CREDENTIALS & SECRETS ---
+kite_credentials.py
+access_token.txt
+token_status.txt
+.env
+dashboard/backend/.env
+
+# --- STATE FILES (regenerated at runtime) ---
+engine.lock
+engine_states_backup.pkl
+active_fvg_ob.json
+active_setups.json
+active_trades.json
+bn_signal_state.json
+daily_log.json
+ob_alerted.json
+option_monthly_lows.json
+option_notified_taps.json
+option_tap_state.json
+position_cache.json
+positions_state.json
+backtest_taps.json
+oi_intelligence_snapshot.json
+oi_sc_active_trades.json
+oi_sc_snapshot.json
+option_active_trades.json
+morning_watchlist.flag
+_temp_queue.json
+_tele_sent.txt
+_signals_today.txt
+_trades_today.txt
+
+# --- DATABASE ---
+*.db
+*.sqlite
+
+# --- LOGS & CSV ---
+logs/
+*.log
+*.log.*
+daily_pnl_log.csv
+trade_ledger_*.csv
+trade_ledger_*.csv.bak
+analysis_report.txt
+paper_trade_log.csv
+paper_trade_outcomes.csv
+
+# --- DATA CACHE ---
+data/cache/
+data/raw/
+*.parquet
+
+# --- SIGNAL OUTPUT ---
+signals/output/
+
+# --- REPORTS ---
+reports/
+
+# --- PYTHON ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+*.pkl
+
+# --- TEMP/IDE ---
+_TEMP_CLAUDE_FILES/
+_temp_files/
+tmpclaude-*
+.vscode/
+.cursor/
+*.code-workspace
+
+# --- NODE ---
+node_modules/
+package-lock.json
+.next/
+dashboard/frontend/.next/
+dashboard/frontend/node_modules/
+
+# --- OS ---
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+*~
+_tunnel_stderr.tmp
+tunnel_url.txt
+
+# --- BINARIES ---
+cloudflared.exe
+
+# --- TEMP SCRIPTS (prefixed with _) ---
+_*.py
+_*.txt

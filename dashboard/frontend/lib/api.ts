@@ -1,0 +1,287 @@
+/**
+ * lib/api.ts
+ * Typed API client for FastAPI backend.
+ * All functions return typed data or throw on error.
+ *
+ * BASE is empty by default so all /api/* calls go through Next.js rewrites
+ * (set up in next.config.ts) → backend. Works for local dev AND Cloudflare tunnel.
+ * Override with NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 for direct mode.
+ */
+
+const BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function post<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST" });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body?.detail ? `: ${body.detail}` : "";
+    } catch {
+      // ignore parse error
+    }
+    throw new Error(`API ${path} → ${res.status}${detail}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export interface EngineSnapshot {
+  active_trades:       ActiveTrade[];
+  active_trade_count:  number;
+  zone_state:          Record<string, ZoneEntry>;
+  daily_pnl_r:         number;
+  consecutive_losses:  number;
+  signals_today:       number;
+  traded_today:        string[];
+  circuit_breaker_active: boolean;
+  market_regime:       "BULLISH" | "BEARISH" | "NEUTRAL";
+  max_daily_loss_r:    number;
+  max_daily_signals:   number;
+  engine_mode:         string;
+  active_strategies:   Record<string, boolean>;
+  index_only:          boolean;
+  paper_mode:          boolean;
+  engine_live:         boolean;
+  engine_running?:     boolean;
+  engine_heartbeat_age_sec?: number | null;
+  snapshot_time:       string;
+  setup_d_state?:      Record<string, SetupDEntry>;
+  adaptive_intel?:     AdaptiveIntel;
+}
+
+export interface AdaptiveEvent {
+  ts: string;
+  symbol: string;
+  setup: string;
+  direction: "LONG" | "SHORT" | string;
+  reason?: string;
+  ai_score?: number;
+}
+
+export interface AdaptiveIntel {
+  setup_multipliers: Record<string, number>;
+  recent_blocks: AdaptiveEvent[];
+  recent_ai_scores: AdaptiveEvent[];
+}
+
+export interface SetupDEntry {
+  bias?:          string;
+  stage?:         string;
+  is_gap_day?:    boolean;
+  choch_level?:   number;
+  choch_time?:    string;
+  bos_confirmed?: boolean;
+  sweep_detected?: boolean;
+}
+
+export interface ActiveTrade {
+  symbol:    string;
+  setup:     string;
+  direction: "LONG" | "SHORT";
+  entry:     number;
+  sl:        number;
+  target:    number;
+  rr:        number;
+  start_time?: string;
+}
+
+export interface ZoneEntry {
+  LONG?:  ZoneState | null;
+  SHORT?: ZoneState | null;
+}
+
+export interface ZoneState {
+  zone:  [number, number];
+  state: "ACTIVE" | "TAPPED";
+  tf:    string;
+}
+
+export interface DailyPnL {
+  daily_pnl_r:         number;
+  consecutive_losses:  number;
+  circuit_breaker_active: boolean;
+  signals_today:       number;
+  max_daily_signals:   number;
+  pnl_status:          "NORMAL" | "WARNING" | "CRITICAL";
+}
+
+export interface AnalyticsSummary {
+  total_trades:       number;
+  win_rate:           number;
+  profit_factor:      number;
+  expectancy_r:       number;
+  total_r:            number;
+  max_drawdown_r:     number;
+  max_consec_losses:  number;
+}
+
+export interface EquityPoint { date: string; cumulative_r: number; }
+export interface SetupStat {
+  setup:        string;
+  total:        number;
+  wins:         number;
+  win_rate:     number;
+  total_r:      number;
+  expectancy_r: number;
+}
+export interface RollingWRPoint { idx: number; date: string; win_rate: number; }
+export interface CalendarDay { date: string; pnl_r: number; count: number; }
+export interface DrawdownEvent { start: string; end: string; depth_r: number; bars: number; }
+
+export interface JournalPage {
+  trades:   JournalTrade[];
+  total:    number;
+  limit:    number;
+  offset:   number;
+  has_more: boolean;
+}
+
+export interface JournalTrade {
+  id:          number;
+  date:        string;
+  symbol:      string;
+  direction:   "LONG" | "SHORT";
+  setup:       string;
+  entry:       number;
+  exit_price:  number | null;
+  result:      "WIN" | "LOSS" | "RUNNING";
+  pnl_r:       number;
+  score:       number | null;
+  notes:       string | null;
+}
+
+export interface SwingIdea {
+  id: number;
+  symbol: string;
+  setup: string;
+  entry_price: number;
+  stop_loss: number;
+  target_1: number | null;
+  target_2: number | null;
+  risk_reward: number;
+  confidence_score: number;
+  expected_holding_period: string;
+  reasoning_summary: string;
+  technical_signals: Record<string, string>;
+  fundamental_signals: Record<string, string>;
+  sentiment_signals: Record<string, string>;
+  technical_factors: Record<string, unknown>;
+  fundamental_factors: Record<string, unknown>;
+  sentiment_factors: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LongTermIdea {
+  id: number;
+  symbol: string;
+  long_term_thesis: string;
+  fair_value_estimate: number | null;
+  entry_zone: number[];
+  long_term_target: number | null;
+  risk_factors: string[];
+  time_horizon: string;
+  confidence_score: number;
+  technical_signals: Record<string, string>;
+  fundamental_signals: Record<string, string>;
+  sentiment_signals: Record<string, string>;
+  fundamental_factors: Record<string, unknown>;
+  technical_factors: Record<string, unknown>;
+  sentiment_factors: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RunningTradeMonitorItem {
+  id: number;
+  symbol: string;
+  entry_price: number;
+  current_price: number;
+  stop_loss: number;
+  targets: number[];
+  profit_loss: number;
+  drawdown: number;
+  distance_to_target: number | null;
+  distance_to_stop_loss: number | null;
+  status: string;
+  progress: number;
+  progress_color: "red" | "yellow" | "green";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResearchRunResponse {
+  ok: boolean;
+  scan: "swing" | "longterm";
+  agent: string;
+  status: string;
+  summary: string;
+  result: Record<string, unknown>;
+}
+
+export interface ResearchCoverageRun {
+  run_time: string | null;
+  universe_requested: number;
+  universe_scanned: number;
+  quality_passed: number;
+  ranked_candidates: number;
+  selected_count: number;
+  coverage_pct: number;
+}
+
+export interface ResearchCoverageResponse {
+  target_universe: number;
+  available_universe: number;
+  sources: Record<string, number>;
+  latest: {
+    SWING: ResearchCoverageRun | null;
+    LONGTERM: ResearchCoverageRun | null;
+  };
+}
+
+// ── API Functions ─────────────────────────────────────────────────────────────
+
+export const api = {
+  // Live state
+  snapshot:     () => get<EngineSnapshot>("/api/snapshot"),
+  activeTrades: () => get<{ active_trades: ActiveTrade[] }>("/api/active-trades"),
+  dailyPnl:     () => get<DailyPnL>("/api/daily-pnl"),
+  zoneState:    () => get<{ zone_state: Record<string, ZoneEntry>; count: number }>("/api/zone-state"),
+  engineStatus: () => get<{ engine_live: boolean; engine_mode: string; active_strategies: Record<string, boolean>; index_only: boolean; paper_mode: boolean }>("/api/engine-status"),
+
+  // Analytics
+  summary:     () => get<AnalyticsSummary>("/api/analytics/summary"),
+  equityCurve: () => get<{ equity_curve: EquityPoint[] }>("/api/analytics/equity-curve"),
+  bySetup:     () => get<{ setups: SetupStat[] }>("/api/analytics/by-setup"),
+  rollingWR:   (w = 20) => get<{ window: number; data: RollingWRPoint[] }>(`/api/analytics/rolling-winrate?window=${w}`),
+  calendar:    () => get<{ calendar: CalendarDay[] }>("/api/analytics/calendar-heatmap"),
+  drawdown:    () => get<{ drawdown_events: DrawdownEvent[] }>("/api/analytics/drawdown-velocity"),
+  timeOfDay:   () => get<{ hours: { hour: number; total: number; wins: number; win_rate: number; total_r: number }[] }>("/api/analytics/time-of-day"),
+
+  // Journal
+  journal: (params: {
+    symbol?: string; setup?: string; result?: string;
+    direction?: string; date_from?: string; date_to?: string;
+    limit?: number; offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return get<JournalPage>(`/api/journal?${q}`);
+  },
+  symbols: () => get<{ symbols: string[] }>("/api/journal/symbols"),
+  setups:  () => get<{ setups:  string[] }>("/api/journal/setups"),
+
+  // AI Research Center
+  swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),
+  longtermResearch: (limit = 12) => get<{ items: LongTermIdea[]; count: number }>(`/api/research/longterm?limit=${limit}`),
+  runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
+  researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
+  runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
+  runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
+};

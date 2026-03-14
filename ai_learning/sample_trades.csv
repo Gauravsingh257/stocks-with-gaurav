@@ -1,0 +1,6 @@
+trade_id,symbol,timeframe,direction,entry_price,sl_price,target_price,result,pnl_r,setup_type,session,notes,date,chart_image
+T001,NSE:RELIANCE,15min,LONG,2450.50,2438.00,2475.00,WIN,1.96,OB_BOS,INDIA_MID,Order block bounce after BOS on 1H. Clean displacement candle.,2026-01-15,
+T002,NSE:HDFCBANK,15min,SHORT,1720.00,1732.00,1696.00,WIN,2.00,CHoCH_FVG,KILLZONE_AM,CHoCH on 15min after liquidity sweep of PDH. FVG entry.,2026-01-16,
+T003,NSE:NIFTY 50,5min,LONG,23150.00,23120.00,23210.00,WIN,2.00,FVG_SWEEP,KILLZONE_AM,Liquidity sweep below previous day low then FVG fill. Strong bullish OB.,2026-01-20,
+T004,NSE:INFY,15min,SHORT,1585.00,1597.00,1561.00,LOSS,-1.00,OB_BOS,INDIA_MID,Short below OB with BOS but got stopped out on news spike.,2026-01-22,
+T005,NSE:TCS,15min,LONG,4050.00,4030.00,4090.00,WIN,2.00,OB_BOS,KILLZONE_AM,Clean bullish OB test after 1H BOS. Displacement confirmed.,2026-01-25,
