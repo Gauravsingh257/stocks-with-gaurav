@@ -298,11 +298,18 @@ def start_csv_watcher(interval_seconds: int = 30) -> None:
     Start a background daemon thread that polls trade_ledger_2026.csv every
     `interval_seconds` and calls full_sync_from_csv() when the file changes.
     Safe to call multiple times — only one watcher thread will run.
+    In production (no CSV): skip polling to avoid log noise.
     """
     global _watcher_thread
 
     if _watcher_thread is not None and _watcher_thread.is_alive():
         logger.debug("[DB Watcher] Already running — skipping duplicate start")
+        return
+
+    # In production (e.g. Railway /app), CSV is never present — trades sync via API.
+    # Skip the watcher to avoid repeated "not found" logs every 30s.
+    if not TRADE_LEDGER_PATH.exists() and "/app" in str(TRADE_LEDGER_PATH):
+        logger.info("[DB Watcher] Skipped — no CSV in production (trades sync via /api/journal/sync)")
         return
 
     def _watch_loop():
