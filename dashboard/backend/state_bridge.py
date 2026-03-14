@@ -40,7 +40,7 @@ try:
     _ENGINE_AVAILABLE = True
     logger.info("[StateBridge] Live engine connection established")
 except Exception as e:
-    logger.warning(f"[StateBridge] Engine not importable — running in STANDALONE mode. ({e})")
+    logger.info(f"[StateBridge] Engine not imported — STANDALONE mode ({e})")
 
 # ─────────────────────────────────────────────────────────────
 # FALLBACK: state_db for ACTIVE_TRADES when engine not imported

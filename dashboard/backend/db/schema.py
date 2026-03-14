@@ -201,6 +201,7 @@ def init_db() -> None:
 _last_mtime: float = 0.0
 _watcher_thread: threading.Thread | None = None
 _sync_lock = threading.Lock()
+_warned_no_csv: bool = False
 
 
 def full_sync_from_csv(force: bool = False) -> int:
@@ -209,10 +210,12 @@ def full_sync_from_csv(force: bool = False) -> int:
     trade_ledger_2026.csv.  Called on startup and whenever the file changes.
     Returns number of rows inserted, or -1 if skipped (file unchanged).
     """
-    global _last_mtime
+    global _last_mtime, _warned_no_csv
 
     if not TRADE_LEDGER_PATH.exists():
-        logger.warning(f"[DB] trade_ledger_2026.csv not found at {TRADE_LEDGER_PATH}")
+        if not _warned_no_csv:
+            logger.info("[DB] trade_ledger_2026.csv not found (normal in production — trades sync via API)")
+            _warned_no_csv = True
         return 0
 
     current_mtime = TRADE_LEDGER_PATH.stat().st_mtime
@@ -307,7 +310,7 @@ def start_csv_watcher(interval_seconds: int = 30) -> None:
         while True:
             try:
                 result = full_sync_from_csv()
-                if result >= 0:
+                if result > 0:
                     logger.info(f"[DB Watcher] Auto-synced {result} trades from CSV")
             except Exception as exc:
                 logger.error(f"[DB Watcher] Error: {exc}")
