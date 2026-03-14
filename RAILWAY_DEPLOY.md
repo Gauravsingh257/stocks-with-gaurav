@@ -9,7 +9,7 @@ Follow these steps to deploy your FastAPI backend so the live site shows real da
 ## Step 1: Push latest code to GitHub
 
 ```powershell
-cd "c:\Users\g6666\Trading Algo"
+cd "path/to/your/trading-algo"   # Your project root
 git add .
 git commit -m "Add Railway deployment config"
 git push origin main
@@ -23,7 +23,7 @@ git push origin main
 2. Sign up with **GitHub**
 3. Click **"New Project"**
 4. Select **"Deploy from GitHub repo"**
-5. Choose **`Gauravsingh257/stocks-with-gaurav`**
+5. Choose **`YOUR_GITHUB_USERNAME/your-repo-name`**
 6. Railway will auto-detect Python and start building
 
 ---
@@ -53,7 +53,7 @@ No Kite/Telegram keys needed for the dashboard to load — it will show "Connect
 
 ## Step 5: Connect Vercel frontend to Railway backend
 
-1. Go to [vercel.com](https://vercel.com) → your **stocks-with-gaurav** project
+1. Go to [vercel.com](https://vercel.com) → your project
 2. **Settings** → **Environment Variables**
 3. Add:
 

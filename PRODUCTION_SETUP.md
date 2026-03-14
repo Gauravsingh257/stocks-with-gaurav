@@ -26,8 +26,8 @@ Run **`sync.bat`** after any code change. It will:
 Run **`sync_trades_to_cloud.ps1`** to push your local `trade_ledger_2026.csv` to production.
 
 ```powershell
-# Set your Railway URL if different
-$env:BACKEND_URL = "https://web-production-1eabc.up.railway.app"
+# Set your Railway backend URL (from Railway → your service → Settings → Domain)
+$env:BACKEND_URL = "https://YOUR-RAILWAY-URL.up.railway.app"
 .\sync_trades_to_cloud.ps1
 ```
 

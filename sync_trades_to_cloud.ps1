@@ -6,10 +6,11 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $csvPath = Join-Path $scriptDir "trade_ledger_2026.csv"
 
-# EDIT THIS: Your Railway backend URL (or set env BACKEND_URL)
+# Set BACKEND_URL to your Railway URL, e.g. $env:BACKEND_URL = "https://xxx.up.railway.app"
 $apiUrl = $env:BACKEND_URL
 if (-not $apiUrl) {
-    $apiUrl = "https://web-production-1eabc.up.railway.app"
+    Write-Host "ERROR: Set BACKEND_URL first. Example: `$env:BACKEND_URL = 'https://YOUR-RAILWAY-URL.up.railway.app'"
+    exit 1
 }
 $syncUrl = "$apiUrl/api/journal/sync"
 

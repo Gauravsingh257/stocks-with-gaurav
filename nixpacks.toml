@@ -1,2 +1,3 @@
+# Single source for Python version on Railway (matches .python-version for local)
 [phases.setup]
 nixPkgs = ["python311"]
