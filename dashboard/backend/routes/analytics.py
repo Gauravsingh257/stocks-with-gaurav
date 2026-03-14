@@ -3,8 +3,14 @@ dashboard/backend/routes/analytics.py
 Performance analytics computed from the trades table in dashboard.db.
 Includes equity curve, per-setup stats, win rate rolling 20,
 drawdown velocity, time-of-day heatmap, regime-based split.
+
+When the trades table is empty (e.g. trade_ledger_2026.csv not synced),
+falls back to the ai_learning signal_log table for live signal data.
 """
 
+import sqlite3
+import logging
+from pathlib import Path
 from fastapi import APIRouter, Query
 from typing import Optional
 from collections import defaultdict
@@ -13,20 +19,71 @@ from dashboard.backend.db import get_connection
 from dashboard.backend.db.schema import full_sync_from_csv, get_sync_info
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+logger = logging.getLogger("analytics")
+
+# Path to the ai_learning signals DB
+_AI_LEARNING_DB = Path(__file__).resolve().parents[3] / "ai_learning" / "data" / "trade_learning.db"
 
 
 def _rows_to_dicts(rows) -> list:
     return [dict(r) for r in rows]
 
 
+def _get_signal_log_rows() -> list:
+    """Read completed signals from ai_learning signal_log and normalise to trades schema."""
+    if not _AI_LEARNING_DB.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(_AI_LEARNING_DB))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT created_at AS date, symbol, direction,
+                       strategy_name AS setup,
+                       entry, stop_loss, target1, target2,
+                       result, pnl_r, score, confidence
+                FROM signal_log
+                WHERE result IN ('WIN','LOSS')
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(f"signal_log fallback error: {exc}")
+        return []
+
+
+def _load_trades(include_running: bool = False) -> tuple[list, str]:
+    """
+    Load trade rows, falling back to signal_log if trades table is empty.
+    Returns (rows, source) where source is 'trades' or 'signal_log'.
+    """
+    conn = get_connection()
+    try:
+        result_filter = "('WIN','LOSS','RUNNING')" if include_running else "('WIN','LOSS')"
+        rows = _rows_to_dicts(
+            conn.execute(f"SELECT * FROM trades WHERE result IN {result_filter} ORDER BY date ASC").fetchall()
+        )
+    finally:
+        conn.close()
+
+    if rows:
+        return rows, "trades"
+
+    # Fallback to signal_log
+    rows = _get_signal_log_rows()
+    return rows, "signal_log"
+
+
 @router.get("/summary")
 def get_summary():
     """Top-level performance metrics (total trades, WR, PF, expectancy, etc.)."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(conn.execute("SELECT * FROM trades ORDER BY date ASC").fetchall())
-    finally:
-        conn.close()
+    rows, source = _load_trades()
 
     if not rows:
         return {
@@ -35,9 +92,10 @@ def get_summary():
             "profit_factor": 0, "expectancy_r": 0,
             "max_drawdown_r": 0, "max_consec_losses": 0,
             "avg_win_r": 0, "avg_loss_r": 0,
+            "data_source": source,
         }
 
-    completed = [r for r in rows if r["result"] in ("WIN", "LOSS")]
+    completed = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
     wins  = [r for r in completed if r["result"] == "WIN"]
     losses= [r for r in completed if r["result"] == "LOSS"]
 
@@ -80,8 +138,8 @@ def get_summary():
         "total_trades":        total,
         "win_count":           win_count,
         "loss_count":          len(losses),
-        "win_rate":            round(win_count / total, 4) if total else 0,  # 0-1 decimal for frontend
-        "win_rate_pct":        win_rate,  # kept for backwards compat
+        "win_rate":            round(win_count / total, 4) if total else 0,
+        "win_rate_pct":        win_rate,
         "total_r":             total_r,
         "profit_factor":       pf,
         "expectancy_r":        expectancy,
@@ -89,29 +147,28 @@ def get_summary():
         "avg_loss_r":          avg_loss,
         "max_drawdown_r":      round(max_dd, 4),
         "max_consec_losses":   max_streak,
+        "data_source":         source,
     }
 
 
 @router.get("/equity-curve")
 def get_equity_curve():
     """Cumulative R-multiple over time — for area chart on frontend."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, pnl_r, result FROM trades WHERE result IN ('WIN','LOSS') ORDER BY date ASC"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, source = _load_trades()
 
     cumulative = 0.0
     curve = []
     for r in rows:
+        if r.get("result") not in ("WIN", "LOSS"):
+            continue
         cumulative += r["pnl_r"] or 0
-        curve.append({"date": r["date"], "cumulative_r": round(cumulative, 4), "trade_r": r["pnl_r"]})
+        curve.append({
+            "date": r.get("date") or r.get("created_at", ""),
+            "cumulative_r": round(cumulative, 4),
+            "trade_r": r["pnl_r"],
+        })
 
-    return {"equity_curve": curve}
+    return {"equity_curve": curve, "data_source": source}
 
 
 # Setups disabled in engine — hidden from dashboard by default
@@ -121,23 +178,16 @@ _DISABLED_SETUPS = {"B", "SETUP-D-V2"}
 @router.get("/by-setup")
 def get_by_setup(include_disabled: bool = Query(default=False, description="Include historically disabled setups")):
     """Win rate, expectancy, total R — broken down by setup type."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT setup, result, pnl_r FROM trades WHERE result IN ('WIN','LOSS')"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, _source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     # Filter out disabled setups unless explicitly requested
     if not include_disabled:
-        rows = [r for r in rows if r["setup"] not in _DISABLED_SETUPS]
+        rows = [r for r in rows if r.get("setup") not in _DISABLED_SETUPS]
 
     buckets = defaultdict(lambda: {"trades": 0, "wins": 0, "losses": 0, "total_r": 0.0})
     for r in rows:
-        b = buckets[r["setup"]]
+        b = buckets[r.get("setup") or "UNKNOWN"]
         b["trades"] += 1
         b["total_r"] += r["pnl_r"] or 0
         if r["result"] == "WIN":
@@ -167,51 +217,39 @@ def get_by_setup(include_disabled: bool = Query(default=False, description="Incl
 @router.get("/rolling-winrate")
 def get_rolling_winrate(window: int = Query(default=20, ge=5, le=100)):
     """Rolling win rate over last N trades — shows system health trend."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, result FROM trades WHERE result IN ('WIN','LOSS') ORDER BY date ASC"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     if len(rows) < window:
-        return {"data": [], "rolling_winrate": [], "window": window}
+        return {"data": [], "rolling_winrate": [], "window": window, "data_source": source}
 
     points = []
     for i in range(window - 1, len(rows)):
         chunk = rows[i - window + 1: i + 1]
         wins  = sum(1 for r in chunk if r["result"] == "WIN")
+        row_date = chunk[-1].get("date") or chunk[-1].get("created_at", "")
         points.append({
-            "date":         chunk[-1]["date"],
+            "date":         row_date,
             "win_rate":     round(wins / window, 4),  # 0-1 decimal for frontend
             "win_rate_pct": round(wins / window * 100, 1),  # kept for backwards compat
             "idx":          i,    # frontend uses 'idx'
             "index":        i,    # kept for backwards compat
         })
 
-    return {"data": points, "rolling_winrate": points, "window": window}  # 'data' for frontend
+    return {"data": points, "rolling_winrate": points, "window": window, "data_source": source}
 
 
 @router.get("/time-of-day")
 def get_time_of_day():
     """PnL aggregated by hour of day — for heatmap / bar chart."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, pnl_r, result FROM trades WHERE result IN ('WIN','LOSS')"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, _source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     buckets = defaultdict(lambda: {"trades": 0, "total_r": 0.0, "wins": 0})
     for r in rows:
         try:
-            hour = int(r["date"][11:13])   # "2026-02-04 13:20:07" → 13
+            date_str = r.get("date") or r.get("created_at", "")
+            hour = int(date_str[11:13])   # "2026-02-04 13:20:07" → 13
             b = buckets[hour]
             b["trades"] += 1
             b["total_r"] += r["pnl_r"] or 0
@@ -239,21 +277,15 @@ def get_time_of_day():
 def get_by_day_of_week():
     """PnL aggregated by day of week."""
     from datetime import datetime as dt
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, pnl_r, result FROM trades WHERE result IN ('WIN','LOSS')"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, _source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     buckets = defaultdict(lambda: {"trades": 0, "total_r": 0.0, "wins": 0})
     for r in rows:
         try:
-            d = dt.fromisoformat(r["date"])
+            date_str = r.get("date") or r.get("created_at", "")
+            d = dt.fromisoformat(date_str)
             day = d.weekday()   # 0=Mon, 4=Fri
             b = buckets[day]
             b["trades"] += 1
@@ -284,15 +316,8 @@ def get_drawdown_velocity():
     Drawdown velocity: R lost per day during drawdown periods.
     A rising velocity warns that losses are accelerating.
     """
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, pnl_r, result FROM trades WHERE result IN ('WIN','LOSS') ORDER BY date ASC"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, _source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     if not rows:
         return {"drawdown_velocity": []}
@@ -306,7 +331,7 @@ def get_drawdown_velocity():
 
     for r in rows:
         cumulative += r["pnl_r"] or 0
-        date = r["date"][:10]
+        date = (r.get("date") or r.get("created_at", ""))[:10]
 
         if cumulative > peak:
             if in_dd and dd_start_date:
@@ -329,19 +354,12 @@ def get_drawdown_velocity():
 @router.get("/calendar-heatmap")
 def get_calendar_heatmap():
     """Daily PnL for calendar heatmap on the analytics page."""
-    conn = get_connection()
-    try:
-        rows = _rows_to_dicts(
-            conn.execute(
-                "SELECT date, pnl_r, result FROM trades WHERE result IN ('WIN','LOSS') ORDER BY date ASC"
-            ).fetchall()
-        )
-    finally:
-        conn.close()
+    rows, _source = _load_trades()
+    rows = [r for r in rows if r.get("result") in ("WIN", "LOSS")]
 
     daily = defaultdict(lambda: {"trades": 0, "total_r": 0.0, "wins": 0})
     for r in rows:
-        day = r["date"][:10]
+        day = (r.get("date") or r.get("created_at", ""))[:10]
         b = daily[day]
         b["trades"] += 1
         b["total_r"] += r["pnl_r"] or 0

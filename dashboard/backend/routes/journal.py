@@ -4,10 +4,20 @@ Trade journal — filterable, sortable trade history from dashboard.db.
 """
 
 import os
+import sqlite3
+import logging
+from datetime import date
+from pathlib import Path
+
 from fastapi import APIRouter, Query, Header, HTTPException
 from typing import Optional
 from pydantic import BaseModel
 from dashboard.backend.db import get_connection
+
+logger = logging.getLogger("journal")
+
+# Path to the ai_learning signals DB (relative to project root)
+_AI_LEARNING_DB = Path(__file__).resolve().parents[3] / "ai_learning" / "data" / "trade_learning.db"
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 
@@ -165,6 +175,46 @@ def add_trade_note(trade_id: int, note: str = Query(...)):
     finally:
         conn.close()
     return {"status": "ok", "trade_id": trade_id, "note": note}
+
+
+@router.get("/signals-today")
+def get_signals_today():
+    """
+    Return all signals generated today from the ai_learning signal_log table.
+    Falls back to empty list if the DB doesn't exist or is not accessible.
+    """
+    today_str = date.today().isoformat()
+    signals: list = []
+
+    if not _AI_LEARNING_DB.exists():
+        logger.warning(f"AI learning DB not found at {_AI_LEARNING_DB}")
+        return {"signals": signals, "count": 0, "date": today_str, "source": "none"}
+
+    try:
+        conn = sqlite3.connect(str(_AI_LEARNING_DB))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT signal_id, timestamp, symbol, direction, strategy_name,
+                       entry, stop_loss, target1, target2, score, confidence,
+                       result, pnl_r, created_at
+                FROM signal_log
+                WHERE DATE(created_at) = ?
+                ORDER BY created_at DESC
+                """,
+                (today_str,),
+            ).fetchall()
+            signals = [dict(r) for r in rows]
+        except sqlite3.OperationalError:
+            # Table may not exist yet on a fresh DB
+            logger.warning("signal_log table not found in ai_learning DB")
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error(f"signals-today error: {exc}")
+
+    return {"signals": signals, "count": len(signals), "date": today_str, "source": "signal_log"}
 
 
 @router.post("/sync")

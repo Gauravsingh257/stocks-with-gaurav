@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { SwingIdea } from "@/lib/api";
 
 interface Props {
@@ -15,6 +16,110 @@ function signalList(signals: Record<string, string>) {
   return Object.values(signals || {}).filter(Boolean);
 }
 
+function tvUrl(symbol: string, interval = "D") {
+  // TradingView expects symbols like NSE:COALINDIA — already in this format
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}&interval=${interval}`;
+}
+
+interface LevelsTooltipProps {
+  item: SwingIdea;
+}
+
+function LevelsTooltip({ item }: LevelsTooltipProps) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <a
+        href={tvUrl(item.symbol)}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open in TradingView"
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          padding: "4px 10px",
+          borderRadius: 6,
+          background: "rgba(41, 98, 255, 0.18)",
+          border: "1px solid rgba(41, 98, 255, 0.45)",
+          color: "#5b9cf6",
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          textDecoration: "none",
+          cursor: "pointer",
+          transition: "background 0.15s",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {/* mini candlestick icon */}
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="4" width="3" height="6" rx="0.5" fill="#5b9cf6"/>
+          <line x1="3.5" y1="1" x2="3.5" y2="4" stroke="#5b9cf6" strokeWidth="1.2"/>
+          <line x1="3.5" y1="10" x2="3.5" y2="12" stroke="#5b9cf6" strokeWidth="1.2"/>
+          <rect x="8" y="3" width="3" height="5" rx="0.5" fill="#00d18c"/>
+          <line x1="9.5" y1="1" x2="9.5" y2="3" stroke="#00d18c" strokeWidth="1.2"/>
+          <line x1="9.5" y1="8" x2="9.5" y2="11" stroke="#00d18c" strokeWidth="1.2"/>
+        </svg>
+        Chart
+      </a>
+
+      {visible && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 50,
+          background: "#1a2035",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          padding: "10px 14px",
+          minWidth: 200,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          pointerEvents: "none",
+        }}>
+          <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#5b9cf6", marginBottom: 8, letterSpacing: "0.06em" }}>
+            KEY LEVELS
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: "0.75rem" }}>
+            <span style={{ color: "var(--text-secondary)" }}>Entry</span>
+            <span style={{ color: "#ffffff", fontWeight: 600 }}>{fmt(item.entry_price)}</span>
+            <span style={{ color: "var(--text-secondary)" }}>Stop Loss</span>
+            <span style={{ color: "#ff4e6a", fontWeight: 600 }}>{fmt(item.stop_loss)}</span>
+            <span style={{ color: "var(--text-secondary)" }}>Target 1</span>
+            <span style={{ color: "#00d18c", fontWeight: 600 }}>{fmt(item.target_1)}</span>
+            {item.target_2 != null && (
+              <>
+                <span style={{ color: "var(--text-secondary)" }}>Target 2</span>
+                <span style={{ color: "#00d18c", fontWeight: 600 }}>{fmt(item.target_2)}</span>
+              </>
+            )}
+            <span style={{ color: "var(--text-secondary)" }}>R:R</span>
+            <span style={{ color: "#f0c060", fontWeight: 600 }}>{item.risk_reward?.toFixed(2) ?? "-"}</span>
+          </div>
+          {/* small triangle pointer */}
+          <div style={{
+            position: "absolute",
+            top: -5,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 10,
+            height: 10,
+            background: "#1a2035",
+            border: "1px solid var(--border)",
+            borderRight: "none",
+            borderBottom: "none",
+            rotate: "45deg",
+          }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SwingIdeasTable({ items }: Props) {
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
@@ -28,7 +133,7 @@ export function SwingIdeasTable({ items }: Props) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
-                {["Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Reasoning"].map(h => (
+                {["Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Chart", "Reasoning"].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
@@ -42,6 +147,9 @@ export function SwingIdeasTable({ items }: Props) {
                     <td style={{ padding: "10px 12px" }}>{fmt(item.target_1)}</td>
                     <td style={{ padding: "10px 12px" }}>{fmt(item.target_2)}</td>
                     <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <LevelsTooltip item={item} />
+                    </td>
                     <td style={{ padding: "10px 12px", color: "var(--text-secondary)", maxWidth: 420 }}>
                       <details>
                         <summary style={{ cursor: "pointer", color: "var(--accent)" }}>View reasoning evidence</summary>

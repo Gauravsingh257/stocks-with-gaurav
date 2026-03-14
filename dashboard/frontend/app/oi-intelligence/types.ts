@@ -84,6 +84,9 @@ export interface OISnapshot {
   bias_history: BiasHistoryPoint[];
   timestamp: string;
   market_open: boolean;
+  market_hours?: boolean;    // from backend meta — true during 09:15-15:31 IST Mon-Fri
+  last_update?: string;      // ISO timestamp of last snapshot generation
+  oi_sentiment_update?: string | null;
   market_state?: MarketState;
 }
 

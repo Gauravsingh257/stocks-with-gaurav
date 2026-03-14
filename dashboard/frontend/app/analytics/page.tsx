@@ -10,27 +10,34 @@ import {
 import { api, AnalyticsSummary, EquityPoint, SetupStat, RollingWRPoint } from "@/lib/api";
 
 export default function AnalyticsPage() {
-  const [summary,  setSummary ] = useState<AnalyticsSummary | null>(null);
-  const [equity,   setEquity  ] = useState<EquityPoint[]>([]);
-  const [setups,   setSetups  ] = useState<SetupStat[]>([]);
-  const [rolling,  setRolling ] = useState<RollingWRPoint[]>([]);
-  const [loading,  setLoading ] = useState(true);
+  const [summary,    setSummary   ] = useState<AnalyticsSummary | null>(null);
+  const [equity,     setEquity    ] = useState<EquityPoint[]>([]);
+  const [setups,     setSetups    ] = useState<SetupStat[]>([]);
+  const [rolling,    setRolling   ] = useState<RollingWRPoint[]>([]);
+  const [loading,    setLoading   ] = useState(true);
+  const [dataSource, setDataSource] = useState<string>("—");
+  const [syncInfo,   setSyncInfo  ] = useState<{ csv_exists?: boolean; db_trade_count?: number; last_sync?: string } | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([api.summary(), api.equityCurve(), api.bySetup(), api.rollingWR(20)])
-      .then(([s, e, b, r]) => {
+    Promise.all([api.summary(), api.equityCurve(), api.bySetup(), api.rollingWR(20), api.syncStatus()])
+      .then(([s, e, b, r, sync]) => {
         setSummary(s);
         setEquity(e.equity_curve ?? []);
         setSetups(b.setups ?? []);
         setRolling(r.data ?? []);
+        // data_source may come from summary or equity (both carry it now)
+        setDataSource((s as Record<string, unknown>)["data_source"] as string ?? "trades");
+        setSyncInfo(sync as Record<string, unknown>);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
 
-  // Initial load + 30-second auto-refresh (syncs with CSV watcher interval)
+  // On mount: trigger a force-sync to pick up any new CSV data, then load
   useEffect(() => {
-    load();
+    api.forceSync().catch(() => {/* silent: CSV may not exist */}).finally(() => {
+      load();
+    });
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
   }, [load]);
@@ -46,13 +53,33 @@ export default function AnalyticsPage() {
   const maxCL      = summary?.max_consec_losses ?? 0;
   const total      = summary?.total_trades ?? 0;
 
+  const sourceLabel = dataSource === "signal_log" ? "Live Signal Log" : "Trade Ledger (CSV)";
+  const sourceBadgeColor = dataSource === "signal_log" ? "#00d18c" : "#5b9cf6";
+
   return (
     <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Analytics</h1>
-        <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
-          Performance metrics from {total} historical trades
-        </p>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Analytics</h1>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
+            Performance metrics from {total} historical trades
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{
+            padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+            background: `${sourceBadgeColor}22`, border: `1px solid ${sourceBadgeColor}55`,
+            color: sourceBadgeColor,
+          }}>
+            {sourceLabel}
+          </span>
+          {syncInfo && (
+            <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+              DB: {syncInfo.db_trade_count ?? 0} trades
+              {syncInfo.csv_exists ? " · CSV synced" : " · No CSV (using signal log)"}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Stat row */}

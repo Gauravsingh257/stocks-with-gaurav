@@ -158,6 +158,23 @@ export interface JournalTrade {
   notes:       string | null;
 }
 
+export interface SignalToday {
+  signal_id:     string;
+  timestamp:     string | null;
+  symbol:        string;
+  direction:     string;
+  strategy_name: string;
+  entry:         number | null;
+  stop_loss:     number | null;
+  target1:       number | null;
+  target2:       number | null;
+  score:         number | null;
+  confidence:    number | null;
+  result:        string | null;
+  pnl_r:         number | null;
+  created_at:    string;
+}
+
 export interface SwingIdea {
   id: number;
   symbol: string;
@@ -263,6 +280,8 @@ export const api = {
   calendar:    () => get<{ calendar: CalendarDay[] }>("/api/analytics/calendar-heatmap"),
   drawdown:    () => get<{ drawdown_events: DrawdownEvent[] }>("/api/analytics/drawdown-velocity"),
   timeOfDay:   () => get<{ hours: { hour: number; total: number; wins: number; win_rate: number; total_r: number }[] }>("/api/analytics/time-of-day"),
+  syncStatus:  () => get<{ csv_exists: boolean; db_trade_count: number; last_sync: string | null }>("/api/analytics/sync-status"),
+  forceSync:   () => post<{ status: string; rows_synced: number }>("/api/analytics/force-sync"),
 
   // Journal
   journal: (params: {
@@ -274,8 +293,9 @@ export const api = {
     Object.entries(params).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
     return get<JournalPage>(`/api/journal?${q}`);
   },
-  symbols: () => get<{ symbols: string[] }>("/api/journal/symbols"),
-  setups:  () => get<{ setups:  string[] }>("/api/journal/setups"),
+  symbols:       () => get<{ symbols: string[] }>("/api/journal/symbols"),
+  setups:        () => get<{ setups:  string[] }>("/api/journal/setups"),
+  signalsToday:  () => get<{ signals: SignalToday[]; count: number; date: string; source: string }>("/api/journal/signals-today"),
 
   // AI Research Center
   swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),

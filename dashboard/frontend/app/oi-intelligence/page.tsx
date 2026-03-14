@@ -123,12 +123,38 @@ export default function OIIntelligencePage() {
           <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: "4px 0 0" }}>
             Real-time Open Interest intelligence from PCR, Strike Activity &amp; execution quality
           </p>
+          {snapshot?.last_update && (
+            <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "2px 0 0" }}>
+              <Activity size={9} style={{ display: "inline", marginRight: 3, verticalAlign: "middle" }} />
+              Last generated: {new Date(snapshot.last_update).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              {!( snapshot.market_hours ?? snapshot.market_open) && " · Outside market hours — showing last session data"}
+            </p>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* LIVE / SNAPSHOT indicator based on market hours */}
+          {snapshot && (() => {
+            const isLive = snapshot.market_hours ?? snapshot.market_open ?? false;
+            return (
+              <span style={{
+                padding: "2px 10px",
+                borderRadius: 20,
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                background: isLive ? "rgba(0,209,140,0.12)" : "rgba(240,192,96,0.12)",
+                border: `1px solid ${isLive ? "rgba(0,209,140,0.4)" : "rgba(240,192,96,0.4)"}`,
+                color: isLive ? "#00d18c" : "#f0c060",
+              }}>
+                {isLive ? "LIVE DATA" : "SNAPSHOT"}
+              </span>
+            );
+          })()}
+
           <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.7rem", color: wsConnected ? "var(--success)" : "var(--text-dim)" }}>
             {wsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {wsConnected ? "LIVE" : "REST"}
+            {wsConnected ? "WS" : "REST"}
           </div>
 
           {lastUpdate && (

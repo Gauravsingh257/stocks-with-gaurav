@@ -561,8 +561,16 @@ def get_token(symbol: str):
 # =====================================================
 
 def is_market_open() -> bool:
-    now = datetime.now().time()
-    return time(9, 15) <= now <= time(15, 25) # Extended to 15:25 to capture MSCI/expiry moves
+    """Return True only during Mon–Fri 09:00–16:30 IST."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    if now_ist.weekday() >= 5:          # Saturday=5, Sunday=6
+        return False
+    t = now_ist.time()
+    return time(9, 0) <= t <= time(16, 30)
 
 # =====================================================
 # SYMBOL UTILS
@@ -4256,15 +4264,6 @@ def run_live_mode():
             cleanup_structure_state()
             now = datetime.now().time()
 
-            # F4.5: HEARTBEAT — send Telegram alive ping every 30 minutes
-            if (datetime.now() - _last_heartbeat).total_seconds() >= _HEARTBEAT_INTERVAL_MIN * 60:
-                trades_count = len(ACTIVE_TRADES)
-                hb_msg = (f"💚 <b>Engine Alive</b> | {datetime.now().strftime('%H:%M')}\n"
-                          f"Active Trades: {trades_count} | PnL: {DAILY_PNL_R:.1f}R | "
-                          f"Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}")
-                telegram_send(hb_msg)
-                _last_heartbeat = datetime.now()
-
             # F4.6: Reset error counter on successful cycle start
             _consecutive_loop_errors = 0
 
@@ -4302,6 +4301,15 @@ def run_live_mode():
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
                 t.sleep(300)
                 continue
+
+            # F4.5: HEARTBEAT — send Telegram alive ping every 30 minutes (market hours only)
+            if (datetime.now() - _last_heartbeat).total_seconds() >= _HEARTBEAT_INTERVAL_MIN * 60:
+                trades_count = len(ACTIVE_TRADES)
+                hb_msg = (f"💚 <b>Engine Alive</b> | {datetime.now().strftime('%H:%M')}\n"
+                          f"Active Trades: {trades_count} | PnL: {DAILY_PNL_R:.1f}R | "
+                          f"Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}")
+                telegram_send(hb_msg)
+                _last_heartbeat = datetime.now()
 
             # 🌅 MORNING WATCHLIST (9:15 – 9:20)
             if time(9, 15) <= now <= time(9, 20):
