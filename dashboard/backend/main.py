@@ -119,6 +119,23 @@ async def websocket_route(websocket: WebSocket):
 def health():
     return {"status": "ok", "service": "smc-dashboard"}
 
+
+@app.get("/health/kite")
+def health_kite():
+    """Debug: check if Kite env vars are set (no secrets exposed)."""
+    api_key_set = bool(os.getenv("KITE_API_KEY", "").strip())
+    token_set = bool(os.getenv("KITE_ACCESS_TOKEN", "").strip())
+    try:
+        from config.kite_auth import get_api_key, get_access_token, is_kite_available
+        return {
+            "kite_api_key_set": api_key_set or bool(get_api_key()),
+            "kite_access_token_set": token_set or bool(get_access_token()),
+            "kite_ready": is_kite_available(),
+            "hint": "Set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, then Redeploy" if not token_set else None,
+        }
+    except Exception as e:
+        return {"error": str(e), "kite_ready": False}
+
 @app.get("/")
 def root():
     return {

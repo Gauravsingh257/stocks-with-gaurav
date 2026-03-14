@@ -167,7 +167,10 @@ def _fetch_ohlc(symbol: str, kite_interval: str, days: int) -> list[dict]:
 
     kite = _get_kite()
     if kite is None:
-        raise RuntimeError("Kite client unavailable — check access_token.txt")
+        raise RuntimeError(
+            "Kite client unavailable. Set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
+            "then Redeploy. Or use access_token.txt locally. Run zerodha_login.py for fresh token."
+        )
 
     token = _get_instrument_token(kite, symbol)
     if token is None:
