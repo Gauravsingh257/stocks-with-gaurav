@@ -40,9 +40,9 @@ export default function AnalyticsPage() {
   const pnlColor   = (v: number) => v >= 0 ? "var(--success)" : "var(--danger)";
   const totalR     = summary?.total_r ?? 0;
   const wr         = ((summary?.win_rate ?? 0) * 100).toFixed(1);
-  const pf         = summary?.profit_factor.toFixed(2) ?? "0";
-  const exp        = summary?.expectancy_r.toFixed(3) ?? "0";
-  const maxDD      = summary?.max_drawdown_r.toFixed(2) ?? "0";
+  const pf         = (summary?.profit_factor ?? 0).toFixed(2);
+  const exp        = (summary?.expectancy_r ?? 0).toFixed(3);
+  const maxDD      = (summary?.max_drawdown_r ?? 0).toFixed(2);
   const maxCL      = summary?.max_consec_losses ?? 0;
   const total      = summary?.total_trades ?? 0;
 

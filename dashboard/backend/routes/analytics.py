@@ -29,7 +29,13 @@ def get_summary():
         conn.close()
 
     if not rows:
-        return {"error": "No trade data found"}
+        return {
+            "total_trades": 0, "win_count": 0, "loss_count": 0,
+            "win_rate": 0, "win_rate_pct": 0, "total_r": 0,
+            "profit_factor": 0, "expectancy_r": 0,
+            "max_drawdown_r": 0, "max_consec_losses": 0,
+            "avg_win_r": 0, "avg_loss_r": 0,
+        }
 
     completed = [r for r in rows if r["result"] in ("WIN", "LOSS")]
     wins  = [r for r in completed if r["result"] == "WIN"]
