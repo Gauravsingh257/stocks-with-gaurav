@@ -2,6 +2,8 @@
 
 Follow these steps to deploy your FastAPI backend so the live site shows real data.
 
+> **Production:** Backend at Railway + Frontend at Vercel → stockswithgaurav.com
+
 ---
 
 ## Step 1: Push latest code to GitHub
