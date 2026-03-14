@@ -1070,12 +1070,12 @@ def _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn):
     spot_details = []  # collect spot-penalty messages here (merged into details later)
     try:
         from kiteconnect import KiteConnect
-        from kite_credentials import API_KEY
-        _workspace = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        _tf = os.path.join(_workspace, "access_token.txt")
-        if os.path.exists(_tf):
-            _kite = KiteConnect(api_key=API_KEY)
-            _kite.set_access_token(open(_tf).read().strip())
+        from config.kite_auth import get_api_key, get_access_token
+        _api_key = get_api_key()
+        _token = get_access_token()
+        if _api_key and _token:
+            _kite = KiteConnect(api_key=_api_key)
+            _kite.set_access_token(_token)
             _idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
             _ohlc = _kite.ohlc([_idx_sym])
             if _idx_sym in _ohlc:

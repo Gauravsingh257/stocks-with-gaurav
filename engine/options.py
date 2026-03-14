@@ -20,7 +20,7 @@ try:
 except ImportError:
     KiteTicker = None
 
-from kite_credentials import API_KEY
+from config.kite_auth import get_api_key
 from engine import config as cfg
 from engine.expiry_manager import (
     get_atm_strikes, get_atm, get_target_expiries, get_rollover_state,
@@ -367,7 +367,7 @@ class BankNiftySignalEngine:
             return
         try:
             access_token = self.kite.access_token
-            self._kws = KiteTicker(API_KEY, access_token)
+            self._kws = KiteTicker(get_api_key(), access_token)
             tick_store = self.tick_store
             logger = self.logger
             contracts = self.contracts

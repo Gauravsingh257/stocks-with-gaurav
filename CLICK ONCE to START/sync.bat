@@ -9,12 +9,13 @@ echo === Syncing to GitHub ===
 echo.
 
 git add -A
+git status --short
+
 if %errorlevel% neq 0 (
-    echo ERROR: Not a git repo or git add failed.
+    echo ERROR: Not a git repo or git failed.
     pause
     exit /b 1
 )
-git status --short
 
 set /p MSG="Commit message (or press Enter for 'Update'): "
 if "%MSG%"=="" set MSG=Update

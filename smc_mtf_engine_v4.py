@@ -27,7 +27,7 @@ except ImportError:
     KiteTicker = None
 
 # from kotak_neo_adapter import KotakNeoAdapter # REMOVED (Legacy)
-from kite_credentials import API_KEY 
+from config.kite_auth import get_api_key, get_access_token, is_kite_available
 from smc_trading_engine.strategy.entry_model import evaluate_entry
 # smc_confluence_engine removed (Phase 4 cleanup — functionality merged into risk_management)
 import risk_management as risk_mgr
@@ -84,7 +84,6 @@ except ImportError:
     def detect_displacement_sequence(candles, **kwargs): return []
     def record_displacement_event(*a, **kw): pass
     def get_recent_displacement_events(*a, **kw): return []
-    logging.warning("[DISPLACEMENT] engine/displacement_detector.py not found — fallback to legacy mode")
 
 
 import logging
@@ -294,13 +293,11 @@ if BACKTEST_MODE:
     bn_signal_engine = None
 else:
     try:
-        if not os.path.exists("access_token.txt"):
-            raise Exception("access_token.txt not found. Please run login script.")
-            
-        with open("access_token.txt", "r") as f:
-            access_token = f.read().strip()
-            
-        kite = KiteConnect(api_key=API_KEY)
+        api_key = get_api_key()
+        access_token = get_access_token()
+        if not api_key or not access_token:
+            raise Exception("Kite credentials missing. Set KITE_API_KEY + KITE_ACCESS_TOKEN env, or use access_token.txt + kite_credentials.")
+        kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
         print("Zerodha Kite Connected")
 
@@ -4047,19 +4044,22 @@ def cleanup_structure_state(max_age_seconds=3600):
 
 def check_token_age(max_hours=20) -> bool:
     """
-    F4.4: Check if access_token.txt is stale (>20 hours old).
+    F4.4: Check if Kite token is stale (>20 hours old).
+    When KITE_ACCESS_TOKEN env is set, skips file check (assume user refreshes daily).
     Returns True if token is fresh enough, False if expired.
     """
-    token_file = "access_token.txt"
     try:
+        # When using env var, we cannot check file mtime — assume user manages it
+        if os.getenv("KITE_ACCESS_TOKEN", "").strip():
+            print("✅ Token from KITE_ACCESS_TOKEN env (refresh daily via zerodha_login)")
+            return True
+        token_file = "access_token.txt"
         if not os.path.exists(token_file):
-            print("❌ access_token.txt NOT FOUND — run zerodha_login.py first")
+            print("❌ access_token.txt NOT FOUND — run zerodha_login.py or set KITE_ACCESS_TOKEN")
             telegram_send("🛑 <b>TOKEN MISSING</b>\naccess_token.txt not found. Run zerodha_login.py!")
             return False
-        
         mod_time = datetime.fromtimestamp(os.path.getmtime(token_file))
         age_hours = (datetime.now() - mod_time).total_seconds() / 3600
-        
         if age_hours > max_hours:
             msg = (f"🛑 <b>TOKEN EXPIRED</b>\n"
                    f"access_token.txt is {age_hours:.1f} hours old (max: {max_hours}h)\n"
@@ -4068,7 +4068,6 @@ def check_token_age(max_hours=20) -> bool:
             telegram_send(msg)
             logging.critical(f"Token expired: {age_hours:.1f}h old")
             return False
-        
         print(f"✅ Token age: {age_hours:.1f}h (max: {max_hours}h)")
         return True
     except Exception as e:

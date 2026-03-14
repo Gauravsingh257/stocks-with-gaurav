@@ -1,0 +1,23 @@
+# =============================================================================
+# Engine Service — SMC MTF Engine (Railway-safe, no ta-lib/backtrader)
+# Use with: Dockerfile.engine or Railway start command
+# =============================================================================
+
+# --- Core Data ---
+pandas>=2.1.0
+numpy>=1.24.0
+
+# --- Trading & Market Data ---
+kiteconnect>=4.2.0
+
+# --- Visualization (charts, OI) ---
+matplotlib>=3.8.0
+mplfinance>=0.12.10
+
+# --- Config & Env ---
+python-dotenv>=1.0.0
+pydantic-settings>=2.1.0
+
+# --- HTTP & Utilities ---
+requests>=2.31.0
+psutil>=5.9.0

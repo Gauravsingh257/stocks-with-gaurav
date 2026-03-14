@@ -6,6 +6,18 @@ Follow these steps to deploy your FastAPI backend so the live site shows real da
 
 ---
 
+# Daily: One Command
+
+Run **`go_live.bat`**. Paste the Zerodha `request_token` when prompted. Done.
+
+See **GO_LIVE_README.md** for one-time setup (Railway CLI, config file, engine service).
+
+---
+
+# Backend Deployment (Reference)
+
+---
+
 ## Step 1: Push latest code to GitHub
 
 ```powershell
@@ -85,3 +97,89 @@ The dashboard shows live data when your **trading engine** runs locally and push
 
 **WebSocket not connecting?**  
 Vercel rewrites `/ws` to your Railway backend. Ensure `BACKEND_URL` in Vercel points to the Railway URL (with `https://`, no trailing slash).
+
+---
+
+# Deploy Engine to Railway (Optional)
+
+Run the SMC engine in the cloud so you don't need to run anything locally. You only need to refresh the Kite token once per day.
+
+## Engine vs Backend
+
+| Service | Role | Runs |
+|---------|------|------|
+| **Backend** | FastAPI API for the website | 24/7 |
+| **Engine** | SMC analysis, signals, Telegram alerts, OI monitor | During market hours (9:15–15:30 IST) |
+
+The engine and backend are **separate services**. The engine sends signals via Telegram; the backend serves the website. For live data on the site, the engine would need to push state to the backend (future enhancement).
+
+---
+
+## Step 1: Add engine as a second service
+
+1. In your Railway project, click **+ New** → **GitHub Repo**
+2. Select the **same repo** as your backend
+3. Name the service: `engine` (or `smc-engine`)
+
+---
+
+## Step 2: Use Docker build for the engine
+
+1. Click the new **engine** service
+2. Go to **Settings** tab
+3. Under **Build**:
+   - **Builder**: Dockerfile
+   - **Dockerfile Path**: `Dockerfile.engine`
+4. Under **Deploy**:
+   - **Root Directory**: leave blank
+5. Under **Networking**: no public domain needed (engine does not serve HTTP)
+
+---
+
+## Step 3: Set environment variables
+
+Go to **Variables** tab and add:
+
+| Variable | Value | Required |
+|----------|-------|----------|
+| `KITE_API_KEY` | Your Zerodha API key | Yes |
+| `KITE_ACCESS_TOKEN` | Your daily token (from zerodha_login) | Yes |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token | Yes |
+| `TELEGRAM_CHAT_ID` | Your main chat ID | Yes |
+| `SMC_PRO_CHAT_ID` | Pro signals chat (optional) | No |
+| `OPENAI_API_KEY` | For AI features (optional) | No |
+
+---
+
+## Step 4: Refresh Kite token daily
+
+The Kite access token expires ~24 hours after login. Each morning before market open:
+
+1. Run locally: `python zerodha_login.py`
+2. Copy the new token from the output
+3. Railway → engine service → **Variables** → edit `KITE_ACCESS_TOKEN` → paste → **Update**
+4. Redeploy: **Deployments** → ⋮ → **Redeploy** (or it may auto-redeploy on variable change)
+
+---
+
+## Step 5: Verify
+
+1. Check **Deployments** → logs for the engine service
+2. You should see: `Zerodha Kite Connected` and `✅ Token from KITE_ACCESS_TOKEN env`
+3. During market hours, you should receive Telegram signals
+
+---
+
+## Engine Troubleshooting
+
+**Build fails?**  
+- Ensure `Dockerfile.engine` and `requirements-engine.txt` exist in the repo
+- Check build logs for missing modules
+
+**"Connection Failed" in logs?**  
+- Verify `KITE_API_KEY` and `KITE_ACCESS_TOKEN` are set
+- Token may be expired — refresh it (Step 4)
+
+**No signals?**  
+- Engine runs a 1-minute loop; wait for the first candle close after 9:15 IST
+- Check `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are correct

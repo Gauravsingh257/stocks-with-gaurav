@@ -5,6 +5,7 @@
 # --- CREDENTIALS & SECRETS ---
 kite_credentials.py
 access_token.txt
+.go_live_config
 token_status.txt
 .env
 dashboard/backend/.env
