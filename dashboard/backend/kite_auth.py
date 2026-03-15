@@ -113,6 +113,25 @@ def get_access_token_ttl_seconds() -> Optional[int]:
     return None
 
 
+def get_last_login_utc() -> Optional[str]:
+    """Return when the token was last stored in Redis (e.g. after URL login). ISO format UTC. None if not from Redis."""
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        return r.get(KITE_LAST_LOGIN_KEY)
+    except Exception as e:
+        log.debug("Kite auth: last_login get failed: %s", e)
+    return None
+
+
+def get_token_source() -> str:
+    """Return 'redis' if token is in Redis (URL login), else 'env_or_file'."""
+    if get_access_token_from_redis_only():
+        return "redis"
+    return "env_or_file"
+
+
 def get_access_token() -> Optional[str]:
     """Read access_token from Redis. If missing, fall back to config.kite_auth (env or file)."""
     token = get_access_token_from_redis_only()

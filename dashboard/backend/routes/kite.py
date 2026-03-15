@@ -44,6 +44,17 @@ def kite_callback(request_token: str | None = Query(None, alias="request_token")
     try:
         access_token = kite_auth.generate_access_token(request_token.strip())
         kite_auth.store_access_token(access_token)
+        # Ensure all consumers use the new token on next use
+        try:
+            from dashboard.backend.routes.charts import _reset_kite
+            _reset_kite()
+        except Exception:
+            pass
+        try:
+            from dashboard.backend.realtime import request_reconnect
+            request_reconnect()
+        except Exception:
+            pass
         return {"status": "connected", "message": "Kite session established"}
     except ValueError:
         return JSONResponse(

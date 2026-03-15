@@ -47,30 +47,33 @@ _WORKSPACE = str(Path(__file__).resolve().parents[3])   # C:\Users\...\Trading A
 if _WORKSPACE not in sys.path:
     sys.path.insert(0, _WORKSPACE)
 
-# Interval map: frontend string → Kite historical interval string
+# Interval map: frontend string → Zerodha Kite historical_data interval (Kite uses "minute" not "1minute")
 INTERVAL_MAP = {
-    "1m":   "1minute",
+    "1m":   "minute",
     "5m":   "5minute",
     "15m":  "15minute",
     "1h":   "60minute",
     "4h":   "day",       # Kite has no native 4h; use day as closest
     "1D":   "day",
-    # also accept Kite strings directly
-    "1minute":  "1minute",
-    "5minute":  "5minute",
-    "15minute": "15minute",
-    "60minute": "60minute",
-    "day":      "day",
+    # Aliases for Kite strings
+    "minute":    "minute",
+    "5minute":   "5minute",
+    "15minute":  "15minute",
+    "60minute":  "60minute",
+    "day":       "day",
 }
 
 # Days to fetch per interval (balance completeness vs API cost)
 DAYS_FOR_INTERVAL = {
-    "1minute":  1,
-    "5minute":  3,
-    "15minute": 7,
-    "60minute": 30,
-    "day":      365,
+    "minute":    1,
+    "5minute":   3,
+    "15minute":  7,
+    "60minute":  30,
+    "day":       365,
 }
+
+# Intervals exposed to frontend (no duplicate keys)
+CHART_INTERVALS = ["1m", "5m", "15m", "1h", "1D"]
 
 # Symbol to Redis key suffix for tick-built candles (realtime)
 SYMBOL_TO_REDIS_SUFFIX = {"NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY"}
@@ -87,14 +90,13 @@ INDEX_SYMBOLS = {
 # ── Shared Kite client ────────────────────────────────────────────────────────
 _kite      = None
 _kite_lock = Lock()
-
-
 _kite_token_mtime: float = 0  # mtime of access_token.txt when _kite was created
+_kite_token_value: str | None = None  # token string we built _kite with (to detect Redis update)
 
 
 def _get_kite():
-    """Lazy-init KiteConnect. Uses KITE_ACCESS_TOKEN env or access_token.txt."""
-    global _kite, _kite_token_mtime
+    """Lazy-init KiteConnect. Uses Redis first, then KITE_ACCESS_TOKEN env or access_token.txt."""
+    global _kite, _kite_token_mtime, _kite_token_value
     with _kite_lock:
         token_path = Path(_WORKSPACE) / "access_token.txt"
         # Auto-detect token file change (when not using env)
@@ -103,8 +105,22 @@ def _get_kite():
             if current_mtime != _kite_token_mtime:
                 logger.info("[Charts] access_token.txt changed — refreshing")
                 _kite = None
+                _kite_token_value = None
                 _token_cache.clear()
                 _ohlc_cache.clear()
+        # Detect Redis token change (e.g. after /api/kite/login callback)
+        if _kite is not None:
+            try:
+                from dashboard.backend.kite_auth import get_access_token_from_redis_only
+                redis_token = get_access_token_from_redis_only()
+                if redis_token is not None and redis_token != _kite_token_value:
+                    logger.info("[Charts] Redis Kite token updated — refreshing")
+                    _kite = None
+                    _kite_token_value = None
+                    _token_cache.clear()
+                    _ohlc_cache.clear()
+            except Exception:
+                pass
 
         if _kite is not None:
             return _kite
@@ -122,6 +138,7 @@ def _get_kite():
             k.set_access_token(access_token)
             _kite = k
             _kite_token_mtime = token_path.stat().st_mtime if token_path.exists() else 0
+            _kite_token_value = access_token
             logger.info("[Charts] Kite client initialised")
             return _kite
         except Exception as e:
@@ -134,10 +151,11 @@ def _reset_kite():
     Clear Kite session state so the next _get_kite() builds a fresh client with the new token.
     Clears in-process caches (instrument tokens, OHLC) to avoid stale market data.
     """
-    global _kite, _kite_token_mtime
+    global _kite, _kite_token_mtime, _kite_token_value
     with _kite_lock:
         _kite = None
         _kite_token_mtime = 0
+        _kite_token_value = None
         _token_cache.clear()
         _ohlc_cache.clear()
         logger.info("[Charts] Kite client reset — session and caches cleared")
@@ -223,6 +241,28 @@ def _fetch_ohlc(symbol: str, kite_interval: str, days: int) -> list[dict]:
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+def _normalize_candle(c: dict) -> dict:
+    """Ensure candle has time, open, high, low, close, volume for frontend."""
+    return {
+        "time":   int(c.get("time", 0)),
+        "open":   round(float(c.get("open", 0)), 2),
+        "high":   round(float(c.get("high", 0)), 2),
+        "low":    round(float(c.get("low", 0)), 2),
+        "close":  round(float(c.get("close", 0)), 2),
+        "volume": int(c.get("volume", 0)),
+    }
+
+
+def _merge_candles(historical: list[dict], redis_candles: list[dict]) -> list[dict]:
+    """Merge historical (Kite) with Redis candles; dedupe by time (Redis wins), sort chronologically."""
+    by_ts: dict[int, dict] = {}
+    for c in historical:
+        by_ts[c["time"]] = c
+    for c in redis_candles:
+        by_ts[c["time"]] = c
+    return sorted(by_ts.values(), key=lambda x: x["time"])
+
+
 def _clean_symbol(symbol: str) -> str:
     """Strip exchange prefix and clean whitespace."""
     return symbol.replace("NSE:", "").replace("BSE:", "").strip()
@@ -252,93 +292,110 @@ def chart_symbols():
 
     return {
         "symbols":   all_syms,
-        "intervals": list(INTERVAL_MAP.keys()),
+        "intervals": CHART_INTERVALS,
     }
 
 
 @router.get("/ohlc/{symbol:path}")
 def ohlc(
     symbol:   str,
-    interval: str = Query("15m", description="5m | 15m | 1h | 1D"),
+    interval: str = Query("15m", description="1m | 5m | 15m | 1h | 1D"),
     days:     int = Query(0,   ge=0, le=365,
                           description="Override days to fetch (0 = auto)"),
 ):
     """
     Return OHLC candles for a symbol.
-    symbol can be bare ('NIFTY 50') or prefixed ('NSE:NIFTY 50').
+    For NIFTY 50 / NIFTY BANK and 1m/5m/15m: Redis tick-built candles are primary; merged with Kite historical.
+    If Kite fails, Redis-only is returned when available (no crash).
     """
     kite_interval = INTERVAL_MAP.get(interval)
     if kite_interval is None:
-        raise HTTPException(status_code=400, detail=f"Unknown interval: {interval}. Use: {list(INTERVAL_MAP.keys())}")
+        raise HTTPException(status_code=400, detail=f"Unknown interval: {interval}. Use: {CHART_INTERVALS}")
 
     fetch_days = days or DAYS_FOR_INTERVAL.get(kite_interval, 7)
     kite_sym   = _kite_symbol(symbol)
+    clean      = _clean_symbol(symbol)
+    redis_sym  = SYMBOL_TO_REDIS_SUFFIX.get(clean)
+    redis_iv   = REDIS_INTERVAL_MAP.get(interval)
+    use_redis_primary = bool(redis_sym and redis_iv)
 
-    # Read from Redis/in-memory cache first (5s TTL — worker or previous request)
-    cache_key = ohlc_key(kite_sym, kite_interval)
-    cached = cache_get(cache_key)
-    if cached is not None:
-        candles = cached
+    candles: list[dict] = []
+    cached_at = None
+
+    if use_redis_primary:
+        # 1m/5m/15m for NIFTY 50 or NIFTY BANK: Redis first, then Kite historical; merge
+        redis_raw = cache_get_candle_list(redis_sym, redis_iv)
+        redis_candles = [_normalize_candle(c) for c in redis_raw]
+
+        # Skip Kite if Redis already has sufficient recent candles (avoid unnecessary API calls)
+        now_ts = int(_time.time())
+        redis_latest_ts = max((c["time"] for c in redis_candles), default=0)
+        redis_recent = len(redis_candles) >= 100 and redis_latest_ts >= (now_ts - 300)
+        if redis_recent and redis_candles:
+            candles = redis_candles
+        else:
+            try:
+                kite_candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
+                candles = _merge_candles(kite_candles, redis_candles)
+            except Exception as e:
+                logger.warning("Kite OHLC failed for %s %s, using Redis candles only: %s", symbol, interval, e)
+                if redis_candles:
+                    candles = redis_candles
+                else:
+                    err_str = str(e)
+                    if "invalid interval" in err_str.lower() or "invalid_interval" in err_str.lower():
+                        raise HTTPException(status_code=400, detail=f"Kite interval error: {e}")
+                    if "KITE_ACCESS_TOKEN" in err_str or "unavailable" in err_str.lower():
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Kite not configured. Log in at /api/kite/login or set KITE_ACCESS_TOKEN.",
+                        )
+                    if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Kite token invalid or expired. Log in at /api/kite/login.",
+                        )
+                    raise HTTPException(status_code=502, detail=f"Kite API error and no Redis candles: {e}")
     else:
-        try:
-            candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
-            cache_set(cache_key, candles, MARKET_DATA_TTL)
-        except RuntimeError as exc:
-            msg = str(exc)
-            if "KITE_ACCESS_TOKEN" in msg or "unavailable" in msg.lower():
-                msg = (
-                    "Kite not configured — set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
-                    "then Redeploy. Token expires daily; update KITE_ACCESS_TOKEN after zerodha_login.py."
-                )
-            raise HTTPException(status_code=503, detail=msg)
-        except Exception as exc:
-            logger.exception("[Charts] OHLC error for %s %s", symbol, interval)
-            err_str = str(exc)
-            if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Kite access token is invalid or expired. "
-                        "Run zerodha_login.py locally and update KITE_ACCESS_TOKEN in Railway Variables."
-                    ),
-                )
-            raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
-
-    # Merge tick-built candles (realtime) for indices when interval is 1m/5m/15m
-    redis_sym = SYMBOL_TO_REDIS_SUFFIX.get(_clean_symbol(symbol))
-    redis_iv = REDIS_INTERVAL_MAP.get(interval)
-    if redis_sym and redis_iv:
-        try:
-            redis_candles = cache_get_candle_list(redis_sym, redis_iv)
-            if redis_candles:
-                def _norm_candle(c):
-                    return {
-                        "time": int(c.get("time", 0)),
-                        "open": round(float(c.get("open", 0)), 2),
-                        "high": round(float(c.get("high", 0)), 2),
-                        "low": round(float(c.get("low", 0)), 2),
-                        "close": round(float(c.get("close", 0)), 2),
-                        "volume": int(c.get("volume", 0)),
-                    }
-                redis_norm = [_norm_candle(c) for c in redis_candles]
-                first_redis_ts = min(c["time"] for c in redis_norm)
-                hist = [c for c in candles if c["time"] < first_redis_ts]
-                merged = hist + redis_norm
-                merged.sort(key=lambda c: c["time"])
-                seen = {}
-                for c in merged:
-                    seen[c["time"]] = c
-                candles = sorted(seen.values(), key=lambda c: c["time"])
-        except Exception as e:
-            logger.debug("Merge Redis candles failed: %s", e)
+        # Other symbols or 1h/1D: Kite + cache; no Redis merge
+        cache_key = ohlc_key(kite_sym, kite_interval)
+        cached = cache_get(cache_key)
+        if cached is not None:
+            candles = cached
+            cached_at = _ohlc_cache.get((kite_sym, kite_interval), {}).get("ts")
+        else:
+            try:
+                candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
+                cache_set(cache_key, candles, MARKET_DATA_TTL)
+                cached_at = _time.time()
+            except RuntimeError as exc:
+                msg = str(exc)
+                if "KITE_ACCESS_TOKEN" in msg or "unavailable" in msg.lower():
+                    msg = (
+                        "Kite not configured — set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
+                        "then Redeploy. Token expires daily; update KITE_ACCESS_TOKEN after zerodha_login.py."
+                    )
+                raise HTTPException(status_code=503, detail=msg)
+            except Exception as exc:
+                logger.exception("[Charts] OHLC error for %s %s", symbol, interval)
+                err_str = str(exc)
+                if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "Kite access token is invalid or expired. "
+                            "Run zerodha_login.py locally and update KITE_ACCESS_TOKEN in Railway Variables."
+                        ),
+                    )
+                raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
 
     return {
-        "symbol":   symbol,
-        "interval": interval,
+        "symbol":       symbol,
+        "interval":     interval,
         "kite_interval": kite_interval,
-        "count":    len(candles),
-        "candles":  candles,
-        "cached_at": _ohlc_cache.get((_kite_sym := _kite_symbol(symbol), kite_interval), {}).get("ts"),
+        "count":        len(candles),
+        "candles":      candles,
+        "cached_at":    cached_at or _ohlc_cache.get((kite_sym, kite_interval), {}).get("ts"),
     }
 
 

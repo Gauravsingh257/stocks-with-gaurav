@@ -80,6 +80,12 @@ def _get_instrument_tokens() -> dict[int, str]:
 
 def _on_ticks(ws, ticks):
     """Called from KiteTicker thread. Write LTP to Redis, publish throttled, aggregate ticks."""
+    if _reconnect_requested.is_set():
+        try:
+            ws.close()
+        except Exception:
+            pass
+        return
     global _last_publish_ts, _last_ltp
     from dashboard.backend.cache import (
         set_ltp,
@@ -234,14 +240,23 @@ def _run_ticker() -> None:
         kws.on_connect = on_connect
         kws.on_close = on_close
         kws.on_error = on_error
+        _reconnect_requested.clear()
         try:
             kws.connect(threaded=False)
         except Exception as e:
             log.warning("Realtime: KiteTicker disconnected — %s", e)
+        if _reconnect_requested.is_set():
+            log.info("Realtime: reconnect requested — will use new token")
         time.sleep(5)
 
 
 _realtime_thread: threading.Thread | None = None
+_reconnect_requested = threading.Event()
+
+
+def request_reconnect() -> None:
+    """Request the realtime tick stream to reconnect (e.g. after token update via /api/kite/callback)."""
+    _reconnect_requested.set()
 
 
 def start_realtime_service() -> None:

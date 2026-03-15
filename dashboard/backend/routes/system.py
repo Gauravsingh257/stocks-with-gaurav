@@ -94,16 +94,25 @@ def system_health():
     kite_connected = False
     token_present = False
     token_expires_in_hours = None
+    kite_last_login_utc = None
+    token_source = None
     kite_hint = None
     kite_disconnect_reason = None
     try:
         import logging
         _log = logging.getLogger("dashboard.system")
-        from dashboard.backend.kite_auth import get_access_token as get_kite_token, get_access_token_ttl_seconds
+        from dashboard.backend.kite_auth import (
+            get_access_token as get_kite_token,
+            get_access_token_ttl_seconds,
+            get_last_login_utc,
+            get_token_source,
+        )
         token_present = bool(get_kite_token())
         ttl_sec = get_access_token_ttl_seconds()
         if ttl_sec is not None and ttl_sec > 0:
             token_expires_in_hours = round(ttl_sec / 3600, 1)
+        kite_last_login_utc = get_last_login_utc()
+        token_source = get_token_source()
         if token_present:
             from dashboard.backend.routes.charts import _get_kite, _reset_kite
             k = _get_kite()
@@ -119,6 +128,14 @@ def system_health():
             kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
     except Exception:
         kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
+
+    if token_source is None:
+        try:
+            from dashboard.backend.kite_auth import get_token_source, get_last_login_utc
+            token_source = get_token_source()
+            kite_last_login_utc = get_last_login_utc()
+        except Exception:
+            pass
 
     # ── Worker heartbeat (detect market_engine.py failure) ────
     worker_status = None
@@ -170,6 +187,8 @@ def system_health():
         "kite_connected":   kite_connected,
         "token_present":    token_present,
         "token_expires_in_hours": token_expires_in_hours,
+        "token_source":     token_source,
+        "kite_last_login_utc": kite_last_login_utc,
         "ws_clients":       ws_clients,
         "latency_ms":       latency_ms,
         "market_status":    market_status,
@@ -275,9 +294,22 @@ def kite_status():
     import os
     api_key_set = bool(os.getenv("KITE_API_KEY", "").strip())
     token_set = False
+    token_source = None
+    kite_last_login_utc = None
+    token_expires_in_hours = None
     try:
-        from dashboard.backend.kite_auth import get_access_token as get_kite_token
+        from dashboard.backend.kite_auth import (
+            get_access_token as get_kite_token,
+            get_token_source,
+            get_last_login_utc,
+            get_access_token_ttl_seconds,
+        )
         token_set = bool(get_kite_token())
+        token_source = get_token_source()
+        kite_last_login_utc = get_last_login_utc()
+        ttl = get_access_token_ttl_seconds()
+        if ttl is not None and ttl > 0:
+            token_expires_in_hours = round(ttl / 3600, 1)
     except Exception:
         pass
 
@@ -302,7 +334,7 @@ def kite_status():
     elif not token_valid:
         hint = "Token invalid or expired. Log in at /api/kite/login or refresh KITE_ACCESS_TOKEN."
 
-    return {
+    out = {
         "kite_ready":   kite_ready,
         "token_valid":  token_valid,
         "api_key_set":  api_key_set,
@@ -310,3 +342,10 @@ def kite_status():
         "error":        kite_error,
         "hint":         hint,
     }
+    if token_source is not None:
+        out["token_source"] = token_source
+    if kite_last_login_utc is not None:
+        out["kite_last_login_utc"] = kite_last_login_utc
+    if token_expires_in_hours is not None:
+        out["token_expires_in_hours"] = token_expires_in_hours
+    return out
