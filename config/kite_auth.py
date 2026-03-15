@@ -6,11 +6,15 @@ Resolution order:
   2. access_token.txt file (for local dev)
 
 API key: KITE_API_KEY env, else kite_credentials.API_KEY
+
+Note: KITE_API_SECRET is only used during login (zerodha_login.py) to exchange
+request_token for access_token. Runtime only needs KITE_API_KEY + KITE_ACCESS_TOKEN.
 """
+import logging
 import os
 from pathlib import Path
 
-# Workspace root
+log = logging.getLogger("config.kite_auth")
 _WORKSPACE = Path(__file__).resolve().parents[1]
 
 
@@ -43,3 +47,16 @@ def get_access_token() -> str:
 def is_kite_available() -> bool:
     """True if both API key and access token are present."""
     return bool(get_api_key() and get_access_token())
+
+
+def log_kite_status() -> None:
+    """Log whether Kite credentials are loaded (no secrets). Call at startup."""
+    api_key = get_api_key()
+    token = get_access_token()
+    if api_key and token:
+        log.info("Kite: API key and access token loaded (env or file)")
+    else:
+        if not api_key:
+            log.warning("Kite: KITE_API_KEY not set — set in Railway Variables or kite_credentials")
+        if not token:
+            log.warning("Kite: KITE_ACCESS_TOKEN not set — set in Railway Variables or run zerodha_login.py")

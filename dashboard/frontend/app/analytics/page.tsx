@@ -26,7 +26,7 @@ export default function AnalyticsPage() {
         setSetups(b.setups ?? []);
         setRolling(r.data ?? []);
         // data_source may come from summary or equity (both carry it now)
-        setDataSource((s as Record<string, unknown>)["data_source"] as string ?? "trades");
+        setDataSource((s as any)?.data_source ?? "trades");
         setSyncInfo(sync as Record<string, unknown>);
       })
       .catch(console.error)

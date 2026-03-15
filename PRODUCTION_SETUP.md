@@ -3,6 +3,8 @@
 > **Deployment flow:** GitHub → Railway (backend) + Vercel (frontend)  
 > Push to `main` → both platforms auto-deploy.
 
+> **If the site still isn’t live:** see **[DEPLOYMENT_BUGS.md](./DEPLOYMENT_BUGS.md)** for a full audit (Railway, Vercel, GitHub) and a final bugs/checklist.
+
 ---
 
 ## Quick Reference — What Causes Each Error

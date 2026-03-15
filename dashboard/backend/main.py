@@ -50,17 +50,35 @@ async def lifespan(app: FastAPI):
     log.info("Dashboard backend starting…")
     init_db()
     synced = full_sync_from_csv(force=True)
-    log.info(f"[DB] Initial sync: {synced} trades loaded from trade_ledger_2026.csv")
+    log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
     start_csv_watcher(interval_seconds=30)
     log.info("[DB] CSV watcher started — auto-syncing every 30s on file change")
     start_broadcast_loop()
+
+    # ── Kite: log status and validate session ────────────────────────────────
+    try:
+        from config.kite_auth import log_kite_status, is_kite_available
+        log_kite_status()
+        if is_kite_available():
+            from dashboard.backend.routes.charts import _get_kite
+            k = _get_kite()
+            if k is not None:
+                k.profile()
+                log.info("Kite: session validated (profile() OK)")
+            else:
+                log.warning("Kite: client init failed — check KITE_API_KEY and KITE_ACCESS_TOKEN")
+        else:
+            log.warning("Kite: credentials missing — OHLC/Charts will show offline until set")
+    except Exception as exc:
+        log.warning("Kite: startup validation failed — %s", exc)
+
     try:
         from agents.runner import start_scheduler
         start_scheduler()
         log.info("Agent scheduler started")
     except Exception as exc:
         log.warning("Agent scheduler not started: %s", exc)
-    log.info("Dashboard backend ready at http://localhost:8000")
+    log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
     stop_broadcast_loop()

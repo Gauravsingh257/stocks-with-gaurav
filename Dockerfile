@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements-railway.txt
 # Copy code
 COPY . .
 
-# Use Python starter so PORT is read from env (no shell expansion issues)
-ENV PORT=8080
+# Repo root on PYTHONPATH so "dashboard" is findable when running scripts/start_web.py
+ENV PYTHONPATH=/app
+ENV PORT=8000
 CMD ["python", "scripts/start_web.py"]

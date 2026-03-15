@@ -3,12 +3,14 @@ dashboard/backend/routes/research.py
 Research Center APIs for swing ideas, long-term ideas, and running trades.
 """
 
+import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.backend.db import get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
 
 router = APIRouter(tags=["research"])
+log = logging.getLogger("dashboard.research")
 
 
 def _swing_payload(limit: int) -> dict:
@@ -178,15 +180,23 @@ def get_research_ranking_runs(
 
 
 def _run_scan(agent_name: str, label: str) -> dict:
+    """Run a research scan agent. Returns dict with ok/status/result or error."""
     try:
         from agents.runner import run_agent_now
-
         result = run_agent_now(agent_name)
     except Exception as exc:
+        log.exception("Research run_agent_now failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
     if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
+        return {
+            "ok": False,
+            "scan": label,
+            "agent": agent_name,
+            "status": "error",
+            "message": result["error"],
+            "result": result,
+        }
 
     return {
         "ok": True,
@@ -201,10 +211,38 @@ def _run_scan(agent_name: str, label: str) -> dict:
 @router.post("/api/research/run/swing")
 @router.post("/research/run/swing")
 def run_swing_scan():
-    return _run_scan("SwingTradeAlphaAgent", "swing")
+    """Trigger swing scan. Always returns JSON; never 502."""
+    try:
+        return _run_scan("SwingTradeAlphaAgent", "swing")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("run_swing_scan failed: %s", e)
+        return {
+            "ok": False,
+            "scan": "swing",
+            "agent": "SwingTradeAlphaAgent",
+            "status": "error",
+            "message": str(e),
+            "result": {},
+        }
 
 
 @router.post("/api/research/run/longterm")
 @router.post("/research/run/longterm")
 def run_longterm_scan():
-    return _run_scan("LongTermInvestmentAgent", "longterm")
+    """Trigger long-term scan. Always returns JSON; never 502."""
+    try:
+        return _run_scan("LongTermInvestmentAgent", "longterm")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("run_longterm_scan failed: %s", e)
+        return {
+            "ok": False,
+            "scan": "longterm",
+            "agent": "LongTermInvestmentAgent",
+            "status": "error",
+            "message": str(e),
+            "result": {},
+        }
