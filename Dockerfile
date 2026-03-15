@@ -12,9 +12,6 @@ RUN pip install --no-cache-dir -r requirements-railway.txt
 # Copy code
 COPY . .
 
-# Entrypoint script reads PORT from env (Railway sets it at runtime)
-COPY scripts/railway_web_start.sh /railway_web_start.sh
-RUN sed -i 's/\r$//' /railway_web_start.sh && chmod +x /railway_web_start.sh
-
+# Use Python starter so PORT is read from env (no shell expansion issues)
 ENV PORT=8080
-CMD ["/railway_web_start.sh"]
+CMD ["python", "scripts/start_web.py"]

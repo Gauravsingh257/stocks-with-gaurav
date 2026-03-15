@@ -8,11 +8,12 @@ Use this when the website shows "ENGINE STALE", "Kite Offline", or 502 errors.
 
 The **web** service serves the API. If it fails, you get 502 and the site won’t work.
 
-### 1.1 Use the Correct Dockerfile
+### 1.1 Use the Correct Dockerfile and Start Command
 
 - Railway → your project → **web** service → **Settings** → **Build**.
 - Set **Dockerfile Path** to: `Dockerfile`  
   (not `Dockerfile.engine`).
+- Under **Deploy** (or **Start Command**), leave **Start Command** empty so the Dockerfile `CMD` is used (runs `python scripts/start_web.py`). If you have a custom command like `uvicorn ... --port $PORT`, remove it — it causes the "Invalid value for '--port': '$PORT'" error.
 - **Save**. Trigger a redeploy if needed.
 
 ### 1.2 Confirm Deployment Succeeded
