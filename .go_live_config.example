@@ -1,3 +1,5 @@
 # Copy to .go_live_config and fill in your values (one-time)
 # BACKEND_URL=https://YOUR-RAILWAY-URL.up.railway.app
 # ENGINE_SERVICE=engine
+# WEB_SERVICE=web
+# KITE_API_KEY=your_zerodha_api_key

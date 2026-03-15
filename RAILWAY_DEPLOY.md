@@ -97,6 +97,9 @@ The **web** service must use the root `Dockerfile` (dashboard backend), not `Doc
 **Build fails on ta-lib?**  
 We use `requirements-railway.txt` (via Dockerfile) to avoid this. If it still fails, check Railway build logs.
 
+**"Kite Offline" on Charts page?**  
+The web service needs both `KITE_API_KEY` and `KITE_ACCESS_TOKEN`. Add `KITE_API_KEY` to `.go_live_config` — `go_live.bat` will push it to both engine and web. Or add manually: Railway → web → Variables → `KITE_API_KEY`, `KITE_ACCESS_TOKEN`. Redeploy after adding.
+
 **"Connecting to engine" forever?**  
 The dashboard shows live data when your **trading engine** runs locally and pushes state. The backend API runs 24/7 on Railway; the engine runs on your PC during market hours. For now, the site will load with empty/placeholder data until you run the engine.
 

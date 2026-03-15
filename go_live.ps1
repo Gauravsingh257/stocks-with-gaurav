@@ -25,7 +25,10 @@ if (Test-Path $configPath) {
 }
 $backendUrl = $env:BACKEND_URL
 $engineService = $env:ENGINE_SERVICE
+$webService = $env:WEB_SERVICE
+$apiKey = $env:KITE_API_KEY
 if (-not $engineService) { $engineService = "engine" }
+if (-not $webService) { $webService = "web" }
 
 # Step 1: Zerodha login
 Write-Host "[1/4] Zerodha Login" -ForegroundColor Yellow
@@ -50,22 +53,34 @@ if (-not $token) {
 Write-Host "      Token saved." -ForegroundColor Green
 Write-Host ""
 
-# Step 2: Update Railway (engine service)
-Write-Host "[2/4] Updating KITE_ACCESS_TOKEN on Railway..." -ForegroundColor Yellow
+# Step 2: Update Railway (engine + web services)
+Write-Host "[2/4] Updating KITE credentials on Railway (engine + web)..." -ForegroundColor Yellow
 $railway = Get-Command railway -ErrorAction SilentlyContinue
 if ($railway) {
+    $engineOk = $false
+    $webOk = $false
+    # KITE_ACCESS_TOKEN (required for both)
     $token | railway variable set KITE_ACCESS_TOKEN --stdin -s $engineService
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "      Railway token updated. Engine will redeploy." -ForegroundColor Green
-    } else {
-        Write-Host "      Railway CLI failed. Paste token manually: Railway -> engine -> Variables -> KITE_ACCESS_TOKEN" -ForegroundColor Yellow
+    if ($LASTEXITCODE -eq 0) { $engineOk = $true }
+    $token | railway variable set KITE_ACCESS_TOKEN --stdin -s $webService
+    if ($LASTEXITCODE -eq 0) { $webOk = $true }
+    # KITE_API_KEY (required for charts; set on both if in config)
+    if ($apiKey) {
+        $apiKey | railway variable set KITE_API_KEY --stdin -s $engineService 2>$null
+        $apiKey | railway variable set KITE_API_KEY --stdin -s $webService 2>$null
+        Write-Host "      KITE_API_KEY + KITE_ACCESS_TOKEN updated on both services." -ForegroundColor Green
+    } elseif ($engineOk -and $webOk) {
+        Write-Host "      KITE_ACCESS_TOKEN updated on both. Add KITE_API_KEY to .go_live_config for charts." -ForegroundColor Yellow
+    }
+    if (-not $engineOk -or -not $webOk) {
+        Write-Host "      Some updates failed. Paste token manually to Railway -> Variables." -ForegroundColor Yellow
         Set-Clipboard -Value $token
         Write-Host "      (Token copied to clipboard)" -ForegroundColor Gray
     }
 } else {
     Write-Host "      Railway CLI not found. Install: npm i -g @railway/cli then run: railway login, railway link" -ForegroundColor Yellow
     Set-Clipboard -Value $token
-    Write-Host "      Token copied to clipboard. Paste into Railway -> engine -> Variables -> KITE_ACCESS_TOKEN" -ForegroundColor Gray
+    Write-Host "      Token copied to clipboard. Paste into Railway -> engine and web -> Variables." -ForegroundColor Gray
 }
 Write-Host ""
 

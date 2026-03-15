@@ -19,9 +19,11 @@ Set:
 ```
 BACKEND_URL=https://YOUR-RAILWAY-URL.up.railway.app
 ENGINE_SERVICE=engine
+WEB_SERVICE=web
+KITE_API_KEY=your_zerodha_api_key
 ```
 
-*(Get the URL from Railway → your backend service → Settings → Domains)*
+*(Get BACKEND_URL from Railway → web service → Settings → Domains. Get KITE_API_KEY from Zerodha app console.)*
 
 ### 2. Install Railway CLI (for auto token update)
 
@@ -54,11 +56,12 @@ If you haven't added the engine service yet, do it once (after pushing code with
 1. Browser opens for Zerodha login
 2. Log in, copy `request_token` from the redirect URL
 3. Paste it when prompted
-4. Script updates Railway, pushes code, syncs trades
+4. Script updates KITE_ACCESS_TOKEN on both engine and web services, pushes code, syncs trades
 
 ---
 
 ## If Railway CLI is not installed
 
-The script will copy the token to your clipboard. Paste it into:
-**Railway → engine service → Variables → KITE_ACCESS_TOKEN** → Update
+The script will copy the token to your clipboard. Paste it into both:
+**Railway → engine service → Variables → KITE_ACCESS_TOKEN** and
+**Railway → web service → Variables → KITE_ACCESS_TOKEN** → Update
