@@ -74,7 +74,10 @@ export default function TopBar() {
       <div style={{ width: 1, height: 20, background: "var(--border)" }} />
 
       {/* Engine loop heartbeat status */}
-      <span className={`badge ${engineRunning ? "badge-live" : "badge-loss"}`}>
+      <span
+        className={`badge ${engineRunning ? "badge-live" : "badge-loss"}`}
+        title={!snapshot?.engine_live && !engineRunning ? "Backend runs separately from engine — STALE is normal. Charts work if Kite is set on web." : undefined}
+      >
         <span
           className="pulse-dot"
           style={{

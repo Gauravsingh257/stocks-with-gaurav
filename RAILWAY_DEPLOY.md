@@ -4,6 +4,8 @@ Follow these steps to deploy your FastAPI backend so the live site shows real da
 
 > **Production:** Backend at Railway + Frontend at Vercel → stockswithgaurav.com
 
+**Website down / 502 / Kite Offline?** → See **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** for step-by-step fixes.
+
 ---
 
 # Daily: One Command
