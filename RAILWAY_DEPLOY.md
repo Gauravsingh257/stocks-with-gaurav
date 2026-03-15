@@ -91,10 +91,10 @@ No Kite/Telegram keys needed for the dashboard to load — it will show "Connect
 
 ## Troubleshooting
 
-**"The executable 'uvicorn' could not be found"?**  
-The **web** service must use the root `Dockerfile` (dashboard backend), not `Dockerfile.engine`.  
-→ Railway → **web** service → **Settings** → **Build** → **Dockerfile Path**: `Dockerfile` (or leave blank to use default).  
-→ The **engine** service should use `Dockerfile.engine`.
+**"Invalid value for '--port': '$PORT'" or "uvicorn" not found?**  
+- **web** service must use the root `Dockerfile` (not `Dockerfile.engine`).  
+- Set **Config file path** to `railway-web.toml` (web service → Settings → Deploy) so the start command runs `python scripts/start_web.py` and reads PORT from env.  
+- Clear any custom **Start Command** that contains `$PORT` (Railway runs it without a shell, so $PORT is not expanded).
 
 **Build fails on ta-lib?**  
 We use `requirements-railway.txt` (via Dockerfile) to avoid this. If it still fails, check Railway build logs.

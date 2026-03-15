@@ -13,8 +13,13 @@ The **web** service serves the API. If it fails, you get 502 and the site won’
 - Railway → your project → **web** service → **Settings** → **Build**.
 - Set **Dockerfile Path** to: `Dockerfile`  
   (not `Dockerfile.engine`).
-- Under **Deploy** (or **Start Command**), leave **Start Command** empty so the Dockerfile `CMD` is used (runs `python scripts/start_web.py`). If you have a custom command like `uvicorn ... --port $PORT`, remove it — it causes the "Invalid value for '--port': '$PORT'" error.
-- **Save**. Trigger a redeploy if needed.
+- **Fix PORT / start command (pick one):**
+  - **Option A:** Set **Config file path** to `railway-web.toml` (Deploy / General). Then clear **Start Command** if set.
+  - **Option B:** Set **Start Command** to exactly:  
+    `/bin/sh -c "exec python scripts/start_web.py"`  
+    (The shell runs our script, which reads PORT from the environment.)
+- Do **not** use `uvicorn ... --port $PORT` as Start Command — Railway runs in exec form so `$PORT` is not expanded and you get "Invalid value for '--port': '$PORT'".
+- **Save**. Trigger a **Redeploy**.
 
 ### 1.2 Confirm Deployment Succeeded
 

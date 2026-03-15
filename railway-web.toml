@@ -1,0 +1,6 @@
+# Railway config for WEB service only.
+# In Railway dashboard: web service -> Settings -> set "Config file path" to: railway-web.toml
+# This start command runs our Python script which reads PORT from env (fixes $PORT not expanded).
+
+[deploy]
+startCommand = "python scripts/start_web.py"
