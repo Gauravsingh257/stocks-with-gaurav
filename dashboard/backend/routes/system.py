@@ -90,21 +90,35 @@ def system_health():
     else:
         engine_status = "offline"
 
-    # ── Kite connected (token valid) + hint when disconnected ─
+    # ── Kite connected (token valid) + token_present + token_expires_in_hours + hint + reason ─
     kite_connected = False
+    token_present = False
+    token_expires_in_hours = None
     kite_hint = None
+    kite_disconnect_reason = None
     try:
-        from config.kite_auth import is_kite_available
-        if is_kite_available():
-            from dashboard.backend.routes.charts import _get_kite
+        import logging
+        _log = logging.getLogger("dashboard.system")
+        from dashboard.backend.kite_auth import get_access_token as get_kite_token, get_access_token_ttl_seconds
+        token_present = bool(get_kite_token())
+        ttl_sec = get_access_token_ttl_seconds()
+        if ttl_sec is not None and ttl_sec > 0:
+            token_expires_in_hours = round(ttl_sec / 3600, 1)
+        if token_present:
+            from dashboard.backend.routes.charts import _get_kite, _reset_kite
             k = _get_kite()
             if k is not None:
-                k.profile()
-                kite_connected = True
+                try:
+                    k.profile()
+                    kite_connected = True
+                except Exception:
+                    _log.warning("Kite session expired")
+                    kite_disconnect_reason = "token_expired"
+                    _reset_kite()
         if not kite_connected:
-            kite_hint = "Token expired or invalid. Run zerodha_login.py and update KITE_ACCESS_TOKEN."
+            kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
     except Exception:
-        kite_hint = "Token expired or invalid. Run zerodha_login.py and update KITE_ACCESS_TOKEN."
+        kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
 
     # ── Worker heartbeat (detect market_engine.py failure) ────
     worker_status = None
@@ -154,6 +168,8 @@ def system_health():
     out = {
         "engine_status":    engine_status,
         "kite_connected":   kite_connected,
+        "token_present":    token_present,
+        "token_expires_in_hours": token_expires_in_hours,
         "ws_clients":       ws_clients,
         "latency_ms":       latency_ms,
         "market_status":    market_status,
@@ -175,6 +191,8 @@ def system_health():
     }
     if kite_hint is not None:
         out["kite_hint"] = kite_hint
+    if kite_disconnect_reason is not None:
+        out["kite_disconnect_reason"] = kite_disconnect_reason
     return out
 
 
@@ -253,34 +271,25 @@ def tactical_plan():
 
 @router.get("/kite-status")
 def kite_status():
-    """Return Kite connectivity status without exposing credentials."""
+    """Return Kite connectivity status without exposing credentials. Token may be in Redis (web login) or env/file."""
     import os
-    api_key_set    = bool(os.getenv("KITE_API_KEY", "").strip())
-    token_set      = bool(os.getenv("KITE_ACCESS_TOKEN", "").strip())
-    token_file_ok  = False
+    api_key_set = bool(os.getenv("KITE_API_KEY", "").strip())
+    token_set = False
     try:
-        from pathlib import Path as _Path
-        tf = _Path(__file__).resolve().parents[3] / "access_token.txt"
-        token_file_ok = tf.exists() and bool(tf.read_text().strip())
+        from dashboard.backend.kite_auth import get_access_token as get_kite_token
+        token_set = bool(get_kite_token())
     except Exception:
         pass
 
-    kite_ready = False
+    kite_ready = token_set
     kite_error = None
-    try:
-        from config.kite_auth import is_kite_available
-        kite_ready = is_kite_available()
-    except Exception as e:
-        kite_error = str(e)
-
-    # Attempt a lightweight Kite API call to verify the token is valid
     token_valid = False
     if kite_ready:
         try:
             from dashboard.backend.routes.charts import _get_kite
             k = _get_kite()
             if k is not None:
-                k.profile()   # lightweight call — raises on bad token
+                k.profile()
                 token_valid = True
         except Exception as ve:
             kite_error = str(ve)
@@ -288,16 +297,16 @@ def kite_status():
     hint = None
     if not api_key_set:
         hint = "Add KITE_API_KEY to Railway Variables and Redeploy."
-    elif not (token_set or token_file_ok):
-        hint = "Add KITE_ACCESS_TOKEN to Railway Variables. Run zerodha_login.py to generate a fresh token."
+    elif not token_set:
+        hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN in Railway."
     elif not token_valid:
-        hint = "Token appears invalid or expired. Run zerodha_login.py and update KITE_ACCESS_TOKEN in Railway."
+        hint = "Token invalid or expired. Log in at /api/kite/login or refresh KITE_ACCESS_TOKEN."
 
     return {
-        "kite_ready":       kite_ready,
-        "token_valid":      token_valid,
-        "api_key_set":      api_key_set,
-        "token_set":        token_set or token_file_ok,
-        "error":            kite_error,
-        "hint":             hint,
+        "kite_ready":   kite_ready,
+        "token_valid":  token_valid,
+        "api_key_set":  api_key_set,
+        "token_set":    token_set,
+        "error":        kite_error,
+        "hint":         hint,
     }

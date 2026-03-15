@@ -13,7 +13,7 @@
 |---------|-----------|-----|
 | Vercel build fails | No `vercel.json` / wrong root directory | Already fixed — `vercel.json` now in repo root |
 | HTTP 502 on all pages | `BACKEND_URL` not set in Vercel | Set env vars (Step 2) |
-| Kite Offline / OHLC 502 | `KITE_ACCESS_TOKEN` missing or expired in Railway | Set/refresh token (Step 3) |
+| Kite Offline / OHLC 502 | `KITE_ACCESS_TOKEN` missing or expired in Railway | Log in at `/api/kite/login` or set token (Step 3) |
 | ENGINE STALE badge | Trading engine not running on Railway | Expected — engine runs locally (Step 4) |
 | OI Intelligence empty | Engine JSON files not on Railway | Expected without live engine |
 | Railway deploy fails | Wrong Dockerfile / missing packages | Fixed — `railway.toml` now in repo root |
@@ -33,7 +33,9 @@ Go to **Railway → your service → Variables** and add:
 
 ```
 KITE_API_KEY          = your_zerodha_api_key
-KITE_ACCESS_TOKEN     = (from zerodha_login.py — update daily!)
+KITE_API_SECRET       = your_zerodha_api_secret   # required for web login (callback)
+KITE_REDIRECT_URI     = https://stockswithgaurav.com/api/kite/callback   # must match Zerodha app whitelist
+KITE_ACCESS_TOKEN     = (optional — use web login at /api/kite/login; or from zerodha_login.py)
 OPENAI_API_KEY        = sk-...
 TELEGRAM_BOT_TOKEN    = (optional)
 TELEGRAM_CHAT_ID      = (optional)
@@ -89,17 +91,29 @@ NEXT_PUBLIC_WS_URL       = wss://<your-railway-url>.up.railway.app/ws
 
 ## Step 3 — Kite Token (Daily Refresh)
 
-The Kite access token expires every day at ~05:00 IST.
+The Kite access token expires every day at ~05:00 IST. No Zerodha password or OTP is stored; only the access token is stored (Redis or env).
 
-### Daily refresh workflow
+### Recommended: Web login (once per day)
+
+1. **Whitelist callback URL** in [Zerodha Kite app dashboard](https://kite.trade/): use your **Railway backend** callback URL, e.g. `https://<your-railway-url>.up.railway.app/api/kite/callback` (Zerodha must redirect to the API server that stores the token).
+2. Set **KITE_REDIRECT_URI** in Railway Variables to that same callback URL. Set **KITE_API_SECRET** (same as used in zerodha_login).
+3. Each morning, open **https://stockswithgaurav.com/api/kite/login** (or your Railway backend URL directly). The frontend redirects to the backend so Kite login works from your domain. **Vercel must have `BACKEND_URL` or `NEXT_PUBLIC_BACKEND_URL` set** to your Railway URL; otherwise you get 404/503 — redeploy after setting.
+4. Log in to Zerodha (password + OTP in browser only). Zerodha redirects to your **backend** callback URL (e.g. `https://<railway-url>.up.railway.app/api/kite/callback`). The backend exchanges the `request_token` for an `access_token`, stores it in Redis (24h TTL), and returns `{"status": "connected"}`.
+5. Backend and market worker automatically use the new token for the rest of the day.
+
+**Requirements:** `REDIS_URL` must be set so the token can be stored. If Redis is unavailable, use the manual workflow below.
+
+### Manual workflow (env token)
+
 1. Run `zerodha_login.py` on your local PC (or `go_live.bat`)
 2. Copy the access token from `access_token.txt` or the console output
 3. Railway → your service → Variables → edit `KITE_ACCESS_TOKEN` → paste new token
 4. **Optionally** click **Deploy** — token is picked up on next request without restart
 
 ### Verify Kite connection
-Visit: `https://<your-railway-url>.up.railway.app/api/system/kite-status`  
-Should return: `{"kite_ready": true, "token_valid": true, ...}`
+
+- **Health:** `https://<your-railway-url>.up.railway.app/api/system/health` → `kite_connected: true`, `token_present: true`
+- **Kite status:** `https://<your-railway-url>.up.railway.app/api/system/kite-status` → `{"kite_ready": true, "token_valid": true, ...}`
 
 ---
 
@@ -163,8 +177,10 @@ stockswithgaurav.com (Vercel — Next.js)
 Railway Web Service (FastAPI — dashboard backend)
       │
       ├── /health            → health check
-      ├── /api/ohlc/*        → Kite OHLC data (needs KITE_ACCESS_TOKEN)
-      ├── /api/system/*      → system health / kite status
+      ├── /api/kite/login    → redirect to Zerodha login (daily admin flow)
+      ├── /api/kite/callback → Kite callback; stores access_token in Redis
+      ├── /api/ohlc/*        → Kite OHLC data (token from Redis or KITE_ACCESS_TOKEN)
+      ├── /api/system/*      → system health / kite status (kite_connected, token_present)
       ├── /api/analytics/*   → trade analytics
       ├── /api/journal/*     → trade journal
       ├── /ws                → WebSocket broadcast (engine snapshots)
@@ -181,12 +197,13 @@ Verify **`GET /api/system/health`** returns:
 |-------|----------|
 | `engine_status` | `running` (or `stale` if worker/engine not running) |
 | `kite_connected` | `true` |
+| `token_present` | `true` |
 | `ws_clients` | `> 0` when dashboard is open |
 | `latency_ms` | `< 100` |
 | `market_status` | `open` \| `premarket` \| `closed` (IST 09:15–15:30) |
 | `worker_status` | `running` when Redis + worker are used |
 
-**Kite token expiry:** If `kite_connected` is `false`, the response includes `kite_hint`: run `zerodha_login.py` and update `KITE_ACCESS_TOKEN` in Railway.
+**Kite token expiry:** If `kite_connected` is `false`, the response includes `kite_hint`: open `/api/kite/login` to log in via Zerodha, or run `zerodha_login.py` and set `KITE_ACCESS_TOKEN` in Railway.
 
 **Load test:** Open ~10 browser tabs to the dashboard; confirm API and WebSocket stay stable (max 5 WS connections per IP).
 
@@ -195,8 +212,8 @@ Verify **`GET /api/system/health`** returns:
 ## Troubleshooting
 
 ### "OHLC fetch failed" / "Kite Offline"
-→ `KITE_ACCESS_TOKEN` is missing, expired, or wrong in Railway Variables  
-→ Run `zerodha_login.py`, copy token, paste into Railway, redeploy
+→ Token missing or expired. **Web login:** open `https://<your-backend>/api/kite/login`, log in to Zerodha (ensure `REDIS_URL`, `KITE_REDIRECT_URI`, `KITE_API_SECRET` are set).  
+→ **Manual:** run `zerodha_login.py`, copy token, set `KITE_ACCESS_TOKEN` in Railway, redeploy.
 
 ### HTTP 502 / 503 on all API calls
 → `BACKEND_URL` and `NEXT_PUBLIC_BACKEND_URL` not set in Vercel  

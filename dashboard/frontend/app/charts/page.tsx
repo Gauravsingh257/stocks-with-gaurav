@@ -179,7 +179,26 @@ export default function ChartsPage() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {kiteOk === true  && <span className="badge badge-live"    style={{ fontSize: "0.72rem" }}><Wifi    size={10}/> Kite Live</span>}
-          {kiteOk === false && <span className="badge badge-warning" style={{ fontSize: "0.72rem" }}><WifiOff size={10}/> Kite Offline</span>}
+          {kiteOk === false && (
+            <>
+              <span className="badge badge-warning" style={{ fontSize: "0.72rem" }}><WifiOff size={10}/> Kite Offline</span>
+              {BASE && (
+                <a
+                  href={`${BASE}/api/kite/login`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "6px 12px", fontSize: "0.75rem", fontWeight: 600,
+                    color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 6,
+                    textDecoration: "none",
+                  }}
+                >
+                  Connect Kite
+                </a>
+              )}
+            </>
+          )}
           <button className="btn-accent" onClick={fetchData} disabled={loading}
             style={{ fontSize: "0.78rem", padding: "6px 14px", opacity: loading ? 0.6 : 1 }}>
             <RefreshCw size={12} style={{ display: "inline", marginRight: 5,
@@ -222,7 +241,7 @@ export default function ChartsPage() {
           <div>
             <strong>Chart data unavailable</strong> — {error}
             <div style={{ fontSize: "0.73rem", color: "var(--text-secondary)", marginTop: 3 }}>
-              Showing demo data. Reconnect Kite or re-run zerodha_login.py to restore live charts.
+              Showing demo data. Click Connect Kite above or open /api/kite/login to log in to Zerodha.
             </div>
           </div>
         </div>

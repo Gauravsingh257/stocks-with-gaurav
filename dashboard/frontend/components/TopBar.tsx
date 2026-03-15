@@ -18,6 +18,9 @@ interface HealthData {
   backend_version: string;
   engine_version: string;
   uptime_human: string;
+  kite_connected?: boolean;
+  token_present?: boolean;
+  token_expires_in_hours?: number | null;
 }
 
 export default function TopBar() {
@@ -140,6 +143,31 @@ export default function TopBar() {
           </div>
         )}
 
+        {/* Connect Kite — show when token missing or Kite disconnected */}
+        {health && (health.kite_connected === false || health.token_present === false) && BASE && (
+          <a
+            href={`${BASE}/api/kite/login`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              color: "var(--accent)",
+              background: "transparent",
+              border: "1px solid var(--accent)",
+              borderRadius: 6,
+              textDecoration: "none",
+            }}
+          >
+            <Wifi size={12} />
+            Connect Kite
+          </a>
+        )}
+
         {/* System health dots */}
         {health && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.65rem", color: "var(--text-secondary)" }}>
@@ -149,6 +177,11 @@ export default function TopBar() {
             <span title={`${health.ws_clients} WebSocket client(s)`}>
               <Activity size={11} color={health.ws_clients > 0 ? "var(--success)" : "var(--warning)"} />
             </span>
+            {typeof health.token_expires_in_hours === "number" && (
+              <span title="Kite token TTL (hours)">
+                Kite {health.token_expires_in_hours}h
+              </span>
+            )}
             <span style={{ color: "var(--text-dim)" }}>
               v{health.backend_version}
             </span>

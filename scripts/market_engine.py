@@ -52,11 +52,32 @@ def main():
         log.error("Redis not available — check REDIS_URL")
         sys.exit(1)
 
+    from dashboard.backend.kite_auth import get_access_token_from_redis_only, get_access_token
+
     log.info("Market engine worker started — OI every %ss, OHLC every %ss", INTERVAL, INTERVAL * OHLC_EVERY_N)
     tick = 0
+    last_token = None
 
     while True:
         try:
+            # ── Token: Redis first, then env/file; wait if none (e.g. before morning login) ─
+            redis_token = get_access_token_from_redis_only()
+            current_token = redis_token or get_access_token()
+            if not current_token:
+                log.warning("Kite token missing — waiting for admin login at /api/kite/login")
+                time.sleep(30)
+                continue
+
+            # ── Force reconnect when Redis token changes (instant after admin login) ─
+            if redis_token is not None and redis_token != last_token:
+                try:
+                    from dashboard.backend.routes.charts import _reset_kite
+                    _reset_kite()
+                    last_token = redis_token
+                    log.info("Kite token updated — client reconnected")
+                except Exception as e:
+                    log.debug("Kite reset failed: %s", e)
+
             # ── OHLC every 10s (halves Kite load) ────────────────────────────
             if tick % OHLC_EVERY_N == 0:
                 try:

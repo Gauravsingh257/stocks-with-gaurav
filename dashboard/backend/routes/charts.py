@@ -97,10 +97,11 @@ def _get_kite():
             return _kite
         try:
             from kiteconnect import KiteConnect
-            from config.kite_auth import get_api_key, get_access_token
+            from config.kite_auth import get_api_key
+            from dashboard.backend.kite_auth import get_access_token as get_kite_access_token
 
             api_key = get_api_key()
-            access_token = get_access_token()
+            access_token = get_kite_access_token()  # Redis first, then env/file
             if not api_key or not access_token:
                 raise ValueError("KITE_API_KEY and KITE_ACCESS_TOKEN (or access_token.txt) required")
 
@@ -116,14 +117,17 @@ def _get_kite():
 
 
 def _reset_kite():
-    """Force re-init on next call (e.g. after token refresh)."""
+    """
+    Clear Kite session state so the next _get_kite() builds a fresh client with the new token.
+    Clears in-process caches (instrument tokens, OHLC) to avoid stale market data.
+    """
     global _kite, _kite_token_mtime
     with _kite_lock:
         _kite = None
         _kite_token_mtime = 0
         _token_cache.clear()
         _ohlc_cache.clear()
-        logger.info("[Charts] Kite client reset")
+        logger.info("[Charts] Kite client reset — session and caches cleared")
 
 
 # ── Token cache (symbol → instrument_token) ──────────────────────────────────

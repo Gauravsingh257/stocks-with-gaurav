@@ -86,10 +86,16 @@ def _get_kite_direct_data() -> dict | None:
     """
     try:
         from kiteconnect import KiteConnect
-        from config.kite_auth import get_api_key, get_access_token
+        from config.kite_auth import get_api_key
 
         api_key = get_api_key()
-        access_token = get_access_token()
+        # Prefer Redis-backed token when running from dashboard/worker
+        try:
+            from dashboard.backend.kite_auth import get_access_token as get_kite_token
+            access_token = get_kite_token()
+        except Exception:
+            from config.kite_auth import get_access_token
+            access_token = get_access_token()
         if not api_key or not access_token:
             return None
 

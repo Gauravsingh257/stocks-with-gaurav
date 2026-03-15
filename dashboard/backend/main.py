@@ -29,7 +29,7 @@ if _env_path.exists():
             os.environ.setdefault(key.strip(), value.strip())
 
 from dashboard.backend.db import init_db, full_sync_from_csv, start_csv_watcher
-from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router
+from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,7 @@ app.include_router(system_router)
 app.include_router(oi_intelligence_router)
 app.include_router(engine_router)  # Phase 7: decision trace
 app.include_router(research_router)
+app.include_router(kite_router)
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
