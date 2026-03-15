@@ -25,9 +25,11 @@ interface HealthData {
 
 interface TopBarProps {
   onMenuClick?: () => void;
+  terminalLayout?: boolean;
+  onTerminalLayoutToggle?: () => void;
 }
 
-export default function TopBar({ onMenuClick }: TopBarProps) {
+export default function TopBar({ onMenuClick, terminalLayout = false, onTerminalLayoutToggle }: TopBarProps) {
   const { snapshot, status } = useEngineSocket();
   const [health, setHealth] = useState<HealthData | null>(null);
 
@@ -152,6 +154,17 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
             <RefreshCw size={11} />
             {new Date(snapshot.snapshot_time).toLocaleTimeString()}
           </div>
+        )}
+
+        {/* Layout toggle — Terminal (multi-panel) vs Classic (single page) */}
+        {onTerminalLayoutToggle && (
+          <button
+            type="button"
+            onClick={onTerminalLayoutToggle}
+            className="shrink-0 px-2 py-1 rounded text-xs font-medium border border-cyan-500/30 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 transition-colors"
+          >
+            {terminalLayout ? "Classic Layout" : "Terminal Layout"}
+          </button>
         )}
 
         {/* Connect Kite — show when Kite disconnected or token missing; uses /api/kite/login proxy */}

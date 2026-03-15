@@ -284,7 +284,27 @@ def get_engine_snapshot() -> Dict:
         "engine_running":      engine_running,
         "engine_heartbeat_age_sec": heartbeat_age_sec,
         "snapshot_time":       datetime.now().isoformat(),
+
+        # ── Index LTP from cache (for real-time command bar / sparklines)
+        "index_ltp":           _get_index_ltp_from_cache(),
     }
+
+
+def _get_index_ltp_from_cache() -> Dict[str, float]:
+    """Read last close for NIFTY 50 and NIFTY BANK from OHLC cache (worker populates)."""
+    out: Dict[str, float] = {}
+    try:
+        from dashboard.backend.cache import get as cache_get, ohlc_key
+        for label, kite_sym in (("NIFTY 50", "NSE:NIFTY 50"), ("NIFTY BANK", "NSE:NIFTY BANK")):
+            key = ohlc_key(kite_sym, "15minute")
+            candles = cache_get(key)
+            if isinstance(candles, list) and len(candles) > 0:
+                last = candles[-1]
+                if isinstance(last, dict) and isinstance(last.get("close"), (int, float)):
+                    out[label] = float(last["close"])
+    except Exception:
+        pass
+    return out
 
 
 def is_engine_live() -> bool:

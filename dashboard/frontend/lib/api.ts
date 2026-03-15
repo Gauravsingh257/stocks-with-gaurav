@@ -70,6 +70,8 @@ export interface EngineSnapshot {
   snapshot_time:       string;
   setup_d_state?:      Record<string, SetupDEntry>;
   adaptive_intel?:     AdaptiveIntel;
+  /** Index LTP from cache (NIFTY 50, NIFTY BANK) for command bar / sparklines */
+  index_ltp?:          Record<string, number>;
 }
 
 export interface AdaptiveEvent {
