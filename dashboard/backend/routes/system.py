@@ -163,3 +163,55 @@ def tactical_plan():
 
     except Exception as e:
         return {"status": "error", "error": str(e), "plan": None}
+
+
+@router.get("/kite-status")
+def kite_status():
+    """Return Kite connectivity status without exposing credentials."""
+    import os
+    api_key_set    = bool(os.getenv("KITE_API_KEY", "").strip())
+    token_set      = bool(os.getenv("KITE_ACCESS_TOKEN", "").strip())
+    token_file_ok  = False
+    try:
+        from pathlib import Path as _Path
+        tf = _Path(__file__).resolve().parents[3] / "access_token.txt"
+        token_file_ok = tf.exists() and bool(tf.read_text().strip())
+    except Exception:
+        pass
+
+    kite_ready = False
+    kite_error = None
+    try:
+        from config.kite_auth import is_kite_available
+        kite_ready = is_kite_available()
+    except Exception as e:
+        kite_error = str(e)
+
+    # Attempt a lightweight Kite API call to verify the token is valid
+    token_valid = False
+    if kite_ready:
+        try:
+            from dashboard.backend.routes.charts import _get_kite
+            k = _get_kite()
+            if k is not None:
+                k.profile()   # lightweight call — raises on bad token
+                token_valid = True
+        except Exception as ve:
+            kite_error = str(ve)
+
+    hint = None
+    if not api_key_set:
+        hint = "Add KITE_API_KEY to Railway Variables and Redeploy."
+    elif not (token_set or token_file_ok):
+        hint = "Add KITE_ACCESS_TOKEN to Railway Variables. Run zerodha_login.py to generate a fresh token."
+    elif not token_valid:
+        hint = "Token appears invalid or expired. Run zerodha_login.py and update KITE_ACCESS_TOKEN in Railway."
+
+    return {
+        "kite_ready":       kite_ready,
+        "token_valid":      token_valid,
+        "api_key_set":      api_key_set,
+        "token_set":        token_set or token_file_ok,
+        "error":            kite_error,
+        "hint":             hint,
+    }

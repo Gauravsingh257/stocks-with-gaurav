@@ -81,17 +81,27 @@ app = FastAPI(
     redoc_url    = "/redoc",
 )
 
-# ── CORS — allow Next.js dev server + production ─────────────────────────────
+# ── CORS — allow Next.js dev server + all production origins ─────────────────
+# Build the origins list, also supporting ALLOWED_ORIGINS env var override
+# (comma-separated list of extra allowed origins for Railway env config).
+_extra_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",   # Next.js dev
+        "http://localhost:3000",             # Next.js dev
         "http://localhost:3001",
         "http://127.0.0.1:3000",
-        "https://*.trycloudflare.com",  # Cloudflare Tunnel
+        "https://*.trycloudflare.com",       # Cloudflare Tunnel
         "https://stockswithgaurav.com",
         "https://www.stockswithgaurav.com",
+        "https://*.vercel.app",              # Vercel preview + production
+        "https://*.railway.app",             # Railway-to-Railway internal calls
+        *_extra_origins,
     ],
+    allow_origin_regex=r"https://.*\.(vercel\.app|trycloudflare\.com|railway\.app)$",
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],

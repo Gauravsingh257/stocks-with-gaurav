@@ -1,0 +1,13 @@
+# Railway configuration — auto-detected by Railway at repo root.
+# This file replaces railway-web.toml (which requires manual config path setup).
+
+[build]
+# Use the slim Dockerfile so Railway installs requirements-railway.txt (not full deps)
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python scripts/start_web.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

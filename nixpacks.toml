@@ -1,3 +1,11 @@
-# Single source for Python version on Railway (matches .python-version for local)
+# Nixpacks config for Railway (fallback if Dockerfile is not used).
+# Matches .python-version for local parity.
+
 [phases.setup]
 nixPkgs = ["python311"]
+
+[phases.install]
+cmds = ["pip install --no-cache-dir -r requirements-railway.txt"]
+
+[start]
+cmd = "python scripts/start_web.py"

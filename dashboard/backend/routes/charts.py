@@ -258,10 +258,26 @@ def ohlc(
     try:
         candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        msg = str(exc)
+        # Friendly message for the most common production issue: missing token
+        if "KITE_ACCESS_TOKEN" in msg or "unavailable" in msg.lower():
+            msg = (
+                "Kite not configured — set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
+                "then Redeploy. Token expires daily; update KITE_ACCESS_TOKEN after zerodha_login.py."
+            )
+        raise HTTPException(status_code=503, detail=msg)
     except Exception as exc:
         logger.exception("[Charts] OHLC error for %s %s", symbol, interval)
-        # Surface Kite API errors (invalid token, rate limit etc.)
+        err_str = str(exc)
+        # Invalid / expired access token
+        if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Kite access token is invalid or expired. "
+                    "Run zerodha_login.py locally and update KITE_ACCESS_TOKEN in Railway Variables."
+                ),
+            )
         raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
 
     return {
