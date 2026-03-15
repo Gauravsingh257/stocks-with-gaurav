@@ -27,7 +27,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("market_engine")
 
-INTERVAL = 5  # seconds
+INTERVAL = 5   # seconds — loop interval
+OHLC_EVERY_N = 2   # do OHLC every 2nd loop → 10s
 OHLC_SYMBOLS = ["NIFTY 50", "NIFTY BANK"]
 OHLC_INTERVAL = "15minute"
 OHLC_DAYS = 7
@@ -40,32 +41,35 @@ def main():
 
     from dashboard.backend.cache import (
         set as cache_set,
-        get as cache_get,
         ohlc_key,
         OI_SNAPSHOT_KEY,
         MARKET_DATA_TTL,
+        MARKET_ENGINE_LAST_UPDATE_KEY,
+        WORKER_HEARTBEAT_TTL,
         is_redis_available,
     )
     if not is_redis_available():
         log.error("Redis not available — check REDIS_URL")
         sys.exit(1)
 
-    log.info("Market engine worker started — OHLC + OI every %ss", INTERVAL)
+    log.info("Market engine worker started — OI every %ss, OHLC every %ss", INTERVAL, INTERVAL * OHLC_EVERY_N)
+    tick = 0
 
     while True:
         try:
-            # ── OHLC (Kite) ─────────────────────────────────────────────────
-            try:
-                from dashboard.backend.routes.charts import _fetch_ohlc, _kite_symbol
-                for sym in OHLC_SYMBOLS:
-                    kite_sym = _kite_symbol(sym)
-                    candles = _fetch_ohlc(kite_sym, OHLC_INTERVAL, OHLC_DAYS)
-                    cache_set(ohlc_key(kite_sym, OHLC_INTERVAL), candles, MARKET_DATA_TTL)
-                log.debug("OHLC cached for %s", OHLC_SYMBOLS)
-            except Exception as e:
-                log.warning("OHLC fetch failed: %s", e)
+            # ── OHLC every 10s (halves Kite load) ────────────────────────────
+            if tick % OHLC_EVERY_N == 0:
+                try:
+                    from dashboard.backend.routes.charts import _fetch_ohlc, _kite_symbol
+                    for sym in OHLC_SYMBOLS:
+                        kite_sym = _kite_symbol(sym)
+                        candles = _fetch_ohlc(kite_sym, OHLC_INTERVAL, OHLC_DAYS)
+                        cache_set(ohlc_key(kite_sym, OHLC_INTERVAL), candles, MARKET_DATA_TTL)
+                    log.debug("OHLC cached for %s", OHLC_SYMBOLS)
+                except Exception as e:
+                    log.warning("OHLC fetch failed: %s", e)
 
-            # ── OI snapshot ──────────────────────────────────────────────────
+            # ── OI snapshot every 5s ────────────────────────────────────────
             try:
                 from agents.oi_intelligence_agent import generate_snapshot
                 snapshot = generate_snapshot()
@@ -74,9 +78,13 @@ def main():
             except Exception as e:
                 log.warning("OI snapshot failed: %s", e)
 
+            # ── Heartbeat for health endpoint (detect worker failure) ─────────
+            cache_set(MARKET_ENGINE_LAST_UPDATE_KEY, time.time(), WORKER_HEARTBEAT_TTL)
+
         except Exception as e:
             log.exception("Worker loop error: %s", e)
 
+        tick += 1
         time.sleep(INTERVAL)
 
 

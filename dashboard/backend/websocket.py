@@ -22,6 +22,8 @@ from dashboard.backend.services import process_recommendation_triggers
 
 log = logging.getLogger("dashboard.ws")
 
+MAX_WS_CONNECTIONS_PER_IP = 5
+
 
 def _get_oi_intelligence_snapshot() -> dict | None:
     """OI snapshot for WebSocket: read from Redis/cache first (worker), else generate."""
@@ -39,22 +41,44 @@ def _get_oi_intelligence_snapshot() -> dict | None:
         return None
 
 # ---------------------------------------------------------------------------
-# Connection registry
+# Connection registry (with per-IP limit to prevent flooding)
 # ---------------------------------------------------------------------------
+def _client_ip(ws: WebSocket) -> str:
+    """Client IP from X-Forwarded-For or scope."""
+    for name, value in ws.scope.get("headers", []):
+        if name == b"x-forwarded-for":
+            return value.decode("utf-8").split(",")[0].strip()
+    client = ws.scope.get("client")
+    if client:
+        return client[0]
+    return "unknown"
+
+
 class _ConnectionManager:
     def __init__(self) -> None:
         self._active: Set[WebSocket] = set()
+        self._ip_for_ws: dict[WebSocket, str] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket) -> bool:
+        """Accept and register client. Returns False if per-IP limit exceeded."""
         await ws.accept()
+        ip = _client_ip(ws)
         async with self._lock:
+            count_for_ip = sum(1 for w in self._active if self._ip_for_ws.get(w) == ip)
+            if count_for_ip >= MAX_WS_CONNECTIONS_PER_IP:
+                await ws.close(code=4008)  # policy violation
+                log.warning("WS rejected: IP %s has %d connections (max %d)", ip, count_for_ip, MAX_WS_CONNECTIONS_PER_IP)
+                return False
             self._active.add(ws)
+            self._ip_for_ws[ws] = ip
         log.info("WS client connected — total: %d", len(self._active))
+        return True
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
             self._active.discard(ws)
+            self._ip_for_ws.pop(ws, None)
         log.info("WS client disconnected — total: %d", len(self._active))
 
     async def broadcast(self, payload: str) -> None:
@@ -74,6 +98,7 @@ class _ConnectionManager:
             async with self._lock:
                 for ws in dead:
                     self._active.discard(ws)
+                    self._ip_for_ws.pop(ws, None)
 
     @property
     def client_count(self) -> int:
@@ -158,9 +183,10 @@ def stop_broadcast_loop() -> None:
 async def ws_endpoint(websocket: WebSocket) -> None:
     """
     Single handler for /ws.
-    Keeps the connection alive and processes incoming messages (reserved).
+    Max 5 connections per IP. Keeps the connection alive and processes incoming messages.
     """
-    await manager.connect(websocket)
+    if not await manager.connect(websocket):
+        return
     try:
         # Send immediate snapshot on connect so client doesn't wait 1 second
         try:

@@ -124,13 +124,15 @@ This stages, commits, and pushes to GitHub → triggers Railway + Vercel auto-de
 
 ## Step 6 — Market Data Worker (Optional — Redis + second service)
 
-To avoid hitting Kite on every request, run a **market engine worker** that fills Redis every 5s:
+To avoid hitting Kite on every request, run a **market engine worker** that fills Redis every 5s (OI) / 10s (OHLC):
 
 1. **Add Redis** to your project (Railway → New → Database → Redis, or use Upstash).
 2. Set **REDIS_URL** on both the **API service** and the **worker service**.
 3. Create a **second Railway service** (same repo):
    - Start command: `python scripts/market_engine.py`
    - Variables: `REDIS_URL`, `KITE_API_KEY`, `KITE_ACCESS_TOKEN` (same as API)
+   - **Restart policy → Always** (in Railway → worker service → Settings → Restart Policy).  
+     This ensures the worker restarts automatically if it crashes; otherwise `engine_status` stays stale.
 4. API will read OHLC and OI from cache; worker keeps cache warm.
 
 Without Redis, the API falls back to in-memory cache and Kite on demand (higher latency, more Kite usage).
@@ -166,6 +168,25 @@ Railway Web Service (FastAPI — dashboard backend)
       ├── /ws                → WebSocket broadcast (engine snapshots)
       └── /docs              → Swagger UI
 ```
+
+---
+
+## Quick Production Checklist (before launch)
+
+Verify **`GET /api/system/health`** returns:
+
+| Field | Expected |
+|-------|----------|
+| `engine_status` | `running` (or `stale` if worker/engine not running) |
+| `kite_connected` | `true` |
+| `ws_clients` | `> 0` when dashboard is open |
+| `latency_ms` | `< 100` |
+| `market_status` | `open` \| `premarket` \| `closed` (IST 09:15–15:30) |
+| `worker_status` | `running` when Redis + worker are used |
+
+**Kite token expiry:** If `kite_connected` is `false`, the response includes `kite_hint`: run `zerodha_login.py` and update `KITE_ACCESS_TOKEN` in Railway.
+
+**Load test:** Open ~10 browser tabs to the dashboard; confirm API and WebSocket stay stable (max 5 WS connections per IP).
 
 ---
 

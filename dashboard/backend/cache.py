@@ -98,6 +98,10 @@ def option_chain_key(symbol: str) -> str:
 
 OI_SNAPSHOT_KEY = "oi_snapshot"
 
+# Worker heartbeat: last time market_engine.py successfully updated cache (epoch seconds)
+MARKET_ENGINE_LAST_UPDATE_KEY = "market_engine:last_update"
+WORKER_HEARTBEAT_TTL = 60  # seconds; if worker dies, key expires and health reports stale
+
 
 def is_redis_available() -> bool:
     """True if Redis is connected (for health endpoint)."""

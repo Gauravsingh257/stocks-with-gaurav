@@ -2,14 +2,14 @@
 dashboard/backend/routes/system.py
 System health, version, diagnostics, and tactical plan endpoints.
 
-GET /api/system/health         — DB, WS, engine live status, uptime
+GET /api/system/health         — DB, WS, engine live status, uptime, market_status, worker heartbeat
 GET /api/system/version        — backend + engine + agent version strings
 GET /api/system/tactical-plan  — today's tactical plan from PreMarketBriefing
 """
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, time as dtime
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -19,6 +19,25 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 BACKEND_VERSION = "1.1.0"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
+
+# NSE market hours IST
+MARKET_OPEN  = dtime(9, 15)
+MARKET_CLOSE = dtime(15, 30)
+PREMARKET_START = dtime(9, 0)
+
+
+def _market_status_now() -> str:
+    """Return 'open' | 'closed' | 'premarket' based on current IST."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).time()
+    if MARKET_OPEN <= now_ist <= MARKET_CLOSE:
+        return "open"
+    if PREMARKET_START <= now_ist < MARKET_OPEN:
+        return "premarket"
+    return "closed"
 
 
 @router.get("/health")
@@ -71,8 +90,9 @@ def system_health():
     else:
         engine_status = "offline"
 
-    # ── Kite connected (token valid) ──────────────────────────
+    # ── Kite connected (token valid) + hint when disconnected ─
     kite_connected = False
+    kite_hint = None
     try:
         from config.kite_auth import is_kite_available
         if is_kite_available():
@@ -81,8 +101,42 @@ def system_health():
             if k is not None:
                 k.profile()
                 kite_connected = True
+        if not kite_connected:
+            kite_hint = "Token expired or invalid. Run zerodha_login.py and update KITE_ACCESS_TOKEN."
+    except Exception:
+        kite_hint = "Token expired or invalid. Run zerodha_login.py and update KITE_ACCESS_TOKEN."
+
+    # ── Worker heartbeat (detect market_engine.py failure) ────
+    worker_status = None
+    market_data_last_update_ts = None
+    try:
+        from dashboard.backend.cache import (
+            get as cache_get,
+            MARKET_ENGINE_LAST_UPDATE_KEY,
+            is_redis_available,
+        )
+        if is_redis_available():
+            raw = cache_get(MARKET_ENGINE_LAST_UPDATE_KEY)
+            if raw is not None:
+                try:
+                    ts = float(raw)
+                    market_data_last_update_ts = ts
+                    if (time.time() - ts) > 15:
+                        worker_status = "stale"
+                        engine_status = "stale"  # so health shows stale when worker died
+                    else:
+                        worker_status = "running"
+                except (TypeError, ValueError):
+                    worker_status = "stale"
+                    engine_status = "stale"
+            else:
+                worker_status = "stale"
+                engine_status = "stale"
     except Exception:
         pass
+
+    # ── Market status (open | closed | premarket) ──────────────
+    market_status = _market_status_now()
 
     # ── Agent scheduler ──────────────────────────────────────
     scheduler_running = False
@@ -97,11 +151,14 @@ def system_health():
     mins,  sec = divmod(rem, 60)
     latency_ms = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
 
-    return {
+    out = {
         "engine_status":    engine_status,
         "kite_connected":   kite_connected,
         "ws_clients":       ws_clients,
         "latency_ms":       latency_ms,
+        "market_status":    market_status,
+        "market_data_last_update_ts": market_data_last_update_ts,
+        "worker_status":    worker_status,
         "backend_version":  BACKEND_VERSION,
         "agent_version":    AGENT_VERSION,
         "engine_version":   engine_version,
@@ -116,6 +173,9 @@ def system_health():
         "uptime_human":     f"{hours}h {mins}m {sec}s",
         "timestamp":        datetime.utcnow().isoformat() + "Z",
     }
+    if kite_hint is not None:
+        out["kite_hint"] = kite_hint
+    return out
 
 
 @router.get("/version")
