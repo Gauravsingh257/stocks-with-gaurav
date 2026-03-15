@@ -89,8 +89,13 @@ No Kite/Telegram keys needed for the dashboard to load — it will show "Connect
 
 ## Troubleshooting
 
+**"The executable 'uvicorn' could not be found"?**  
+The **web** service must use the root `Dockerfile` (dashboard backend), not `Dockerfile.engine`.  
+→ Railway → **web** service → **Settings** → **Build** → **Dockerfile Path**: `Dockerfile` (or leave blank to use default).  
+→ The **engine** service should use `Dockerfile.engine`.
+
 **Build fails on ta-lib?**  
-We use `requirements-railway.txt` (via nixpacks.toml) to avoid this. If it still fails, check Railway build logs.
+We use `requirements-railway.txt` (via Dockerfile) to avoid this. If it still fails, check Railway build logs.
 
 **"Connecting to engine" forever?**  
 The dashboard shows live data when your **trading engine** runs locally and pushes state. The backend API runs 24/7 on Railway; the engine runs on your PC during market hours. For now, the site will load with empty/placeholder data until you run the engine.
