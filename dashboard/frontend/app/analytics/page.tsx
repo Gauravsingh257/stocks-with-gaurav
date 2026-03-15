@@ -9,6 +9,17 @@ import {
 } from "recharts";
 import { api, AnalyticsSummary, EquityPoint, SetupStat, RollingWRPoint } from "@/lib/api";
 
+function useChartHeight() {
+  const [h, setH] = useState(220);
+  useEffect(() => {
+    const update = () => setH(typeof window !== "undefined" && window.innerWidth < 768 ? 180 : 220);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return h;
+}
+
 export default function AnalyticsPage() {
   const [summary,    setSummary   ] = useState<AnalyticsSummary | null>(null);
   const [equity,     setEquity    ] = useState<EquityPoint[]>([]);
@@ -17,6 +28,7 @@ export default function AnalyticsPage() {
   const [loading,    setLoading   ] = useState(true);
   const [dataSource, setDataSource] = useState<string>("—");
   const [syncInfo,   setSyncInfo  ] = useState<{ csv_exists?: boolean; db_trade_count?: number; last_sync?: string } | null>(null);
+  const chartHeight = useChartHeight();
 
   const load = useCallback(() => {
     Promise.all([api.summary(), api.equityCurve(), api.bySetup(), api.rollingWR(20), api.syncStatus()])
@@ -62,7 +74,7 @@ export default function AnalyticsPage() {
     <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div>
-          <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Analytics</h1>
+          <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0" style={{ color: "var(--text-primary)" }}>Analytics</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
             Performance metrics from {total} historical trades
           </p>
@@ -103,9 +115,9 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Equity curve */}
-      <div className="glass" style={{ padding: 20 }}>
+      <div className="glass w-full overflow-hidden border-cyan-500/10 shadow-[0_0_10px_rgba(0,255,255,0.08)]" style={{ padding: 20 }}>
         <div style={{ fontWeight: 600, marginBottom: 16, fontSize: "0.9rem" }}>Equity Curve (Cumulative R)</div>
-        <ResponsiveContainer width="100%" height={220}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
           <LineChart data={equity} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis dataKey="date" tick={{ fill: "var(--text-dim)", fontSize: 10 }}
@@ -125,11 +137,11 @@ export default function AnalyticsPage() {
         </ResponsiveContainer>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Setup breakdown */}
-        <div className="glass" style={{ padding: 20 }}>
+        <div className="glass w-full overflow-hidden border-cyan-500/10" style={{ padding: 20 }}>
           <div style={{ fontWeight: 600, marginBottom: 16, fontSize: "0.9rem" }}>Setup Performance (Total R)</div>
-          <ResponsiveContainer width="100%" height={200}>
+          <ResponsiveContainer width="100%" height={Math.min(chartHeight, 200)}>
             <BarChart data={setups} margin={{ left: 0, right: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis dataKey="setup" tick={{ fill: "var(--text-dim)", fontSize: 9 }}
@@ -147,9 +159,9 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Rolling win rate */}
-        <div className="glass" style={{ padding: 20 }}>
+        <div className="glass w-full overflow-hidden border-cyan-500/10" style={{ padding: 20 }}>
           <div style={{ fontWeight: 600, marginBottom: 16, fontSize: "0.9rem" }}>Rolling Win Rate (20 trades)</div>
-          <ResponsiveContainer width="100%" height={200}>
+          <ResponsiveContainer width="100%" height={Math.min(chartHeight, 200)}>
             <LineChart data={rolling} margin={{ left: 0, right: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis dataKey="idx" tick={{ fill: "var(--text-dim)", fontSize: 10 }} />

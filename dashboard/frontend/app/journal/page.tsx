@@ -178,7 +178,7 @@ export default function JournalPage() {
   return (
     <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>Trade Journal</h1>
+        <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0">Trade Journal</h1>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
           {total} trades · {wins} W / {losses} L · {totalR >= 0 ? "+" : ""}{totalR.toFixed(2)}R (this view)
         </p>
@@ -188,7 +188,7 @@ export default function JournalPage() {
       <TodaySignals />
 
       {/* Filters */}
-      <div className="glass" style={{ padding: "14px 16px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      <div className="glass flex flex-col md:flex-row flex-wrap gap-3 md:gap-2.5 items-center p-4 md:px-4 md:py-3.5">
         <div style={{ position: "relative" }}>
           <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
           <input className="input-dark" placeholder="Symbol…" value={symbol}

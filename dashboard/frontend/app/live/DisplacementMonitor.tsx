@@ -487,7 +487,7 @@ export function DisplacementMonitor() {
       </div>
 
       {/* ── Event table ── */}
-      <div>
+      <div className="w-full overflow-x-auto min-w-0">
         <div
           style={{
             fontSize: "0.72rem",

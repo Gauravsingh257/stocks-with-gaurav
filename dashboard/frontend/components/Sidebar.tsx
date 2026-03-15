@@ -1,4 +1,5 @@
 "use client";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -16,77 +17,100 @@ const NAV = [
   { href: "/chat",            label: "AI Chatbot",      icon: MessageSquare },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({
+  isOpen = false,
+  onClose,
+}: {
+  isOpen?: boolean;
+  onClose?: () => void;
+}) {
   const path = usePathname();
 
   return (
-    <aside
-      style={{
-        width: 220,
-        flexShrink: 0,
-        background: "rgba(13,21,38,0.95)",
-        borderRight: "1px solid var(--border)",
-        display: "flex",
-        flexDirection: "column",
-        padding: "24px 12px",
-        gap: 4,
-        backdropFilter: "blur(12px)",
-        position: "sticky",
-        top: 0,
-        height: "100vh",
-        overflowY: "auto",
-        zIndex: 10,
-      }}
-    >
-      {/* Logo */}
-      <div style={{ padding: "0 4px 24px", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-[99] bg-black/50 md:hidden"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Desktop: always visible; Mobile: drawer */}
+      <aside
+        className={`
+          w-64 flex-shrink-0 flex flex-col py-6 px-3 gap-1
+          bg-slate-900/95 border-r border-cyan-500/10 backdrop-blur-[12px] overflow-y-auto z-[100]
+          hidden md:flex
+          md:sticky md:top-0 md:h-screen
+          md:translate-x-0
+          fixed inset-y-0 left-0 transform transition-transform duration-200 ease-out
+          ${isOpen ? "translate-x-0 flex" : "-translate-x-full"}
+        `}
+        style={{ gap: 4 }}
+      >
+        {/* Logo */}
+        <div className="pb-6 px-1 border-b border-cyan-500/10">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+              style={{
+                background: "var(--accent-dim)",
+                border: "1px solid var(--accent)",
+                boxShadow: "0 0 12px rgba(0,212,255,0.2)",
+              }}
+            >
+              <Zap size={16} color="var(--accent)" />
+            </div>
+            <div>
+              <div className="neon-text text-[0.82rem] font-bold leading-tight">
+                Stocks With Gaurav
+              </div>
+              <div
+                className="text-[0.62rem] tracking-wide"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                SMC DASHBOARD
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex flex-col gap-0.5 mt-2">
+          {NAV.map(({ href, label, icon: Icon }) => {
+            const active = path === href || (href !== "/" && path.startsWith(href));
+            return (
+              <Link
+                key={href}
+                href={href}
+                onClick={onClose}
+                className={`nav-link ${active ? "active" : ""}`}
+              >
+                <Icon size={16} />
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* AI Bot Widget */}
+        <div className="mt-auto pt-4">
+          <SidebarBotWidget />
+        </div>
+
+        {/* Footer */}
+        <div className="pt-3 border-t border-cyan-500/10">
           <div
-            style={{
-              width: 32, height: 32, borderRadius: 8,
-              background: "var(--accent-dim)",
-              border: "1px solid var(--accent)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              boxShadow: "0 0 12px rgba(0,212,255,0.2)",
-            }}
+            className="text-[0.7rem] text-center"
+            style={{ color: "var(--text-dim)" }}
           >
-            <Zap size={16} color="var(--accent)" />
-          </div>
-          <div>
-            <div className="neon-text" style={{ fontSize: "0.82rem", fontWeight: 700, lineHeight: 1.2 }}>
-              Stocks With Gaurav
-            </div>
-            <div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", letterSpacing: "0.05em" }}>
-              SMC DASHBOARD
-            </div>
+            AI Engine · Active
           </div>
         </div>
-      </div>
-
-      {/* Nav */}
-      <nav style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 8 }}>
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active = path === href || (href !== "/" && path.startsWith(href));
-          return (
-            <Link key={href} href={href} className={`nav-link ${active ? "active" : ""}`}>
-              <Icon size={16} />
-              {label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* AI Bot Widget */}
-      <div style={{ marginTop: "auto", paddingTop: 16 }}>
-        <SidebarBotWidget />
-      </div>
-
-      {/* Footer */}
-      <div style={{ paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-        <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", textAlign: "center" }}>
-          AI Engine · Active
-        </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

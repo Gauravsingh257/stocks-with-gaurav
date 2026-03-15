@@ -23,7 +23,11 @@ interface HealthData {
   token_expires_in_hours?: number | null;
 }
 
-export default function TopBar() {
+interface TopBarProps {
+  onMenuClick?: () => void;
+}
+
+export default function TopBar({ onMenuClick }: TopBarProps) {
   const { snapshot, status } = useEngineSocket();
   const [health, setHealth] = useState<HealthData | null>(null);
 
@@ -51,21 +55,26 @@ export default function TopBar() {
   const hbAge = snapshot?.engine_heartbeat_age_sec;
 
   return (
-    <header style={{
-      height: 56,
-      background: "rgba(13,21,38,0.9)",
-      borderBottom: "1px solid var(--border)",
-      backdropFilter: "blur(12px)",
-      display: "flex",
-      alignItems: "center",
-      padding: "0 24px",
-      gap: 20,
-      position: "sticky",
-      top: 0,
-      zIndex: 50,
-    }}>
+    <header
+      className="h-14 sticky top-0 z-50 flex items-center px-4 md:px-6 gap-2 md:gap-5 shrink-0 overflow-x-hidden"
+      style={{
+        background: "rgba(15,23,42,0.9)",
+        borderBottom: "1px solid rgba(6,182,212,0.2)",
+        backdropFilter: "blur(12px)",
+      }}
+    >
+      {/* Hamburger - mobile only */}
+      <button
+        type="button"
+        className="md:hidden p-2 rounded-md -ml-1 text-[var(--text-primary)] hover:bg-white/5"
+        onClick={onMenuClick}
+        aria-label="Open menu"
+      >
+        &#9776;
+      </button>
+
       {/* WS transport status */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div className="flex items-center gap-1.5 shrink-0">
         {status === "connected" || status === "polling"
           ? <Wifi size={14} color={status === "connected" ? "var(--success)" : "var(--accent)"} />
           : <WifiOff size={14} color="var(--danger)" />
@@ -75,11 +84,13 @@ export default function TopBar() {
         </span>
       </div>
 
-      <div style={{ width: 1, height: 20, background: "var(--border)" }} />
+      <div className="w-px h-5 bg-[var(--border)] shrink-0" />
 
+      {/* Badges row - scroll on small screens */}
+      <div className="flex items-center gap-2 md:gap-5 overflow-x-auto min-w-0 flex-1">
       {/* Engine loop heartbeat status */}
       <span
-        className={`badge ${engineRunning ? "badge-live" : "badge-loss"}`}
+        className={`badge shrink-0 ${engineRunning ? "badge-live" : "badge-loss"}`}
         title={!snapshot?.engine_live && !engineRunning ? "Backend runs separately from engine — STALE is normal. Charts work if Kite is set on web." : undefined}
       >
         <span
@@ -97,25 +108,25 @@ export default function TopBar() {
       </span>
 
       {/* Engine mode */}
-      <span className={`badge ${paper ? "badge-paper" : "badge-live"}`}>
+      <span className={`badge shrink-0 ${paper ? "badge-paper" : "badge-live"}`}>
         <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: paper ? "var(--warning)" : "var(--success)", display: "inline-block" }} />
         {paper ? "PAPER" : "LIVE"} · {snapshot?.engine_mode ?? "—"}
       </span>
 
       {/* Regime */}
-      <span className={rb.cls}>
+      <span className={`${rb.cls} shrink-0`}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: rb.dot, display: "inline-block" }} />
         {rb.label}
       </span>
 
       {/* Circuit breaker */}
       {cb && (
-        <span className="badge badge-halt">
+        <span className="badge badge-halt shrink-0">
           ⛔ CIRCUIT BREAKER
         </span>
       )}
 
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 20 }}>
+      <div className="ml-auto flex items-center gap-2 md:gap-5 shrink-0">
         {/* Daily PnL */}
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: "0.65rem", color: "var(--text-secondary)", letterSpacing: "0.05em" }}>DAILY PnL</div>
@@ -186,6 +197,7 @@ export default function TopBar() {
             </span>
           </div>
         )}
+      </div>
       </div>
     </header>
   );

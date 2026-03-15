@@ -56,7 +56,7 @@ export default function LivePage() {
       {/* Page header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Live Trading</h1>
+          <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0" style={{ color: "var(--text-primary)" }}>Live Trading</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
             Real-time engine state · {new Date(snapshot.snapshot_time).toLocaleTimeString()}
           </p>
@@ -298,7 +298,7 @@ function AdaptiveIntelligencePanel({ adaptiveIntel }: { adaptiveIntel?: Adaptive
         </div>
       )}
 
-      <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 md:px-5">
         <div>
           <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: 8 }}>Adaptive Risk Multipliers</div>
           {Object.keys(multipliers).length === 0 ? (

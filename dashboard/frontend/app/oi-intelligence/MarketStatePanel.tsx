@@ -174,11 +174,7 @@ export function MarketStatePanel({ marketState }: Props) {
 
         {/* Events grid */}
         {events.length > 0 && (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 6,
-          }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {/* Bull events */}
             <div>
               <div style={{ fontSize: "0.6rem", color: "#69f0ae", fontWeight: 600, marginBottom: 4, letterSpacing: "0.05em" }}>

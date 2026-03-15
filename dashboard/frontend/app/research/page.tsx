@@ -75,7 +75,7 @@ export default function ResearchPage() {
             <Bot size={17} color="var(--accent)" />
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: "1.2rem" }}>AI Research Center</h1>
+            <h1 className="m-0 text-xl md:text-2xl lg:text-3xl font-bold">AI Research Center</h1>
             <p style={{ margin: "2px 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
               Swing ideas, long-term theses, and running trade intelligence
             </p>

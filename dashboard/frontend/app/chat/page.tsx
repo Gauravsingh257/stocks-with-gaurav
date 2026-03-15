@@ -216,7 +216,7 @@ export default function ChatPage() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <h1 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>AI Assistant</h1>
+          <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0">AI Assistant</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
             GPT-3.5 &middot; Live engine context &middot; Streaming
           </p>

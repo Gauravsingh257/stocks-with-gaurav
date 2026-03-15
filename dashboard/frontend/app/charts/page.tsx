@@ -97,6 +97,7 @@ export default function ChartsPage() {
   useEffect(() => {
     if (candles === null) return;
     let destroyed = false;
+    let cleanup: (() => void) | undefined;
 
     async function buildChart() {
       if (!containerRef.current || destroyed) return;
@@ -106,14 +107,15 @@ export default function ChartsPage() {
 
         if (chartRef.current) (chartRef.current as { remove(): void }).remove();
 
-        const chart = createChart(containerRef.current, {
+        const el = containerRef.current;
+        const chart = createChart(el, {
           layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8899bb" },
           grid:   { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
           crosshair: { mode: 1 },
           rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
           timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: true, secondsVisible: false },
-          width:  containerRef.current.clientWidth,
-          height: 460,
+          width:  el.clientWidth,
+          height: el.clientHeight,
         });
 
         const series = chart.addSeries(CandlestickSeries, {
@@ -152,15 +154,21 @@ export default function ChartsPage() {
         chart.timeScale().fitContent();
 
         const ro = new ResizeObserver(() => {
-          if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+          if (containerRef.current) {
+            const el = containerRef.current;
+            chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+          }
         });
-        ro.observe(containerRef.current);
-        return () => ro.disconnect();
+        ro.observe(el);
+        cleanup = () => ro.disconnect();
       } catch (e) { console.warn("Chart init error", e); }
     }
 
     buildChart();
-    return () => { destroyed = true; };
+    return () => {
+      destroyed = true;
+      cleanup?.();
+    };
   }, [candles, zonesData]);
 
   const activeZones = zonesData?.zones?.filter(z => !z.tapped) ?? [];
@@ -172,7 +180,7 @@ export default function ChartsPage() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <h1 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>SMC Charts</h1>
+          <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0">SMC Charts</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
             Live OHLC · OB / FVG zone overlays · Active trade lines
           </p>
@@ -245,19 +253,19 @@ export default function ChartsPage() {
       )}
 
       {/* Chart */}
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="glass w-full overflow-hidden p-0 border-cyan-500/10 shadow-[0_0_10px_rgba(0,255,255,0.08)]">
+        <div className="border-b border-cyan-500/10 flex items-center gap-2.5" style={{ padding: "14px 20px" }}>
           <TrendingUp size={16} color="var(--accent)" />
           <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>{selected} · {interval}</span>
           {kiteOk === false && <span className="badge badge-paper" style={{ marginLeft: 6, fontSize: "0.68rem" }}>DEMO</span>}
           {kiteOk === true  && <span className="badge badge-live"  style={{ marginLeft: 6, fontSize: "0.68rem" }}>LIVE</span>}
           {loading && <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--text-secondary)" }}>Loading…</span>}
         </div>
-        <div ref={containerRef} style={{ width: "100%", minHeight: 460 }} />
+        <div ref={containerRef} className="w-full h-[300px] md:h-[400px] lg:h-[500px]" />
       </div>
 
       {/* Zone + Line panels */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="glass" style={{ padding: "16px 20px" }}>
           <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", letterSpacing: "0.08em", marginBottom: 10 }}>
             ACTIVE ZONES ({activeZones.length})

@@ -117,11 +117,11 @@ export default function OIIntelligencePage() {
 
   /* ── Render ─────────────────────────────────────────────── */
   return (
-    <div style={{ padding: "24px 28px", maxWidth: 1400, margin: "0 auto" }}>
+    <div className="w-full max-w-screen-2xl mx-auto px-4 md:px-6 lg:px-8 py-6">
       {/* Header */}
-      <div className="fade-in" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+      <div className="fade-in flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
         <div>
-          <h1 style={{ fontSize: "1.4rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10, margin: 0, color: "var(--text-primary)" }}>
+          <h1 className="text-lg md:text-xl lg:text-2xl font-extrabold flex items-center gap-2.5 m-0" style={{ color: "var(--text-primary)" }}>
             <Eye size={22} color="var(--accent)" />
             Live OI Radar
           </h1>
@@ -137,7 +137,7 @@ export default function OIIntelligencePage() {
           )}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div className="flex flex-wrap items-center gap-3">
           {/* LIVE / SNAPSHOT indicator based on market hours */}
           {snapshot && (() => {
             const isLive = snapshot.market_hours ?? snapshot.market_open ?? false;
@@ -214,8 +214,8 @@ export default function OIIntelligencePage() {
 
       {/* Main Content */}
       {snapshot && (
-        <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 1fr", gap: 16 }}>
+        <div className="fade-in flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <PCRGauge pcr={snapshot.pcr} trend={snapshot.pcr_trend} confidence={snapshot.confidence} />
             <OverallBiasCard snapshot={snapshot} />
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -241,7 +241,7 @@ export default function OIIntelligencePage() {
 
           <StrikeHeatmap entries={snapshot.strike_heatmap} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ShortCoveringPanel signals={snapshot.short_covering_signals} />
             <ExecutionQualityPanel
               quality={snapshot.execution_quality}

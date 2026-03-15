@@ -83,7 +83,7 @@ export function ExecutionQualityPanel({
           Execution quality stats unavailable
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-2.5">
           <Metric label="Trades Today" value={String(quality.total_trades_today)} />
           <Metric label="Index Trades" value={String(quality.index_trades_today)} />
           <Metric

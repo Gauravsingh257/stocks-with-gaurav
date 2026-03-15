@@ -61,7 +61,7 @@ export function AgentCard({
         {agent.description}
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: "0.72rem" }}>
+      <div className="grid grid-cols-2 gap-2 text-[0.72rem]">
         <div>
           <div style={{ color: "var(--text-secondary)", marginBottom: 2 }}>Last run</div>
           <div style={{ color: "var(--text-primary)" }}>{lastTime}</div>
