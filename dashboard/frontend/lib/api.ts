@@ -3,12 +3,27 @@
  * Typed API client for FastAPI backend.
  * All functions return typed data or throw on error.
  *
- * BASE is empty by default so all /api/* calls go through Next.js rewrites
- * (set up in next.config.ts) → backend. Works for local dev AND Cloudflare tunnel.
- * Override with NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 for direct mode.
+ * Backend URL: NEXT_PUBLIC_BACKEND_URL || BACKEND_URL (rewrites use BACKEND_URL at build).
+ * If neither is set, /api/* goes through Next.js rewrites to BACKEND_URL (build-time).
  */
+function getBackendBase(): string {
+  const backend =
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    process.env.BACKEND_URL ||
+    "";
+  const base = (typeof backend === "string" && backend) ? backend.replace(/\/$/, "") : "";
+  if (typeof window !== "undefined" && !base) {
+    if (!(window as unknown as { __kite_backend_warned?: boolean }).__kite_backend_warned) {
+      (window as unknown as { __kite_backend_warned?: boolean }).__kite_backend_warned = true;
+      console.warn(
+        "[Kite] Backend URL not configured. Set NEXT_PUBLIC_BACKEND_URL or BACKEND_URL in Vercel to avoid 503 on /api/kite/login."
+      );
+    }
+  }
+  return base;
+}
 
-const BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
+const BASE = getBackendBase();
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });

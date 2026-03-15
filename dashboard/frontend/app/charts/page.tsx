@@ -182,21 +182,18 @@ export default function ChartsPage() {
           {kiteOk === false && (
             <>
               <span className="badge badge-warning" style={{ fontSize: "0.72rem" }}><WifiOff size={10}/> Kite Offline</span>
-              {BASE && (
-                <a
-                  href={`${BASE}/api/kite/login`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 5,
-                    padding: "6px 12px", fontSize: "0.75rem", fontWeight: 600,
-                    color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 6,
-                    textDecoration: "none",
-                  }}
-                >
-                  Connect Kite
-                </a>
-              )}
+              <button
+                type="button"
+                onClick={() => { window.location.href = "/api/kite/login"; }}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  padding: "6px 12px", fontSize: "0.75rem", fontWeight: 600,
+                  color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 6,
+                  cursor: "pointer", background: "transparent",
+                }}
+              >
+                Connect Kite
+              </button>
             </>
           )}
           <button className="btn-accent" onClick={fetchData} disabled={loading}

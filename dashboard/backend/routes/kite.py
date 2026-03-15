@@ -20,10 +20,10 @@ def kite_login():
     try:
         url = kite_auth.get_login_url()
         return RedirectResponse(url=url)
-    except Exception as e:
+    except Exception:
         return JSONResponse(
             status_code=500,
-            content={"status": "error", "message": "Failed to build login URL", "detail": str(e)},
+            content={"status": "error", "message": "Failed to build login URL. Check KITE_API_KEY."},
         )
 
 
@@ -45,12 +45,12 @@ def kite_callback(request_token: str | None = Query(None, alias="request_token")
         access_token = kite_auth.generate_access_token(request_token.strip())
         kite_auth.store_access_token(access_token)
         return {"status": "connected", "message": "Kite session established"}
-    except ValueError as e:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": "Invalid or expired request token."},
         )
-    except Exception as e:
+    except Exception:
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": "Could not establish session. Try logging in again."},

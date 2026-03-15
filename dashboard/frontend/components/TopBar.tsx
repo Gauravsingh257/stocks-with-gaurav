@@ -143,12 +143,11 @@ export default function TopBar() {
           </div>
         )}
 
-        {/* Connect Kite — show when token missing or Kite disconnected */}
-        {health && (health.kite_connected === false || health.token_present === false) && BASE && (
-          <a
-            href={`${BASE}/api/kite/login`}
-            target="_blank"
-            rel="noopener noreferrer"
+        {/* Connect Kite — show when Kite disconnected or token missing; uses /api/kite/login proxy */}
+        {health && (health.kite_connected === false || health.token_present === false) && (
+          <button
+            type="button"
+            onClick={() => { window.location.href = "/api/kite/login"; }}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -160,12 +159,12 @@ export default function TopBar() {
               background: "transparent",
               border: "1px solid var(--accent)",
               borderRadius: 6,
-              textDecoration: "none",
+              cursor: "pointer",
             }}
           >
             <Wifi size={12} />
             Connect Kite
-          </a>
+          </button>
         )}
 
         {/* System health dots */}
