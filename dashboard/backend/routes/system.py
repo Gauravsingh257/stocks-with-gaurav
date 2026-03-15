@@ -23,11 +23,13 @@ _start_time     = time.time()
 
 @router.get("/health")
 def system_health():
-    """Full system health check — DB, WebSocket, engine, uptime."""
+    """Full system health — engine_status, kite_connected, ws_clients, latency_ms, DB, uptime."""
+    start_ns = time.perf_counter_ns()
 
     # ── DB connectivity ───────────────────────────────────────
     db_ok    = False
     db_rows  = 0
+    db_error = None
     try:
         from dashboard.backend.db import get_connection
         conn    = get_connection()
@@ -36,8 +38,6 @@ def system_health():
         db_ok   = True
     except Exception as e:
         db_error = str(e)
-    else:
-        db_error = None
 
     # ── WebSocket clients ────────────────────────────────────
     ws_clients = 0
@@ -47,10 +47,11 @@ def system_health():
     except Exception:
         pass
 
-    # ── Engine snapshot ──────────────────────────────────────
+    # ── Engine snapshot + status (running | stale | offline) ───
     engine_version = "v4"
     engine_live    = False
     engine_mode    = "UNKNOWN"
+    engine_running = False
     last_snapshot  = None
     try:
         from dashboard.backend.state_bridge import get_engine_snapshot
@@ -59,6 +60,27 @@ def system_health():
         engine_mode    = snap.get("engine_mode", "UNKNOWN")
         last_snapshot  = snap.get("snapshot_time")
         engine_version = snap.get("engine_version", "v4")
+        engine_running = snap.get("engine_running", False)
+    except Exception:
+        pass
+
+    if engine_running and engine_live:
+        engine_status = "running"
+    elif engine_live:
+        engine_status = "stale"
+    else:
+        engine_status = "offline"
+
+    # ── Kite connected (token valid) ──────────────────────────
+    kite_connected = False
+    try:
+        from config.kite_auth import is_kite_available
+        if is_kite_available():
+            from dashboard.backend.routes.charts import _get_kite
+            k = _get_kite()
+            if k is not None:
+                k.profile()
+                kite_connected = True
     except Exception:
         pass
 
@@ -73,8 +95,13 @@ def system_health():
     uptime_s = int(time.time() - _start_time)
     hours, rem = divmod(uptime_s, 3600)
     mins,  sec = divmod(rem, 60)
+    latency_ms = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
 
     return {
+        "engine_status":    engine_status,
+        "kite_connected":   kite_connected,
+        "ws_clients":       ws_clients,
+        "latency_ms":       latency_ms,
         "backend_version":  BACKEND_VERSION,
         "agent_version":    AGENT_VERSION,
         "engine_version":   engine_version,
@@ -83,7 +110,6 @@ def system_health():
         "db_connected":     db_ok,
         "db_trade_rows":    db_rows,
         "db_error":         db_error,
-        "ws_clients":       ws_clients,
         "scheduler_running": scheduler_running,
         "last_snapshot":    last_snapshot,
         "uptime_seconds":   uptime_s,

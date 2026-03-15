@@ -41,7 +41,11 @@ ENGINE_MODE           = AGGRESSIVE
 PAPER_TRADING         = 1
 LOG_LEVEL             = INFO
 PORT                  = 8080
+REDIS_URL             = (optional) redis://default:password@host:port — for market data cache
 ```
+
+- **Rate limit:** 60 requests/minute per IP (health endpoints excluded).
+- **Cache:** If `REDIS_URL` is set, OHLC and OI snapshots are cached for 5s; API reads from cache so Kite is not hit repeatedly.
 
 > **Important:** After setting variables, click **Deploy** to restart with new env.
 
@@ -118,7 +122,20 @@ This stages, commits, and pushes to GitHub → triggers Railway + Vercel auto-de
 
 ---
 
-## Step 6 — Live Engine (Optional — Railway Worker)
+## Step 6 — Market Data Worker (Optional — Redis + second service)
+
+To avoid hitting Kite on every request, run a **market engine worker** that fills Redis every 5s:
+
+1. **Add Redis** to your project (Railway → New → Database → Redis, or use Upstash).
+2. Set **REDIS_URL** on both the **API service** and the **worker service**.
+3. Create a **second Railway service** (same repo):
+   - Start command: `python scripts/market_engine.py`
+   - Variables: `REDIS_URL`, `KITE_API_KEY`, `KITE_ACCESS_TOKEN` (same as API)
+4. API will read OHLC and OI from cache; worker keeps cache warm.
+
+Without Redis, the API falls back to in-memory cache and Kite on demand (higher latency, more Kite usage).
+
+## Step 7 — Live Engine (Optional — Railway Worker)
 
 The trading engine (`smc_mtf_engine_v4.py`) runs locally by default.  
 "ENGINE STALE" in the TopBar is **normal** for the cloud-only setup.

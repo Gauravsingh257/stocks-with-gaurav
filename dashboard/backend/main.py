@@ -17,6 +17,8 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from dashboard.backend.rate_limit import RateLimitMiddleware
+
 # Load .env file (OPENAI_API_KEY etc.)
 _env_path = Path(__file__).resolve().parent / ".env"
 if _env_path.exists():
@@ -88,6 +90,7 @@ _extra_origins = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
 
+app.add_middleware(RateLimitMiddleware)  # 60 req/min per IP — add first so it runs outermost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

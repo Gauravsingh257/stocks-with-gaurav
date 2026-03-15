@@ -30,6 +30,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from dashboard.backend.cache import ohlc_key, get as cache_get, set as cache_set, MARKET_DATA_TTL
+
 logger = logging.getLogger("dashboard.charts")
 
 router = APIRouter(prefix="/api", tags=["charts"])
@@ -255,30 +257,35 @@ def ohlc(
     fetch_days = days or DAYS_FOR_INTERVAL.get(kite_interval, 7)
     kite_sym   = _kite_symbol(symbol)
 
-    try:
-        candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
-    except RuntimeError as exc:
-        msg = str(exc)
-        # Friendly message for the most common production issue: missing token
-        if "KITE_ACCESS_TOKEN" in msg or "unavailable" in msg.lower():
-            msg = (
-                "Kite not configured — set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
-                "then Redeploy. Token expires daily; update KITE_ACCESS_TOKEN after zerodha_login.py."
-            )
-        raise HTTPException(status_code=503, detail=msg)
-    except Exception as exc:
-        logger.exception("[Charts] OHLC error for %s %s", symbol, interval)
-        err_str = str(exc)
-        # Invalid / expired access token
-        if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Kite access token is invalid or expired. "
-                    "Run zerodha_login.py locally and update KITE_ACCESS_TOKEN in Railway Variables."
-                ),
-            )
-        raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
+    # Read from Redis/in-memory cache first (5s TTL — worker or previous request)
+    cache_key = ohlc_key(kite_sym, kite_interval)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        candles = cached
+    else:
+        try:
+            candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
+            cache_set(cache_key, candles, MARKET_DATA_TTL)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "KITE_ACCESS_TOKEN" in msg or "unavailable" in msg.lower():
+                msg = (
+                    "Kite not configured — set KITE_API_KEY and KITE_ACCESS_TOKEN in Railway Variables, "
+                    "then Redeploy. Token expires daily; update KITE_ACCESS_TOKEN after zerodha_login.py."
+                )
+            raise HTTPException(status_code=503, detail=msg)
+        except Exception as exc:
+            logger.exception("[Charts] OHLC error for %s %s", symbol, interval)
+            err_str = str(exc)
+            if "Invalid token" in err_str or "invalid_token" in err_str or "TokenException" in err_str:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Kite access token is invalid or expired. "
+                        "Run zerodha_login.py locally and update KITE_ACCESS_TOKEN in Railway Variables."
+                    ),
+                )
+            raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
 
     return {
         "symbol":   symbol,

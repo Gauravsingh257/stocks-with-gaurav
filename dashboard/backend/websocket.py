@@ -24,7 +24,14 @@ log = logging.getLogger("dashboard.ws")
 
 
 def _get_oi_intelligence_snapshot() -> dict | None:
-    """Safely fetch OI intelligence data for WebSocket broadcast."""
+    """OI snapshot for WebSocket: read from Redis/cache first (worker), else generate."""
+    try:
+        from dashboard.backend.cache import OI_SNAPSHOT_KEY, get as cache_get
+        cached = cache_get(OI_SNAPSHOT_KEY)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
     try:
         from agents.oi_intelligence_agent import get_cached_snapshot
         return get_cached_snapshot()
