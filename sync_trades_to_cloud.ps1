@@ -17,7 +17,7 @@ if (-not $env:BACKEND_URL) {
         }
     }
 }
-$apiUrl = ($env:BACKEND_URL ?? "").Trim().TrimEnd('/')
+$apiUrl = if ($env:BACKEND_URL) { $env:BACKEND_URL.Trim().TrimEnd('/') } else { "" }
 if (-not $apiUrl) {
     Write-Host "ERROR: Set BACKEND_URL first. Example: BACKEND_URL=https://YOUR-RAILWAY-URL.up.railway.app in .go_live_config"
     exit 1
