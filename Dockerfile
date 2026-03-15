@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements-railway.txt
 # Copy code
 COPY . .
 
-# Railway sets PORT at runtime. Use shell form so $PORT is expanded.
+# Entrypoint script reads PORT from env (Railway sets it at runtime)
+COPY scripts/railway_web_start.sh /railway_web_start.sh
+RUN sed -i 's/\r$//' /railway_web_start.sh && chmod +x /railway_web_start.sh
+
 ENV PORT=8080
-CMD uvicorn dashboard.backend.main:app --host 0.0.0.0 --port ${PORT}
+CMD ["/railway_web_start.sh"]
