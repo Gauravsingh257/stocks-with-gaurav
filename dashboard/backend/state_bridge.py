@@ -157,6 +157,7 @@ def get_engine_snapshot() -> Dict:
         paper_mode    = bool(_safe_read("PAPER_MODE", False))
         engine_last_loop_at = _safe_read("ENGINE_LAST_LOOP_AT", None)
         engine_running = False
+        engine_live = True  # in-process engine is always "live"
         heartbeat_age_sec = None
         if hasattr(engine_last_loop_at, "isoformat"):
             try:
@@ -242,14 +243,34 @@ def get_engine_snapshot() -> Dict:
         max_signals   = 5
         index_only    = True
         paper_mode    = False
-        engine_running = False
-        heartbeat_age_sec = None
         setup_d_state = {}
         adaptive_intel = {
             "setup_multipliers": {},
             "recent_blocks": [],
             "recent_ai_scores": [],
         }
+        # Railway 24/7: engine runs as separate service — derive status from Redis heartbeat
+        try:
+            from dashboard.backend.cache import get_engine_heartbeat_ts, ENGINE_HEARTBEAT_STALE_SEC, ENGINE_HEARTBEAT_OFFLINE_SEC
+            import time as _time
+            ts = get_engine_heartbeat_ts()
+            if ts is not None:
+                heartbeat_age_sec = round(_time.time() - ts, 2)
+                engine_running = heartbeat_age_sec <= ENGINE_HEARTBEAT_STALE_SEC   # <= 60s = LIVE
+                engine_live = heartbeat_age_sec <= ENGINE_HEARTBEAT_OFFLINE_SEC  # <= 120s = at least STALE
+            else:
+                heartbeat_age_sec = None
+                engine_running = False
+                engine_live = False
+        except Exception:
+            heartbeat_age_sec = None
+            engine_running = False
+            engine_live = False
+
+    _engine_version = _get_engine_version_from_cache()
+    if _engine_version is None:
+        _engine_version = str(_safe_read("ENGINE_VERSION", "v4")) if _ENGINE_AVAILABLE else "v4"
+    _last_cycle_ts, _last_cycle_age = _get_engine_last_cycle_from_cache()
 
     return {
         # ── Core trade state
@@ -279,15 +300,51 @@ def get_engine_snapshot() -> Dict:
         "setup_d_state":       setup_d_state,
         "adaptive_intel":      adaptive_intel,
 
-        # ── Meta
-        "engine_live":         _ENGINE_AVAILABLE,
+        # ── Meta (engine_live: True when in-process; when standalone, from Redis heartbeat)
+        "engine_live":         engine_live,
         "engine_running":      engine_running,
         "engine_heartbeat_age_sec": heartbeat_age_sec,
+        "engine_started_at":   _get_engine_started_at_from_cache(),
+        "engine_version":      _engine_version,
+        "engine_last_cycle":   _last_cycle_ts,
+        "engine_last_cycle_age_sec": _last_cycle_age,
         "snapshot_time":       datetime.now().isoformat(),
 
         # ── Index LTP from cache (for real-time command bar / sparklines)
         "index_ltp":           _get_index_ltp_from_cache(),
     }
+
+
+def _get_engine_started_at_from_cache() -> Optional[float]:
+    """Return engine start timestamp (epoch seconds) from Redis for uptime display. None if not set."""
+    try:
+        from dashboard.backend.cache import get_engine_started_at
+        return get_engine_started_at()
+    except Exception:
+        return None
+
+
+def _get_engine_version_from_cache() -> Optional[str]:
+    """Return running engine version from Redis (e.g. v4.2.1). None if not set."""
+    try:
+        from dashboard.backend.cache import get_engine_version
+        return get_engine_version()
+    except Exception:
+        return None
+
+
+def _get_engine_last_cycle_from_cache() -> tuple[Optional[float], Optional[float]]:
+    """Return (engine_last_cycle_ts, engine_last_cycle_age_sec) from Redis. (None, None) if not set."""
+    try:
+        import time as _time
+        from dashboard.backend.cache import get_engine_last_cycle
+        ts = get_engine_last_cycle()
+        if ts is None:
+            return (None, None)
+        age = round(_time.time() - ts, 2)
+        return (ts, age)
+    except Exception:
+        return (None, None)
 
 
 def _get_index_ltp_from_cache() -> Dict[str, float]:

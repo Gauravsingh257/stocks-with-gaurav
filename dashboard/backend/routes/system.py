@@ -72,6 +72,9 @@ def system_health():
     engine_mode    = "UNKNOWN"
     engine_running = False
     last_snapshot  = None
+    engine_started_at = None
+    engine_last_cycle = None
+    engine_last_cycle_age_sec = None
     try:
         from dashboard.backend.state_bridge import get_engine_snapshot
         snap           = get_engine_snapshot()
@@ -80,6 +83,9 @@ def system_health():
         last_snapshot  = snap.get("snapshot_time")
         engine_version = snap.get("engine_version", "v4")
         engine_running = snap.get("engine_running", False)
+        engine_started_at = snap.get("engine_started_at")
+        engine_last_cycle = snap.get("engine_last_cycle")
+        engine_last_cycle_age_sec = snap.get("engine_last_cycle_age_sec")
     except Exception:
         pass
 
@@ -182,8 +188,27 @@ def system_health():
     mins,  sec = divmod(rem, 60)
     latency_ms = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
 
+    engine_uptime_seconds = None
+    engine_uptime_human = None
+    if engine_started_at is not None:
+        try:
+            engine_uptime_seconds = int(time.time() - float(engine_started_at))
+            if engine_uptime_seconds < 0:
+                engine_uptime_seconds = 0
+            eh, er = divmod(engine_uptime_seconds, 3600)
+            em, _ = divmod(er, 60)
+            engine_uptime_human = f"{eh}h {em}m"
+        except (TypeError, ValueError):
+            pass
+
     out = {
         "engine_status":    engine_status,
+        "engine_version":   engine_version,
+        "engine_started_at": engine_started_at,
+        "engine_uptime_seconds": engine_uptime_seconds,
+        "engine_uptime_human": engine_uptime_human,
+        "engine_last_cycle": engine_last_cycle,
+        "engine_last_cycle_age_sec": engine_last_cycle_age_sec,
         "kite_connected":   kite_connected,
         "token_present":    token_present,
         "token_expires_in_hours": token_expires_in_hours,

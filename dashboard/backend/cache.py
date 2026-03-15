@@ -102,6 +102,14 @@ OI_SNAPSHOT_KEY = "oi_snapshot"
 MARKET_ENGINE_LAST_UPDATE_KEY = "market_engine:last_update"
 WORKER_HEARTBEAT_TTL = 60  # seconds; if worker dies, key expires and health reports stale
 
+# Engine worker (smc_mtf_engine_v4) heartbeat for Railway 24/7 — written by engine every 30s
+ENGINE_HEARTBEAT_KEY = "engine_heartbeat"
+ENGINE_STARTED_AT_KEY = "engine_started_at"
+ENGINE_VERSION_KEY = "engine_version"
+ENGINE_LAST_CYCLE_KEY = "engine_last_cycle"
+ENGINE_HEARTBEAT_STALE_SEC = 60   # if older than this, dashboard shows ENGINE STALE
+ENGINE_HEARTBEAT_OFFLINE_SEC = 120  # if older than this, engine_status = offline
+
 # Real-time LTP (from Kite WebSocket tick stream); no TTL so value persists
 LTP_KEY_PREFIX = "ltp:"
 LTP_TTL = 300  # 5 min TTL so stale data expires if tick stream stops
@@ -232,3 +240,71 @@ def upsert_candle(symbol: str, interval: str, candle: dict) -> None:
 def is_redis_available() -> bool:
     """True if Redis is connected (for health endpoint)."""
     return _get_redis() is not None
+
+
+def get_engine_heartbeat_ts() -> float | None:
+    """
+    Return last engine heartbeat timestamp (epoch seconds) from Redis.
+    Used by dashboard when engine runs as separate Railway service (no in-process engine).
+    Returns None if key missing or Redis unavailable.
+    """
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(ENGINE_HEARTBEAT_KEY)
+        if raw is None:
+            return None
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_engine_started_at() -> float | None:
+    """
+    Return engine start timestamp (epoch seconds) from Redis.
+    Set when the engine acquires the lock. Use with time.time() to show uptime (e.g. "3h 25m").
+    Returns None if key missing or Redis unavailable.
+    """
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(ENGINE_STARTED_AT_KEY)
+        if raw is None:
+            return None
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_engine_version() -> str | None:
+    """
+    Return running engine version string from Redis (e.g. "v4.2.1").
+    Set when the engine acquires the lock. Returns None if key missing or Redis unavailable.
+    """
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        return r.get(ENGINE_VERSION_KEY)
+    except Exception:
+        return None
+
+
+def get_engine_last_cycle() -> float | None:
+    """
+    Return last scan cycle timestamp (epoch seconds) from Redis.
+    Updated after each completed strategy scan cycle. Use with time.time() for engine_last_cycle_age_sec.
+    Returns None if key missing or Redis unavailable.
+    """
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(ENGINE_LAST_CYCLE_KEY)
+        if raw is None:
+            return None
+        return float(raw)
+    except (TypeError, ValueError):
+        return None

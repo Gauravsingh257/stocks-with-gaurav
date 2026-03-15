@@ -177,7 +177,10 @@ def scan_ema_crossover(symbol):
                 f"TP: {tp_p:.2f} (1:2)\n\n"
                 f"ADX: {adx:.1f} | Vol: {cur_vol}"
             )
-            telegram_send(msg)
+            # Signal ID: strategy_timeframe_symbol_timestamp (stronger dedupe across strategies/timeframes)
+            _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
+            signal_id = f"ema_5m_{_sym}_{ts.timestamp():.0f}"
+            telegram_send(msg, signal_id=signal_id)
             print(f"🔥 EMA SIGNAL SENT: {symbol} {action}")
             logging.info(f"EMA SIGNAL: {symbol} {action} @ {entry_p}")
             
@@ -222,6 +225,7 @@ print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now())
 # PART 1 — CONFIG & BOOT (MODULAR V4)
 # =====================================================
 
+ENGINE_VERSION = "v4.2.1"
 ENGINE_MODE = "AGGRESSIVE"
 
 if ENGINE_MODE == "CONSERVATIVE":
@@ -268,7 +272,19 @@ BACKTEST_MODE = os.environ.get("BACKTEST_MODE", "") == "1"
 # =====================================================
 # TELEGRAM CORE (Early Definition for Init)
 # =====================================================
-def telegram_send(message: str, chat_id=None):
+def telegram_send(message: str, chat_id=None, signal_id=None):
+    """
+    Send message to Telegram. If signal_id is set, deduplicates via Redis:
+    skip if already sent in last hour; otherwise send and mark sent.
+    """
+    if signal_id:
+        try:
+            import engine_runtime
+            if not engine_runtime.should_send_signal(signal_id):
+                logging.debug("Signal dedupe skip: %s", signal_id)
+                return
+        except Exception as e:
+            logging.debug("Signal dedupe check failed: %s", e)
     target = chat_id or CHAT_ID
     message = paper_prefix(message)  # Phase 6: prefix in paper mode
     try:
@@ -282,6 +298,12 @@ def telegram_send(message: str, chat_id=None):
             },
             timeout=5
         )
+        if signal_id:
+            try:
+                import engine_runtime
+                engine_runtime.mark_signal_sent(signal_id)
+            except Exception:
+                pass
     except Exception as e:
         print("Telegram error:", e)
 
@@ -2288,7 +2310,9 @@ def fetch_manual_orders():
                    f"Auto-SL: {round(sl, 2)}\n"
                    f"Auto-Tgt: {round(target, 2)}\n"
                    f"<i>Engine is now managing this trade.</i>")
-            telegram_send(msg)
+            _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
+            signal_id = f"manual_0_{_sym}_{datetime.now().timestamp():.0f}"
+            telegram_send(msg, signal_id=signal_id)
             
     except Exception as e:
         print(f"Manual Sync Error: {e}")
@@ -4214,8 +4238,9 @@ def run_live_mode():
     OI_BIAS_SCANNED_920 = False
     OI_BIAS_LOCKED = False
     
-    # F4.5 & F4.6: Heartbeat and error tracking state
+    # F4.5 & F4.6: Heartbeat (dedicated thread) and error tracking state
     _last_heartbeat = datetime.now()
+    _last_lock_refresh = t.time()
     _consecutive_loop_errors = 0
     _HEARTBEAT_INTERVAL_MIN = 30
     _MAX_CONSECUTIVE_ERRORS = 5
@@ -4263,6 +4288,18 @@ def run_live_mode():
             ENGINE_LAST_LOOP_AT = datetime.now()
             cleanup_structure_state()
             now = datetime.now().time()
+
+            # Railway 24/7: lock refresh every 2 min (heartbeat runs in dedicated thread)
+            try:
+                import engine_runtime
+                if t.time() - _last_lock_refresh >= engine_runtime.ENGINE_LOCK_REFRESH_INTERVAL_SEC:
+                    if not engine_runtime.refresh_engine_lock():
+                        logging.warning("Lost engine lock; another instance may have taken over. Exiting.")
+                        _shutdown_handler("redis_lock_lost")
+                        return
+                    _last_lock_refresh = t.time()
+            except Exception as _e:
+                logging.debug("Engine runtime lock refresh: %s", _e)
 
             # F4.6: Reset error counter on successful cycle start
             _consecutive_loop_errors = 0
@@ -4446,7 +4483,10 @@ def run_live_mode():
                                 if _TRADE_BUTTONS_AVAILABLE:
                                     _send_trade_buttons(zt_sig, zt_msg)
                                 else:
-                                    telegram_send(zt_msg)
+                                    _under = (zt_sig.get("underlying") or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
+                                    _dir = (zt_sig.get("direction") or "").lower()[:5]
+                                    sid = f"zt_5m_{_under}_{_dir}_{t.time():.0f}"
+                                    telegram_send(zt_msg, signal_id=sid)
                                 print(f"  🎯 ZONE TAP: {zt_sig['underlying']} {zt_sig['direction']} "
                                       f"@ {zt_sig['zone_type']} | {zt_sig['pattern']} | "
                                       f"score {zt_sig['score']}")
@@ -4812,7 +4852,13 @@ def run_live_mode():
         
             # 💾 SAVE PERSISTED MEMORY AFTER BATCH
             save_engine_states()
-    
+            # Cycle monitoring: dashboard can detect stuck engine (heartbeat fresh but last_cycle stale)
+            try:
+                import engine_runtime
+                engine_runtime.write_last_cycle()
+            except Exception as _e:
+                logging.debug("write_last_cycle: %s", _e)
+
         except Exception as e:
             # F4.6: Error escalation — track consecutive main loop errors
             _consecutive_loop_errors += 1
@@ -4841,7 +4887,20 @@ import signal as signal_module
 LOCK_FILE_PATH = "engine.lock"
 
 def _acquire_process_lock():
-    """F1.8: Prevent multiple engine instances from running simultaneously"""
+    """F1.8 + Railway: Prevent multiple engine instances — Redis lock first (if REDIS_URL), else file lock."""
+    try:
+        import engine_runtime
+        if os.getenv("REDIS_URL", "").strip():
+            if not engine_runtime.acquire_engine_lock():
+                print("🛑 ABORT: Another engine instance already running (Redis lock held). Exiting.")
+                logging.warning("Engine lock not acquired (Redis). Another instance running.")
+                import sys
+                sys.exit(1)
+            engine_runtime.set_engine_version(ENGINE_VERSION)
+            logging.info("Engine started with Redis lock (24/7 safe mode)")
+            return
+    except ImportError:
+        pass
     if os.path.exists(LOCK_FILE_PATH):
         try:
             with open(LOCK_FILE_PATH, "r") as f:
@@ -4874,7 +4933,12 @@ def _acquire_process_lock():
     logging.info(f"🔒 Process lock acquired (PID {os.getpid()})")
 
 def _release_process_lock():
-    """Remove lock file on shutdown"""
+    """Remove lock file on shutdown; also release Redis lock if held."""
+    try:
+        import engine_runtime
+        engine_runtime.release_engine_lock()
+    except Exception as e:
+        logging.debug("Engine runtime release_engine_lock: %s", e)
     try:
         if os.path.exists(LOCK_FILE_PATH):
             os.remove(LOCK_FILE_PATH)
@@ -4883,7 +4947,7 @@ def _release_process_lock():
         logging.error(f"Failed to release lock file: {e}")
 
 def _shutdown_handler(reason="unknown"):
-    """Save all state on exit — called by atexit and SIGINT"""
+    """Save all state on exit — called by atexit, SIGINT, SIGTERM. Releases Redis lock."""
     logging.info(f"🛑 Engine shutting down (reason: {reason}). Saving state...")
     try:
         save_engine_states()
@@ -4916,6 +4980,11 @@ except (OSError, AttributeError):
     pass  # SIGTERM not available on Windows in all contexts
 
 if __name__ == "__main__":
-    _acquire_process_lock()  # F1.8: Prevent multiple instances
+    _acquire_process_lock()  # F1.8: Prevent multiple instances (Redis or file lock)
+    try:
+        import engine_runtime
+        engine_runtime.start_heartbeat_thread()  # Dedicated thread: heartbeat every 30s even if main loop stalls
+    except Exception as e:
+        logging.debug("Heartbeat thread not started: %s", e)
     start_data_prefetcher()
     run_live_mode()

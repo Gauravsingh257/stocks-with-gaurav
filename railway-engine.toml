@@ -1,0 +1,13 @@
+# Railway config for ENGINE WORKER service only.
+# In Railway dashboard: engine service -> Settings -> set "Config file path" to: railway-engine.toml
+# Use with Dockerfile.engine. This service runs the trading engine 24/7.
+# Scaling: keep exactly 1 replica (Redis lock also enforces single leader; this avoids extra container starts).
+
+[build]
+dockerfilePath = "Dockerfile.engine"
+
+[deploy]
+startCommand = "python smc_mtf_engine_v4.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+replicas = 1
