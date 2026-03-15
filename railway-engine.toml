@@ -9,5 +9,4 @@ dockerfilePath = "Dockerfile.engine"
 [deploy]
 startCommand = "python smc_mtf_engine_v4.py"
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
-replicas = 1
+restartPolicyMaxRetries = 5
