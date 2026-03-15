@@ -1,21 +1,10 @@
-# Engine Service — SMC MTF Engine for Railway
-# Build: Railway uses this when "Dockerfile Path" is set to Dockerfile.engine
-
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for matplotlib/mplfinance
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libfreetype6-dev libpng-dev pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install engine dependencies (no ta-lib, no backtrader)
 COPY requirements-engine.txt .
 RUN pip install --no-cache-dir -r requirements-engine.txt
 
-# Copy full codebase (engine needs engine/, smc_trading_engine/, config/, utils/, etc.)
 COPY . .
 
-# Engine runs as a long-lived process
 CMD ["python", "smc_mtf_engine_v4.py"]
