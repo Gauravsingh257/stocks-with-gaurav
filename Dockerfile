@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir -r requirements-railway.txt
 # Copy code
 COPY . .
 
-# Railway sets PORT; default 8080 for local runs
+# Railway sets PORT at runtime. Use shell form so $PORT is expanded.
 ENV PORT=8080
-CMD ["sh", "-c", "exec uvicorn dashboard.backend.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD uvicorn dashboard.backend.main:app --host 0.0.0.0 --port ${PORT}
