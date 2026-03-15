@@ -30,7 +30,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from dashboard.backend.cache import ohlc_key, get as cache_get, set as cache_set, MARKET_DATA_TTL
+from dashboard.backend.cache import (
+    ohlc_key,
+    get as cache_get,
+    set as cache_set,
+    get_candle_list as cache_get_candle_list,
+    MARKET_DATA_TTL,
+)
 
 logger = logging.getLogger("dashboard.charts")
 
@@ -43,12 +49,14 @@ if _WORKSPACE not in sys.path:
 
 # Interval map: frontend string → Kite historical interval string
 INTERVAL_MAP = {
+    "1m":   "1minute",
     "5m":   "5minute",
     "15m":  "15minute",
     "1h":   "60minute",
     "4h":   "day",       # Kite has no native 4h; use day as closest
     "1D":   "day",
     # also accept Kite strings directly
+    "1minute":  "1minute",
     "5minute":  "5minute",
     "15minute": "15minute",
     "60minute": "60minute",
@@ -57,11 +65,16 @@ INTERVAL_MAP = {
 
 # Days to fetch per interval (balance completeness vs API cost)
 DAYS_FOR_INTERVAL = {
+    "1minute":  1,
     "5minute":  3,
     "15minute": 7,
     "60minute": 30,
     "day":      365,
 }
+
+# Symbol to Redis key suffix for tick-built candles (realtime)
+SYMBOL_TO_REDIS_SUFFIX = {"NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY"}
+REDIS_INTERVAL_MAP = {"1m": "1m", "5m": "5m", "15m": "15m"}  # frontend interval -> Redis key interval
 
 # Well-known NSE indices and their exchange:tradingsymbol strings
 INDEX_SYMBOLS = {
@@ -290,6 +303,34 @@ def ohlc(
                     ),
                 )
             raise HTTPException(status_code=502, detail=f"Kite API error: {exc}")
+
+    # Merge tick-built candles (realtime) for indices when interval is 1m/5m/15m
+    redis_sym = SYMBOL_TO_REDIS_SUFFIX.get(_clean_symbol(symbol))
+    redis_iv = REDIS_INTERVAL_MAP.get(interval)
+    if redis_sym and redis_iv:
+        try:
+            redis_candles = cache_get_candle_list(redis_sym, redis_iv)
+            if redis_candles:
+                def _norm_candle(c):
+                    return {
+                        "time": int(c.get("time", 0)),
+                        "open": round(float(c.get("open", 0)), 2),
+                        "high": round(float(c.get("high", 0)), 2),
+                        "low": round(float(c.get("low", 0)), 2),
+                        "close": round(float(c.get("close", 0)), 2),
+                        "volume": int(c.get("volume", 0)),
+                    }
+                redis_norm = [_norm_candle(c) for c in redis_candles]
+                first_redis_ts = min(c["time"] for c in redis_norm)
+                hist = [c for c in candles if c["time"] < first_redis_ts]
+                merged = hist + redis_norm
+                merged.sort(key=lambda c: c["time"])
+                seen = {}
+                for c in merged:
+                    seen[c["time"]] = c
+                candles = sorted(seen.values(), key=lambda c: c["time"])
+        except Exception as e:
+            logger.debug("Merge Redis candles failed: %s", e)
 
     return {
         "symbol":   symbol,

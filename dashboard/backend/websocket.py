@@ -1,6 +1,6 @@
 """
 dashboard/backend/websocket.py
-Hardened WebSocket — broadcasts engine snapshot every second.
+Hardened WebSocket — broadcasts engine snapshot every 5s + real-time LTP when available.
 
 Safety guarantees:
   • No engine mutation — only reads `get_engine_snapshot()`
@@ -8,11 +8,13 @@ Safety guarantees:
   • Per-client send queue capped at 5 — drops oldest on overflow (backpressure)
   • Graceful cleanup on disconnect / unexpected close
   • Broadcast loop never crashes server on client error
+  • LTP updates from Redis pub/sub (realtime tick stream) broadcast at 1s throttle
 """
 
 import asyncio
 import json
 import logging
+import threading
 from typing import Set
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -21,6 +23,11 @@ from dashboard.backend.state_bridge import get_engine_snapshot
 from dashboard.backend.services import process_recommendation_triggers
 
 log = logging.getLogger("dashboard.ws")
+
+# Latest LTP payload from Redis ltp_updates channel (set by subscriber thread)
+_pending_ltp: dict | None = None
+_pending_ltp_lock = threading.Lock()
+_ltp_subscriber_stop = threading.Event()
 
 MAX_WS_CONNECTIONS_PER_IP = 5
 
@@ -111,6 +118,50 @@ manager = _ConnectionManager()
 # Background broadcast loop — started from main.py lifespan
 # ---------------------------------------------------------------------------
 _broadcast_task: asyncio.Task | None = None
+_ltp_broadcast_task: asyncio.Task | None = None
+_ltp_subscriber_thread: threading.Thread | None = None
+
+
+def _ltp_subscriber_thread_fn() -> None:
+    """Subscribe to Redis ltp_updates and set _pending_ltp for broadcast loop."""
+    try:
+        from dashboard.backend.cache import _get_redis, LTP_UPDATES_CHANNEL
+        r = _get_redis()
+        if r is None:
+            return
+        pub = r.pubsub()
+        pub.subscribe(LTP_UPDATES_CHANNEL)
+        for msg in pub.listen():
+            if _ltp_subscriber_stop.is_set():
+                break
+            if msg and msg.get("type") == "message" and msg.get("data"):
+                try:
+                    data = json.loads(msg["data"])
+                    if isinstance(data, dict):
+                        with _pending_ltp_lock:
+                            global _pending_ltp
+                            _pending_ltp = data
+                except (json.JSONDecodeError, TypeError):
+                    pass
+    except Exception as e:
+        log.debug("LTP subscriber thread exited: %s", e)
+
+
+async def _ltp_broadcast_loop() -> None:
+    """Every 1s broadcast latest LTP to connected clients (real-time command bar / sparkline)."""
+    while True:
+        await asyncio.sleep(1.0)
+        if manager.client_count == 0:
+            continue
+        with _pending_ltp_lock:
+            payload = _pending_ltp
+            _pending_ltp = None
+        if payload:
+            try:
+                msg = json.dumps({"type": "ltp", "data": payload})
+                await manager.broadcast(msg)
+            except Exception as exc:
+                log.debug("LTP broadcast error: %s", exc)
 
 
 async def _broadcast_loop() -> None:
@@ -163,15 +214,37 @@ async def _broadcast_loop() -> None:
 
 def start_broadcast_loop() -> None:
     """Called from FastAPI lifespan to start the loop."""
-    global _broadcast_task
+    global _broadcast_task, _ltp_broadcast_task, _ltp_subscriber_thread
     loop = asyncio.get_event_loop()
     _broadcast_task = loop.create_task(_broadcast_loop())
+    _ltp_broadcast_task = loop.create_task(_ltp_broadcast_loop())
+    try:
+        from dashboard.backend.cache import _get_redis, LTP_UPDATES_CHANNEL
+        if _get_redis() is not None:
+            _ltp_subscriber_stop.clear()
+            _ltp_subscriber_thread = threading.Thread(target=_ltp_subscriber_thread_fn, daemon=True)
+            _ltp_subscriber_thread.start()
+            log.info("LTP Redis subscriber started")
+    except Exception as e:
+        log.debug("LTP subscriber not started: %s", e)
     log.info("WebSocket broadcast loop started")
 
 
 def stop_broadcast_loop() -> None:
     """Called from FastAPI lifespan on shutdown."""
-    global _broadcast_task
+    global _broadcast_task, _ltp_broadcast_task, _ltp_subscriber_thread
+    _ltp_subscriber_stop.set()
+    if _ltp_subscriber_thread is not None:
+        try:
+            from dashboard.backend.cache import _get_redis
+            r = _get_redis()
+            if r is not None:
+                r.publish("ltp_updates", "{}")  # wake listener
+        except Exception:
+            pass
+        _ltp_subscriber_thread = None
+    if _ltp_broadcast_task and not _ltp_broadcast_task.done():
+        _ltp_broadcast_task.cancel()
     if _broadcast_task and not _broadcast_task.done():
         _broadcast_task.cancel()
         log.info("WebSocket broadcast loop stopped")

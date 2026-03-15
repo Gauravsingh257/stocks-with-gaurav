@@ -19,7 +19,7 @@ interface ZoneItem { direction: string; top: number; bottom: number; zone_type: 
 interface PriceLine { type: string; price: number; label: string; color: string }
 interface ZonesData { symbol: string; zones: ZoneItem[]; active_lines: PriceLine[]; engine_live: boolean }
 
-const INTERVALS = ["5m", "15m", "1h", "1D"] as const;
+const INTERVALS = ["1m", "5m", "15m", "1h", "1D"] as const;
 type Interval = typeof INTERVALS[number];
 
 const ZONE_COLORS: Record<string, { line: string }> = {
@@ -86,12 +86,14 @@ export default function ChartsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Refresh chart: 10s for 1m/5m/15m (real-time tail), 30s for 1h/1D
+  const refreshMs = ["1m", "5m", "15m"].includes(interval) ? 10_000 : 30_000;
   useEffect(() => {
     const id = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "hidden") fetchData();
-    }, 30_000);
+    }, refreshMs);
     return () => clearInterval(id);
-  }, [fetchData]);
+  }, [fetchData, refreshMs]);
 
   // ── Build chart ────────────────────────────────────────────────────────────
   useEffect(() => {

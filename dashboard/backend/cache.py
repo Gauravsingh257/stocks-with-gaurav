@@ -102,6 +102,100 @@ OI_SNAPSHOT_KEY = "oi_snapshot"
 MARKET_ENGINE_LAST_UPDATE_KEY = "market_engine:last_update"
 WORKER_HEARTBEAT_TTL = 60  # seconds; if worker dies, key expires and health reports stale
 
+# Real-time LTP (from Kite WebSocket tick stream); no TTL so value persists
+LTP_KEY_PREFIX = "ltp:"
+LTP_TTL = 300  # 5 min TTL so stale data expires if tick stream stops
+LTP_UPDATES_CHANNEL = "ltp_updates"
+CANDLE_KEY_PREFIX = "candle:"
+CANDLE_MAX_BARS = 500
+CANDLE_TTL = 86400  # 24h for tick-built candles
+
+
+def ltp_key(symbol: str) -> str:
+    """Redis key for live LTP. symbol: NIFTY or BANKNIFTY."""
+    return f"{LTP_KEY_PREFIX}{symbol}"
+
+
+def candle_key(symbol: str, interval: str) -> str:
+    """Redis key for tick-aggregated candles. interval: 1m, 5m, 15m."""
+    return f"{CANDLE_KEY_PREFIX}{interval}:{symbol}"
+
+
+def set_ltp(symbol: str, value: float) -> None:
+    """Set LTP in Redis (and optional in-memory) for real-time command bar."""
+    key = ltp_key(symbol)
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.setex(key, LTP_TTL, str(value))
+        except Exception as e:
+            log.debug("Redis set_ltp error %s: %s", key, e)
+        return
+    with _memory_lock:
+        _memory_cache[key] = (value, time.time() + LTP_TTL)
+
+
+def get_ltp(symbol: str) -> float | None:
+    """Get LTP from Redis (or in-memory). Returns None if missing."""
+    key = ltp_key(symbol)
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(key)
+            if raw is None:
+                return None
+            return float(raw)
+        except (TypeError, ValueError) as e:
+            log.debug("Redis get_ltp parse error %s: %s", key, e)
+            return None
+    with _memory_lock:
+        entry = _memory_cache.get(key)
+        if entry is None:
+            return None
+        val, expires_at = entry
+        if time.time() > expires_at:
+            del _memory_cache[key]
+            return None
+        return float(val) if isinstance(val, (int, float)) else None
+
+
+def publish_ltp_update(payload: dict) -> None:
+    """Publish LTP payload to Redis channel for WebSocket broadcast. Keys: NIFTY 50, NIFTY BANK."""
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        import json
+        r.publish(LTP_UPDATES_CHANNEL, json.dumps(payload, default=str))
+    except Exception as e:
+        log.debug("Redis publish_ltp error: %s", e)
+
+
+def get_candle_list(symbol: str, interval: str) -> list:
+    """Get list of candles from Redis (tick-built). Returns [] if missing."""
+    key = candle_key(symbol, interval)
+    raw = get(key)
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def append_candle(symbol: str, interval: str, candle: dict) -> None:
+    """Append one candle and trim to CANDLE_MAX_BARS. Candle: {time, open, high, low, close, volume}."""
+    key = candle_key(symbol, interval)
+    data = get_candle_list(symbol, interval)
+    data.append(candle)
+    data = data[-CANDLE_MAX_BARS:]
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.setex(key, CANDLE_TTL, json.dumps(data, default=str))
+        except Exception as e:
+            log.debug("Redis append_candle error %s: %s", key, e)
+        return
+    with _memory_lock:
+        _memory_cache[key] = (data, time.time() + CANDLE_TTL)
+
 
 def is_redis_available() -> bool:
     """True if Redis is connected (for health endpoint)."""

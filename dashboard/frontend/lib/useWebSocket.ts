@@ -91,6 +91,11 @@ export function useEngineSocket() {
         try {
           const msg = JSON.parse(ev.data as string);
           if (msg.type === "snapshot" && msg.data) setSnapshot(msg.data as EngineSnapshot);
+          if (msg.type === "ltp" && msg.data && typeof msg.data === "object") {
+            setSnapshot((prev) =>
+              prev ? { ...prev, index_ltp: msg.data as Record<string, number> } : prev
+            );
+          }
           if (msg.type === "ping" || msg.type === "keepalive") setLastPing(Date.now());
         } catch { /* ignore parse errors */ }
       };

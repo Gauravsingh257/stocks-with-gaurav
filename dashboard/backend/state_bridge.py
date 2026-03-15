@@ -291,11 +291,17 @@ def get_engine_snapshot() -> Dict:
 
 
 def _get_index_ltp_from_cache() -> Dict[str, float]:
-    """Read last close for NIFTY 50 and NIFTY BANK from OHLC cache (worker populates)."""
+    """Read LTP from Redis (realtime tick stream) first; fallback to OHLC last close (worker)."""
     out: Dict[str, float] = {}
     try:
-        from dashboard.backend.cache import get as cache_get, ohlc_key
-        for label, kite_sym in (("NIFTY 50", "NSE:NIFTY 50"), ("NIFTY BANK", "NSE:NIFTY BANK")):
+        from dashboard.backend.cache import get_ltp, get as cache_get, ohlc_key
+        for label, redis_sym in (("NIFTY 50", "NIFTY"), ("NIFTY BANK", "BANKNIFTY")):
+            ltp = get_ltp(redis_sym)
+            if ltp is not None:
+                out[label] = float(ltp)
+                continue
+            # Fallback: last close from OHLC cache (worker or historical)
+            kite_sym = "NSE:NIFTY 50" if redis_sym == "NIFTY" else "NSE:NIFTY BANK"
             key = ohlc_key(kite_sym, "15minute")
             candles = cache_get(key)
             if isinstance(candles, list) and len(candles) > 0:

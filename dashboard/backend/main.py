@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
     start_csv_watcher(interval_seconds=30)
     log.info("[DB] CSV watcher started — auto-syncing every 30s on file change")
     start_broadcast_loop()
+    try:
+        from dashboard.backend.realtime import start_realtime_service
+        start_realtime_service()
+    except Exception as exc:
+        log.debug("Realtime market data service not started: %s", exc)
 
     # ── Kite: log status and validate session ────────────────────────────────
     try:
@@ -81,6 +86,11 @@ async def lifespan(app: FastAPI):
     log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
+    try:
+        from dashboard.backend.realtime import stop_realtime_service
+        stop_realtime_service()
+    except Exception:
+        pass
     stop_broadcast_loop()
     try:
         from agents.runner import stop_scheduler
