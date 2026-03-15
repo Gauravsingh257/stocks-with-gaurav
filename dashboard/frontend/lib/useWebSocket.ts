@@ -5,11 +5,13 @@
  * WebSocket URL auto-detects from page location so it works on both
  * localhost and Cloudflare tunnel (phone / remote access).
  *
- * Includes REST polling fallback: if WS fails 3+ times, switches to
- * /api/snapshot polling every 2 seconds, so the page always loads.
+ * REST polling fallback: if WS fails 3+ times, switches to /api/snapshot
+ * polling every 5s (was 2s) — pauses automatically when the tab is hidden.
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { EngineSnapshot } from "./api";
+
+const POLL_INTERVAL_MS = 5_000; // REST fallback interval (was 2000)
 
 function getWsUrl(): string {
   const env = process.env.NEXT_PUBLIC_WS_URL;
@@ -41,6 +43,8 @@ export function useEngineSocket() {
     setStatus("polling");
 
     const poll = async () => {
+      // Pause fetching when tab is hidden to save API quota
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
         const r = await fetch(`${BASE}/api/snapshot`, { cache: "no-store" });
         if (r.ok) {
@@ -51,7 +55,7 @@ export function useEngineSocket() {
     };
 
     poll(); // immediate first fetch
-    pollRef.current = setInterval(poll, 2000);
+    pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
   }, []);
 
   const stopPolling = useCallback(() => {

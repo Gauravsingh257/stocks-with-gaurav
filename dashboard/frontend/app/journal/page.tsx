@@ -39,7 +39,9 @@ function TodaySignals() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 30_000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") load();
+    }, 30_000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -160,7 +162,9 @@ export default function JournalPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 60_000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") load();
+    }, 60_000);
     return () => clearInterval(t);
   }, [load]);
 

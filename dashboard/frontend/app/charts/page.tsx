@@ -87,7 +87,9 @@ export default function ChartsPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   useEffect(() => {
-    const id = setInterval(fetchData, 30_000);
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") fetchData();
+    }, 30_000);
     return () => clearInterval(id);
   }, [fetchData]);
 

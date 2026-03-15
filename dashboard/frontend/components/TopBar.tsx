@@ -26,13 +26,14 @@ export default function TopBar() {
 
   useEffect(() => {
     const fetchHealth = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       fetch(`${BASE}/api/system/health`)
         .then(r => r.ok ? r.json() : null)
         .then(d => d && setHealth(d))
         .catch(() => {});
     };
     fetchHealth();
-    const t = setInterval(fetchHealth, 15_000);
+    const t = setInterval(fetchHealth, 30_000); // was 15s
     return () => clearInterval(t);
   }, []);
 

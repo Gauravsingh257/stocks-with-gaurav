@@ -317,7 +317,12 @@ export function DisplacementMonitor() {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 15_000);   // refresh every 15 seconds
+    const id = setInterval(() => {
+      // Pause when tab is not visible to save API quota
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
+        refresh();
+      }
+    }, 30_000); // was 15s — displacement events don't change faster than 30s
     return () => clearInterval(id);
   }, [refresh]);
 

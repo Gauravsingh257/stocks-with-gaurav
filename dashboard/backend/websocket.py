@@ -82,10 +82,15 @@ _broadcast_task: asyncio.Task | None = None
 
 
 async def _broadcast_loop() -> None:
-    """Push engine snapshot to all connected clients every 1 second."""
-    INTERVAL    = 1.0   # seconds between snapshots
-    PING_EVERY  = 10    # send ping every N iterations
-    OI_EVERY    = 10    # send OI snapshot every N iterations (10s)
+    """Push engine snapshot to all connected clients every 5 seconds.
+
+    5s interval keeps the UI feeling live while cutting Railway CPU/bandwidth
+    by 80% vs the original 1s loop. Engine state doesn't change faster than
+    the engine's own loop (typically 60–300s between signal evaluations).
+    """
+    INTERVAL    = 5.0   # seconds between snapshots (was 1.0)
+    PING_EVERY  = 6     # send ping every N iterations → every 30s
+    OI_EVERY    = 6     # send OI snapshot every N iterations → every 30s
     tick        = 0
 
     while True:

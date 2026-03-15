@@ -53,10 +53,10 @@ export default function OIIntelligencePage() {
     }
   }, []);
 
-  /* ── WebSocket (receives OI pushes every 10s) ──────────── */
+  /* ── WebSocket — primary data source (OI pushed every 30s) ─ */
   useEffect(() => {
-    const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${wsProto}://${window.location.host}/ws`;
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+      ?? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     let ws: WebSocket;
     let dead = false;
 
@@ -68,12 +68,13 @@ export default function OIIntelligencePage() {
       ws.onopen = () => setWsConnected(true);
       ws.onclose = () => {
         setWsConnected(false);
+        // Back-off: 3s before reconnect
         if (!dead) setTimeout(connect, 3000);
       };
       ws.onerror = () => setWsConnected(false);
       ws.onmessage = (ev) => {
         try {
-          const msg = JSON.parse(ev.data);
+          const msg = JSON.parse(ev.data as string);
           if (msg.type === "oi_intelligence" && msg.data) {
             setSnapshot(msg.data);
             setLastUpdate(new Date().toLocaleTimeString());
@@ -88,23 +89,27 @@ export default function OIIntelligencePage() {
     return () => { dead = true; ws?.close(); };
   }, []);
 
-  /* ── REST Polling fallback (every 10s) ──────────────────── */
+  /* ── REST Polling — fallback only when WebSocket is down ── */
   useEffect(() => {
-    fetchSnapshot(); // initial load
+    fetchSnapshot(); // always do an immediate load on mount
 
-    if (autoRefresh) {
-      pollRef.current = setInterval(fetchSnapshot, 10_000);
-    }
+    if (!autoRefresh) return;
+
+    // Poll at 30s when WS is connected (safety net), 10s when WS is down.
+    // This avoids redundant parallel requests when WebSocket is healthy.
+    const interval = wsConnected ? 30_000 : 10_000;
+    pollRef.current = setInterval(() => {
+      // Never poll while the tab is hidden — saves API quota
+      if (document.visibilityState !== "hidden") fetchSnapshot();
+    }, interval);
+
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [autoRefresh, fetchSnapshot]);
+  }, [autoRefresh, fetchSnapshot, wsConnected]);
 
-  /* ── Visibility Change — instant refresh when returning ── */
+  /* ── Visibility Change — instant refresh on tab focus ──── */
   useEffect(() => {
     function handleVisibility() {
-      if (document.visibilityState === "visible") {
-        // User returned to the tab after being away — fetch fresh data now
-        fetchSnapshot();
-      }
+      if (document.visibilityState === "visible") fetchSnapshot();
     }
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);

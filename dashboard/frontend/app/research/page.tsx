@@ -40,7 +40,9 @@ export default function ResearchPage() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 30_000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") refresh();
+    }, 30_000);
     return () => clearInterval(t);
   }, [refresh]);
 

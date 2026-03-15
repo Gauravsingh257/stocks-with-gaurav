@@ -148,8 +148,8 @@ def _get_instrument_token(kite, symbol: str) -> int | None:
 
 # ── OHLC cache (symbol, interval) → {data, ts} ────────────────────────────────
 _ohlc_cache: dict[tuple, dict] = {}
-_OHLC_TTL   = 30          # seconds for intraday
-_OHLC_TTL_D = 300         # seconds for daily
+_OHLC_TTL   = 60          # seconds for intraday (was 30 — Kite rate limit friendly)
+_OHLC_TTL_D = 600         # seconds for daily (was 300 — daily bars change once/day)
 
 def _ohlc_ttl(kite_interval: str) -> int:
     return _OHLC_TTL_D if kite_interval == "day" else _OHLC_TTL
