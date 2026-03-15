@@ -197,6 +197,38 @@ def append_candle(symbol: str, interval: str, candle: dict) -> None:
         _memory_cache[key] = (data, time.time() + CANDLE_TTL)
 
 
+def upsert_candle(symbol: str, interval: str, candle: dict) -> None:
+    """
+    Write candle with duplicate prevention: if the last stored candle has the same
+    timestamp (minute boundary), overwrite it; otherwise append. Then trim to CANDLE_MAX_BARS.
+    Ensures Redis candles merge cleanly with Kite historical (no duplicate times).
+    """
+    key = candle_key(symbol, interval)
+    data = get_candle_list(symbol, interval)
+    candle_time = int(candle.get("time", 0))
+    if data and len(data) > 0:
+        try:
+            last_ts = int(data[-1].get("time", -1))
+        except (TypeError, ValueError):
+            last_ts = -1
+        if last_ts == candle_time:
+            data[-1] = candle
+        else:
+            data.append(candle)
+    else:
+        data.append(candle)
+    data = data[-CANDLE_MAX_BARS:]
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.setex(key, CANDLE_TTL, json.dumps(data, default=str))
+        except Exception as e:
+            log.debug("Redis upsert_candle error %s: %s", key, e)
+        return
+    with _memory_lock:
+        _memory_cache[key] = (data, time.time() + CANDLE_TTL)
+
+
 def is_redis_available() -> bool:
     """True if Redis is connected (for health endpoint)."""
     return _get_redis() is not None

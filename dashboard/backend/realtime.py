@@ -17,7 +17,6 @@ import os
 import sys
 import threading
 import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,9 +36,9 @@ LTP_PUBLISH_INTERVAL_MS = 200
 _last_publish_ts: float = 0
 _last_ltp: dict[str, float] = {}
 
-# 1m buffer: symbol -> list of (ts_unix, price, volume)
-_minute_buffers: dict[str, list[tuple[int, float, int]]] = defaultdict(list)
-_last_minute_ts: dict[str, int] = {}  # symbol -> last closed minute (unix)
+# Current 1m candle being built per symbol. Candle time is always minute boundary (epoch).
+# Structure: { "minute": int, "open": float, "high": float, "low": float, "close": float, "volume": int }
+_current_1m: dict[str, dict] = {}
 
 
 def _get_instrument_tokens() -> dict[int, str]:
@@ -90,10 +89,12 @@ def _on_ticks(ws, ticks):
     from dashboard.backend.cache import (
         set_ltp,
         publish_ltp_update,
-        append_candle,
+        upsert_candle,
     )
 
+    # Use integer second; minute bucket = exact boundary aligned with Kite historical
     now_ts = int(time.time())
+    minute_ts = (now_ts // 60) * 60  # 09:15:02 -> 09:15:00 (epoch)
     payload_ltp: dict[str, float] = {}
 
     for t in ticks:
@@ -117,36 +118,37 @@ def _on_ticks(ws, ticks):
         set_ltp(symbol, price)
         payload_ltp[SYMBOL_TO_LABEL[symbol]] = price
 
-        # Aggregate into current minute buffer
-        minute_ts = (now_ts // 60) * 60
-        _minute_buffers[symbol].append((now_ts, price, volume))
-
-        # Flush previous minute if we crossed boundary
-        last_ts = _last_minute_ts.get(symbol)
-        if last_ts is not None and minute_ts > last_ts:
-            buf = _minute_buffers[symbol]
-            # Ticks belonging to previous minute: last_ts <= ts < minute_ts
-            prev_buf = [(ts, p, v) for ts, p, v in buf if last_ts <= ts < minute_ts]
-            buf_curr = [(ts, p, v) for ts, p, v in buf if ts >= minute_ts]
-            _minute_buffers[symbol] = buf_curr
-            _last_minute_ts[symbol] = minute_ts
-
-            if prev_buf:
-                prices = [p for _, p, _ in prev_buf]
-                vols = [v for _, _, v in prev_buf]
+        # ── Tick-to-candle aggregation (minute boundary only) ──
+        cur = _current_1m.get(symbol)
+        if cur is None or cur["minute"] != minute_ts:
+            # Minute changed (or first tick): finalize previous candle, then start new one
+            if cur is not None:
+                # Finalize previous minute candle (timestamp = minute boundary)
                 candle_1m = {
-                    "time": last_ts,
-                    "open": round(prev_buf[0][1], 2),
-                    "high": round(max(prices), 2),
-                    "low": round(min(prices), 2),
-                    "close": round(prev_buf[-1][1], 2),
-                    "volume": sum(vols),
+                    "time": cur["minute"],
+                    "open": round(cur["open"], 2),
+                    "high": round(cur["high"], 2),
+                    "low": round(cur["low"], 2),
+                    "close": round(cur["close"], 2),
+                    "volume": cur["volume"],
                 }
-                append_candle(symbol, "1m", candle_1m)
+                upsert_candle(symbol, "1m", candle_1m)
                 _aggregate_to_5m_15m(symbol, candle_1m)
-
-        if last_ts is None:
-            _last_minute_ts[symbol] = minute_ts
+            # Start new candle for current minute
+            _current_1m[symbol] = {
+                "minute": minute_ts,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": volume,
+            }
+        else:
+            # Same minute: update high, low, close, volume
+            cur["high"] = max(cur["high"], price)
+            cur["low"] = min(cur["low"], price)
+            cur["close"] = price
+            cur["volume"] += volume
 
     if not payload_ltp:
         return
@@ -160,35 +162,35 @@ def _on_ticks(ws, ticks):
 
 
 def _aggregate_to_5m_15m(symbol: str, candle_1m: dict) -> None:
-    """After appending a 1m candle, optionally flush 5m and 15m if bucket is complete."""
-    from dashboard.backend.cache import get_candle_list, append_candle
+    """After writing a 1m candle, optionally build 5m and 15m if bucket is complete. Uses minute-boundary timestamps."""
+    from dashboard.backend.cache import get_candle_list, upsert_candle
 
-    t = candle_1m["time"]
+    t = int(candle_1m["time"])  # already minute boundary
     list_1m = get_candle_list(symbol, "1m")
 
-    # 5m: one candle per 5m bucket when we have 5 full 1m bars in that bucket
+    # 5m: one candle per 5m bucket (timestamp = bucket boundary, e.g. 1710500700)
     bucket_5m = (t // 300) * 300
-    in_bucket_5 = [c for c in list_1m if (c["time"] // 300) * 300 == bucket_5m]
-    existing_5m = get_candle_list(symbol, "5m")
-    if len(in_bucket_5) >= 5 and not any(c["time"] == bucket_5m for c in existing_5m):
+    in_bucket_5 = [c for c in list_1m if (int(c["time"]) // 300) * 300 == bucket_5m]
+    if len(in_bucket_5) >= 5:
         take = in_bucket_5[-5:]
-        o, c = take[0]["open"], take[-1]["close"]
+        o = take[0]["open"]
+        c = take[-1]["close"]
         h = max(x["high"] for x in take)
         l = min(x["low"] for x in take)
-        vol = sum(x.get("volume", 0) for x in take)
-        append_candle(symbol, "5m", {"time": bucket_5m, "open": o, "high": h, "low": l, "close": c, "volume": vol})
+        vol = sum(int(x.get("volume", 0)) for x in take)
+        upsert_candle(symbol, "5m", {"time": bucket_5m, "open": o, "high": h, "low": l, "close": c, "volume": vol})
 
-    # 15m
+    # 15m: one candle per 15m bucket (minute boundary)
     bucket_15m = (t // 900) * 900
-    in_bucket_15 = [c for c in list_1m if (c["time"] // 900) * 900 == bucket_15m]
-    existing_15m = get_candle_list(symbol, "15m")
-    if len(in_bucket_15) >= 15 and not any(c["time"] == bucket_15m for c in existing_15m):
+    in_bucket_15 = [c for c in list_1m if (int(c["time"]) // 900) * 900 == bucket_15m]
+    if len(in_bucket_15) >= 15:
         take = in_bucket_15[-15:]
-        o, c = take[0]["open"], take[-1]["close"]
+        o = take[0]["open"]
+        c = take[-1]["close"]
         h = max(x["high"] for x in take)
         l = min(x["low"] for x in take)
-        vol = sum(x.get("volume", 0) for x in take)
-        append_candle(symbol, "15m", {"time": bucket_15m, "open": o, "high": h, "low": l, "close": c, "volume": vol})
+        vol = sum(int(x.get("volume", 0)) for x in take)
+        upsert_candle(symbol, "15m", {"time": bucket_15m, "open": o, "high": h, "low": l, "close": c, "volume": vol})
 
 
 def _run_ticker() -> None:
