@@ -17,11 +17,12 @@ if (-not $env:BACKEND_URL) {
         }
     }
 }
-$apiUrl = $env:BACKEND_URL
+$apiUrl = ($env:BACKEND_URL ?? "").Trim().TrimEnd('/')
 if (-not $apiUrl) {
-    Write-Host "ERROR: Set BACKEND_URL first. Example: `$env:BACKEND_URL = 'https://YOUR-RAILWAY-URL.up.railway.app'"
+    Write-Host "ERROR: Set BACKEND_URL first. Example: BACKEND_URL=https://YOUR-RAILWAY-URL.up.railway.app in .go_live_config"
     exit 1
 }
+if (-not $apiUrl.StartsWith("http")) { $apiUrl = "https://" + $apiUrl }
 $syncUrl = "$apiUrl/api/journal/sync"
 
 if (-not (Test-Path $csvPath)) {
@@ -58,5 +59,12 @@ try {
     Write-Host "OK: Synced $($resp.synced) trades."
 } catch {
     Write-Host "ERROR: $($_.Exception.Message)"
+    if ($_.Exception.Message -match "502") {
+        Write-Host ""
+        Write-Host "502 = Backend is down or not ready. Fix the Railway WEB service:" -ForegroundColor Yellow
+        Write-Host "  1. Railway -> web -> Settings -> Build -> Dockerfile Path = Dockerfile" -ForegroundColor White
+        Write-Host "  2. Redeploy and wait for 'Deployment successful'" -ForegroundColor White
+        Write-Host "  3. Run this sync again" -ForegroundColor White
+    }
     exit 1
 }
