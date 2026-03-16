@@ -31,10 +31,23 @@ def get_api_key() -> str:
 
 
 def get_access_token() -> str:
-    """Kite access token: env KITE_ACCESS_TOKEN first, else access_token.txt."""
+    """Kite access token: Redis first (web login), env KITE_ACCESS_TOKEN, else access_token.txt."""
+    # 1. Redis — token set by /api/kite/callback (web login flow)
+    try:
+        import redis as _redis
+        url = os.getenv("REDIS_URL", "").strip()
+        if url:
+            r = _redis.from_url(url, decode_responses=True)
+            tok = r.get("kite:access_token")
+            if tok and tok.strip():
+                return tok.strip()
+    except Exception:
+        pass
+    # 2. Environment variable
     token = os.getenv("KITE_ACCESS_TOKEN", "").strip()
     if token:
         return token
+    # 3. Local file
     token_file = _WORKSPACE / "access_token.txt"
     if token_file.exists():
         try:

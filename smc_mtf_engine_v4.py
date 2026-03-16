@@ -5064,10 +5064,19 @@ if __name__ == "__main__":
     try:
         from dashboard.backend.engine_api import start_api_server, set_state_reader
         set_state_reader(get_engine_state_snapshot)
-        threading.Thread(target=start_api_server, daemon=True).start()
-        print("[ENGINE] Local API server thread started on http://localhost:8000")
+        api_port = int(os.environ.get("PORT", 8000))
+        threading.Thread(target=start_api_server, kwargs={"port": api_port}, daemon=True).start()
+        print(f"[ENGINE] API server thread started on http://0.0.0.0:{api_port}")
     except Exception as e:
         logging.debug("Engine API server not started: %s", e)
     start_data_prefetcher()
     update_engine_state(engine="ON")
-    run_live_mode()
+    # Railway: retry run_live_mode if it exits early (token stale, data fail)
+    # so the container stays alive for healthcheck and auto-recovers when token is refreshed.
+    _railway = bool(os.getenv("RAILWAY_ENVIRONMENT", ""))
+    while True:
+        run_live_mode()
+        if not _railway:
+            break
+        logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
+        t.sleep(120)

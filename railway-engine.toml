@@ -4,6 +4,8 @@
 dockerfilePath = "Dockerfile.engine"
 
 [deploy]
-startCommand = "bash -lc 'python -m uvicorn dashboard.backend.engine_api:app --host 0.0.0.0 --port ${PORT}'"
+startCommand = "python smc_mtf_engine_v4.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
