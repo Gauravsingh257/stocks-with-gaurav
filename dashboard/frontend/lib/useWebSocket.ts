@@ -16,6 +16,12 @@ const POLL_INTERVAL_MS = 5_000; // REST fallback interval (was 2000)
 function getWsUrl(): string {
   const env = process.env.NEXT_PUBLIC_WS_URL;
   if (env) return env;
+  const backend = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+  if (backend) {
+    const wsProto = backend.startsWith("https") ? "wss:" : "ws:";
+    const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return `${wsProto}//${host}/ws`;
+  }
   if (typeof window === "undefined") return "ws://localhost:8000/ws";
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/ws`;

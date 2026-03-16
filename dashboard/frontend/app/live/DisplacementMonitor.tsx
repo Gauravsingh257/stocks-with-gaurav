@@ -277,7 +277,7 @@ function EventRow({ ev, i }: { ev: DisplacementEvent; i: number }) {
 
 // ─── Main Panel ───────────────────────────────────────────────────────────────
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
 export function DisplacementMonitor() {
   const [events, setEvents]         = useState<DisplacementEvent[]>([]);

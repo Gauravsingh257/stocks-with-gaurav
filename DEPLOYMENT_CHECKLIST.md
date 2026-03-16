@@ -86,7 +86,7 @@ The site (stockswithgaurav.com) is the frontend on Vercel. It must know your bac
 - Vercel → your project → **Settings** → **Environment Variables**.
 - Add:
   - **Name:** `BACKEND_URL`
-  - **Value:** `https://web-production-1eabc.up.railway.app`  
+  - **Value:** `https://web-production-2781a.up.railway.app`  
     (replace with your Railway web URL from **Settings → Domains**).
 - Redeploy: **Deployments** → ⋮ on latest → **Redeploy**.
 

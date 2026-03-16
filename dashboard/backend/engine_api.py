@@ -45,7 +45,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://stockswithgaurav.com",
+        "https://www.stockswithgaurav.com",
     ],
+    allow_origin_regex=r"https://.*\.(vercel\.app|railway\.app)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,6 +59,11 @@ def _normalise_timestamp(ts: Optional[str]) -> str:
     if ts:
         return ts
     return datetime.utcnow().isoformat() + "Z"
+
+
+@app.get("/health")
+def health() -> Dict[str, str]:
+    return {"status": "ok", "service": "smc-engine"}
 
 
 @app.get("/api/status")

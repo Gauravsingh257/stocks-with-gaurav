@@ -55,8 +55,16 @@ export default function OIIntelligencePage() {
 
   /* ── WebSocket — primary data source (OI pushed every 30s) ─ */
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-      ?? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
+    const backend = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+    let wsUrl = process.env.NEXT_PUBLIC_WS_URL || "";
+    if (!wsUrl && backend) {
+      const wsProto = backend.startsWith("https") ? "wss" : "ws";
+      const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      wsUrl = `${wsProto}://${host}/ws`;
+    }
+    if (!wsUrl) {
+      wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
+    }
     let ws: WebSocket;
     let dead = false;
 
