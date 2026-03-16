@@ -48,11 +48,17 @@ log = logging.getLogger("dashboard")
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
     log.info("Dashboard backend starting…")
-    init_db()
-    synced = full_sync_from_csv(force=True)
-    log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
-    start_csv_watcher(interval_seconds=30)
-    log.info("[DB] CSV watcher started — auto-syncing every 30s on file change")
+    try:
+        init_db()
+        synced = full_sync_from_csv(force=True)
+        log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
+    except Exception as exc:
+        log.warning("DB init/sync failed (non-fatal): %s", exc)
+    try:
+        start_csv_watcher(interval_seconds=30)
+        log.info("[DB] CSV watcher started — auto-syncing every 30s on file change")
+    except Exception as exc:
+        log.warning("CSV watcher not started: %s", exc)
     start_broadcast_loop()
     try:
         from dashboard.backend.realtime import start_realtime_service
@@ -183,6 +189,7 @@ def root():
     return {
         "service":  "SMC Trading Dashboard API",
         "version":  "1.0.0",
-        "docs":     "http://localhost:8000/docs",
-        "websocket": "ws://localhost:8000/ws",
+        "docs":     "/docs",
+        "health":   "/health",
+        "status":   "/api/system/health",
     }
