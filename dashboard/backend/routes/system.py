@@ -237,6 +237,9 @@ def system_health():
         out["kite_hint"] = kite_hint
     if kite_disconnect_reason is not None:
         out["kite_disconnect_reason"] = kite_disconnect_reason
+    # When market is closed, last_cycle is only updated during 9:15–15:30 IST — not a sign engine is down
+    if market_status == "closed" and engine_last_cycle_age_sec is not None and engine_last_cycle_age_sec > 3600:
+        out["engine_status_hint"] = "Market closed. Engine status is heartbeat-based 24/7; last_cycle updates during market hours (9:15–15:30 IST)."
     return out
 
 

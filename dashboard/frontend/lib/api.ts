@@ -6,7 +6,7 @@
  * Backend URL: NEXT_PUBLIC_BACKEND_URL || BACKEND_URL (rewrites use BACKEND_URL at build).
  * If neither is set, /api/* goes through Next.js rewrites to BACKEND_URL (build-time).
  */
-function getBackendBase(): string {
+export function getBackendBase(): string {
   const backend =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.BACKEND_URL ||
@@ -22,6 +22,8 @@ function getBackendBase(): string {
   }
   return base;
 }
+
+export const API_BASE = getBackendBase() || "http://localhost:8000";
 
 const BASE = getBackendBase();
 

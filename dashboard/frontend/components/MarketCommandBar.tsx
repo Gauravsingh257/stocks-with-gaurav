@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import Sparkline from "@/components/Sparkline";
-
-const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+import { API_BASE } from "@/lib/api";
 
 const MAX_HISTORY = 40;
 const LABELS = ["NIFTY 50", "NIFTY BANK"] as const;
@@ -66,13 +65,20 @@ export default function MarketCommandBar() {
     NIFTY: "",
     BANKNIFTY: "",
   });
+  const [engineApiStatus, setEngineApiStatus] = useState<"ON" | "OFF">("OFF");
+  const [backendTimestamp, setBackendTimestamp] = useState<string | null>(null);
+  const [apiNifty, setApiNifty] = useState<number | null>(null);
+  const [apiBanknifty, setApiBanknifty] = useState<number | null>(null);
+  const [signalCount, setSignalCount] = useState<number>(0);
   const prevPriceRef = useRef<Record<string, number>>({});
 
   // Health fetch for engine, kite, version only (no market status)
   useEffect(() => {
     const fetchHealth = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      fetch(`${BASE}/api/system/health`)
+      const base = API_BASE || "";
+      if (!base) return;
+      fetch(`${base}/api/system/health`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setHealth(d))
         .catch(() => {});
@@ -80,6 +86,48 @@ export default function MarketCommandBar() {
     fetchHealth();
     const t = setInterval(fetchHealth, 30_000);
     return () => clearInterval(t);
+  }, []);
+
+  // Poll engine API every 2 seconds for status, market, signals
+  useEffect(() => {
+    const base = API_BASE || "";
+    if (!base) return;
+
+    const fetchData = async () => {
+      try {
+        const statusRes = await fetch(`${base}/api/status`);
+        const marketRes = await fetch(`${base}/api/market`);
+        const signalsRes = await fetch(`${base}/api/signals`);
+
+        if (!statusRes.ok || !marketRes.ok || !signalsRes.ok) {
+          throw new Error("API error");
+        }
+
+        const statusJson = await statusRes.json();
+        const marketJson = await marketRes.json();
+        const signalsJson = await signalsRes.json();
+
+        setEngineApiStatus(statusJson.engine === "ON" ? "ON" : "OFF");
+        setBackendTimestamp(statusJson.timestamp ?? null);
+
+        setApiNifty(
+          typeof marketJson.nifty === "number" ? marketJson.nifty : null
+        );
+        setApiBanknifty(
+          typeof marketJson.banknifty === "number" ? marketJson.banknifty : null
+        );
+
+        setSignalCount(
+          typeof signalsJson.count === "number" ? signalsJson.count : 0
+        );
+      } catch {
+        setEngineApiStatus("OFF");
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
+    return () => clearInterval(interval);
   }, []);
 
   // Tick-based history and flash: every WebSocket snapshot with index_ltp
@@ -145,9 +193,8 @@ export default function MarketCommandBar() {
   const marketStatusColor =
     session === "OPEN" ? "text-green-400" : session === "PREOPEN" ? "text-yellow-400" : "text-gray-400";
 
-  const engineStatus = health?.engine_status ?? "offline";
-  const engineStale = engineStatus === "stale" || engineStatus === "offline";
-  const sigToday = snapshot?.signals_today ?? 0;
+  const engineOn = engineApiStatus === "ON";
+  const sigToday = signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
   const kiteOk = health?.kite_connected === true;
 
@@ -167,7 +214,13 @@ export default function MarketCommandBar() {
       {LABELS.map((label) => {
         const tick = ticks[label];
         const short = SHORT_KEYS[label];
-        const price = tick?.price;
+        const priceOverride =
+          label === "NIFTY 50"
+            ? apiNifty ?? tick?.price
+            : label === "NIFTY BANK"
+            ? apiBanknifty ?? tick?.price
+            : tick?.price;
+        const price = priceOverride ?? null;
         const change = tick?.change ?? 0;
         const percentChange = tick?.percentChange ?? 0;
         const changeColor =
@@ -214,8 +267,8 @@ export default function MarketCommandBar() {
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={engineStale ? "text-red-400" : "text-green-400"}>
-        Engine {engineStatus === "running" ? "LIVE" : engineStatus === "stale" ? "STALE" : "OFF"}
+      <span className={engineOn ? "text-green-400" : "text-red-400"}>
+        Engine {engineOn ? "ON" : "OFF"}
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
@@ -241,7 +294,14 @@ export default function MarketCommandBar() {
       </span>
 
       {health?.backend_version && (
-        <span className="text-slate-600 ml-auto">v{health.backend_version}</span>
+        <span className="text-slate-600 ml-auto flex items-center gap-3">
+          {backendTimestamp && (
+            <span className="font-mono text-xs text-slate-400">
+              {new Date(backendTimestamp).toLocaleTimeString()}
+            </span>
+          )}
+          <span>v{health.backend_version}</span>
+        </span>
       )}
     </div>
   );

@@ -8,6 +8,7 @@ import threading
 import pickle
 from collections import deque
 import csv
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -220,6 +221,33 @@ console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
 
 print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now())
+
+# =====================================================
+# SHARED ENGINE STATE FOR LOCAL API
+# =====================================================
+_ENGINE_STATE_LOCK = threading.Lock()
+ENGINE_STATE: Dict[str, Any] = {
+    "engine": "OFF",
+    "market": "CLOSED",
+    "nifty": None,
+    "banknifty": None,
+    "signals": [],
+    "trades": [],
+    "timestamp": None,
+}
+
+
+def update_engine_state(**kwargs: Any) -> None:
+    """Thread-safe update of ENGINE_STATE; always refresh timestamp."""
+    with _ENGINE_STATE_LOCK:
+        ENGINE_STATE.update(kwargs)
+        ENGINE_STATE["timestamp"] = datetime.now().isoformat()
+
+
+def get_engine_state_snapshot() -> Dict[str, Any]:
+    """Return a shallow copy of ENGINE_STATE for API consumption."""
+    with _ENGINE_STATE_LOCK:
+        return dict(ENGINE_STATE)
 
 # =====================================================
 # PART 1 — CONFIG & BOOT (MODULAR V4)
@@ -752,7 +780,18 @@ def fetch_ltp(symbol: str):
     try:
         quote = kite.ltp(symbol)
         if symbol in quote:
-            return quote[symbol]["last_price"]
+            price = quote[symbol]["last_price"]
+            # Update shared engine state for index symbols
+            try:
+                if symbol.upper() == "NSE:NIFTY 50":
+                    update_engine_state(nifty=price)
+                    print("API update:", get_engine_state_snapshot())
+                elif symbol.upper() == "NSE:NIFTY BANK":
+                    update_engine_state(banknifty=price)
+                    print("API update:", get_engine_state_snapshot())
+            except Exception:
+                pass
+            return price
     except:
         return None
 
@@ -2303,6 +2342,11 @@ def fetch_manual_orders():
             
             ACTIVE_TRADES.append(trade)
             persist_active_trades()  # F1.2: crash recovery
+            try:
+                update_engine_state(trades=list(ACTIVE_TRADES))
+                print("API update:", get_engine_state_snapshot())
+            except Exception:
+                pass
             
             msg = (f"✋ <b>MANUAL TRADE DETECTED</b>\n"
                    f"Symbol: {symbol}\n"
@@ -3834,6 +3878,11 @@ def monitor_active_trades(symbol, current_price):
             log_trade_to_csv(trade)
             ACTIVE_TRADES.remove(trade)
             persist_active_trades()  # F1.2: crash recovery
+            try:
+                update_engine_state(trades=list(ACTIVE_TRADES))
+                print("API update:", get_engine_state_snapshot())
+            except Exception:
+                pass
             # W2: Update circuit breaker
             DAILY_PNL_R += final_r
             CONSECUTIVE_LOSSES = 0
@@ -3869,6 +3918,11 @@ def monitor_active_trades(symbol, current_price):
             log_trade_to_csv(trade)
             ACTIVE_TRADES.remove(trade)
             persist_active_trades()  # F1.2: crash recovery
+            try:
+                update_engine_state(trades=list(ACTIVE_TRADES))
+                print("API update:", get_engine_state_snapshot())
+            except Exception:
+                pass
             # W2: Update circuit breaker
             DAILY_PNL_R += exit_r
             _record_setup_outcome(trade.get("setup", "UNKNOWN"), exit_r)
@@ -4335,11 +4389,21 @@ def run_live_mode():
                      reset_oi_state()
                      reset_oi_sc_state()
                 
+                try:
+                    update_engine_state(market="CLOSED")
+                    print("API update:", get_engine_state_snapshot())
+                except Exception:
+                    pass
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
                 t.sleep(300)
                 continue
 
             # F4.5: HEARTBEAT — send Telegram alive ping every 30 minutes (market hours only)
+            try:
+                update_engine_state(market="OPEN")
+                print("API update:", get_engine_state_snapshot())
+            except Exception:
+                pass
             if (datetime.now() - _last_heartbeat).total_seconds() >= _HEARTBEAT_INTERVAL_MIN * 60:
                 trades_count = len(ACTIVE_TRADES)
                 hb_msg = (f"💚 <b>Engine Alive</b> | {datetime.now().strftime('%H:%M')}\n"
@@ -4535,6 +4599,16 @@ def run_live_mode():
             ranked_signals = []
             if all_signals:
                 try:
+                    # Maintain capped recent signals list for API
+                    try:
+                        MAX_SIGNALS = 20
+                        recent = list(ENGINE_STATE.get("signals", []))
+                        recent.extend(all_signals)
+                        recent = recent[-MAX_SIGNALS:]
+                        update_engine_state(signals=recent)
+                        print("API update:", get_engine_state_snapshot())
+                    except Exception:
+                        pass
                     for s in rank_signals(all_signals):
                         # DEFENSIVE CHECK: Ensure 'entry' key exists and is valid
                         if all(k in s for k in ["entry", "sl", "target", "rr"]) and s["entry"] is not None:
@@ -4980,11 +5054,20 @@ except (OSError, AttributeError):
     pass  # SIGTERM not available on Windows in all contexts
 
 if __name__ == "__main__":
+    print("Starting SMC trading engine...")
     _acquire_process_lock()  # F1.8: Prevent multiple instances (Redis or file lock)
     try:
         import engine_runtime
         engine_runtime.start_heartbeat_thread()  # Dedicated thread: heartbeat every 30s even if main loop stalls
     except Exception as e:
         logging.debug("Heartbeat thread not started: %s", e)
+    try:
+        from dashboard.backend.engine_api import start_api_server, set_state_reader
+        set_state_reader(get_engine_state_snapshot)
+        threading.Thread(target=start_api_server, daemon=True).start()
+        print("[ENGINE] Local API server thread started on http://localhost:8000")
+    except Exception as e:
+        logging.debug("Engine API server not started: %s", e)
     start_data_prefetcher()
+    update_engine_state(engine="ON")
     run_live_mode()

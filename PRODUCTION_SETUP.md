@@ -3,6 +3,8 @@
 > **Deployment flow:** GitHub → Railway (backend) + Vercel (frontend)  
 > Push to `main` → both platforms auto-deploy.
 
+> **Run everything on the cloud (web + engine + Redis + frontend):** see **[EVERYTHING_ON_CLOUD.md](./EVERYTHING_ON_CLOUD.md)** for the full checklist.
+
 > **If the site still isn’t live:** see **[DEPLOYMENT_BUGS.md](./DEPLOYMENT_BUGS.md)** for a full audit (Railway, Vercel, GitHub) and a final bugs/checklist.
 
 ---
@@ -14,8 +16,8 @@
 | Vercel build fails | No `vercel.json` / wrong root directory | Already fixed — `vercel.json` now in repo root |
 | HTTP 502 on all pages | `BACKEND_URL` not set in Vercel | Set env vars (Step 2) |
 | Kite Offline / OHLC 502 | `KITE_ACCESS_TOKEN` missing or expired in Railway | Log in at `/api/kite/login` or set token (Step 3) |
-| ENGINE STALE badge | Trading engine not running on Railway | Expected — engine runs locally (Step 4) |
-| OI Intelligence empty | Engine JSON files not on Railway | Expected without live engine |
+| ENGINE STALE badge | Trading engine not running or no heartbeat | Deploy engine on Railway; see [EVERYTHING_ON_CLOUD.md](./EVERYTHING_ON_CLOUD.md) |
+| OI Intelligence empty | Engine not running or not writing to shared Redis | Run engine on Railway with same REDIS_URL as web |
 | Railway deploy fails | Wrong Dockerfile / missing packages | Fixed — `railway.toml` now in repo root |
 
 ---
@@ -153,17 +155,12 @@ To avoid hitting Kite on every request, run a **market engine worker** that fill
 
 Without Redis, the API falls back to in-memory cache and Kite on demand (higher latency, more Kite usage).
 
-## Step 7 — Live Engine (Optional — Railway Worker)
+## Step 7 — Live Engine on Railway (full cloud)
 
-The trading engine (`smc_mtf_engine_v4.py`) runs locally by default.  
-"ENGINE STALE" in the TopBar is **normal** for the cloud-only setup.
+To run **everything** on the cloud (so you can turn off your laptop), deploy the trading engine on Railway:
 
-To run the engine in the cloud:
-1. Create a **second Railway service** in the same project
-2. Connect the same GitHub repo
-3. Start command: `python smc_mtf_engine_v4.py`
-4. Add same env vars + `KITE_API_KEY`, `KITE_ACCESS_TOKEN`
-5. Add Volume at `/data`
+- **Full checklist:** [EVERYTHING_ON_CLOUD.md](./EVERYTHING_ON_CLOUD.md) — web, engine, Redis, frontend, env vars, verification.
+- **Engine service:** Same repo, config file `railway-engine.toml`, Dockerfile `Dockerfile.engine`, start `python smc_mtf_engine_v4.py`. Set same `REDIS_URL`, `KITE_API_KEY`, `KITE_ACCESS_TOKEN` as the web service so heartbeat and status show correctly.
 
 ---
 
@@ -228,5 +225,4 @@ Verify **`GET /api/system/health`** returns:
 → `railway.toml` in repo root now points to `Dockerfile` which uses `requirements-railway.txt`
 
 ### ENGINE STALE
-→ Normal when engine runs locally, not on Railway  
-→ REST polling fallback activates automatically — all pages still load data
+→ Engine not running on Railway or not writing heartbeat to Redis. Deploy engine service (see [EVERYTHING_ON_CLOUD.md](./EVERYTHING_ON_CLOUD.md)). REST polling fallback still loads data.

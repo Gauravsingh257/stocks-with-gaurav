@@ -6,6 +6,31 @@
 
 ---
 
+## Quick verdict (4 steps)
+
+1. **Run the audit script:**
+   ```bash
+   export BACKEND_URL="https://YOUR-RAILWAY-URL"
+   export REDIS_URL="redis://YOUR-REDIS"
+   python scripts/audit_cloud_deployment.py
+   ```
+
+2. **Check these values in the output:**
+   - `engine_heartbeat_age_sec` < 60  
+   - `engine_last_cycle_age_sec` < 60  
+   - API endpoints return 200  
+   - Website status = live  
+
+3. **If all above are OK**  
+   → **SYSTEM FULLY CLOUD HOSTED — You can turn off your laptop safely.**
+
+4. **If heartbeat stops or API fails**  
+   → **SYSTEM DEPENDS ON LOCAL MACHINE — Laptop must stay on.**
+
+The script prints **SYSTEM FULLY CLOUD HOSTED** or **SYSTEM DEPENDS ON LOCAL MACHINE** at the end based on these criteria.
+
+---
+
 ## How to Run the Audit
 
 ### Automated checks (API + Redis)

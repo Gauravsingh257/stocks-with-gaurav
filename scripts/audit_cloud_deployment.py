@@ -87,8 +87,14 @@ def main():
             rclient = redis.from_url(args.redis, decode_responses=True)
             rclient.ping()
         except Exception as e:
-            report["issues"].append(f"Redis connection: {e}")
-            report["redis_keys"] = {"error": str(e)}
+            err_str = str(e)
+            report["issues"].append(f"Redis connection: {err_str}")
+            report["redis_keys"] = {"error": err_str}
+            if "railway.internal" in args.redis or "getaddrinfo failed" in err_str:
+                report["issues"].append(
+                    "REDIS_URL uses Railway internal hostname - not reachable from your laptop. "
+                    "Backend and engine on Railway can still use Redis. Use a public Redis URL to audit from PC."
+                )
         else:
             keys = [
                 "engine_lock",
@@ -146,14 +152,33 @@ def main():
             pass
 
     # ─── Verdict ─────────────────────────────────────────────────────────────
-    if report["website_status"] != "live":
-        report["verdict"] = "SYSTEM_DEPENDS_ON_LOCAL_OR_UNREACHABLE"
-    elif report["issues"] and report.get("engine_health") == "offline":
-        report["verdict"] = "SYSTEM_DEPENDS_ON_LOCAL_OR_ENGINE_DOWN"
-    elif report.get("engine_health") in ("running", "stale", "alive_but_stuck"):
-        report["verdict"] = "SYSTEM_FULLY_CLOUD_HOSTED"
-    else:
+    # Criteria: API 200, website live, engine_heartbeat_age_sec < 60, engine_last_cycle_age_sec < 60
+    apis_ok = all(
+        report["api_endpoints"].get(label, {}).get("ok")
+        for label in ["GET /health", "GET /api/system/health", "GET /api/snapshot", "GET /api/agents/oi-intelligence"]
+    )
+    hb_age = report["redis_ages"].get("engine_heartbeat_age_sec")
+    lc_age = report["redis_ages"].get("engine_last_cycle_age_sec")
+    heartbeat_ok = hb_age is not None and hb_age < 60
+    cycle_ok = lc_age is not None and lc_age < 60
+
+    redis_unreachable = args.redis and "error" in report.get("redis_keys", {})
+    if report["website_status"] != "live" or not apis_ok:
+        report["verdict"] = "SYSTEM_DEPENDS_ON_LOCAL_MACHINE"
+    elif redis_unreachable and apis_ok:
         report["verdict"] = "INCONCLUSIVE"
+        report["issues"].append("API is live but Redis not reachable from this machine (e.g. internal URL). Engine on Railway may still be running; check Railway dashboard.")
+    elif args.redis and (hb_age is None or lc_age is None):
+        report["verdict"] = "SYSTEM_DEPENDS_ON_LOCAL_MACHINE"
+    elif args.redis and (not heartbeat_ok or not cycle_ok):
+        report["verdict"] = "SYSTEM_DEPENDS_ON_LOCAL_MACHINE"
+    else:
+        # No Redis URL: only API + website; with Redis: heartbeat and cycle both < 60
+        if not args.redis:
+            report["verdict"] = "INCONCLUSIVE"
+            report["issues"].append("REDIS_URL not set — cannot verify engine heartbeat/cycle; set REDIS_URL for full verdict")
+        else:
+            report["verdict"] = "SYSTEM_FULLY_CLOUD_HOSTED"
 
     # ─── Output ──────────────────────────────────────────────────────────────
     if args.json:
@@ -197,11 +222,16 @@ def main():
         for i in report["issues"]:
             print(f"  - {i}")
     print()
-    print("VERDICT:", report["verdict"])
     if report["verdict"] == "SYSTEM_FULLY_CLOUD_HOSTED":
-        print("  → Laptop can be turned off safely.")
+        print("OK SYSTEM FULLY CLOUD HOSTED - You can turn off your laptop safely.")
+    elif report["verdict"] == "SYSTEM_DEPENDS_ON_LOCAL_MACHINE":
+        print("FAIL SYSTEM DEPENDS ON LOCAL MACHINE - Laptop must stay on.")
+    elif report["verdict"] == "INCONCLUSIVE":
+        print("VERDICT: INCONCLUSIVE (API live; Redis not reachable from this PC).")
+        print("  If the engine runs on Railway, system is likely cloud-hosted. Check Railway dashboard.")
     else:
-        print("  → Resolve issues above; laptop may be required until engine is running on Railway.")
+        print("VERDICT:", report["verdict"])
+        print("  -> Set REDIS_URL and re-run for full verdict, or resolve issues above.")
     print("=" * 60)
 
     sys.exit(0 if report["verdict"] == "SYSTEM_FULLY_CLOUD_HOSTED" else 1)
