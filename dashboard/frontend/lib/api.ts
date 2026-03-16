@@ -23,7 +23,7 @@ export function getBackendBase(): string {
   return base;
 }
 
-export const API_BASE = getBackendBase() || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const BASE = getBackendBase();
 
