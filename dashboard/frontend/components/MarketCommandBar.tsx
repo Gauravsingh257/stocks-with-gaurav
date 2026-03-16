@@ -39,8 +39,11 @@ function getMarketSession(): "OPEN" | "PREOPEN" | "CLOSED" {
   return "CLOSED";
 }
 
+/** Full number only (no "k" shorthand). e.g. 23409, 54413 */
 function formatLtp(v: number): string {
-  return v >= 1 ? v.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 }) : v.toFixed(2);
+  if (typeof v !== "number" || Number.isNaN(v)) return "—";
+  const n = v >= 1 ? Math.round(v) : v;
+  return n >= 1 ? n.toLocaleString("en-IN", { maximumFractionDigits: 0 }) : v.toFixed(2);
 }
 
 function formatPercent(v: number): string {
@@ -174,7 +177,8 @@ export default function MarketCommandBar() {
   const marketStatusColor =
     session === "OPEN" ? "text-green-400" : session === "PREOPEN" ? "text-yellow-400" : "text-gray-400";
 
-  const engineOn = Boolean(snapshot?.engine_running ?? snapshot?.engine_live);
+  const hasSnapshot = snapshot != null;
+  const engineOn = hasSnapshot ? Boolean(snapshot.engine_running ?? snapshot.engine_live) : null;
   const sigToday = snapshot?.signals_today ?? signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
   const kiteOk = health?.kite_connected === true;
@@ -248,8 +252,8 @@ export default function MarketCommandBar() {
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={engineOn ? "text-green-400" : "text-red-400"}>
-        Engine {engineOn ? "ON" : "OFF"}
+      <span className={engineOn === true ? "text-green-400" : engineOn === false ? "text-red-400" : "text-slate-400"}>
+        Engine {engineOn === true ? "ON" : engineOn === false ? "OFF" : "…"}
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
