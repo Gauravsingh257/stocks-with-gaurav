@@ -40,7 +40,7 @@ function getMarketSession(): "OPEN" | "PREOPEN" | "CLOSED" {
 }
 
 function formatLtp(v: number): string {
-  return v >= 1000 ? (v / 1000).toFixed(2) + "k" : v.toFixed(2);
+  return v >= 1 ? v.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 }) : v.toFixed(2);
 }
 
 function formatPercent(v: number): string {
@@ -65,7 +65,6 @@ export default function MarketCommandBar() {
     NIFTY: "",
     BANKNIFTY: "",
   });
-  const [engineApiStatus, setEngineApiStatus] = useState<"ON" | "OFF">("OFF");
   const [backendTimestamp, setBackendTimestamp] = useState<string | null>(null);
   const [apiNifty, setApiNifty] = useState<number | null>(null);
   const [apiBanknifty, setApiBanknifty] = useState<number | null>(null);
@@ -88,46 +87,28 @@ export default function MarketCommandBar() {
     return () => clearInterval(t);
   }, []);
 
-  // Poll engine API every 2 seconds for status, market, signals
+  // Optional: poll web backend for signal count (snapshot is primary for engine status)
   useEffect(() => {
     const base = API_BASE || "";
     if (!base) return;
-
-    const fetchData = async () => {
-      try {
-        const statusRes = await fetch(`${base}/api/status`);
-        const marketRes = await fetch(`${base}/api/market`);
-        const signalsRes = await fetch(`${base}/api/signals`);
-
-        if (!statusRes.ok || !marketRes.ok || !signalsRes.ok) {
-          throw new Error("API error");
-        }
-
-        const statusJson = await statusRes.json();
-        const marketJson = await marketRes.json();
-        const signalsJson = await signalsRes.json();
-
-        setEngineApiStatus(statusJson.engine === "ON" ? "ON" : "OFF");
-        setBackendTimestamp(statusJson.timestamp ?? null);
-
-        setApiNifty(
-          typeof marketJson.nifty === "number" ? marketJson.nifty : null
-        );
-        setApiBanknifty(
-          typeof marketJson.banknifty === "number" ? marketJson.banknifty : null
-        );
-
-        setSignalCount(
-          typeof signalsJson.count === "number" ? signalsJson.count : 0
-        );
-      } catch {
-        setEngineApiStatus("OFF");
-      }
-    };
-
-    fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
+    fetch(`${base}/api/snapshot`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.signals_today === "number") setSignalCount(d.signals_today);
+        if (d && d.snapshot_time) setBackendTimestamp(d.snapshot_time);
+      })
+      .catch(() => {});
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      fetch(`${base}/api/snapshot`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d && typeof d.signals_today === "number") setSignalCount(d.signals_today);
+          if (d && d.snapshot_time) setBackendTimestamp(d.snapshot_time);
+        })
+        .catch(() => {});
+    }, 10_000);
+    return () => clearInterval(t);
   }, []);
 
   // Tick-based history and flash: every WebSocket snapshot with index_ltp
@@ -193,8 +174,8 @@ export default function MarketCommandBar() {
   const marketStatusColor =
     session === "OPEN" ? "text-green-400" : session === "PREOPEN" ? "text-yellow-400" : "text-gray-400";
 
-  const engineOn = engineApiStatus === "ON";
-  const sigToday = signalCount;
+  const engineOn = Boolean(snapshot?.engine_running ?? snapshot?.engine_live);
+  const sigToday = snapshot?.signals_today ?? signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
   const kiteOk = health?.kite_connected === true;
 

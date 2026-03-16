@@ -19,23 +19,31 @@ export default function ResearchPage() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      setError(null);
-      const [s, l, r, c] = await Promise.all([
-        api.swingResearch(12),
-        api.longtermResearch(12),
-        api.runningTradesResearch(40),
-        api.researchCoverage(1800),
-      ]);
-      setSwing(s.items || []);
-      setLongterm(l.items || []);
-      setRunning(r.items || []);
-      setCoverage(c);
-    } catch {
-      setError("Unable to load AI research data.");
-    } finally {
-      setLoading(false);
+    setError(null);
+    const results = await Promise.allSettled([
+      api.swingResearch(12),
+      api.longtermResearch(12),
+      api.runningTradesResearch(40),
+      api.researchCoverage(1800),
+    ]);
+    const [swingRes, longtermRes, runningRes, coverageRes] = results;
+    if (swingRes.status === "fulfilled") {
+      setSwing(swingRes.value?.items ?? []);
     }
+    if (longtermRes.status === "fulfilled") {
+      setLongterm(longtermRes.value?.items ?? []);
+    }
+    if (runningRes.status === "fulfilled") {
+      setRunning(runningRes.value?.items ?? []);
+    }
+    if (coverageRes.status === "fulfilled") {
+      setCoverage(coverageRes.value ?? null);
+    }
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      setError("Some data could not be loaded. Run a scan or refresh — backend may still be syncing.");
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => {

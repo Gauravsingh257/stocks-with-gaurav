@@ -76,7 +76,9 @@ export default function AnalyticsPage() {
         <div>
           <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0" style={{ color: "var(--text-primary)" }}>Analytics</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
-            Performance metrics from {total} historical trades
+            {total === 0
+              ? "No trades yet. Sync trade ledger (CSV) or use live signal log to see metrics here."
+              : `Performance metrics from ${total} historical trades`}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

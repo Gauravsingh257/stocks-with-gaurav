@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, TrendingUp, Bot, BookOpen, Settings } from "lucide-react";
+import { Activity, BarChart2, BookOpen, Bot, Eye, MessageSquare, TrendingUp } from "lucide-react";
 
 const ITEMS = [
-  { href: "/live", label: "Home", icon: Activity },
-  { href: "/charts", label: "Charts", icon: TrendingUp },
-  { href: "/research", label: "AI", icon: Bot },
+  { href: "/live", label: "Live", icon: Activity },
+  { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/journal", label: "Journal", icon: BookOpen },
-  { href: "/chat", label: "Settings", icon: Settings },
+  { href: "/research", label: "Research", icon: Bot },
+  { href: "/oi-intelligence", label: "OI", icon: Eye },
+  { href: "/charts", label: "Charts", icon: TrendingUp },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
 ];
 
 export default function MobileNav() {
@@ -17,10 +19,10 @@ export default function MobileNav() {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-50 md:hidden glass border-t border-cyan-500/20"
+      className="fixed bottom-0 left-0 right-0 z-50 md:hidden glass border-t border-cyan-500/20 overflow-x-auto"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0)" }}
     >
-      <div className="flex items-center justify-around h-14 min-h-[44px]">
+      <div className="flex items-center justify-start gap-0 min-w-max h-14 min-h-[44px] px-1">
         {ITEMS.map(({ href, label, icon: Icon }) => {
           const active =
             path === href || (href !== "/" && path.startsWith(href));
@@ -28,15 +30,15 @@ export default function MobileNav() {
             <Link
               key={href}
               href={href}
-              className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 h-full text-[0.65rem] font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center gap-0.5 shrink-0 w-14 h-full text-[0.6rem] font-medium transition-colors ${
                 active
                   ? "text-[var(--accent)]"
                   : "text-[var(--text-secondary)]"
               }`}
               aria-label={label}
             >
-              <Icon size={20} strokeWidth={2} />
-              <span className="truncate max-w-full px-1">{label}</span>
+              <Icon size={18} strokeWidth={2} />
+              <span className="truncate max-w-[52px]">{label}</span>
             </Link>
           );
         })}

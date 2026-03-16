@@ -60,7 +60,7 @@ export function ExecutionQualityPanel({
   const lastExitSymbol = quality?.last_oi_sc_symbol || null;
 
   return (
-    <div className="glass" style={{ padding: 20 }}>
+    <div className="glass" style={{ padding: 20, minHeight: 200 }}>
       <div
         style={{
           fontSize: "0.7rem",

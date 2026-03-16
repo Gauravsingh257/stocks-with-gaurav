@@ -5,7 +5,7 @@ import { fmt, type ShortCoveringSignal } from "./types";
 
 export function ShortCoveringPanel({ signals }: { signals: ShortCoveringSignal[] }) {
   return (
-    <div className="glass" style={{ padding: 20, position: "relative", overflow: "hidden" }}>
+    <div className="glass" style={{ padding: 20, position: "relative", overflow: "hidden", minHeight: 200 }}>
       <HexPattern style={{ opacity: 0.02 }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>
