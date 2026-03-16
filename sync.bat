@@ -1,5 +1,5 @@
 @echo off
-REM One-click sync: commit all changes and push to GitHub
+REM One-click sync: pull latest, commit your changes, push to GitHub
 REM Run this after editing any code in Trading Algo folder
 
 cd /d "%~dp0"
@@ -8,22 +8,26 @@ echo.
 echo === Syncing to GitHub ===
 echo.
 
+REM 1. Stage and commit your changes (so pull can run)
 git add -A
+git status --short
+set /p MSG="Commit message (or press Enter for 'Update'): "
+if "%MSG%"=="" set MSG=Update
+git commit -m "%MSG%"
 if %errorlevel% neq 0 (
-    echo ERROR: Not a git repo or git add failed.
+    echo Nothing to commit - that's OK.
+)
+
+REM 2. Get latest from GitHub, then put your commit on top
+echo Pulling latest...
+git pull --rebase origin main
+if %errorlevel% neq 0 (
+    echo Pull had conflicts. Fix them, then run sync again.
     pause
     exit /b 1
 )
-git status --short
 
-set /p MSG="Commit message (or press Enter for 'Update'): "
-if "%MSG%"=="" set MSG=Update
-
-git commit -m "%MSG%"
-if %errorlevel% neq 0 (
-    echo Nothing to commit, or commit failed.
-)
-
+REM 3. Push
 git push origin main
 if %errorlevel% neq 0 (
     echo Push failed. Check your connection.
