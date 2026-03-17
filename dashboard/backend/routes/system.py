@@ -131,7 +131,16 @@ def system_health():
                     kite_disconnect_reason = "token_expired"
                     _reset_kite()
         if not kite_connected:
-            kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
+            if token_source == "env_or_file" and token_present:
+                kite_hint = (
+                    "Token from env/file is expired. Log in at /api/kite/login. "
+                    "If using morning login: remove KITE_ACCESS_TOKEN from Railway Variables so the system uses the Redis token. "
+                    "Ensure Zerodha app redirect URL: https://web-production-2781a.up.railway.app/api/kite/callback"
+                )
+            elif token_source == "redis" and token_present:
+                kite_hint = "Token in Redis invalid or expired. Log in again at /api/kite/login."
+            else:
+                kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
     except Exception:
         kite_hint = "Log in at /api/kite/login or set KITE_ACCESS_TOKEN."
 

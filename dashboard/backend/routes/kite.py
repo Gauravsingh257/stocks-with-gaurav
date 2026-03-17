@@ -2,16 +2,32 @@
 dashboard/backend/routes/kite.py
 Kite Connect web login flow: redirect to Zerodha, callback to store token in Redis.
 
-GET /api/kite/login   — redirect to Zerodha login page
-GET /api/kite/callback — exchange request_token, store access_token in Redis
+GET  /api/kite/login   — redirect to Zerodha login page
+GET  /api/kite/callback — exchange request_token, store access_token in Redis
+POST /api/kite/token   — accept request_token or full URL, exchange and store (for manual paste)
 """
 
+import re
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse, JSONResponse
+from pydantic import BaseModel
 
 from dashboard.backend import kite_auth
 
 router = APIRouter(prefix="/api/kite", tags=["kite"])
+
+
+def _extract_request_token(value: str) -> str | None:
+    """Extract request_token from full URL or return value as-is if it looks like a raw token."""
+    s = (value or "").strip()
+    if not s:
+        return None
+    # If it looks like a URL with request_token=, extract it
+    m = re.search(r"request_token=([^&\s]+)", s)
+    if m:
+        return m.group(1).strip()
+    # Otherwise treat as raw token
+    return s if len(s) >= 5 else None
 
 
 @router.get("/login")
@@ -61,8 +77,62 @@ def kite_callback(request_token: str | None = Query(None, alias="request_token")
             status_code=400,
             content={"status": "error", "message": "Invalid or expired request token."},
         )
-    except Exception:
+    except RuntimeError as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": str(e)},
+        )
+    except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": "Could not establish session. Try logging in again."},
+            content={"status": "error", "message": f"Could not establish session: {e}. Try logging in again."},
+        )
+
+
+class TokenInput(BaseModel):
+    """Body for POST /api/kite/token — paste full redirect URL or raw request_token."""
+    request_token: str = ""
+
+
+@router.post("/token")
+def kite_token_from_paste(body: TokenInput):
+    """
+    Accept request_token or full callback URL (e.g. from Zerodha redirect).
+    Exchanges for access_token, stores in Redis — used everywhere (dashboard, engine).
+    """
+    raw = (body.request_token or "").strip()
+    request_token = _extract_request_token(raw)
+    if not request_token:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Paste the full redirect URL or request_token from Zerodha login.",
+            },
+        )
+    try:
+        access_token = kite_auth.generate_access_token(request_token)
+        kite_auth.store_access_token(access_token)
+        try:
+            from dashboard.backend.routes.charts import _reset_kite
+            _reset_kite()
+        except Exception:
+            pass
+        try:
+            from dashboard.backend.realtime import request_reconnect
+            request_reconnect()
+        except Exception:
+            pass
+        return {"status": "connected", "message": "Token stored in Redis — dashboard and engine will use it."}
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Invalid or expired request token. Log in again."},
+        )
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"status": "error", "message": str(e)})
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": str(e)},
         )
