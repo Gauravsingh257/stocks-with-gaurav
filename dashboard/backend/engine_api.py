@@ -40,15 +40,26 @@ def _read_state() -> Dict[str, Any]:
             "timestamp": None,
         }
 
+import os as _os
+
+_extra_origins = [
+    o.strip() for o in _os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3001",
         "http://127.0.0.1:3000",
         "https://stockswithgaurav.com",
         "https://www.stockswithgaurav.com",
+        "https://*.vercel.app",
+        "https://*.railway.app",
+        "https://*.trycloudflare.com",
+        *_extra_origins,
     ],
-    allow_origin_regex=r"https://.*\.(vercel\.app|railway\.app)$",
+    allow_origin_regex=r"https://.*\.(vercel\.app|railway\.app|trycloudflare\.com)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -161,15 +161,24 @@ class BankNiftySignalEngine:
     def send_alert(self, message):
         if self.telegram_fn:
             self.telegram_fn(message)
-        else:
+            return
+        if not BOT_TOKEN or not CHAT_ID:
+            self.logger.error("[Telegram] BOT_TOKEN or CHAT_ID not set — cannot send alert")
+            return
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+        for attempt in range(2):
             try:
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    data={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"},
-                    timeout=5
-                )
+                resp = requests.post(url, data=payload, timeout=8)
+                if resp.ok:
+                    self.logger.info("[Telegram] Alert sent (attempt %d)", attempt + 1)
+                    return
+                self.logger.warning("[Telegram] API %s: %s (attempt %d)", resp.status_code, resp.text[:200], attempt + 1)
+            except requests.exceptions.Timeout:
+                self.logger.warning("[Telegram] Timeout on attempt %d", attempt + 1)
             except Exception as e:
-                self.logger.error(f"Telegram Error: {e}")
+                self.logger.error("[Telegram] Error on attempt %d: %s", attempt + 1, e)
+        self.logger.error("[Telegram] Failed to send alert after 2 attempts")
 
     # --- Contract Management ---
     def get_weekly_expiry(self, instruments, instr_name):

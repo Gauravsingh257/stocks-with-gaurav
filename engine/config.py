@@ -51,9 +51,9 @@ VOLUME_MULTIPLIER = 1.2
 # =====================================================
 # TELEGRAM / ENVIRONMENT
 # =====================================================
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8388602985:AAEiombJFTGv0Dx9UZeeKkpKeo0hem9hv8I")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-1003268636791")
-SMC_PRO_CHAT_ID = os.getenv("SMC_PRO_CHAT_ID", "-1003814937157")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+SMC_PRO_CHAT_ID = os.getenv("SMC_PRO_CHAT_ID", "")
 
 DEBUG_MODE = True
 BACKTEST_MODE = os.environ.get("BACKTEST_MODE", "") == "1"

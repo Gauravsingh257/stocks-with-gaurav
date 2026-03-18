@@ -23,8 +23,11 @@ export function getBackendBase(): string {
   return base;
 }
 
-/** Same as backend: use NEXT_PUBLIC_BACKEND_URL so Engine ON/OFF polling hits your Railway API. */
-export const API_BASE = getBackendBase() || "http://localhost:8000";
+/** Same as backend: use NEXT_PUBLIC_BACKEND_URL so Engine ON/OFF polling hits your Railway API.
+ *  NOTE: Falls back to "" (empty) in production so Next.js rewrites handle routing.
+ *  NEVER fall back to localhost in production — that causes 503s on Vercel.
+ */
+export const API_BASE = getBackendBase();
 
 const BASE = getBackendBase();
 

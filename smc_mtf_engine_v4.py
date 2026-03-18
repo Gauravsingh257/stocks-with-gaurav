@@ -9,6 +9,19 @@ import pickle
 from collections import deque
 import csv
 from typing import Any, Dict
+from pathlib import Path
+
+# ── Load .env before anything else (local dev + Railway uses env vars directly) ──
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_file = Path(__file__).parent / ".env"
+    if _env_file.exists():
+        _load_dotenv(dotenv_path=str(_env_file), override=False)
+        print(f"[ENV] Loaded .env from {_env_file}")
+    else:
+        _load_dotenv(override=False)  # search up the directory tree
+except ImportError:
+    pass  # python-dotenv not installed; rely on env vars being set externally
 
 import pandas as pd
 
@@ -285,9 +298,9 @@ VOLUME_MULTIPLIER = 1.2
 STOCK_UNIVERSE = []
 # Ensure you set these in your environment variables for security!
 # For now, we keep defaults but allow env overrides
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8388602985:AAEiombJFTGv0Dx9UZeeKkpKeo0hem9hv8I")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-1003268636791")
-SMC_PRO_CHAT_ID = os.getenv("SMC_PRO_CHAT_ID", "-1003814937157")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+SMC_PRO_CHAT_ID = os.getenv("SMC_PRO_CHAT_ID", "")
 
 DEBUG_MODE = True
 
@@ -302,38 +315,62 @@ BACKTEST_MODE = os.environ.get("BACKTEST_MODE", "") == "1"
 # =====================================================
 def telegram_send(message: str, chat_id=None, signal_id=None):
     """
-    Send message to Telegram. If signal_id is set, deduplicates via Redis:
-    skip if already sent in last hour; otherwise send and mark sent.
+    Send message to Telegram with deduplication, retry on failure, and proper logging.
+
+    Dedup: if signal_id is set, check Redis before sending. If Redis is unavailable,
+    the check is skipped (fail-open) so signals are NOT silently dropped.
     """
+    if not BOT_TOKEN:
+        logging.error("[Telegram] BOT_TOKEN not set — cannot send message")
+        return
+    if not (chat_id or CHAT_ID):
+        logging.error("[Telegram] CHAT_ID not set — cannot send message")
+        return
+
+    # Deduplication via Redis (fail-open: skip check if Redis is down)
     if signal_id:
         try:
             import engine_runtime
             if not engine_runtime.should_send_signal(signal_id):
-                logging.debug("Signal dedupe skip: %s", signal_id)
+                logging.debug("[Telegram] Signal dedupe skip: %s", signal_id)
                 return
         except Exception as e:
-            logging.debug("Signal dedupe check failed: %s", e)
+            logging.warning("[Telegram] Signal dedupe check failed (sending anyway): %s", e)
+
     target = chat_id or CHAT_ID
-    message = paper_prefix(message)  # Phase 6: prefix in paper mode
-    try:
-        import requests
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={
-                "chat_id": target,
-                "text": message,
-                "parse_mode": "HTML"
-            },
-            timeout=5
-        )
-        if signal_id:
-            try:
-                import engine_runtime
-                engine_runtime.mark_signal_sent(signal_id)
-            except Exception:
-                pass
-    except Exception as e:
-        print("Telegram error:", e)
+    message = paper_prefix(message)
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": target, "text": message, "parse_mode": "HTML"}
+
+    # Retry up to 2 times on network failure
+    last_exc = None
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, data=payload, timeout=8)
+            if resp.ok:
+                logging.info("[Telegram] Message sent (chat=%s signal=%s)", target, signal_id)
+                if signal_id:
+                    try:
+                        import engine_runtime
+                        engine_runtime.mark_signal_sent(signal_id)
+                    except Exception:
+                        pass
+                return
+            else:
+                logging.warning(
+                    "[Telegram] API returned %s: %s (attempt %d)",
+                    resp.status_code, resp.text[:200], attempt + 1,
+                )
+                last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except requests.exceptions.Timeout:
+            logging.warning("[Telegram] Timeout on attempt %d", attempt + 1)
+            last_exc = Exception("Timeout")
+        except Exception as exc:
+            logging.warning("[Telegram] Error on attempt %d: %s", attempt + 1, exc)
+            last_exc = exc
+
+    logging.error("[Telegram] Failed to send after 2 attempts. Last error: %s", last_exc)
 
 if BACKTEST_MODE:
     print("[BACKTEST] Skipping Kite/Telegram init...")

@@ -25,7 +25,10 @@ param(
 
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pyExe = "C:\Users\g6666\AppData\Local\Programs\Python\Python311\python.exe"
+
+# Prefer venv python, then system python
+$venvPy = Join-Path $Root ".venv\Scripts\python.exe"
+$pyExe = if (Test-Path $venvPy) { $venvPy } else { "python" }
 
 # -- Helpers --
 function Kill-Port {
