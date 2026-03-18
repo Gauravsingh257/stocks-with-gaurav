@@ -279,6 +279,35 @@ def get_engine_state_snapshot() -> Dict[str, Any]:
     with _ENGINE_STATE_LOCK:
         return dict(ENGINE_STATE)
 
+
+def _publish_redis_snapshot() -> None:
+    """Write the current engine state to Redis for dashboard (standalone mode).
+    Safe to call at any point in the loop — never raises."""
+    try:
+        import engine_runtime
+        _snap = {
+            "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
+            "signals_today": DAILY_SIGNAL_COUNT,
+            "daily_pnl_r": DAILY_PNL_R,
+            "traded_today": list(TRADED_TODAY),
+            "consecutive_losses": CONSECUTIVE_LOSSES,
+            "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
+            "market_regime": str(MARKET_REGIME),
+            "engine_mode": ENGINE_MODE,
+            "index_ltp": {},
+            "timestamp": now_ist().isoformat(),
+        }
+        _n = ENGINE_STATE.get("nifty")
+        _b = ENGINE_STATE.get("banknifty")
+        if _n is not None:
+            _snap["index_ltp"]["NIFTY 50"] = float(_n)
+        if _b is not None:
+            _snap["index_ltp"]["NIFTY BANK"] = float(_b)
+        engine_runtime.write_engine_snapshot(_snap)
+    except Exception as _e:
+        logging.debug("_publish_redis_snapshot: %s", _e)
+
+
 # =====================================================
 # PART 1 — CONFIG & BOOT (MODULAR V4)
 # =====================================================
@@ -4747,9 +4776,9 @@ def run_live_mode():
                 
                 try:
                     update_engine_state(market="CLOSED")
-                    print("API update:", get_engine_state_snapshot())
                 except Exception:
                     pass
+                _publish_redis_snapshot()
                 print(f"[{now_ist().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
                 try:
                     import engine_runtime
@@ -4791,6 +4820,7 @@ def run_live_mode():
                         "Website & health endpoint remain live."
                     )
                     logging.info("Signal window closed at %s IST — engine alive, signals paused.", now_ist().strftime("%H:%M"))
+                _publish_redis_snapshot()
                 try:
                     import engine_runtime
                     engine_runtime.set_engine_stage("SIGNAL_WINDOW_SLEEP")
@@ -5555,30 +5585,7 @@ def run_live_mode():
                 engine_runtime.write_last_cycle()
             except Exception as _e:
                 logging.debug("write_last_cycle: %s", _e)
-            # Redis snapshot for dashboard (standalone mode): real-time trades, PnL, signals, index LTP
-            try:
-                import engine_runtime
-                _snap = {
-                    "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
-                    "signals_today": DAILY_SIGNAL_COUNT,
-                    "daily_pnl_r": DAILY_PNL_R,
-                    "traded_today": list(TRADED_TODAY),
-                    "consecutive_losses": CONSECUTIVE_LOSSES,
-                    "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
-                    "market_regime": str(MARKET_REGIME),
-                    "engine_mode": ENGINE_MODE,
-                    "index_ltp": {},
-                    "timestamp": now_ist().isoformat(),
-                }
-                _n = ENGINE_STATE.get("nifty")
-                _b = ENGINE_STATE.get("banknifty")
-                if _n is not None:
-                    _snap["index_ltp"]["NIFTY 50"] = float(_n)
-                if _b is not None:
-                    _snap["index_ltp"]["NIFTY BANK"] = float(_b)
-                engine_runtime.write_engine_snapshot(_snap)
-            except Exception as _e:
-                logging.debug("write_engine_snapshot: %s", _e)
+            _publish_redis_snapshot()
 
         except Exception as e:
             # F4.6: Error escalation — track consecutive main loop errors
