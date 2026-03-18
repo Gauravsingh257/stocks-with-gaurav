@@ -372,6 +372,9 @@ def telegram_send(message: str, chat_id=None, signal_id=None):
 
     logging.error("[Telegram] Failed to send after 2 attempts. Last error: %s", last_exc)
 
+# Current token in use (for refresh comparison). Set after successful set_access_token.
+_current_kite_token = None
+
 if BACKTEST_MODE:
     print("[BACKTEST] Skipping Kite/Telegram init...")
     kite = None
@@ -386,7 +389,21 @@ else:
             raise Exception("Kite credentials missing. Set KITE_API_KEY + KITE_ACCESS_TOKEN env, or use access_token.txt + kite_credentials.")
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
-        print("Zerodha Kite Connected")
+        # Validate session immediately — fail fast on wrong/expired token
+        try:
+            profile = kite.profile()
+            _current_kite_token = access_token
+            mask_key = (api_key[-4:] if len(api_key) >= 4 else "****")
+            mask_tok = (access_token[:6] + "..." + access_token[-4:] if len(access_token) >= 10 else "****")
+            print(f"Zerodha Kite Connected (api_key=...{mask_key} token={mask_tok})")
+            logging.info("Kite session validated: user=%s", profile.get("user_name", "?"))
+        except Exception as sess_e:
+            err = str(sess_e).lower()
+            if "api_key" in err or "access_token" in err or "invalid" in err or "token" in err:
+                print("Incorrect api_key or access_token — token may be expired or wrong.")
+                print("Run morning_login.bat (or zerodha_login.py), then restart the engine.")
+                logging.critical("Kite session invalid: %s", sess_e)
+            raise sess_e
 
         # Initialize Manual Trade Handler
         manual_handler = ManualTradeHandlerV2(kite)
@@ -407,6 +424,7 @@ else:
 
     except Exception as e:
         print(f"Connection Failed: {e}")
+        _current_kite_token = None
         manual_handler = None
         option_monitor = None
         bn_signal_engine = None
@@ -4332,6 +4350,8 @@ def run_live_mode():
     # F4.5 & F4.6: Heartbeat (dedicated thread) and error tracking state
     _last_heartbeat = datetime.now()
     _last_lock_refresh = t.time()
+    _last_token_refresh = t.time()
+    _TOKEN_REFRESH_INTERVAL_SEC = 120  # Re-read token from Redis/env/file every 2 min (fixes "Incorrect api_key or access_token" after morning login)
     _consecutive_loop_errors = 0
     _HEARTBEAT_INTERVAL_MIN = 30
     _MAX_CONSECUTIVE_ERRORS = 5
@@ -4391,6 +4411,20 @@ def run_live_mode():
                     _last_lock_refresh = t.time()
             except Exception as _e:
                 logging.debug("Engine runtime lock refresh: %s", _e)
+
+            # Kite token refresh: re-read from Redis/env/file so morning_login.bat takes effect without restart
+            global _current_kite_token
+            if kite and (t.time() - _last_token_refresh) >= _TOKEN_REFRESH_INTERVAL_SEC:
+                _last_token_refresh = t.time()
+                try:
+                    new_token = get_access_token()
+                    if new_token and new_token != _current_kite_token:
+                        kite.set_access_token(new_token)
+                        kite.profile()  # validate
+                        _current_kite_token = new_token
+                        logging.info("Kite token refreshed from central store (Redis/env/file) — OI/signals will use new token")
+                except Exception as _te:
+                    logging.warning("Kite token refresh failed (using existing): %s", _te)
 
             # F4.6: Reset error counter on successful cycle start
             _consecutive_loop_errors = 0

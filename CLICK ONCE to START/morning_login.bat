@@ -22,7 +22,8 @@ echo  Browser opened. Complete Zerodha login.
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0morning_login.ps1" -Backend "%BACKEND%"
 echo.
-echo  Done! The system will use the new token everywhere (Redis, dashboard, engine).
+echo  Done! Token is stored in Redis. Dashboard uses it immediately.
+echo  Engine (Railway or local) will pick up the new token within 2 minutes — no restart needed.
 echo  You can close this window.
 echo.
 pause

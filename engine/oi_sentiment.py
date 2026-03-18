@@ -486,7 +486,13 @@ def _fetch_index_oi(kite_obj, index_symbol, index_name, step):
         }
         
     except Exception as e:
-        logger.error(f"OI fetch error for {index_name}: {e}")
+        err_str = str(e).lower()
+        logger.error("OI fetch error for %s: %s", index_name, e)
+        if "api_key" in err_str or "access_token" in err_str or "invalid" in err_str or "token" in err_str or "incorrect" in err_str:
+            logger.error(
+                "Kite auth failed for OI. Token may be expired or wrong. "
+                "Run morning_login.bat (or zerodha_login.py); engine will pick up new token from Redis within 2 min, or restart engine."
+            )
         return None
 
 

@@ -1,14 +1,17 @@
 """
-config/kite_auth.py — Centralized Kite API key + token resolution.
+config/kite_auth.py — Centralized Kite API key + token resolution (SINGLE SOURCE OF TRUTH).
 
-Resolution order:
-  1. KITE_ACCESS_TOKEN env var (for Railway/cloud — update daily from zerodha_login)
-  2. access_token.txt file (for local dev)
+Token resolution order for get_access_token():
+  1. Redis key "kite:access_token" (when REDIS_URL is set — used by Railway; set by morning_login callback or zerodha_login.py)
+  2. KITE_ACCESS_TOKEN env var
+  3. access_token.txt file (project root)
 
 API key: KITE_API_KEY env, else kite_credentials.API_KEY
 
-Note: KITE_API_SECRET is only used during login (zerodha_login.py) to exchange
-request_token for access_token. Runtime only needs KITE_API_KEY + KITE_ACCESS_TOKEN.
+The live engine re-reads token from this module every 2 minutes, so after running
+morning_login.bat or zerodha_login.py (with Redis updated), the engine picks up
+the new token without restart. KITE_API_SECRET is only used at login to exchange
+request_token → access_token.
 """
 import logging
 import os
