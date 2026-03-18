@@ -750,12 +750,26 @@ def now_ist() -> datetime:
 
 
 def is_market_open() -> bool:
-    """Return True only during Mon–Fri 09:00–16:30 IST."""
+    """Return True only during Mon–Fri 09:00–16:30 IST (for general market state checks)."""
     n = now_ist()
     if n.weekday() >= 5:
         return False
-    t = n.time()
-    return time(9, 0) <= t <= time(16, 30)
+    t_now = n.time()
+    return time(9, 0) <= t_now <= time(16, 30)
+
+
+def is_signal_window() -> bool:
+    """
+    Return True only when the signal-firing system should be active.
+    Signals are enabled Mon–Fri 09:00–16:10 IST.
+    After 16:10 the engine loop keeps running (website stays live) but no new
+    trade signals are generated or sent to Telegram.
+    """
+    n = now_ist()
+    if n.weekday() >= 5:
+        return False
+    t_now = n.time()
+    return time(9, 0) <= t_now <= time(16, 10)
 
 # =====================================================
 # SYMBOL UTILS
@@ -4693,6 +4707,33 @@ def run_live_mode():
                           f"Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}")
                 telegram_send(hb_msg)
                 _last_heartbeat = now_ist()
+
+            # ─── SIGNAL WINDOW GATE ──────────────────────────────────────────────
+            # After 16:10 IST: engine loop keeps running (website/health stays live)
+            # but NO new signals are generated or sent.  Resumes at 09:00 next day.
+            if not is_signal_window():
+                if not hasattr(run_live_mode, '_signal_sleep_notified'):
+                    run_live_mode._signal_sleep_notified = False
+                if not run_live_mode._signal_sleep_notified:
+                    run_live_mode._signal_sleep_notified = True
+                    telegram_send(
+                        f"🌙 <b>Signal system PAUSED</b> — {now_ist().strftime('%H:%M')} IST\n"
+                        "No new trade signals until 09:00 tomorrow.\n"
+                        "Website & health endpoint remain live."
+                    )
+                    logging.info("Signal window closed at %s IST — engine alive, signals paused.", now_ist().strftime("%H:%M"))
+                t.sleep(60)   # Light sleep; loop keeps running for /health & active trade monitoring
+                continue
+            else:
+                # Reset notification flag when signal window re-opens
+                if hasattr(run_live_mode, '_signal_sleep_notified') and run_live_mode._signal_sleep_notified:
+                    run_live_mode._signal_sleep_notified = False
+                    telegram_send(
+                        f"🌅 <b>Signal system ACTIVE</b> — {now_ist().strftime('%H:%M')} IST\n"
+                        "Trade signals are now enabled. Good morning!"
+                    )
+                    logging.info("Signal window opened at %s IST.", now_ist().strftime("%H:%M"))
+            # ─────────────────────────────────────────────────────────────────────
 
             # 🌅 MORNING WATCHLIST (9:15 – 9:20)
             if time(9, 15) <= now <= time(9, 20):
