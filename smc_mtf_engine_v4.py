@@ -506,12 +506,18 @@ MORNING_WATCHLIST_FLAG = "morning_watchlist.flag"
 # TIME SYNC HELPER
 # =====================================================
 def wait_for_next_minute():
-    """Sleeps until the start of the next minute (plus 1s buffer)"""
+    """Sleeps until the start of the next minute (plus 1s buffer).
+    Uses safe_sleep to keep the watchdog alive."""
     now = now_ist()
     sleep_seconds = 60 - now.second + 1
-    if sleep_seconds < 0: sleep_seconds = 1 # Safety
+    if sleep_seconds < 0:
+        sleep_seconds = 1
     print(f"[INFO] Waiting {sleep_seconds}s for next candle close...")
-    t.sleep(sleep_seconds)
+    try:
+        import engine_runtime
+        engine_runtime.safe_sleep(sleep_seconds)
+    except Exception:
+        t.sleep(sleep_seconds)
 
 INDEX_SYMBOLS = [
     "NSE:NIFTY 50",
@@ -4623,9 +4629,10 @@ def run_live_mode():
     while True:
         try:
             ENGINE_LAST_LOOP_AT = now_ist()
-            # Notify watchdog that the main loop is alive
+            # Notify watchdog that the main loop is alive + set stage
             try:
                 import engine_runtime
+                engine_runtime.set_engine_stage("LOOP_START")
                 engine_runtime.write_last_cycle()
             except Exception:
                 pass
@@ -4730,14 +4737,11 @@ def run_live_mode():
                 except Exception:
                     pass
                 print(f"[{now_ist().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
-                # Sleep in short chunks so write_last_cycle() keeps the watchdog happy.
-                # A single t.sleep(300) > watchdog threshold (180s) and causes a crash loop.
-                for _ in range(30):       # 30 x 10s = 5 min total
-                    try:
-                        import engine_runtime
-                        engine_runtime.write_last_cycle()
-                    except Exception:
-                        pass
+                try:
+                    import engine_runtime
+                    engine_runtime.set_engine_stage("MARKET_CLOSED_SLEEP")
+                    engine_runtime.safe_sleep(300)
+                except Exception:
                     t.sleep(10)
                 continue
 
@@ -4773,13 +4777,11 @@ def run_live_mode():
                         "Website & health endpoint remain live."
                     )
                     logging.info("Signal window closed at %s IST — engine alive, signals paused.", now_ist().strftime("%H:%M"))
-                # Chunked sleep keeps watchdog alive
-                for _ in range(6):        # 6 x 10s = 60s total
-                    try:
-                        import engine_runtime
-                        engine_runtime.write_last_cycle()
-                    except Exception:
-                        pass
+                try:
+                    import engine_runtime
+                    engine_runtime.set_engine_stage("SIGNAL_WINDOW_SLEEP")
+                    engine_runtime.safe_sleep(60)
+                except Exception:
                     t.sleep(10)
                 continue
             else:
@@ -4978,6 +4980,11 @@ def run_live_mode():
                 oc_data = fetch_option_chain_data("NSE:NIFTY 50")
             
             # 🔥 INDEX-FIRST SCAN ORDER
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("DATA_FETCH")
+            except Exception:
+                pass
             # 0. Sync Manual Trades (Once per cycle)
             fetch_manual_orders()
             
@@ -5019,6 +5026,11 @@ def run_live_mode():
                     except Exception as e:
                         print(f"  ⚠️ Zone tap scan error ({index_sym}): {e}")
 
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("STRATEGY_SCAN")
+            except Exception:
+                pass
             _scan_errors = []
             _scan_data_ok = 0
             _scan_data_empty = 0
@@ -5266,6 +5278,11 @@ def run_live_mode():
             # -----------------------------
             # SEND TOP ALERTS + REGISTER TRADE
             # -----------------------------
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("SIGNAL_DISPATCH")
+            except Exception:
+                pass
             for sig in ranked_signals[:5]:
                 # MORNING-ONLY STOCK TRADING CUTOFF
                 # Backtest evidence: afternoon trades lose -15.75R over 2 months
@@ -5407,6 +5424,11 @@ def run_live_mode():
             # -----------------------------
             # SMART WAIT (ZERO LATENCY MONITOR)
             # -----------------------------
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("TRADE_MONITOR")
+            except Exception:
+                pass
             # Instead of sleeping blindly, we poll active trades every second
             while True:
                 # 1. Update Active Trades (Fast Exit)
@@ -5686,13 +5708,11 @@ def run_engine_main():
             logging.info("run_live_mode returned (token/data failure or redis_lock_lost). Exiting.")
             break
         logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
-        # Chunked sleep keeps watchdog happy during recovery wait
-        for _ in range(12):       # 12 x 10s = 120s
-            try:
-                import engine_runtime
-                engine_runtime.write_last_cycle()
-            except Exception:
-                pass
+        try:
+            import engine_runtime
+            engine_runtime.set_engine_stage("RECOVERY_WAIT")
+            engine_runtime.safe_sleep(120)
+        except Exception:
             t.sleep(10)
 
 

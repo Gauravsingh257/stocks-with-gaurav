@@ -46,10 +46,13 @@ _last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watc
 # Watchdog: if main loop doesn't update in this many seconds → force exit (Railway restarts)
 ENGINE_CYCLE_WATCHDOG_SEC = 180  # 3 min; allows for slow data fetches
 
-# Crash-loop detection: track watchdog kills to detect infinite restart loops
-_watchdog_kill_times: list = []   # timestamps of recent os._exit(1) calls
+# Crash-loop detection (Redis-based, survives restarts)
 _CRASH_LOOP_WINDOW_SEC = 300     # 5 min window
-_CRASH_LOOP_MAX_KILLS = 3        # if >3 kills in 5 min → critical alert
+_CRASH_LOOP_MAX_KILLS = 3        # if >=3 kills in 5 min → critical alert
+
+# Loop stage tracker: set by engine before each major phase so crash alerts
+# include WHERE the engine was stuck (e.g. "DATA_FETCH", "STRATEGY", "SIGNAL").
+engine_stage: str = "INIT"
 
 
 def _get_redis():
@@ -213,6 +216,34 @@ def write_last_cycle() -> None:
         log.debug("write_last_cycle Redis failed: %s", e)
 
 
+# ── CRITICAL: Use safe_sleep() instead of time.sleep() in ALL engine code ────
+# Direct time.sleep(>60s) will trigger the watchdog and crash the engine.
+# safe_sleep() pings the watchdog every 10 seconds during the wait.
+def safe_sleep(total_seconds: int) -> None:
+    """
+    Sleep for `total_seconds` in 10-second chunks, pinging the watchdog
+    before each chunk.  This prevents the watchdog from killing the engine
+    during legitimate idle periods (market closed, signal window paused, etc.).
+
+    ALWAYS use this instead of time.sleep() in engine code.
+    """
+    chunks = max(1, total_seconds // 10)
+    remainder = total_seconds % 10
+    for _ in range(chunks):
+        write_last_cycle()
+        time.sleep(10)
+    if remainder > 0:
+        write_last_cycle()
+        time.sleep(remainder)
+
+
+def set_engine_stage(stage: str) -> None:
+    """Update the current engine stage label (e.g. 'DATA_FETCH', 'STRATEGY', 'SIGNAL').
+    Included in watchdog crash alerts for instant debugging."""
+    global engine_stage
+    engine_stage = stage
+
+
 def _watchdog_loop() -> None:
     """
     Daemon thread: checks that the main engine loop runs at least every
@@ -231,19 +262,21 @@ def _watchdog_loop() -> None:
             continue  # not yet started
         age = time.time() - _last_cycle_local
         if age > ENGINE_CYCLE_WATCHDOG_SEC:
+            _stage = engine_stage
             log.error(
-                "ENGINE STUCK — main loop last cycled %.0fs ago (limit %ss). "
-                "Forcing exit so Railway can restart.",
-                age, ENGINE_CYCLE_WATCHDOG_SEC,
+                "ENGINE STUCK at stage '%s' — main loop last cycled %.0fs ago "
+                "(limit %ss). Forcing exit so Railway can restart.",
+                _stage, age, ENGINE_CYCLE_WATCHDOG_SEC,
             )
             # Crash-loop detection via Redis (survives process restarts)
             _is_crash_loop = False
+            _recent_count = 1
             try:
                 _r = _get_redis()
                 if _r:
                     _crash_key = "engine:watchdog_kills"
                     _r.rpush(_crash_key, str(time.time()))
-                    _r.ltrim(_crash_key, -10, -1)   # Keep last 10 entries
+                    _r.ltrim(_crash_key, -10, -1)
                     _r.expire(_crash_key, _CRASH_LOOP_WINDOW_SEC)
                     _recent = _r.lrange(_crash_key, 0, -1) or []
                     _cutoff = time.time() - _CRASH_LOOP_WINDOW_SEC
@@ -252,7 +285,7 @@ def _watchdog_loop() -> None:
             except Exception:
                 pass
 
-            # Send Telegram alert (best-effort, 5s timeout)
+            # Send Telegram alert with stage info (best-effort, 5s timeout)
             try:
                 import os as _os
                 import requests as _req
@@ -261,12 +294,16 @@ def _watchdog_loop() -> None:
                 if _bot and _cid:
                     if _is_crash_loop:
                         _msg = (
-                            "🚨 CRASH LOOP DETECTED — engine has restarted "
-                            f"{len(_watchdog_kill_times)} times in 5 min.\n"
+                            f"🚨 CRASH LOOP DETECTED — engine restarted "
+                            f"{_recent_count} times in 5 min.\n"
+                            f"Last stage: {_stage}\n"
                             "Investigation needed. Check Railway deploy logs."
                         )
                     else:
-                        _msg = "⚠️ ENGINE STUCK — main loop frozen. Forcing restart."
+                        _msg = (
+                            f"⚠️ ENGINE STUCK at: {_stage}\n"
+                            f"Main loop frozen for {int(age)}s. Forcing restart."
+                        )
                     _req.post(
                         f"https://api.telegram.org/bot{_bot}/sendMessage",
                         data={"chat_id": _cid, "text": _msg},
