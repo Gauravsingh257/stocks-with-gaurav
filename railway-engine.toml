@@ -1,10 +1,11 @@
 # Engine worker service — set "Config file path" to railway-engine.toml in Railway dashboard.
+# Uses run_engine_railway.py so /health responds within seconds (fixes healthcheck failure).
 
 [build]
 dockerfilePath = "Dockerfile.engine"
 
 [deploy]
-startCommand = "python smc_mtf_engine_v4.py"
+startCommand = "python run_engine_railway.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

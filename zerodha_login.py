@@ -92,6 +92,8 @@ def store_in_redis(access_token: str) -> None:
         import redis as _redis
         r = _redis.from_url(redis_url, decode_responses=True)
         r.set("kite:access_token", access_token, ex=86400)
+        from datetime import datetime
+        r.set("kite:token_ts", datetime.now().isoformat(), ex=86400)
         log.info("✅ Token stored in Redis (key: kite:access_token, TTL: 24h)")
     except Exception as e:
         log.warning("Redis storage failed: %s", e)

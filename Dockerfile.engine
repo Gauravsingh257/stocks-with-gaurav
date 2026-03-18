@@ -7,4 +7,6 @@ RUN pip install --no-cache-dir -r requirements-engine.txt
 
 COPY . .
 
-CMD ["python", "smc_mtf_engine_v4.py"]
+# Use bootstrap: starts /health server FIRST (Railway healthcheck passes),
+# then loads and runs the heavy engine in the same process.
+CMD ["python", "run_engine_railway.py"]

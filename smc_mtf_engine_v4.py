@@ -424,11 +424,12 @@ else:
 
     except Exception as e:
         print(f"Connection Failed: {e}")
+        kite = None
         _current_kite_token = None
         manual_handler = None
         option_monitor = None
         bn_signal_engine = None
-    # We allow it to continue (for offline testing maybe?) but it will fail on data fetch
+        logging.warning("Module-level Kite init failed — _reinit_kite() will retry with latest token")
 
 
 # =====================================================
@@ -4186,11 +4187,37 @@ def cleanup_structure_state(max_age_seconds=3600):
 def check_token_age(max_hours=20) -> bool:
     """
     F4.4: Check if Kite token is stale (>20 hours old).
-    When KITE_ACCESS_TOKEN env is set, skips file check (assume user refreshes daily).
+    - Redis token: check kite:token_ts (set by zerodha_login). If missing, trust _reinit_kite's profile() validation.
+    - Env var: assume user manages freshness.
+    - File: check mtime.
     Returns True if token is fresh enough, False if expired.
     """
     try:
-        # When using env var, we cannot check file mtime — assume user manages it
+        # Redis timestamp (set alongside token by zerodha_login.py)
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            try:
+                import redis as _redis
+                r = _redis.from_url(redis_url, decode_responses=True)
+                tok = r.get("kite:access_token")
+                if tok and tok.strip():
+                    ts = r.get("kite:token_ts")
+                    if ts:
+                        from datetime import datetime as _dt
+                        token_time = _dt.fromisoformat(ts)
+                        age_hours = (datetime.now() - token_time).total_seconds() / 3600
+                        if age_hours > max_hours:
+                            print(f"❌ Redis token is {age_hours:.1f}h old (max {max_hours}h) — STALE")
+                            logging.critical("Token expired: %.1fh old (Redis)", age_hours)
+                            return False
+                        print(f"✅ Token age (Redis): {age_hours:.1f}h (max: {max_hours}h)")
+                        return True
+                    # No timestamp stored — trust the profile() call in _reinit_kite
+                    print("✅ Token from Redis (no age info — validated by profile())")
+                    return True
+            except Exception as redis_e:
+                logging.debug("Redis token age check: %s", redis_e)
+
         if os.getenv("KITE_ACCESS_TOKEN", "").strip():
             print("✅ Token from KITE_ACCESS_TOKEN env (refresh daily via zerodha_login)")
             return True
@@ -4207,13 +4234,13 @@ def check_token_age(max_hours=20) -> bool:
                    f"Run zerodha_login.py to refresh!")
             print(f"❌ Token is {age_hours:.1f} hours old (max {max_hours}h) — STALE")
             telegram_send(msg)
-            logging.critical(f"Token expired: {age_hours:.1f}h old")
+            logging.critical("Token expired: %.1fh old", age_hours)
             return False
         print(f"✅ Token age: {age_hours:.1f}h (max: {max_hours}h)")
         return True
     except Exception as e:
-        logging.error(f"Token age check failed: {e}")
-        return True  # Don't block on check failure
+        logging.error("Token age check failed: %s", e)
+        return True
 
 def test_data_connection():
     """
@@ -4337,6 +4364,46 @@ def load_engine_states():
     except Exception as e:
         logging.error(f"Failed to load multi-day halt state: {e}")
 
+def _reinit_kite():
+    """Re-read token from Redis/env/file and re-create the kite instance.
+    Called by run_live_mode on each attempt so Railway retry loops work
+    after morning_login.bat updates the token in Redis."""
+    global kite, _current_kite_token, manual_handler, option_monitor, bn_signal_engine
+    try:
+        api_key = get_api_key()
+        access_token = get_access_token()
+        if not api_key or not access_token:
+            logging.warning("[reinit_kite] No api_key or access_token available")
+            return False
+        if kite is not None and access_token == _current_kite_token:
+            return True
+        new_kite = KiteConnect(api_key=api_key)
+        new_kite.set_access_token(access_token)
+        new_kite.profile()
+        kite = new_kite
+        _current_kite_token = access_token
+        mask_tok = access_token[:6] + "..." + access_token[-4:] if len(access_token) >= 10 else "****"
+        logging.info("[reinit_kite] Kite session refreshed (token=%s)", mask_tok)
+        try:
+            manual_handler = ManualTradeHandlerV2(kite)
+        except Exception:
+            pass
+        try:
+            option_monitor = OptionMonitor(kite)
+            option_monitor.initialize()
+        except Exception:
+            pass
+        try:
+            bn_signal_engine = BankNiftySignalEngine(kite, telegram_fn=telegram_send)
+            bn_signal_engine.initialize()
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logging.warning("[reinit_kite] Failed: %s", e)
+        return False
+
+
 def run_live_mode():
     global EOD_SENT
     global DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE
@@ -4351,26 +4418,27 @@ def run_live_mode():
     _last_heartbeat = datetime.now()
     _last_lock_refresh = t.time()
     _last_token_refresh = t.time()
-    _TOKEN_REFRESH_INTERVAL_SEC = 120  # Re-read token from Redis/env/file every 2 min (fixes "Incorrect api_key or access_token" after morning login)
+    _TOKEN_REFRESH_INTERVAL_SEC = 120
     _consecutive_loop_errors = 0
     _HEARTBEAT_INTERVAL_MIN = 30
     _MAX_CONSECUTIVE_ERRORS = 5
     
     # 💾 LOAD PERSISTED MEMORY
     load_engine_states()
-    
+
+    # Re-init Kite from latest token (Redis/env/file) — critical for Railway restart loops
+    if not _reinit_kite():
+        logging.warning("Kite init failed — token may not be set yet. Will retry on next cycle.")
+        return
+
     # F4.4: Check token freshness BEFORE data connection test
     if not check_token_age(max_hours=20):
-        print("\n🛑 ABORTING ENGINE STARTUP — TOKEN TOO OLD")
-        print("Run `zerodha_login.py` to generate a fresh token.")
-        t.sleep(10)
+        print("\n🛑 TOKEN TOO OLD — waiting for refresh via morning_login")
         return
 
     # 🛑 RUN HEALTH CHECK
     if not test_data_connection():
-        print("\n🛑 ABORTING ENGINE STARTUP DUE TO DATA FAILURE")
-        print("Please run `zerodha_login.py` to refresh tokens.")
-        t.sleep(10) # Give user time to read
+        print("\n🛑 DATA CONNECTION FAILED — token may be expired or invalid")
         return
 
     # Phase 6: Paper mode banner
@@ -5033,18 +5101,19 @@ import signal as signal_module
 LOCK_FILE_PATH = "engine.lock"
 
 def _acquire_process_lock():
-    """F1.8 + Railway: Prevent multiple engine instances — Redis lock first (if REDIS_URL), else file lock."""
+    """F1.8 + Railway: Prevent multiple engine instances — Redis lock first (if REDIS_URL), else file lock.
+    Returns True if lock acquired, False if another instance holds it (caller should stay alive for healthcheck).
+    """
     try:
         import engine_runtime
         if os.getenv("REDIS_URL", "").strip():
             if not engine_runtime.acquire_engine_lock():
-                print("🛑 ABORT: Another engine instance already running (Redis lock held). Exiting.")
-                logging.warning("Engine lock not acquired (Redis). Another instance running.")
-                import sys
-                sys.exit(1)
+                print("🛑 Another engine instance already running (Redis lock held). Entering standby — /health will still respond.")
+                logging.warning("Engine lock not acquired (Redis). Another instance running. Standby mode.")
+                return False
             engine_runtime.set_engine_version(ENGINE_VERSION)
             logging.info("Engine started with Redis lock (24/7 safe mode)")
-            return
+            return True
     except ImportError:
         pass
     if os.path.exists(LOCK_FILE_PATH):
@@ -5054,10 +5123,9 @@ def _acquire_process_lock():
             # Check if the old process is still running
             import psutil
             if psutil.pid_exists(old_pid):
-                print(f"🛑 ABORT: Another engine instance is running (PID {old_pid})")
-                print(f"   If this is stale, delete '{LOCK_FILE_PATH}' manually.")
-                import sys
-                sys.exit(1)
+                print(f"🛑 Another engine instance is running (PID {old_pid}). Entering standby.")
+                logging.warning("Process lock held by PID %s. Standby mode.", old_pid)
+                return False
             else:
                 print(f"⚠️ Stale lock file found (PID {old_pid} not running). Overwriting.")
         except (ImportError, ValueError):
@@ -5065,10 +5133,8 @@ def _acquire_process_lock():
             try:
                 old_pid = int(open(LOCK_FILE_PATH).read().strip())
                 os.kill(old_pid, 0)  # signal 0 = check if alive
-                print(f"🛑 ABORT: Another engine instance may be running (PID {old_pid})")
-                print(f"   If this is stale, delete '{LOCK_FILE_PATH}' manually.")
-                import sys
-                sys.exit(1)
+                print(f"🛑 Another engine instance may be running (PID {old_pid}). Entering standby.")
+                return False
             except (OSError, ValueError):
                 # Process not running or PID invalid — stale lock
                 print(f"⚠️ Stale lock file found. Overwriting.")
@@ -5076,7 +5142,8 @@ def _acquire_process_lock():
     # Write our PID
     with open(LOCK_FILE_PATH, "w") as f:
         f.write(str(os.getpid()))
-    logging.info(f"🔒 Process lock acquired (PID {os.getpid()})")
+    logging.info("🔒 Process lock acquired (PID=%s)", os.getpid())
+    return True
 
 def _release_process_lock():
     """Remove lock file on shutdown; also release Redis lock if held."""
@@ -5130,26 +5197,39 @@ try:
 except (OSError, AttributeError):
     pass  # SIGTERM not available on Windows in all contexts
 
-if __name__ == "__main__":
-    print("Starting SMC trading engine...")
-    _acquire_process_lock()  # F1.8: Prevent multiple instances (Redis or file lock)
+def run_engine_main():
+    """Entry point for bootstrap (run_engine_railway.py). Runs lock + trading loop. Skip HTTP server if SKIP_ENGINE_HTTP is set."""
+    if os.environ.get("SKIP_ENGINE_HTTP"):
+        try:
+            from dashboard.backend.engine_api import set_state_reader
+            set_state_reader(get_engine_state_snapshot)
+        except Exception as e:
+            logging.debug("set_state_reader: %s", e)
+    else:
+        # Standalone: start our own /health server first
+        try:
+            from dashboard.backend.engine_api import start_api_server, set_state_reader
+            set_state_reader(get_engine_state_snapshot)
+            api_port = int(os.environ.get("PORT", 8000))
+            threading.Thread(target=start_api_server, kwargs={"port": api_port}, daemon=True).start()
+            print(f"[ENGINE] API server started on http://0.0.0.0:{api_port}")
+        except Exception as e:
+            logging.debug("Engine API server not started: %s", e)
+        t.sleep(1)
+    if not _acquire_process_lock():
+        logging.info("Engine in standby (lock held by another instance). Retrying every 2 min.")
+        while True:
+            t.sleep(120)
+            if _acquire_process_lock():
+                logging.info("Lock acquired. Starting trading loop.")
+                break
     try:
         import engine_runtime
-        engine_runtime.start_heartbeat_thread()  # Dedicated thread: heartbeat every 30s even if main loop stalls
+        engine_runtime.start_heartbeat_thread()
     except Exception as e:
         logging.debug("Heartbeat thread not started: %s", e)
-    try:
-        from dashboard.backend.engine_api import start_api_server, set_state_reader
-        set_state_reader(get_engine_state_snapshot)
-        api_port = int(os.environ.get("PORT", 8000))
-        threading.Thread(target=start_api_server, kwargs={"port": api_port}, daemon=True).start()
-        print(f"[ENGINE] API server thread started on http://0.0.0.0:{api_port}")
-    except Exception as e:
-        logging.debug("Engine API server not started: %s", e)
     start_data_prefetcher()
     update_engine_state(engine="ON")
-    # Railway: retry run_live_mode if it exits early (token stale, data fail)
-    # so the container stays alive for healthcheck and auto-recovers when token is refreshed.
     _railway = bool(os.getenv("RAILWAY_ENVIRONMENT", ""))
     while True:
         run_live_mode()
@@ -5158,3 +5238,8 @@ if __name__ == "__main__":
             break
         logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
         t.sleep(120)
+
+
+if __name__ == "__main__":
+    print("Starting SMC trading engine...")
+    run_engine_main()
