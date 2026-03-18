@@ -21,6 +21,12 @@ Example trigger (March 5, 2026 — NIFTY):
 import logging
 from datetime import datetime, timedelta, time
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 import smc_detectors as smc
 
 logger = logging.getLogger("smc_zone_tap")
@@ -197,7 +203,7 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
         list of signal dicts  (usually 0 or 1 per call)
     """
     underlying = UNDERLYING_MAP.get(symbol, symbol)
-    now = now_override or datetime.now()
+    now = now_override or datetime.now(_IST)
 
     # ── time window ──
     t_now = now.time()
@@ -236,7 +242,7 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
         return []
     st["last_candle_ts"] = candle_ts
     # clean up expired cooldowns to avoid memory growth over a session
-    now_check = now_override or datetime.now()
+    now_check = now_override or datetime.now(_IST)
     st["zone_cooldowns"] = {
         k: v for k, v in st["zone_cooldowns"].items()
         if (now_check - v).total_seconds() < COOLDOWN_MINUTES * 60

@@ -1179,7 +1179,8 @@ def detect_hierarchical(symbol):
         setup, reject = evaluate_entry(
             symbol,
             df_15m,
-            df_5m
+            df_5m,
+            current_time=now_ist().time()
         )
         
         if setup:
@@ -4713,6 +4714,7 @@ def run_live_mode():
             _scan_data_ok = 0
             _scan_data_empty = 0
             _scan_raw_signals = 0
+            _setup_results = {}
             for symbol in scan_universe:
                 try:
                     signals = scan_symbol(symbol)
@@ -4725,6 +4727,39 @@ def run_live_mode():
                         _scan_data_ok += 1
                     else:
                         _scan_data_empty += 1
+
+                    if not hasattr(run_live_mode, '_diag_sent'):
+                        _sym_short = symbol.split(":")[-1][:10]
+                        _sr = {}
+                        tf = fetch_multitf(symbol)
+                        _sr["data_5m"] = len(tf.get("5m") or [])
+                        _sr["data_1h"] = len(tf.get("1h") or [])
+                        _sr["data_15m"] = len(tf.get("15m") or [])
+                        if ACTIVE_STRATEGIES.get("SETUP_A"):
+                            try:
+                                r = detect_setup_a(symbol, tf)
+                                _sr["A"] = "SIG" if r else "none"
+                            except Exception as e:
+                                _sr["A"] = f"ERR:{e}"[:30]
+                        if ACTIVE_STRATEGIES.get("SETUP_C"):
+                            try:
+                                r = detect_setup_c(symbol, tf)
+                                _sr["C"] = f"SIG({len(r)})" if r else "none"
+                            except Exception as e:
+                                _sr["C"] = f"ERR:{e}"[:30]
+                        if ACTIVE_STRATEGIES.get("SETUP_D"):
+                            try:
+                                r = detect_setup_d(symbol, tf)
+                                _sr["D"] = "SIG" if r else "none"
+                            except Exception as e:
+                                _sr["D"] = f"ERR:{e}"[:30]
+                        if ACTIVE_STRATEGIES.get("HIERARCHICAL"):
+                            try:
+                                r = detect_hierarchical(symbol)
+                                _sr["H"] = "SIG" if r else "none"
+                            except Exception as e:
+                                _sr["H"] = f"ERR:{e}"[:30]
+                        _setup_results[_sym_short] = _sr
 
                     price = fetch_ltp(symbol)
                     if price:
@@ -4740,21 +4775,26 @@ def run_live_mode():
                 run_live_mode._diag_sent = True
                 _nifty_ltp = fetch_ltp("NSE:NIFTY 50")
                 _bn_ltp = fetch_ltp("NSE:NIFTY BANK")
-                _diag = (
-                    f"🔍 <b>SCAN DIAGNOSTIC</b> (first cycle)\n"
-                    f"Time: {now_ist().strftime('%H:%M:%S')} IST\n"
-                    f"Symbols scanned: {len(scan_universe)}\n"
-                    f"Data OK: {_scan_data_ok} | Data empty: {_scan_data_empty}\n"
-                    f"Raw signals found: {_scan_raw_signals}\n"
-                    f"Nifty LTP: {_nifty_ltp}\n"
-                    f"BankNifty LTP: {_bn_ltp}\n"
-                    f"Kite obj: {'OK' if kite else 'NONE'}\n"
-                    f"Token: {_current_kite_token[:8] + '...' if _current_kite_token else 'NONE'}\n"
-                    f"Errors: {len(_scan_errors)}"
-                )
+                _time_ist = now_ist().strftime('%H:%M:%S')
+                _diag_lines = [
+                    f"🔍 <b>SCAN DIAGNOSTIC</b> (first cycle)",
+                    f"Time: {_time_ist} IST",
+                    f"Scanned: {len(scan_universe)} | Data OK: {_scan_data_ok} | Empty: {_scan_data_empty}",
+                    f"Raw signals: {_scan_raw_signals} | Errors: {len(_scan_errors)}",
+                    f"Nifty: {_nifty_ltp} | BN: {_bn_ltp}",
+                    f"Kite: {'OK' if kite else 'NONE'} | Token: {_current_kite_token[:8] + '...' if _current_kite_token else 'NONE'}",
+                    "",
+                    "<b>Per-symbol setup results:</b>",
+                ]
+                for sym, sr in _setup_results.items():
+                    parts = [f"5m={sr.get('data_5m',0)} 1h={sr.get('data_1h',0)} 15m={sr.get('data_15m',0)}"]
+                    for setup_key in ["A", "C", "D", "H"]:
+                        if setup_key in sr:
+                            parts.append(f"{setup_key}={sr[setup_key]}")
+                    _diag_lines.append(f"  {sym}: {' | '.join(parts)}")
                 if _scan_errors:
-                    _diag += f"\nFirst error: {_scan_errors[0][:100]}"
-                telegram_send(_diag)
+                    _diag_lines.append(f"\nFirst error: {_scan_errors[0][:100]}")
+                telegram_send("\n".join(_diag_lines))
 
             if not all_signals and not ACTIVE_TRADES:
                 t.sleep(1) # Tiny sleep to prevent CPU burn if list empty, but wait_for_next will handle it.

@@ -32,6 +32,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, time
 import logging
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 from smc_trading_engine.smc.market_structure import (
     analyze_structure, TrendState, calculate_atr, is_ranging_market
 )
@@ -90,13 +96,13 @@ TRADE_SESSION_END = time(14, 30)
 
 def is_in_session(current_time: time = None) -> bool:
     """Trade only during 9:30 AM - 2:30 PM IST."""
-    t = current_time or datetime.now().time()
+    t = current_time or datetime.now(_IST).time()
     return TRADE_SESSION_START <= t <= TRADE_SESSION_END
 
 
 def is_near_session_close(current_time: time = None, buffer_min: int = 15) -> bool:
     """Avoid entries near session close."""
-    t = current_time or datetime.now().time()
+    t = current_time or datetime.now(_IST).time()
     cutoff = time(TRADE_SESSION_END.hour, TRADE_SESSION_END.minute - buffer_min)
     return t >= cutoff
 
@@ -214,7 +220,7 @@ def evaluate_entry(
     if risk_mgr is None:
         risk_mgr = RiskManager()
 
-    now = current_time or datetime.now().time()
+    now = current_time or datetime.now(_IST).time()
 
     # ── FILTER 1: Session check ──
     if not is_in_session(now):

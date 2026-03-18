@@ -16,6 +16,16 @@ from datetime import datetime, time, timedelta
 from collections import deque
 
 try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_ist():
+    return datetime.now(_IST)
+
+try:
     from kiteconnect import KiteTicker
 except ImportError:
     KiteTicker = None
@@ -142,7 +152,7 @@ class BankNiftySignalEngine:
         self.bias_locked = False
         self.morning_signals = []
         self.bias_scan_done = False
-        self.current_date = datetime.now().date()
+        self.current_date = _now_ist().date()
 
         self.active_expiry_map = {}   # {underlying: set(expiry_dates)}
         self._cached_atm = {}         # {underlying: int} — last computed ATM strike
@@ -182,7 +192,7 @@ class BankNiftySignalEngine:
 
     # --- Contract Management ---
     def get_weekly_expiry(self, instruments, instr_name):
-        today = datetime.now().date()
+        today = _now_ist().date()
         opts = [i for i in instruments
                 if i["name"] == instr_name
                 and i["instrument_type"] in ("CE", "PE")]
@@ -196,7 +206,7 @@ class BankNiftySignalEngine:
         return min(expiries) if expiries else None
 
     def get_monthly_expiry(self, instruments, instr_name):
-        today = datetime.now().date()
+        today = _now_ist().date()
         opts = [i for i in instruments
                 if i["name"] == instr_name
                 and i["instrument_type"] in ("CE", "PE")]
@@ -355,7 +365,7 @@ class BankNiftySignalEngine:
                 # Update legacy active_expiry_map
                 self.active_expiry_map[ul] = new_exps
 
-            self.last_atm_refresh = datetime.now()
+            self.last_atm_refresh = _now_ist()
             
             # Build reverse lookup map for O(1) performance
             for tkn, info in self.contracts.items():
@@ -859,7 +869,7 @@ class BankNiftySignalEngine:
 
     # --- Composite Signal Evaluation ---
     def evaluate_signals(self, snapshot):
-        now = datetime.now()
+        now = _now_ist()
         low_taps = self.detect_monthly_low(snapshot)
         session_taps = self.detect_session_low_break(snapshot)
         all_taps = low_taps + session_taps
@@ -1573,7 +1583,7 @@ class BankNiftySignalEngine:
             self._save_active_trades()
 
     def poll(self):
-        now = datetime.now()
+        now = _now_ist()
         
         # Date rollover check
         if hasattr(self, 'current_date') and self.current_date != now.date():
