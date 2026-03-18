@@ -71,17 +71,21 @@ def generate_access_token(request_token: str) -> str:
 
 
 def store_access_token(token: str) -> None:
-    """Store access_token in Redis with 24h TTL; set kite:last_login for debugging. Raises if Redis unavailable or store fails."""
+    """Store access_token in Redis with 24h TTL; set kite:last_login and kite:token_ts.
+    kite:token_ts is read by the engine to detect fresh logins and unlock the signal window."""
     r = _get_redis()
     if r is None:
         msg = "Redis not available — set REDIS_URL on web service to store token from login"
         log.warning("Kite auth: %s", msg)
         raise RuntimeError(msg)
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
         r.set(KITE_ACCESS_TOKEN_KEY, token, ex=KITE_TOKEN_TTL_SECONDS)
-        r.set(KITE_LAST_LOGIN_KEY, datetime.now(timezone.utc).isoformat(), ex=KITE_TOKEN_TTL_SECONDS)
-        log.info("Kite auth: access token stored in Redis (TTL %ss)", KITE_TOKEN_TTL_SECONDS)
+        r.set(KITE_LAST_LOGIN_KEY, now_utc.isoformat(), ex=KITE_TOKEN_TTL_SECONDS)
+        r.set("kite:token_ts", now_ist.replace(tzinfo=None).isoformat(), ex=KITE_TOKEN_TTL_SECONDS)
+        log.info("Kite auth: access token + token_ts stored in Redis (TTL %ss)", KITE_TOKEN_TTL_SECONDS)
     except Exception as e:
         log.warning("Kite auth: failed to store token in Redis: %s", e)
         raise
