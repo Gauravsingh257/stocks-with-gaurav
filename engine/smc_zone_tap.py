@@ -65,8 +65,12 @@ def _get_state(underlying):
         _state[underlying] = {
             "last_candle_ts": None,
             "zone_cooldowns": {},   # zone_key -> last_alert_time
+            "active_1m_scans": {},  # zone_key -> bool
         }
-    return _state[underlying]
+    st = _state[underlying]
+    if "active_1m_scans" not in st:
+        st["active_1m_scans"] = {}
+    return st
 
 
 def reset_state():
@@ -280,7 +284,7 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
         st["active_1m_scans"][zone_key] = True
         def _scan():
             import time as _time
-            from engine import fetch_ohlc
+            from smc_mtf_engine_v4 import fetch_ohlc
             print(f"[ZONE TAP] Starting 1m scan for {underlying} {zone_type} {direction} {zone}")
             for _ in range(20):  # scan for up to 20 minutes
                 candles_1m = fetch_ohlc(symbol, "1minute", 30)
@@ -316,8 +320,13 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
                         }
                         # Only fire once per zone per direction
                         if not st["zone_cooldowns"].get(zone_key):
-                            from smc_mtf_engine_v4 import handle_zone_tap_signal
-                            handle_zone_tap_signal(sig)
+                            try:
+                                from smc_mtf_engine_v4 import telegram_send, paper_prefix, format_zone_tap_alert
+                                msg = format_zone_tap_alert(sig)
+                                msg = paper_prefix(msg)
+                                telegram_send(msg, signal_id=f"zt_1m_{zone_key}_{int(_time.time())}")
+                            except Exception as _zt_e:
+                                logging.warning("1m zone tap alert failed: %s", _zt_e)
                             st["zone_cooldowns"][zone_key] = datetime.now(_IST)
                         st["active_1m_scans"][zone_key] = False
                         return

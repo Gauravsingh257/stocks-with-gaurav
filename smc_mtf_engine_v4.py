@@ -1218,12 +1218,14 @@ def detect_setup_a(symbol: str, tf_data: dict):
     
     # Required candles
     if not tf_data.get("5m") or not tf_data.get("1h"):
+        logging.debug(f"[A] {symbol}: no 5m/1h data")
         return None
 
     # RELAXED BIAS: Use 1H Trend Only (Ignore 4H for now to increase frequency)
     bias = detect_htf_bias(tf_data["1h"])
 
     if not bias:
+        logging.debug(f"[A] {symbol}: no HTF bias on 1h")
         return None
 
     ltf = tf_data["5m"]
@@ -2533,7 +2535,9 @@ def scan_symbol(symbol: str):
     # SMC CONFLUENCE SCORING & SIZING (PRESERVED)
     # ----------------------------------------------------
     if not signals:
+         logging.debug(f"[scan_symbol] {symbol}: all setups returned None/empty")
          return []
+    logging.info(f"[scan_symbol] {symbol}: {len(signals)} raw signal(s) -> {[s.get('setup','?') for s in signals]}")
 
     # Fetch Data for Scoring (Use tf_data)
     ltf_data = tf_data.get("5m")
@@ -4730,39 +4734,6 @@ def run_live_mode():
                     else:
                         _scan_data_empty += 1
 
-                    if not hasattr(run_live_mode, '_diag_sent'):
-                        _sym_short = symbol.split(":")[-1][:10]
-                        _sr = {}
-                        tf = fetch_multitf(symbol)
-                        _sr["data_5m"] = len(tf.get("5m") or [])
-                        _sr["data_1h"] = len(tf.get("1h") or [])
-                        _sr["data_15m"] = len(tf.get("15m") or [])
-                        if ACTIVE_STRATEGIES.get("SETUP_A"):
-                            try:
-                                r = detect_setup_a(symbol, tf)
-                                _sr["A"] = "SIG" if r else "none"
-                            except Exception as e:
-                                _sr["A"] = f"ERR:{e}"[:30]
-                        if ACTIVE_STRATEGIES.get("SETUP_C"):
-                            try:
-                                r = detect_setup_c(symbol, tf)
-                                _sr["C"] = f"SIG({len(r)})" if r else "none"
-                            except Exception as e:
-                                _sr["C"] = f"ERR:{e}"[:30]
-                        if ACTIVE_STRATEGIES.get("SETUP_D"):
-                            try:
-                                r = detect_setup_d(symbol, tf)
-                                _sr["D"] = "SIG" if r else "none"
-                            except Exception as e:
-                                _sr["D"] = f"ERR:{e}"[:30]
-                        if ACTIVE_STRATEGIES.get("HIERARCHICAL"):
-                            try:
-                                r = detect_hierarchical(symbol)
-                                _sr["H"] = "SIG" if r else "none"
-                            except Exception as e:
-                                _sr["H"] = f"ERR:{e}"[:30]
-                        _setup_results[_sym_short] = _sr
-
                     price = fetch_ltp(symbol)
                     if price:
                          monitor_active_trades(symbol, price)
@@ -4773,29 +4744,104 @@ def run_live_mode():
                         logging.error(f"Scan Exception {symbol}: {e}")
                         print(f"Scan Exception {symbol}: {e}")
 
-            if not hasattr(run_live_mode, '_diag_sent'):
-                run_live_mode._diag_sent = True
+            # Periodic diagnostic telegram (first cycle + every 30 min)
+            if not hasattr(run_live_mode, '_diag_count'):
+                run_live_mode._diag_count = 0
+                run_live_mode._last_diag = 0
+            _should_diag = (run_live_mode._diag_count == 0 or
+                            (t.time() - run_live_mode._last_diag) >= 1800)
+            if _should_diag:
+                run_live_mode._diag_count += 1
+                run_live_mode._last_diag = t.time()
                 _nifty_ltp = fetch_ltp("NSE:NIFTY 50")
                 _bn_ltp = fetch_ltp("NSE:NIFTY BANK")
                 _time_ist = now_ist().strftime('%H:%M:%S')
                 _diag_lines = [
-                    f"🔍 <b>SCAN DIAGNOSTIC</b> (first cycle)",
+                    f"🔍 <b>SCAN DIAGNOSTIC</b> (cycle #{run_live_mode._diag_count})",
                     f"Time: {_time_ist} IST",
                     f"Scanned: {len(scan_universe)} | Data OK: {_scan_data_ok} | Empty: {_scan_data_empty}",
-                    f"Raw signals: {_scan_raw_signals} | Errors: {len(_scan_errors)}",
+                    f"Raw signals (this cycle): {_scan_raw_signals} | Errors: {len(_scan_errors)}",
                     f"Nifty: {_nifty_ltp} | BN: {_bn_ltp}",
                     f"Kite: {'OK' if kite else 'NONE'} | Token: {_current_kite_token[:8] + '...' if _current_kite_token else 'NONE'}",
-                    "",
-                    "<b>Per-symbol setup results:</b>",
+                    f"Regime: {MARKET_REGIME} | Circuit: {'ON' if CIRCUIT_BREAKER_ACTIVE else 'OFF'}",
+                    f"Active Trades: {len(ACTIVE_TRADES)} | Daily Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}",
                 ]
-                for sym, sr in _setup_results.items():
-                    parts = [f"5m={sr.get('data_5m',0)} 1h={sr.get('data_1h',0)} 15m={sr.get('data_15m',0)}"]
-                    for setup_key in ["A", "C", "D", "H"]:
-                        if setup_key in sr:
-                            parts.append(f"{setup_key}={sr[setup_key]}")
-                    _diag_lines.append(f"  {sym}: {' | '.join(parts)}")
+
+                # Per-symbol detailed setup diagnostics
+                _diag_lines.append("")
+                _diag_lines.append("<b>Per-symbol setup status:</b>")
+                for sym in scan_universe:
+                    _sym_short = sym.split(":")[-1][:12]
+                    parts = []
+                    tf = fetch_multitf(sym)
+                    if not tf or not tf.get("5m"):
+                        parts.append("NO DATA")
+                        _diag_lines.append(f"  {_sym_short}: {' | '.join(parts)}")
+                        continue
+                    parts.append(f"5m={len(tf.get('5m') or [])} 1h={len(tf.get('1h') or [])} 15m={len(tf.get('15m') or [])}")
+
+                    # Setup A state
+                    if ACTIVE_STRATEGIES.get("SETUP_A"):
+                        bias = detect_htf_bias(tf.get("1h"))
+                        key_a = f"{sym}_{bias}" if bias else None
+                        st_a = STRUCTURE_STATE.get(key_a) if key_a else None
+                        if not bias:
+                            parts.append("A=no_htf_bias")
+                        elif st_a:
+                            parts.append(f"A={st_a['stage']}")
+                        else:
+                            ob = detect_order_block(tf["5m"], bias)
+                            fvg = detect_fvg(tf["5m"], bias)
+                            parts.append(f"A={'OB+FVG' if ob and fvg else 'no_ob' if not ob else 'no_fvg'}")
+
+                    # Setup C state
+                    if ACTIVE_STRATEGIES.get("SETUP_C"):
+                        zs = ZONE_STATE.get(sym, {})
+                        zl = zs.get("LONG")
+                        zs_short = zs.get("SHORT")
+                        c_parts = []
+                        if zl:
+                            c_parts.append(f"L:{zl['state']}")
+                        if zs_short:
+                            c_parts.append(f"S:{zs_short['state']}")
+                        parts.append(f"C={','.join(c_parts) if c_parts else 'no_zones'}")
+
+                    # Hierarchical rejection reason
+                    if ACTIVE_STRATEGIES.get("HIERARCHICAL"):
+                        try:
+                            df_15m = pd.DataFrame(tf["15m"])
+                            df_5m = pd.DataFrame(tf["5m"])
+                            if not df_15m.empty: df_15m.columns = [c.lower() for c in df_15m.columns]
+                            if not df_5m.empty: df_5m.columns = [c.lower() for c in df_5m.columns]
+                            setup_h, reject_h = evaluate_entry(sym, df_15m, df_5m, current_time=now_ist().time())
+                            if setup_h:
+                                parts.append("H=SIG!")
+                            elif reject_h:
+                                parts.append(f"H=REJ:{reject_h.reason}")
+                            else:
+                                parts.append("H=none")
+                        except Exception as he:
+                            parts.append(f"H=ERR:{str(he)[:20]}")
+
+                    _diag_lines.append(f"  {_sym_short}: {' | '.join(parts)}")
+
+                # Zone tap status
+                _diag_lines.append("")
+                _diag_lines.append("<b>Other engines:</b>")
+                _diag_lines.append(f"  BN Signal Engine: {'OK' if bn_signal_engine else 'NONE'}")
+                _diag_lines.append(f"  Option Monitor: {'OK' if option_monitor else 'NONE'}")
+                try:
+                    from engine.smc_zone_tap import _state as _zt_state_dict
+                    _zt_state_info = []
+                    for _zt_sym in INDEX_SYMBOLS:
+                        _zt_s = _zt_state_dict.get(_zt_sym)
+                        _zt_state_info.append(f"{_zt_sym.split(':')[-1][:6]}={'active' if _zt_s else 'init'}")
+                    _diag_lines.append(f"  Zone Tap: {', '.join(_zt_state_info)}")
+                except Exception:
+                    _diag_lines.append("  Zone Tap: unknown")
+
                 if _scan_errors:
-                    _diag_lines.append(f"\nFirst error: {_scan_errors[0][:100]}")
+                    _diag_lines.append(f"\nErrors: {_scan_errors[0][:100]}")
                 telegram_send("\n".join(_diag_lines))
 
             if not all_signals and not ACTIVE_TRADES:
