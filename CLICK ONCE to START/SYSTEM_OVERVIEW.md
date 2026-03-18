@@ -3,8 +3,8 @@
 > **Purpose:** Single reference document for any AI agent (Cursor, GPT, Claude, etc.)
 > to understand, debug, and modify this trading system without full codebase context.
 >
-> **Last updated:** 2026-03-18
-> **Engine version:** V4 Modular (smc_mtf_engine_v4.py)
+> **Last updated:** 2026-03-18 (architecture fix: WS, REST, Engine→Redis snapshot)
+> **Engine version:** V4 Modular (smc_mtf_engine_v4.py) — v4.2.1
 
 ---
 
@@ -58,20 +58,27 @@ An automated **Smart Money Concepts (SMC)** trading system for Indian markets
                      │              │ │              │ │              │
                      │ • Main loop  │ │ • FastAPI    │ │ • Next.js    │
                      │ • Signals    │ │ • Dashboard  │ │ • Dashboard  │
-                     │ • Telegram   │ │   API        │ │   UI         │
-                     │ • /health    │ │ • /health    │ │              │
-                     └──────┬───────┘ └──────┬───────┘ └──────────────┘
-                            │                │
-                            └───────┬────────┘
-                                    v
-                           ┌──────────────┐
-                           │    REDIS     │
-                           │              │
-                           │ • kite token │
-                           │ • engine lock│
-                           │ • heartbeat  │
-                           │ • signal     │
-                           │   dedup      │
+                     │ • Telegram   │ │   API + /ws  │ │   UI         │
+                     │ • /health    │ │ • /health    │ │ • .env.prod  │
+                     │ • Snapshot → │ │ • Snapshot ← │ │              │
+                     │   Redis      │ │   Redis      │ │              │
+                     └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+                            │                │                │
+                            └───────┬────────┘                │
+                                    v                         │
+                           ┌──────────────┐                   │
+                           │    REDIS     │                   │
+                           │              │      REST: /api/* via rewrites
+                           │ • kite token │      WS: direct to Railway Web
+                           │ • engine lock│  <────────────────┘
+                           │ • heartbeat  │    (browser connects directly
+                           │ • signal     │     via NEXT_PUBLIC_WS_URL;
+                           │   dedup      │     Vercel does NOT proxy WS)
+                           │ • engine:    │
+                           │   snapshot   │
+                           │ • ltp:NIFTY  │
+                           │ • ltp:BANK   │
+                           │   NIFTY      │
                            └──────────────┘
 ```
 
@@ -162,6 +169,8 @@ The heart of the system. ~5100 lines. Single file containing:
 | `is_signal_window()` | True during Mon–Fri 09:00–16:10 IST. |
 | `monitor_active_trades(symbol, price)` | Trail stop / SL / target hit detection. |
 | `wait_for_next_minute()` | Sleeps until next minute candle close (uses `safe_sleep`). |
+| `_publish_redis_snapshot()` | Builds a dict of engine state (active trades, PnL, signals, regime, index LTP) and writes to Redis via `engine_runtime.write_engine_snapshot()`. Called at end of every loop iteration, market-closed sleep, and signal-window sleep. |
+| `update_engine_state(**kw)` | Updates `ENGINE_STATE` dict; now also writes NIFTY/BANKNIFTY LTP to Redis via `engine_runtime.set_index_ltp()`. |
 
 ### RUNTIME (`engine_runtime.py`)
 
@@ -175,6 +184,8 @@ The heart of the system. ~5100 lines. Single file containing:
 | `refresh_engine_lock()` | Refresh lock TTL every 120s. |
 | `start_heartbeat_thread()` | Writes `engine_heartbeat` to Redis every 30s. |
 | `should_send_signal(id)` / `mark_signal_sent(id)` | Redis-based signal deduplication (1h TTL). |
+| `write_engine_snapshot(snap)` | Writes full engine state (trades, PnL, signals, LTP, regime, mode) to Redis `engine:snapshot` (600s TTL). Called by `_publish_redis_snapshot()` in engine. |
+| `set_index_ltp(nifty, banknifty)` | Writes NIFTY/BANKNIFTY LTP to Redis (`ltp:NIFTY`, `ltp:BANKNIFTY`, 300s TTL). Called by `update_engine_state()` when index prices are fetched. |
 
 ### STRATEGIES
 
@@ -448,6 +459,17 @@ CMD ["python", "run_engine_railway.py"]
 | `PORT` | HTTP port (Railway sets this) |
 | `RAILWAY_ENVIRONMENT` | Auto-set by Railway; engine uses for Railway-specific behavior |
 
+### Environment Variables (Vercel)
+
+| Variable | Purpose |
+|----------|---------|
+| `BACKEND_URL` | Railway Web URL — used at build time by Next.js rewrites for `/api/*` proxy |
+| `NEXT_PUBLIC_BACKEND_URL` | Same URL — available in browser JS for API client and WS URL derivation |
+| `NEXT_PUBLIC_WS_URL` | `wss://<Railway-Web>/ws` — direct WebSocket URL (Vercel cannot proxy WS) |
+
+> These are also stored in `dashboard/frontend/.env.production` for the Vercel build.
+> If you change the Railway Web URL, update both Vercel env vars AND `.env.production`.
+
 ### Redis Keys
 
 | Key | Purpose | TTL |
@@ -460,6 +482,9 @@ CMD ["python", "run_engine_railway.py"]
 | `engine_started_at` | Engine start time | None |
 | `engine_version` | Engine version string | None |
 | `engine:watchdog_kills` | Crash-loop detection list | 300s |
+| `engine:snapshot` | Full engine state snapshot (trades, PnL, signals, regime, mode, index LTP) | 600s |
+| `ltp:NIFTY` | NIFTY 50 last traded price | 300s |
+| `ltp:BANKNIFTY` | NIFTY BANK last traded price | 300s |
 | `{signal_id}` | Signal dedup marker | 3600s |
 
 ---
@@ -470,25 +495,69 @@ CMD ["python", "run_engine_railway.py"]
 
 - **Entry:** `scripts/start_web.py` → starts `dashboard.backend.main:app`
 - **Framework:** FastAPI
-- **Key routes:** `/health`, `/api/status`, `/api/signals`, `/api/trades`, `/api/kite/*`
-- **State:** Reads from `state_bridge.py` (live engine globals or DB fallback)
+- **Key routes:** `/health`, `/api/status`, `/api/snapshot`, `/api/signals`, `/api/trades`, `/api/kite/*`, `/api/system/health`, `/ws`
+- **State:** Reads from `state_bridge.py` (live engine globals OR Redis `engine:snapshot` in standalone mode)
 
-### Frontend (Vercel)
+### Frontend (Vercel — stockswithgaurav.com)
 
 - **Framework:** Next.js (TypeScript)
 - **Key pages:** Live dashboard, OI Intelligence, Analytics, Charts, Journal, Research, Agents
-- **API:** Fetches from `NEXT_PUBLIC_API_URL` (Railway web service URL)
+- **REST API:** Fetches via Next.js rewrites (`/api/*` → `BACKEND_URL/api/*` at build time)
+- **WebSocket:** Connects directly to Railway Web via `NEXT_PUBLIC_WS_URL` (Vercel cannot proxy WebSocket)
+- **Env file:** `.env.production` bakes `BACKEND_URL`, `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_WS_URL` into the build
 
 ### How Dashboard Gets Engine State
 
 ```
-Engine globals (smc_mtf_engine_v4) ──→ state_bridge.py ──→ engine_api /api/status
-                                                               │
-                                        Frontend polls ←───────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ LIVE MODE (engine + web in same process)                             │
+│                                                                      │
+│ Engine globals ──→ state_bridge.py (direct import) ──→ /api/snapshot │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
+│ STANDALONE MODE (engine and web on separate Railway services)        │
+│                                                                      │
+│ Engine ──→ _publish_redis_snapshot() ──→ Redis engine:snapshot        │
+│                                                  │                   │
+│ Web ──→ state_bridge.py reads engine:snapshot ←──┘                   │
+│   ├── /api/snapshot (REST)                                           │
+│   └── /ws (WebSocket — pushes snapshot every ~5s)                    │
+│                                                                      │
+│ Frontend (Vercel):                                                   │
+│   ├── WebSocket: wss://Railway-Web/ws (via NEXT_PUBLIC_WS_URL)       │
+│   │   └── exponential backoff, max 5 retries, then fallback to REST  │
+│   └── REST polling: /api/snapshot (via Next.js rewrites)             │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-When engine and web run in the same process (Railway engine service):
-`state_bridge` imports engine globals directly. Otherwise: DB/JSON fallback.
+### WebSocket Architecture
+
+- **Vercel limitation:** Vercel does NOT support WebSocket proxy/upgrade
+- Frontend connects directly to Railway Web URL for WebSocket
+- `useWebSocket.ts` resolves WS URL: `NEXT_PUBLIC_WS_URL` → derive from `NEXT_PUBLIC_BACKEND_URL` → `localhost` (dev only)
+- On production, if neither env var is set, WS is disabled (avoids broken same-domain attempts)
+- Reconnect uses exponential backoff (base 2s, max 30s, max 5 attempts)
+- OI Intelligence page (`oi-intelligence/page.tsx`) has its own WS connection with same backoff logic
+
+### Environment Variables (Vercel)
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `BACKEND_URL` | Railway Web URL — used by Next.js rewrites at build time for `/api/*` proxying | Yes |
+| `NEXT_PUBLIC_BACKEND_URL` | Same Railway Web URL — available in browser JS for API client and WS fallback | Yes |
+| `NEXT_PUBLIC_WS_URL` | `wss://<Railway-Web>/ws` — direct WebSocket URL bypassing Vercel | Yes |
+
+### Key Backend Files for Dashboard Data
+
+| File | Purpose |
+|------|---------|
+| `dashboard/backend/state_bridge.py` | Builds engine snapshot (merges Redis `engine:snapshot` in standalone mode) |
+| `dashboard/backend/cache.py` | Redis cache layer; includes `get_engine_snapshot_from_redis()` |
+| `dashboard/backend/routes/system.py` | `/api/system/health` — engine status, Kite status, worker status |
+| `dashboard/frontend/lib/useWebSocket.ts` | WS client with env-based URL resolution, backoff, REST fallback |
+| `dashboard/frontend/lib/api.ts` | REST API client; logs error if `NEXT_PUBLIC_BACKEND_URL` missing on prod |
+| `dashboard/frontend/components/MarketCommandBar.tsx` | Top bar — fetches health + snapshot; removed `if(!base)` guard |
 
 ---
 
@@ -497,7 +566,7 @@ When engine and web run in the same process (Railway engine service):
 ```
 Trading Algo/
 ├── smc_mtf_engine_v4.py          # MAIN ENGINE (~5100 lines) — all strategies + loop
-├── engine_runtime.py             # Runtime: watchdog, safe_sleep, lock, heartbeat
+├── engine_runtime.py             # Runtime: watchdog, safe_sleep, lock, heartbeat, snapshot + LTP write to Redis
 ├── smc_detectors.py              # Pure SMC detection functions
 ├── risk_management.py            # Risk checks, position sizing
 ├── option_monitor_module.py      # Monthly low tap monitor
@@ -530,14 +599,15 @@ Trading Algo/
 │   ├── backend/                  # FastAPI backend
 │   │   ├── main.py               # Web service entry
 │   │   ├── engine_api.py         # Engine /health endpoint
-│   │   ├── state_bridge.py       # Engine → dashboard data bridge
-│   │   ├── cache.py              # Redis cache layer
+│   │   ├── state_bridge.py       # Engine → dashboard data bridge (reads Redis engine:snapshot in standalone mode)
+│   │   ├── cache.py              # Redis cache layer (incl. get_engine_snapshot_from_redis)
 │   │   ├── routes/               # API route handlers
 │   │   └── db/                   # Database schema
 │   └── frontend/                 # Next.js frontend
 │       ├── app/                  # Pages (live, analytics, OI, etc.)
 │       ├── components/           # Shared UI components
-│       └── lib/                  # API client, WebSocket
+│       ├── lib/                  # API client, WebSocket (useWebSocket.ts, api.ts)
+│       └── .env.production       # Baked env vars (BACKEND_URL, WS_URL) for Vercel build
 │
 ├── smc_trading_engine/           # Hierarchical strategy module
 │   ├── strategy/entry_model.py   # evaluate_entry() — Hierarchical setup
@@ -588,6 +658,14 @@ Trading Algo/
 | Engine stuck on Kite hang | Bare `kite.profile()`, `kite.ltp()` without timeout | All calls via `_kite_call()` with 10s timeout |
 | Wrong timezone (UTC on Railway) | `datetime.now()` used everywhere | Replaced with `now_ist()` / `datetime.now(_IST)` |
 | Watchdog kills during startup | Watchdog started before engine ready | 5-min grace period before watchdog activates |
+| WebSocket never connects on Vercel | Vercel serverless cannot proxy WS upgrades; frontend defaulted to same-domain `/ws` | Frontend forces direct Railway WS URL via `NEXT_PUBLIC_WS_URL`; exponential backoff + REST fallback |
+| REST API fails on production | `BACKEND_URL` unset → Next.js rewrites targeted `localhost:8000` | `.env.production` bakes Railway URL; build-time warning in `next.config.ts`; error log in `api.ts` |
+| Dashboard shows empty/stale data | Engine only wrote heartbeat to Redis, no full state snapshot | Engine now writes `engine:snapshot` to Redis (600s TTL) via `_publish_redis_snapshot()` every loop, including market-closed/signal-sleep paths |
+| NIFTY/BANKNIFTY show "—" | Index LTP not written to Redis | `set_index_ltp()` in `engine_runtime.py`; called by `update_engine_state()` + included in `engine:snapshot` |
+| Kite shows "OFF" incorrectly | `MarketCommandBar.tsx` had `if(!base) return` guard that blocked health fetch when env missing | Removed the guard; health now fetches via same-origin `/api/*` rewrites |
+| Worker status overwrites engine status | `system.py` set `engine_status = "stale"` when `MARKET_ENGINE_LAST_UPDATE_KEY` was missing (standalone mode) | Now only downgrades when key exists AND is stale; missing key = standalone, keep heartbeat as source of truth |
+| Engine snapshot TTL too short | `ENGINE_SNAPSHOT_TTL_SEC` was 120s but market-closed sleep is 300s, causing snapshot to expire | Increased to 600s to survive 5-min sleep cycles with margin |
+| Duplicate `write_last_cycle()` in engine_runtime | Two definitions existed; older one lacked watchdog compatibility | Removed the redundant definition |
 
 ---
 
@@ -602,7 +680,10 @@ Trading Algo/
 | Token / auth | `config/kite_auth.py` | `zerodha_login.py` |
 | OI / options signals | `engine/options.py` | `engine/oi_short_covering.py` |
 | Zone tap signals | `engine/smc_zone_tap.py` | |
-| Dashboard API | `dashboard/backend/engine_api.py` | `dashboard/backend/state_bridge.py` |
+| Dashboard API | `dashboard/backend/engine_api.py` | `dashboard/backend/state_bridge.py`, `dashboard/backend/cache.py` |
+| WebSocket issues | `dashboard/frontend/lib/useWebSocket.ts` | `dashboard/frontend/.env.production`, `dashboard/frontend/app/oi-intelligence/page.tsx` |
+| Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` |
+| Health/status display | `dashboard/backend/routes/system.py` | `dashboard/frontend/components/MarketCommandBar.tsx` |
 | Risk / position sizing | `risk_management.py` | |
 | SMC detection logic | `smc_detectors.py` | |
 | Deployment | `Dockerfile.engine` + `railway-engine.toml` | `run_engine_railway.py` |
@@ -612,8 +693,11 @@ Trading Algo/
 - **`run_engine_railway.py`** — Bootstrap sequence; changing startup order can break Railway healthcheck
 - **`engine_runtime.py` watchdog thresholds** — Changing `ENGINE_CYCLE_WATCHDOG_SEC` without updating `safe_sleep` chunk sizes can cause crash loops
 - **`_respect_api_throttle()` timing** — Lowering below 350ms risks Kite rate limit bans
-- **Redis key names** — Shared between engine, dashboard, and runtime; changing breaks coordination
+- **Redis key names** — Shared between engine, dashboard, and runtime; changing breaks coordination. Key names include: `engine:snapshot`, `ltp:NIFTY`, `ltp:BANKNIFTY`, `engine_heartbeat`, `engine_lock`, `kite:access_token`
 - **`is_signal_window()` / `is_market_open()`** — Used across multiple files; changes must be synchronized
+- **`_publish_redis_snapshot()`** — Engine→Redis data bridge; removing or breaking it will cause dashboard to show stale/empty data
+- **`dashboard/frontend/.env.production`** — Contains Railway URLs baked into Vercel build; incorrect values break all API + WS connections
+- **WebSocket URL resolution in `useWebSocket.ts`** — Production safety logic prevents broken same-domain WS on Vercel; do not revert to relative `/ws`
 
 ### Safe Areas for Modification
 
@@ -649,7 +733,11 @@ Trading Algo/
 | **"ENGINE STUCK" once then recovers** | Normal — a single slow Kite API call exceeded timeout. Watchdog restarted, engine recovered. No action needed unless repeated. |
 | **Token not picked up** | 1. Check `kite:access_token` in Redis 2. Check `kite:token_ts` — is it today's date? 3. Engine polls every 120s — wait 2 min 4. Check engine logs for "Kite token refresh failed" |
 | **No data / empty scans** | 1. Check `fetch_ohlc` return — is it `[]`? 2. Kite session valid? Run `kite.profile()` 3. Rate limited? Check for "NetworkException" in logs 4. Holiday? Market may be closed |
-| **Dashboard shows stale data** | 1. Check `engine_heartbeat` Redis key — is it recent? 2. Check `state_bridge.py` — is engine module importable? 3. Frontend: check `NEXT_PUBLIC_API_URL` environment variable |
+| **Dashboard shows stale data** | 1. Check `engine_heartbeat` Redis key — is it recent? 2. Check `engine:snapshot` Redis key — is it present and < 600s old? 3. Check `state_bridge.py` — is it reading snapshot in standalone mode? 4. Frontend: check `NEXT_PUBLIC_BACKEND_URL` env var is set |
+| **WebSocket not connecting** | 1. Check `NEXT_PUBLIC_WS_URL` is set in Vercel to `wss://<Railway-Web>/ws` 2. Check Railway Web service is running and `/ws` is accessible 3. Browser console: look for `WS CONNECTING →`, `WS CONNECTED`, or `WS FAILED` 4. Vercel CANNOT proxy WS — frontend must connect directly to Railway |
+| **NIFTY/BANKNIFTY show "—"** | 1. Check `ltp:NIFTY` and `ltp:BANKNIFTY` Redis keys — present? 2. Engine must call `set_index_ltp()` via `update_engine_state()` 3. Check `engine:snapshot` → `index_ltp` field 4. `state_bridge.py` merges `index_ltp` from snapshot |
+| **Kite shows "OFF" on dashboard** | 1. Check `/api/system/health` → `kite_connected` field 2. Is `kite:access_token` in Redis valid and today's date? 3. Was `MarketCommandBar.tsx` guard (`if (!base) return`) removed? It should be. |
+| **Engine status says "stale" incorrectly** | 1. Check `routes/system.py` — `MARKET_ENGINE_LAST_UPDATE_KEY` logic 2. In standalone mode, if worker key is missing, engine_status should NOT be overwritten 3. Engine heartbeat (30s TTL) is the source of truth |
 | **Railway deploy fails** | 1. Check `requirements-engine.txt` — missing dependency? 2. Check `Dockerfile.engine` — syntax ok? 3. Railway dashboard → Build Logs for exact error |
 | **Telegram not sending** | 1. Check `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` env vars 2. Check engine logs for `[Telegram]` lines 3. Bot may be blocked or chat ID wrong — test with `test_telegram.py` |
 
@@ -658,3 +746,5 @@ Trading Algo/
 > **Confirmation:** This documentation is sufficient for an AI agent to understand and operate
 > on the system without full repo context. It covers architecture, execution flow, signal pipeline,
 > failure handling, deployment, and provides actionable debug guidance for all common scenarios.
+>
+> **See also:** `docs/WEBSITE_AUDIT.md` for the full website audit and applied fix details.
