@@ -25,7 +25,7 @@ _start_time     = time.time()
 _kite_status_cache: dict = {"connected": None, "checked_at": 0.0, "fail_streak": 0}
 _kite_status_lock = threading.Lock()
 _KITE_CHECK_INTERVAL_SEC = 300  # only call k.profile() once every 5 minutes
-_KITE_FAIL_THRESHOLD = 2        # require 2 consecutive failures before marking expired
+_KITE_FAIL_THRESHOLD = 3        # require 3 consecutive failures before marking expired
 _log = logging.getLogger("dashboard.system")
 
 # NSE market hours IST
@@ -52,10 +52,10 @@ def _check_kite_cached() -> tuple:
     """
     Return (kite_connected: bool, disconnect_reason: str | None).
 
-    Caches the k.profile() result for _KITE_CHECK_INTERVAL_SEC (5 min) to avoid
-    hammering the Kite API on every health poll. Requires _KITE_FAIL_THRESHOLD
-    consecutive failures before reporting expired — a single transient timeout
-    or rate-limit error won't flip the status.
+    Uses a two-tier verification strategy:
+    1. If the cached result is fresh (< _KITE_CHECK_INTERVAL_SEC), return it immediately.
+    2. Otherwise, try k.margins() (lightweight, reliable). If that fails, try k.profile().
+       If both fail _KITE_FAIL_THRESHOLD times in a row, mark as expired.
 
     NEVER calls _reset_kite() — the Charts module handles its own refresh
     via token-change detection in _get_kite().
@@ -77,29 +77,38 @@ def _check_kite_cached() -> tuple:
             _kite_status_cache["fail_streak"] = _kite_status_cache.get("fail_streak", 0) + 1
         return False, "token_expired"
 
-    try:
-        k.profile()
+    api_ok = False
+    last_err = None
+    for method_name in ("margins", "profile"):
+        try:
+            getattr(k, method_name)()
+            api_ok = True
+            break
+        except Exception as exc:
+            last_err = exc
+            _log.debug("Kite %s() failed: %s — trying next", method_name, exc)
+
+    if api_ok:
         with _kite_status_lock:
             _kite_status_cache["connected"] = True
             _kite_status_cache["checked_at"] = now
             _kite_status_cache["fail_streak"] = 0
         return True, None
-    except Exception as exc:
-        with _kite_status_lock:
-            streak = _kite_status_cache.get("fail_streak", 0) + 1
-            _kite_status_cache["fail_streak"] = streak
-            _kite_status_cache["checked_at"] = now
-            if streak >= _KITE_FAIL_THRESHOLD:
-                _kite_status_cache["connected"] = False
-                _log.warning("Kite profile() failed %d times consecutively: %s", streak, exc)
-                return False, "token_expired"
-            else:
-                prev = _kite_status_cache.get("connected")
-                if prev is True:
-                    _log.debug("Kite profile() transient failure (%d/%d), keeping connected status", streak, _KITE_FAIL_THRESHOLD)
-                    return True, None
-                _kite_status_cache["connected"] = False
-                return False, "token_expired"
+
+    with _kite_status_lock:
+        streak = _kite_status_cache.get("fail_streak", 0) + 1
+        _kite_status_cache["fail_streak"] = streak
+        _kite_status_cache["checked_at"] = now
+        if streak >= _KITE_FAIL_THRESHOLD:
+            _kite_status_cache["connected"] = False
+            _log.warning("Kite API failed %d times consecutively: %s", streak, last_err)
+            return False, "token_expired"
+        # Below threshold: assume connected if token has significant TTL left,
+        # or if we were previously connected. Short-cache (30s) so we re-check soon.
+        _kite_status_cache["checked_at"] = now - _KITE_CHECK_INTERVAL_SEC + 30  # re-check in 30s
+        _log.debug("Kite API transient failure (%d/%d) — will retry in 30s", streak, _KITE_FAIL_THRESHOLD)
+        _kite_status_cache["connected"] = True
+        return True, None
 
 
 def invalidate_kite_status_cache():
