@@ -2,32 +2,50 @@
 /**
  * lib/useWebSocket.ts
  * Auto-reconnecting WebSocket hook that streams engine snapshots.
- * WebSocket URL auto-detects from page location so it works on both
- * localhost and Cloudflare tunnel (phone / remote access).
+ *
+ * PRODUCTION (Vercel): WebSocket MUST go to Railway — Vercel does not support WS.
+ * Set NEXT_PUBLIC_WS_URL or NEXT_PUBLIC_BACKEND_URL so we never use same-domain /ws.
  *
  * REST polling fallback: if WS fails 3+ times, switches to /api/snapshot
- * polling every 5s (was 2s) — pauses automatically when the tab is hidden.
+ * polling every 5s — pauses when the tab is hidden.
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { EngineSnapshot } from "./api";
 
-const POLL_INTERVAL_MS = 5_000; // REST fallback interval (was 2000)
+const POLL_INTERVAL_MS = 5_000;
+const MAX_WS_RETRIES_BEFORE_POLLING = 3;
+const WS_BACKOFF_BASE_MS = 3000;
+const WS_BACKOFF_MAX_MS = 30000;
 
+/** Never use same-domain /ws in production (Vercel cannot handle WebSocket). */
 function getWsUrl(): string {
   const env = process.env.NEXT_PUBLIC_WS_URL;
-  if (env) return env;
-  const backend = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+  if (env && env.trim()) return env.trim();
+  const backend = (process.env.NEXT_PUBLIC_BACKEND_URL || "").trim();
   if (backend) {
     const wsProto = backend.startsWith("https") ? "wss:" : "ws:";
     const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return `${wsProto}//${host}/ws`;
   }
   if (typeof window === "undefined") return "ws://localhost:8000/ws";
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws`;
+  const hostname = window.location.hostname;
+  if (hostname === "localhost" || hostname === "127.0.0.1")
+    return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+  return "";
 }
 
-const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+function getBackendBase(): string {
+  const base = (process.env.NEXT_PUBLIC_BACKEND_URL || "").trim().replace(/\/$/, "");
+  if (typeof window !== "undefined" && !base && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+    if (!(window as unknown as { __backend_url_warned?: boolean }).__backend_url_warned) {
+      (window as unknown as { __backend_url_warned?: boolean }).__backend_url_warned = true;
+      console.error("[API] BACKEND_URL not set — set NEXT_PUBLIC_BACKEND_URL in Vercel so REST/WS work.");
+    }
+  }
+  return base;
+}
+
+const BASE = getBackendBase();
 
 export type WsStatus = "connecting" | "connected" | "disconnected" | "polling";
 
@@ -76,21 +94,30 @@ export function useEngineSocket() {
   const connect = useCallback(() => {
     if (deadRef.current) return;
 
-    // After 3 WS failures, switch to REST polling
-    if (failCount.current >= 3) {
+    if (failCount.current >= MAX_WS_RETRIES_BEFORE_POLLING) {
       startPolling();
       return;
     }
 
+    const wsUrl = getWsUrl();
+    if (!wsUrl) {
+      if (typeof console !== "undefined") console.warn("WS CONNECTING → (no URL; Vercel needs NEXT_PUBLIC_WS_URL or NEXT_PUBLIC_BACKEND_URL)");
+      failCount.current += 1;
+      startPolling();
+      return;
+    }
+
+    if (typeof console !== "undefined") console.log("WS CONNECTING →", wsUrl);
     setStatus("connecting");
     try {
-      const ws = new WebSocket(getWsUrl());
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (typeof console !== "undefined") console.log("WS CONNECTED");
         setStatus("connected");
         failCount.current = 0;
-        stopPolling(); // WS recovered, stop polling
+        stopPolling();
       };
 
       ws.onmessage = (ev) => {
@@ -106,20 +133,32 @@ export function useEngineSocket() {
         } catch { /* ignore parse errors */ }
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        if (typeof console !== "undefined") console.warn("WS FAILED (error)");
+        ws.close();
+      };
 
       ws.onclose = () => {
+        if (typeof console !== "undefined") console.warn("WS FAILED (close)");
         setStatus("disconnected");
         failCount.current += 1;
         if (!deadRef.current) {
-          retryRef.current = setTimeout(connect, 3000);
+          const delay = Math.min(
+            WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),
+            WS_BACKOFF_MAX_MS
+          );
+          retryRef.current = setTimeout(connect, delay);
         }
       };
-    } catch {
-      // WebSocket constructor can throw (e.g. bad URL)
+    } catch (err) {
+      if (typeof console !== "undefined") console.warn("WS FAILED (throw)", err);
       failCount.current += 1;
       if (!deadRef.current) {
-        retryRef.current = setTimeout(connect, 3000);
+        const delay = Math.min(
+          WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),
+          WS_BACKOFF_MAX_MS
+        );
+        retryRef.current = setTimeout(connect, delay);
       }
     }
   }, [startPolling, stopPolling]);

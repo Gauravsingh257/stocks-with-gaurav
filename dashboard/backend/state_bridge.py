@@ -146,6 +146,7 @@ def get_engine_snapshot() -> Dict:
     Deep-copied — callers cannot mutate engine globals.
     Safe to call at any frequency.
     """
+    _index_ltp_override: Optional[Dict[str, float]] = None
     if _ENGINE_AVAILABLE:
         active_trades = _get_active_trades_live()
         zone_state    = _get_zone_state_live()
@@ -273,6 +274,32 @@ def get_engine_snapshot() -> Dict:
             engine_running = False
             engine_live = False
 
+        # Standalone: merge real-time data from engine Redis snapshot (engine:snapshot)
+        try:
+            from dashboard.backend.cache import get_engine_snapshot_from_redis
+            redis_snap = get_engine_snapshot_from_redis()
+            if redis_snap:
+                if isinstance(redis_snap.get("active_trades"), list):
+                    active_trades = redis_snap["active_trades"]
+                if isinstance(redis_snap.get("daily_pnl_r"), (int, float)):
+                    daily_pnl_r = float(redis_snap["daily_pnl_r"])
+                if isinstance(redis_snap.get("signals_today"), (int, float)):
+                    daily_signal_count = int(redis_snap["signals_today"])
+                if isinstance(redis_snap.get("traded_today"), list):
+                    traded_today = list(redis_snap["traded_today"])
+                if isinstance(redis_snap.get("consecutive_losses"), (int, float)):
+                    consec_losses = int(redis_snap["consecutive_losses"])
+                if isinstance(redis_snap.get("circuit_breaker_active"), bool):
+                    cb_active = redis_snap["circuit_breaker_active"]
+                if isinstance(redis_snap.get("market_regime"), str):
+                    market_regime = redis_snap["market_regime"]
+                if isinstance(redis_snap.get("engine_mode"), str):
+                    engine_mode = redis_snap["engine_mode"]
+                if isinstance(redis_snap.get("index_ltp"), dict):
+                    _index_ltp_override = {k: float(v) for k, v in redis_snap["index_ltp"].items() if isinstance(v, (int, float))}
+        except Exception as e:
+            logger.debug("Redis engine snapshot merge failed: %s", e)
+
     _engine_version = _get_engine_version_from_cache()
     if _engine_version is None:
         _engine_version = str(_safe_read("ENGINE_VERSION", "v4")) if _ENGINE_AVAILABLE else "v4"
@@ -316,8 +343,8 @@ def get_engine_snapshot() -> Dict:
         "engine_last_cycle_age_sec": _last_cycle_age,
         "snapshot_time":       datetime.now(_IST).isoformat(),
 
-        # ── Index LTP from cache (for real-time command bar / sparklines)
-        "index_ltp":           _get_index_ltp_from_cache(),
+        # ── Index LTP from cache or engine Redis snapshot (for real-time command bar / sparklines)
+        "index_ltp":           _index_ltp_override if _index_ltp_override is not None else _get_index_ltp_from_cache(),
     }
 
 

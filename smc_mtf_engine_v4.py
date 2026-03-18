@@ -254,10 +254,24 @@ ENGINE_STATE: Dict[str, Any] = {
 
 
 def update_engine_state(**kwargs: Any) -> None:
-    """Thread-safe update of ENGINE_STATE; always refresh timestamp in IST."""
+    """Thread-safe update of ENGINE_STATE; always refresh timestamp in IST.
+    When nifty/banknifty are passed, also writes LTP to Redis for dashboard (standalone mode).
+    """
     with _ENGINE_STATE_LOCK:
         ENGINE_STATE.update(kwargs)
         ENGINE_STATE["timestamp"] = now_ist().isoformat()
+    if "nifty" in kwargs or "banknifty" in kwargs:
+        try:
+            import engine_runtime
+            n = kwargs.get("nifty")
+            b = kwargs.get("banknifty")
+            if n is not None or b is not None:
+                engine_runtime.set_index_ltp(
+                    float(n) if isinstance(n, (int, float)) else None,
+                    float(b) if isinstance(b, (int, float)) else None,
+                )
+        except Exception:
+            pass
 
 
 def get_engine_state_snapshot() -> Dict[str, Any]:
@@ -5541,6 +5555,30 @@ def run_live_mode():
                 engine_runtime.write_last_cycle()
             except Exception as _e:
                 logging.debug("write_last_cycle: %s", _e)
+            # Redis snapshot for dashboard (standalone mode): real-time trades, PnL, signals, index LTP
+            try:
+                import engine_runtime
+                _snap = {
+                    "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
+                    "signals_today": DAILY_SIGNAL_COUNT,
+                    "daily_pnl_r": DAILY_PNL_R,
+                    "traded_today": list(TRADED_TODAY),
+                    "consecutive_losses": CONSECUTIVE_LOSSES,
+                    "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
+                    "market_regime": str(MARKET_REGIME),
+                    "engine_mode": ENGINE_MODE,
+                    "index_ltp": {},
+                    "timestamp": now_ist().isoformat(),
+                }
+                _n = ENGINE_STATE.get("nifty")
+                _b = ENGINE_STATE.get("banknifty")
+                if _n is not None:
+                    _snap["index_ltp"]["NIFTY 50"] = float(_n)
+                if _b is not None:
+                    _snap["index_ltp"]["NIFTY BANK"] = float(_b)
+                engine_runtime.write_engine_snapshot(_snap)
+            except Exception as _e:
+                logging.debug("write_engine_snapshot: %s", _e)
 
         except Exception as e:
             # F4.6: Error escalation — track consecutive main loop errors

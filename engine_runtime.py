@@ -26,6 +26,11 @@ ENGINE_HEARTBEAT_KEY = "engine_heartbeat"
 ENGINE_STARTED_AT_KEY = "engine_started_at"
 ENGINE_VERSION_KEY = "engine_version"
 ENGINE_LAST_CYCLE_KEY = "engine_last_cycle"
+ENGINE_SNAPSHOT_KEY = "engine:snapshot"
+ENGINE_SNAPSHOT_TTL_SEC = 120
+LTP_KEY_NIFTY = "ltp:NIFTY"
+LTP_KEY_BANKNIFTY = "ltp:BANKNIFTY"
+LTP_TTL_SEC = 300
 
 # Lock: shorter TTL so a frozen (non-crashing) engine doesn't block restarts for long
 LOCK_TTL = 600
@@ -112,17 +117,6 @@ def set_engine_version(version: str) -> None:
         log.debug("set_engine_version failed: %s", e)
 
 
-def write_last_cycle() -> None:
-    """Write current timestamp to engine_last_cycle (call after each completed scan cycle)."""
-    r = _get_redis()
-    if r is None:
-        return
-    try:
-        r.set(ENGINE_LAST_CYCLE_KEY, str(time.time()), ex=300)  # 5 min TTL
-    except Exception as e:
-        log.debug("write_last_cycle failed: %s", e)
-
-
 def refresh_engine_lock() -> bool:
     """Refresh lock TTL if we hold it. Call periodically from main loop."""
     global _lock_holder, _lock_refresh_at
@@ -177,6 +171,40 @@ def write_heartbeat() -> None:
         r.set(ENGINE_HEARTBEAT_KEY, str(time.time()), ex=120)  # 2 min TTL if engine dies
     except Exception as e:
         log.debug("Heartbeat write failed: %s", e)
+
+
+def write_engine_snapshot(snapshot: dict) -> None:
+    """
+    Write dashboard snapshot to Redis so the Web service (standalone mode) can show
+    real-time data. Keys: active_trades, signals_today, daily_pnl_r, traded_today,
+    index_ltp, timestamp. Call from engine after each cycle.
+    """
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        import json
+        payload = json.dumps(snapshot, default=str)
+        r.setex(ENGINE_SNAPSHOT_KEY, ENGINE_SNAPSHOT_TTL_SEC, payload)
+    except Exception as e:
+        log.debug("write_engine_snapshot failed: %s", e)
+
+
+def set_index_ltp(nifty: Optional[float] = None, banknifty: Optional[float] = None) -> None:
+    """
+    Write NIFTY/BANKNIFTY LTP to Redis so dashboard command bar shows live index prices.
+    Keys match dashboard.backend.cache (ltp:NIFTY, ltp:BANKNIFTY). Call when engine has LTP.
+    """
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        if nifty is not None:
+            r.setex(LTP_KEY_NIFTY, LTP_TTL_SEC, str(nifty))
+        if banknifty is not None:
+            r.setex(LTP_KEY_BANKNIFTY, LTP_TTL_SEC, str(banknifty))
+    except Exception as e:
+        log.debug("set_index_ltp failed: %s", e)
 
 
 def _heartbeat_loop() -> None:

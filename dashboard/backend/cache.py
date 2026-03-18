@@ -107,6 +107,7 @@ ENGINE_HEARTBEAT_KEY = "engine_heartbeat"
 ENGINE_STARTED_AT_KEY = "engine_started_at"
 ENGINE_VERSION_KEY = "engine_version"
 ENGINE_LAST_CYCLE_KEY = "engine_last_cycle"
+ENGINE_SNAPSHOT_KEY = "engine:snapshot"  # Full snapshot from engine (standalone mode)
 ENGINE_HEARTBEAT_STALE_SEC = 60   # if older than this, dashboard shows ENGINE STALE
 ENGINE_HEARTBEAT_OFFLINE_SEC = 120  # if older than this, engine_status = offline
 
@@ -307,4 +308,22 @@ def get_engine_last_cycle() -> float | None:
             return None
         return float(raw)
     except (TypeError, ValueError):
+        return None
+
+
+def get_engine_snapshot_from_redis() -> dict | None:
+    """
+    Return the engine snapshot written by engine_runtime.write_engine_snapshot (standalone mode).
+    Contains: active_trades, signals_today, daily_pnl_r, traded_today, index_ltp, timestamp.
+    Returns None if key missing, expired, or Redis unavailable.
+    """
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(ENGINE_SNAPSHOT_KEY)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
         return None

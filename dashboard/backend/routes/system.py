@@ -153,6 +153,8 @@ def system_health():
             pass
 
     # ── Worker heartbeat (detect market_engine.py failure) ────
+    # Only downgrade engine_status when worker is actually in use (key exists and stale).
+    # Standalone Railway: Web does not run market_engine.py, so key is missing — keep engine_status from snapshot.
     worker_status = None
     market_data_last_update_ts = None
     try:
@@ -169,15 +171,13 @@ def system_health():
                     market_data_last_update_ts = ts
                     if (time.time() - ts) > 15:
                         worker_status = "stale"
-                        engine_status = "stale"  # so health shows stale when worker died
+                        engine_status = "stale"
                     else:
                         worker_status = "running"
                 except (TypeError, ValueError):
                     worker_status = "stale"
                     engine_status = "stale"
-            else:
-                worker_status = "stale"
-                engine_status = "stale"
+            # else: key missing (e.g. standalone mode) — do not overwrite engine_status; heartbeat is source of truth
     except Exception:
         pass
 

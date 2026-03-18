@@ -55,29 +55,35 @@ export default function OIIntelligencePage() {
 
   /* ── WebSocket — primary data source (OI pushed every 30s) ─ */
   useEffect(() => {
-    const backend = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-    let wsUrl = process.env.NEXT_PUBLIC_WS_URL || "";
+    const backend = (process.env.NEXT_PUBLIC_BACKEND_URL || "").trim();
+    let wsUrl = (process.env.NEXT_PUBLIC_WS_URL || "").trim();
     if (!wsUrl && backend) {
       const wsProto = backend.startsWith("https") ? "wss" : "ws";
       const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
       wsUrl = `${wsProto}://${host}/ws`;
     }
     if (!wsUrl) {
-      wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
+      const hostname = window.location.hostname;
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
+      }
     }
+    if (!wsUrl) return;
     let ws: WebSocket;
     let dead = false;
+    let failCount = 0;
 
     function connect() {
-      if (dead) return;
+      if (dead || failCount >= 3) return;
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => setWsConnected(true);
+      ws.onopen = () => { setWsConnected(true); failCount = 0; };
       ws.onclose = () => {
         setWsConnected(false);
-        // Back-off: 3s before reconnect
-        if (!dead) setTimeout(connect, 3000);
+        failCount += 1;
+        const delay = Math.min(3000 * Math.pow(2, failCount - 1), 30000);
+        if (!dead && failCount < 3) setTimeout(connect, delay);
       };
       ws.onerror = () => setWsConnected(false);
       ws.onmessage = (ev) => {

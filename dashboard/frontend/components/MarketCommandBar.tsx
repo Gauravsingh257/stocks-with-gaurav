@@ -79,7 +79,6 @@ export default function MarketCommandBar() {
     const fetchHealth = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const base = API_BASE || "";
-      if (!base) return;
       fetch(`${base}/api/system/health`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setHealth(d))
@@ -90,18 +89,10 @@ export default function MarketCommandBar() {
     return () => clearInterval(t);
   }, []);
 
-  // Optional: poll web backend for signal count (snapshot is primary for engine status)
+  // Poll web backend for signal count (snapshot is primary for engine status)
   useEffect(() => {
     const base = API_BASE || "";
-    if (!base) return;
-    fetch(`${base}/api/snapshot`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d && typeof d.signals_today === "number") setSignalCount(d.signals_today);
-        if (d && d.snapshot_time) setBackendTimestamp(d.snapshot_time);
-      })
-      .catch(() => {});
-    const t = setInterval(() => {
+    const fetchSnap = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       fetch(`${base}/api/snapshot`)
         .then((r) => (r.ok ? r.json() : null))
@@ -110,7 +101,9 @@ export default function MarketCommandBar() {
           if (d && d.snapshot_time) setBackendTimestamp(d.snapshot_time);
         })
         .catch(() => {});
-    }, 10_000);
+    };
+    fetchSnap();
+    const t = setInterval(fetchSnap, 10_000);
     return () => clearInterval(t);
   }, []);
 

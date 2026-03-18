@@ -15,8 +15,8 @@ export function getBackendBase(): string {
   if (typeof window !== "undefined" && !base) {
     if (!(window as unknown as { __kite_backend_warned?: boolean }).__kite_backend_warned) {
       (window as unknown as { __kite_backend_warned?: boolean }).__kite_backend_warned = true;
-      console.warn(
-        "[Kite] Backend URL not configured. Set NEXT_PUBLIC_BACKEND_URL or BACKEND_URL in Vercel to avoid 503 on /api/kite/login."
+      console.error(
+        "[API] Backend URL not configured. Set NEXT_PUBLIC_BACKEND_URL (and BACKEND_URL for rewrites) in Vercel — required for /api/* and WebSocket."
       );
     }
   }
