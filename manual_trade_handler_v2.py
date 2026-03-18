@@ -5,6 +5,13 @@
 import time as t
 import requests
 from datetime import datetime, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 import json
 import os
 import risk_management as rm
@@ -182,7 +189,7 @@ class ManualTradeHandlerV2:
                 return 0, 0
 
             token = ltp_response[symbol]['instrument_token']
-            to_date = datetime.now()
+            to_date = datetime.now(_IST).replace(tzinfo=None)
             from_date = to_date - timedelta(days=5)
             
             candles = self.kite.historical_data(

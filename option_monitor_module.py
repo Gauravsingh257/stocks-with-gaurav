@@ -9,6 +9,17 @@ import pickle
 import requests
 from datetime import datetime, timedelta, date
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_ist():
+    """Current time in IST (naive) for market hours — same as engine on Railway."""
+    return datetime.now(_IST).replace(tzinfo=None)
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
@@ -29,12 +40,12 @@ class OptionMonitor:
         self.notified_taps = set()
         self.tap_state = {}
         self.contracts = {}
-        self.last_atm_refresh = datetime.now()
-        self.last_scan_time = datetime.now()
+        self.last_atm_refresh = _now_ist()
+        self.last_scan_time = _now_ist()
         self.scan_interval = 60  # Seconds
         self.tap_cooldowns = {}    # {symbol: datetime} — cooldown expiry per strike
         self.tap_daily_count = {}  # {symbol: int} — alerts sent today per strike
-        self._tap_count_date = datetime.now().date()  # reset counter each day
+        self._tap_count_date = _now_ist().date()  # reset counter each day
         
         # Load State
         self.load_state()
@@ -98,7 +109,7 @@ class OptionMonitor:
     # CORE LOGIC
     # =====================================================
     def get_target_expiry(self, instruments, name):
-        today = datetime.now().date()
+        today = _now_ist().date()
         futures = [i for i in instruments if i["name"] == name and i["instrument_type"] == "FUT"]
         futures.sort(key=lambda x: x["expiry"])
         for f in futures:
@@ -184,15 +195,15 @@ class OptionMonitor:
             self.logger.error("No contracts found to monitor!")
             return
 
-        start_date = datetime.now().replace(day=1)
-        end_date = datetime.now()
+        start_date = _now_ist().replace(day=1)
+        end_date = _now_ist()
 
         updates = False
         for token, info in self.contracts.items():
             symbol = info["symbol"]
             
             # Skip if already updated today
-            if symbol in self.monthly_lows and self.monthly_lows[symbol].get("last_update") == datetime.now().date().isoformat():
+            if symbol in self.monthly_lows and self.monthly_lows[symbol].get("last_update") == _now_ist().date().isoformat():
                 continue
 
             try:
@@ -222,7 +233,7 @@ class OptionMonitor:
 
                 self.monthly_lows[symbol] = {
                     "monthly_low": monthly_low,
-                    "last_update": datetime.now().date().isoformat(),
+                    "last_update": _now_ist().date().isoformat(),
                     "strike": info["strike"],
                     "type": info["type"],
                     "expiry": info["expiry"].isoformat() if isinstance(info["expiry"], (datetime, date)) else str(info["expiry"])
@@ -245,18 +256,18 @@ class OptionMonitor:
             if current_price < existing_low:
                 self.logger.warning(f"[NEW LOW] {symbol}: {existing_low:.2f} -> {current_price:.2f}")
                 self.monthly_lows[symbol]["monthly_low"] = current_price
-                self.monthly_lows[symbol]["last_update"] = datetime.now().date().isoformat()
+                self.monthly_lows[symbol]["last_update"] = _now_ist().date().isoformat()
                 self.save_monthly_lows()
                 return True
         return False
 
     def poll(self):
         """Main polling function - Call this from the engine loop"""
-        now = datetime.now()
+        now = _now_ist()
 
-        # 1. Market Hours Check
+        # 1. Market Hours Check (IST)
         if now.hour < 9 or (now.hour == 9 and now.minute < 15) or (now.hour > 15) or (now.hour == 15 and now.minute >= 30):
-            return # Market Closed
+            return  # Market Closed
 
         # 2. Interval Check (60s)
         if (now - self.last_scan_time).total_seconds() < self.scan_interval:

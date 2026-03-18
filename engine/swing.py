@@ -14,6 +14,12 @@ import time as t
 import logging
 from datetime import datetime
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 from engine import config as cfg
 from engine.indicators import calculate_atr
 
@@ -356,7 +362,7 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
 
 def format_swing_report(picks, market_regime="UNKNOWN"):
     msg = "<b>PREMIUM SWING PICKS</b>\n"
-    msg += f"{datetime.now().strftime('%d %b %Y %I:%M %p')}\n"
+    msg += f"{datetime.now(_IST).replace(tzinfo=None).strftime('%d %b %Y %I:%M %p')}\n"
     msg += f"Top {len(picks)} out of 500 stocks scanned\n"
     msg += f"Market Regime: {market_regime}\n"
     msg += "-" * 30 + "\n"
@@ -411,7 +417,7 @@ def monitor_swing_trades(fetch_ltp_fn, telegram_fn):
                     triggered = True
                 if triggered:
                     trade["status"] = "ACTIVE"
-                    trade["triggered_at"] = datetime.now().strftime("%H:%M")
+                    trade["triggered_at"] = datetime.now(_IST).replace(tzinfo=None).strftime("%H:%M")
                     telegram_fn(
                         f"<b>SWING ENTRY TRIGGERED</b>\n\n"
                         f"<b>{sym_clean}</b> | {direction}\n"
@@ -521,7 +527,7 @@ def run_swing_scan(fetch_ohlc_fn, get_universe_fn, telegram_fn):
                     "rr": pick["rr"], "potential_pct": pick["potential_pct"],
                     "score": pick["score"], "sector": pick["sector"],
                     "status": "WAITING",
-                    "scan_time": datetime.now().strftime("%H:%M"),
+                    "scan_time": datetime.now(_IST).replace(tzinfo=None).strftime("%H:%M"),
                     "last_price": pick["entry"], "progress_pct": 0
                 })
 

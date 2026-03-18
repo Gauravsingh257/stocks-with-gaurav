@@ -128,7 +128,7 @@ def _collect_expiries(instruments, index_name):
     Returns:
         list of date objects, sorted ascending
     """
-    today = dt_date.today()
+    today = datetime.now(_IST).date()
     expiries = set()
     for i in instruments:
         if i.get("name") != index_name:
@@ -235,7 +235,7 @@ def is_near_expiry(expiry_date, days=None):
     if isinstance(expiry_date, datetime):
         expiry_date = expiry_date.date()
 
-    today = dt_date.today()
+    today = datetime.now(_IST).date()
     delta = (expiry_date - today).days
 
     return 0 <= delta <= threshold
@@ -245,7 +245,7 @@ def is_expiry_today(expiry_date):
     """Check if today is the expiry day."""
     if isinstance(expiry_date, datetime):
         expiry_date = expiry_date.date()
-    return expiry_date == dt_date.today()
+    return expiry_date == datetime.now(_IST).date()
 
 
 def is_post_expiry_cutoff():
@@ -386,7 +386,7 @@ class ExpiryRolloverState:
             self.expired[underlying].update(removed)
 
         self.active_expiries[underlying] = current_set
-        self.last_check = datetime.now()
+        self.last_check = datetime.now(_IST).replace(tzinfo=None)
 
         return {"added": sorted(added), "expired": sorted(removed)}
 
@@ -404,7 +404,7 @@ class ExpiryRolloverState:
         if not is_post_expiry_cutoff():
             return []
 
-        today = dt_date.today()
+        today = datetime.now(_IST).date()
         to_drop = []
 
         for exp in list(self.active_expiries.get(underlying, set())):

@@ -7,6 +7,12 @@ import os
 import json
 from datetime import datetime, timedelta
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 # =====================================================
 # CONFIGURATION (LIVE trading params)
 # =====================================================
@@ -247,7 +253,7 @@ def load_daily_trades() -> list:
 def get_daily_pnl() -> float:
     """Calculates today's P&L in RR units"""
     trades = load_daily_trades()
-    today = datetime.now().date().isoformat()
+    today = datetime.now(_IST).date().isoformat()
     
     daily_pnl = 0.0
     for trade_line in trades:
@@ -266,7 +272,7 @@ def get_daily_pnl() -> float:
 def get_daily_trade_count() -> int:
     """Counts today's trades"""
     trades = load_daily_trades()
-    today = datetime.now().date().isoformat()
+    today = datetime.now(_IST).date().isoformat()
     
     count = 0
     for trade in trades:

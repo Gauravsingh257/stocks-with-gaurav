@@ -52,7 +52,7 @@ def is_expiry_day(symbol=None):
     NIFTY 50 / FIN SERVICE: Thursday
     BANK NIFTY: Wednesday
     """
-    today = datetime.now().weekday()
+    today = datetime.now(_IST).weekday()
     if symbol:
         if "BANK" in symbol.upper():
             return today == 2

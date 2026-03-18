@@ -661,7 +661,7 @@ def get_token(symbol: str):
         token = list(kite.ltp(symbol).values())[0]["instrument_token"]
         TOKEN_CACHE[symbol] = token
         return token
-    except:
+    except Exception:
         return None
 
 
@@ -862,7 +862,7 @@ def fetch_ltp(symbol: str):
             except Exception:
                 pass
             return price
-    except:
+    except Exception:
         return None
 
 def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
@@ -2223,7 +2223,7 @@ def smc_confluence_score(signal, ltf_data, htf_data):
                    f"Score: <b>{score}/10</b>\n"
                    f"Breakdown: {breakdown}")
             telegram_send(msg, chat_id=SMC_PRO_CHAT_ID)
-        except: pass
+        except Exception: pass
         
     return score, breakdown
 
@@ -2386,8 +2386,8 @@ def fetch_manual_orders():
                 )
                 atr = calculate_atr(candles)
                 if atr == 0: atr = entry_price * 0.01
-            except:
-                atr = entry_price * 0.01 
+            except Exception:
+                atr = entry_price * 0.01
             
             # SL = 0.5 ATR, Target = 1.0 ATR (Conservative for manual)
             sl_buffer = atr * 0.5
@@ -3435,7 +3435,7 @@ def send_morning_watchlist():
             signals = scan_symbol(symbol)
             if signals:
                 all_signals.extend(signals)
-        except:
+        except Exception:
             continue
 
     if not all_signals:
@@ -4544,6 +4544,9 @@ def run_live_mode():
                      STRUCTURE_STATE.clear()
                      SETUP_D_STATE.clear()
                      EARLY_WARNING_STATE.clear()
+                     EMA_LAST_PROCESSED.clear()
+                     DAILY_LOG.clear()
+                     MANUAL_ORDER_CACHE.clear()
                      reset_market_state()
                      reset_oi_state()
                      reset_oi_sc_state()
@@ -4867,7 +4870,7 @@ def run_live_mode():
                         # DEFENSIVE CHECK: Ensure 'entry' key exists and is valid
                         if all(k in s for k in ["entry", "sl", "target", "rr"]) and s["entry"] is not None:
                             # STEP 2: Regime Filter — suppress counter-trend stock signals
-                            if 'should_suppress_signal' in dir() and should_suppress_signal(s):
+                            if 'should_suppress_signal' in globals() and should_suppress_signal(s):
                                 logging.info(f"REGIME BLOCKED: {s['symbol']} {s['direction']} (Market={MARKET_REGIME})")
                                 continue
 
@@ -5084,7 +5087,7 @@ def run_live_mode():
                             price = fetch_ltp(t_obj["symbol"])
                             if price:
                                 monitor_active_trades(t_obj["symbol"], price)
-                        except: pass
+                        except Exception: pass
                         
                 # 2. Check for Next Minute Start
                 if now_ist().second == 0:
@@ -5156,7 +5159,7 @@ def run_live_mode():
                                     # Fallback: send text only
                                     try:
                                         telegram_send(_format_alert(sc_sig))
-                                    except:
+                                    except Exception:
                                         pass
 
                         # Send structure contradiction alerts (informational)

@@ -167,7 +167,7 @@ def get_engine_snapshot() -> Dict:
         heartbeat_age_sec = None
         if hasattr(engine_last_loop_at, "isoformat"):
             try:
-                heartbeat_age_sec = round((datetime.now() - engine_last_loop_at).total_seconds(), 2)
+                heartbeat_age_sec = round((datetime.now(_IST).replace(tzinfo=None) - engine_last_loop_at).total_seconds(), 2)
                 # Engine considered running if loop heartbeat was seen in the last 120s.
                 engine_running = heartbeat_age_sec <= 120
             except Exception:

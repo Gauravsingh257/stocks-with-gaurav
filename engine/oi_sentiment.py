@@ -360,7 +360,7 @@ def _get_nearest_expiry(instruments, index_name):
     Find the nearest weekly expiry for the given index from instruments list.
     Returns a date object or None.
     """
-    today = dt_date.today()
+    today = datetime.now(_IST).date()
     expiries = set()
     for i in instruments:
         if i["name"] == index_name and i["instrument_type"] in ("CE", "PE"):
