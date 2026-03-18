@@ -232,7 +232,11 @@ formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
 
-print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", now_ist(), "IST")
+try:
+    from zoneinfo import ZoneInfo as _BootZI
+except ImportError:
+    from backports.zoneinfo import ZoneInfo as _BootZI  # type: ignore
+print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now(_BootZI("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S"), "IST")
 
 # =====================================================
 # SHARED ENGINE STATE FOR LOCAL API
