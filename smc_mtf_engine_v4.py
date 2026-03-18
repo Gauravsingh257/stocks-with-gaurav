@@ -4569,6 +4569,16 @@ def run_live_mode():
     _consecutive_loop_errors = 0
     _HEARTBEAT_INTERVAL_MIN = 30
     _MAX_CONSECUTIVE_ERRORS = 5
+
+    # Token-triggered signal activation:
+    # _fresh_token_today  = True after user runs RUN_ENGINE_ON_RAILWAY.bat during the day.
+    #                       Overrides the 09:00 signal-window gate so signals fire immediately
+    #                       regardless of what time the token was refreshed.
+    # _catch_up_scan_done = ensures the missed-signals catch-up runs only once per token refresh.
+    _fresh_token_today: bool = False
+    _catch_up_scan_done: bool = False
+    _token_activated_at: str = ""       # IST time string shown in Telegram
+    _last_known_token_ts: str = ""      # Redis kite:token_ts value at last check
     
     # 💾 LOAD PERSISTED MEMORY
     load_engine_states()
@@ -4645,6 +4655,34 @@ def run_live_mode():
                         kite.profile()  # validate
                         _current_kite_token = new_token
                         logging.info("Kite token refreshed from central store (Redis/env/file) — OI/signals will use new token")
+
+                        # ── Token-triggered signal activation ───────────────────
+                        # Read kite:token_ts from Redis to confirm this is a fresh
+                        # login done TODAY (not a stale token from yesterday).
+                        try:
+                            _redis_url = os.getenv("REDIS_URL", "").strip()
+                            if _redis_url:
+                                import redis as _redis_mod
+                                _r = _redis_mod.from_url(_redis_url, decode_responses=True)
+                                _tok_ts = _r.get("kite:token_ts") or ""
+                                if _tok_ts and _tok_ts != _last_known_token_ts:
+                                    from datetime import datetime as _dt2
+                                    _ts_obj = _dt2.fromisoformat(_tok_ts)
+                                    _today = now_ist().date()
+                                    _in_day = time(9, 0) <= now_ist().time() <= time(16, 10)
+                                    if _ts_obj.date() == _today and _in_day:
+                                        _last_known_token_ts = _tok_ts
+                                        _fresh_token_today = True
+                                        _catch_up_scan_done = False
+                                        _token_activated_at = now_ist().strftime("%H:%M")
+                                        logging.info(
+                                            "Fresh token detected (ts=%s) — signal window unlocked at %s IST",
+                                            _tok_ts, _token_activated_at,
+                                        )
+                        except Exception as _ts_e:
+                            logging.debug("Token-ts Redis check failed: %s", _ts_e)
+                        # ────────────────────────────────────────────────────────
+
                 except Exception as _te:
                     logging.warning("Kite token refresh failed (using existing): %s", _te)
 
@@ -4709,9 +4747,13 @@ def run_live_mode():
                 _last_heartbeat = now_ist()
 
             # ─── SIGNAL WINDOW GATE ──────────────────────────────────────────────
-            # After 16:10 IST: engine loop keeps running (website/health stays live)
-            # but NO new signals are generated or sent.  Resumes at 09:00 next day.
-            if not is_signal_window():
+            # Signals are active during 09:00–16:10 IST on trading days.
+            # EXCEPTION: if the user ran the login bat at any time today and we
+            # detected a fresh token, _fresh_token_today overrides the clock check
+            # so signals fire immediately without waiting for 09:00 tomorrow.
+            _in_signal_window = is_signal_window() or _fresh_token_today
+
+            if not _in_signal_window:
                 if not hasattr(run_live_mode, '_signal_sleep_notified'):
                     run_live_mode._signal_sleep_notified = False
                 if not run_live_mode._signal_sleep_notified:
@@ -4725,14 +4767,95 @@ def run_live_mode():
                 t.sleep(60)   # Light sleep; loop keeps running for /health & active trade monitoring
                 continue
             else:
-                # Reset notification flag when signal window re-opens
+                # Reset the "paused" notification flag when window re-opens (clock OR fresh token)
                 if hasattr(run_live_mode, '_signal_sleep_notified') and run_live_mode._signal_sleep_notified:
                     run_live_mode._signal_sleep_notified = False
-                    telegram_send(
-                        f"🌅 <b>Signal system ACTIVE</b> — {now_ist().strftime('%H:%M')} IST\n"
-                        "Trade signals are now enabled. Good morning!"
+
+                # ── Change 3: Telegram notification on fresh-token activation ──
+                if _fresh_token_today and not _catch_up_scan_done:
+                    _elapsed_min = int(
+                        (now_ist() - now_ist().replace(hour=9, minute=0, second=0, microsecond=0)).total_seconds() / 60
                     )
-                    logging.info("Signal window opened at %s IST.", now_ist().strftime("%H:%M"))
+                    _act_msg = (
+                        f"🔑 <b>TOKEN REFRESHED — Signals ACTIVE</b>\n"
+                        f"Token updated at {_token_activated_at} IST\n"
+                        f"Scanning from now until 16:10 IST.\n"
+                    )
+                    if _elapsed_min > 15:
+                        _act_msg += f"⚠️ Market has been open {_elapsed_min} min — running catch-up scan now."
+                    telegram_send(_act_msg)
+                    logging.info("Signal window unlocked by fresh token at %s IST.", _token_activated_at)
+
+                # Clock-based 09:00 re-open notification (non-token path)
+                elif not _fresh_token_today:
+                    if not hasattr(run_live_mode, '_clock_open_notified'):
+                        run_live_mode._clock_open_notified = False
+                    if not run_live_mode._clock_open_notified:
+                        run_live_mode._clock_open_notified = True
+                        telegram_send(
+                            f"🌅 <b>Signal system ACTIVE</b> — {now_ist().strftime('%H:%M')} IST\n"
+                            "Trade signals are now enabled. Good morning!"
+                        )
+                        logging.info("Signal window opened at %s IST.", now_ist().strftime("%H:%M"))
+            # ─────────────────────────────────────────────────────────────────────
+
+            # ── Change 4: CATCH-UP SCAN — runs once when token is refreshed late ──
+            # Triggers an immediate scan so setups already forming are not missed.
+            # Signals are tagged [CATCH-UP] and ranked the same as normal signals.
+            if _fresh_token_today and not _catch_up_scan_done:
+                _catch_up_scan_done = True   # mark immediately so a slow scan doesn't re-trigger
+                _catchup_elapsed = int(
+                    (now_ist() - now_ist().replace(hour=9, minute=0, second=0, microsecond=0)).total_seconds() / 60
+                )
+                if _catchup_elapsed > 15:    # only worth running if market has been open >15 min
+                    try:
+                        logging.info("[CATCH-UP] Running immediate scan (%d min since 09:00)", _catchup_elapsed)
+                        _cu_universe = build_scan_universe(get_stock_universe())
+                        _cu_signals = []
+                        for _cu_sym in _cu_universe:
+                            try:
+                                _cu_sigs = scan_symbol(_cu_sym)
+                                if _cu_sigs:
+                                    _cu_signals.extend(_cu_sigs)
+                            except Exception:
+                                pass
+                        if _cu_signals:
+                            # Rank the same way as the normal signal loop
+                            _cu_ranked = sorted(
+                                _cu_signals,
+                                key=lambda s: (s.get("smc_score", 0) + s.get("ai_score", 0) / 10),
+                                reverse=True,
+                            )
+                            _cu_sent = 0
+                            for _cu_sig in _cu_ranked[:5]:
+                                try:
+                                    _cu_text = (
+                                        f"⏰ <b>[CATCH-UP SCAN]</b> — token activated {_token_activated_at} IST\n"
+                                        f"Market open for {_catchup_elapsed} min — setup already forming:\n\n"
+                                        f"<b>{_cu_sig['symbol']}</b>  |  {_cu_sig['direction']}  |  {_cu_sig['setup']}\n"
+                                        f"Entry: {_cu_sig['entry']}  |  SL: {_cu_sig['sl']}  |  Target: {_cu_sig['target']}\n"
+                                        f"RR: {_cu_sig['rr']}  |  SMC Score: {_cu_sig.get('smc_score', 'N/A')}/10\n"
+                                        f"<i>⚠️ Price-based on current market — verify before acting.</i>"
+                                    )
+                                    _cu_sid = f"catchup_{_cu_sig['symbol'].replace(':', '_')}_{_cu_sig['setup']}_{now_ist().strftime('%Y%m%d')}"
+                                    telegram_send_signal(_cu_text, signal_id=_cu_sid)
+                                    _cu_sent += 1
+                                except Exception as _cu_e:
+                                    logging.warning("[CATCH-UP] Signal send error: %s", _cu_e)
+                            if _cu_sent == 0:
+                                telegram_send(
+                                    f"🔍 <b>Catch-up scan complete</b> — no setups found at {now_ist().strftime('%H:%M')} IST.\n"
+                                    "Engine scanning normally from here."
+                                )
+                            logging.info("[CATCH-UP] Sent %d/%d signals", _cu_sent, len(_cu_ranked))
+                        else:
+                            telegram_send(
+                                f"🔍 <b>Catch-up scan complete</b> — no setups found at {now_ist().strftime('%H:%M')} IST.\n"
+                                "Engine scanning normally from here."
+                            )
+                            logging.info("[CATCH-UP] No signals found on immediate scan")
+                    except Exception as _cu_err:
+                        logging.error("[CATCH-UP] Scan failed: %s", _cu_err)
             # ─────────────────────────────────────────────────────────────────────
 
             # 🌅 MORNING WATCHLIST (9:15 – 9:20)
