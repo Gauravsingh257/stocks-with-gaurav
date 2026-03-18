@@ -56,6 +56,12 @@ from datetime import datetime, time, timedelta, date as dt_date
 from collections import deque
 from pathlib import Path
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 from engine import config as cfg
 from engine.expiry_manager import get_atm_strikes, get_target_expiries
 
@@ -1799,7 +1805,7 @@ def _is_market_hours():
     - Gap-down/up days produce false signals from stale OI
     - Need genuine price discovery before OI patterns are reliable
     """
-    now = datetime.now().time()
+    now = datetime.now(_IST).time()
     return time(9, 45) <= now <= time(15, 15)
 
 
@@ -1807,7 +1813,7 @@ def _check_daily_reset():
     """Reset state on new trading day."""
     global _last_scan_time
 
-    today = datetime.now().date().isoformat()
+    today = datetime.now(_IST).date().isoformat()
 
     # Check if any alerted key is from a previous day
     stale_keys = [

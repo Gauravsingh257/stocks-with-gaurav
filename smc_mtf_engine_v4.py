@@ -113,9 +113,8 @@ def scan_ema_crossover(symbol):
     Merged from live_ema_crossover.py
     """
     try:
-        # Check Time Window (09:15 - 15:15)
-        now = datetime.now().time()
-        # Allow up to 15:16 to capture 15:15 candle
+        # Check Time Window (09:15 - 15:15 IST)
+        now = now_ist().time()
         if not (time(9,15) <= now <= time(15,16)):
             return
 
@@ -666,16 +665,26 @@ def get_token(symbol: str):
 # MARKET HOURS
 # =====================================================
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def now_ist() -> datetime:
+    """Current time in IST — use this everywhere instead of datetime.now()
+    so Railway (UTC) and local (IST) both work correctly."""
+    return datetime.now(_IST)
+
+
 def is_market_open() -> bool:
     """Return True only during Mon–Fri 09:00–16:30 IST."""
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo  # type: ignore
-    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
-    if now_ist.weekday() >= 5:          # Saturday=5, Sunday=6
+    n = now_ist()
+    if n.weekday() >= 5:
         return False
-    t = now_ist.time()
+    t = n.time()
     return time(9, 0) <= t <= time(16, 30)
 
 # =====================================================
@@ -3454,7 +3463,7 @@ def build_scan_universe(stock_universe: list) -> list:
     symbols = INDEX_SYMBOLS.copy()
 
     # Scan full stock universe every 6 minutes (skip in INDEX_ONLY mode)
-    if not INDEX_ONLY and datetime.now().minute % 6 == 0:
+    if not INDEX_ONLY and now_ist().minute % 6 == 0:
         symbols.extend(stock_universe)
 
     return symbols
@@ -4415,7 +4424,7 @@ def run_live_mode():
     OI_BIAS_LOCKED = False
     
     # F4.5 & F4.6: Heartbeat (dedicated thread) and error tracking state
-    _last_heartbeat = datetime.now()
+    _last_heartbeat = now_ist()
     _last_lock_refresh = t.time()
     _last_token_refresh = t.time()
     _TOKEN_REFRESH_INTERVAL_SEC = 120
@@ -4464,9 +4473,9 @@ def run_live_mode():
 
     while True:
         try:
-            ENGINE_LAST_LOOP_AT = datetime.now()
+            ENGINE_LAST_LOOP_AT = now_ist()
             cleanup_structure_state()
-            now = datetime.now().time()
+            now = now_ist().time()
 
             # Railway 24/7: lock refresh every 2 min (heartbeat runs in dedicated thread)
             try:
@@ -4534,7 +4543,7 @@ def run_live_mode():
                     print("API update:", get_engine_state_snapshot())
                 except Exception:
                     pass
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
+                print(f"[{now_ist().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
                 t.sleep(300)
                 continue
 
@@ -4544,13 +4553,13 @@ def run_live_mode():
                 print("API update:", get_engine_state_snapshot())
             except Exception:
                 pass
-            if (datetime.now() - _last_heartbeat).total_seconds() >= _HEARTBEAT_INTERVAL_MIN * 60:
+            if (now_ist() - _last_heartbeat).total_seconds() >= _HEARTBEAT_INTERVAL_MIN * 60:
                 trades_count = len(ACTIVE_TRADES)
-                hb_msg = (f"💚 <b>Engine Alive</b> | {datetime.now().strftime('%H:%M')}\n"
+                hb_msg = (f"💚 <b>Engine Alive</b> | {now_ist().strftime('%H:%M')}\n"
                           f"Active Trades: {trades_count} | PnL: {DAILY_PNL_R:.1f}R | "
                           f"Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}")
                 telegram_send(hb_msg)
-                _last_heartbeat = datetime.now()
+                _last_heartbeat = now_ist()
 
             # 🌅 MORNING WATCHLIST (9:15 – 9:20)
             if time(9, 15) <= now <= time(9, 20):
@@ -4665,7 +4674,7 @@ def run_live_mode():
             # ==================================
             # 🚀 EMA CROSSOVER SCAN (EVERY 5 MIN)
             # ==================================
-            if datetime.now().minute % 5 == 0:
+            if now_ist().minute % 5 == 0:
                 print("⚡ Checking EMA Crossover (Nifty/Bank Nifty)...")
                 for index_sym in INDEX_SYMBOLS:
                     scan_ema_crossover(index_sym)
@@ -4673,7 +4682,7 @@ def run_live_mode():
             # ====================================
             # 🎯 SMC ZONE TAP SCAN (EVERY 5 MIN)
             # ====================================
-            if datetime.now().minute % 5 == 1:
+            if now_ist().minute % 5 == 1:
                 for index_sym in INDEX_SYMBOLS:
                     try:
                         zt_candles = fetch_ohlc(index_sym, "5minute", 80)
@@ -4824,7 +4833,7 @@ def run_live_mode():
                 # Backtest evidence: afternoon trades lose -15.75R over 2 months
                 cutoff_h = getattr(eng_cfg, "STOCK_SIGNAL_CUTOFF_HOUR", 24)
                 cutoff_m = getattr(eng_cfg, "STOCK_SIGNAL_CUTOFF_MIN", 0)
-                now_t = datetime.now().time()
+                now_t = now_ist().time()
                 if now_t >= time(cutoff_h, cutoff_m) and not is_index(sig.get("symbol", "")):
                     logging.info(f"🕐 AFTERNOON CUTOFF: {sig['symbol']} blocked — no new stock entries after {cutoff_h}:{cutoff_m:02d}")
                     continue

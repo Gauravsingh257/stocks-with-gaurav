@@ -9,6 +9,12 @@ from datetime import datetime, time
 import pandas as pd
 import logging
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 import smc_detectors as smc
 
 # ---------------------------------------------------------------------------
@@ -22,7 +28,7 @@ def killzone_confidence():
     E4: Time-weighted killzone confidence (0.0 - 1.0).
     Higher = better trading quality expected.
     """
-    now = SIMULATION_TIME or datetime.now().time()
+    now = SIMULATION_TIME or datetime.now(_IST).time()
 
     if time(9, 15) <= now < time(10, 0):
         return 0.8

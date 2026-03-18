@@ -49,6 +49,12 @@ Expiry Rules:
 import logging
 from datetime import datetime, date as dt_date, timedelta, time
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 from engine import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -244,7 +250,7 @@ def is_expiry_today(expiry_date):
 
 def is_post_expiry_cutoff():
     """Check if current time is after 3:30 PM (post-expiry cleanup cutoff)."""
-    return datetime.now().time() >= time(15, 30)
+    return datetime.now(_IST).time() >= time(15, 30)
 
 
 # =====================================================
