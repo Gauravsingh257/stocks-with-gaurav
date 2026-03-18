@@ -86,6 +86,11 @@ def store_access_token(token: str) -> None:
         r.set(KITE_LAST_LOGIN_KEY, now_utc.isoformat(), ex=KITE_TOKEN_TTL_SECONDS)
         r.set("kite:token_ts", now_ist.replace(tzinfo=None).isoformat(), ex=KITE_TOKEN_TTL_SECONDS)
         log.info("Kite auth: access token + token_ts stored in Redis (TTL %ss)", KITE_TOKEN_TTL_SECONDS)
+        try:
+            from dashboard.backend.routes.system import invalidate_kite_status_cache
+            invalidate_kite_status_cache()
+        except Exception:
+            pass
     except Exception as e:
         log.warning("Kite auth: failed to store token in Redis: %s", e)
         raise

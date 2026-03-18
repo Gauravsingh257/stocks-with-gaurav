@@ -8,7 +8,9 @@ GET /api/system/tactical-plan  — today's tactical plan from PreMarketBriefing
 """
 
 import json
+import logging
 import time
+import threading
 from datetime import datetime, time as dtime
 from pathlib import Path
 
@@ -19,6 +21,12 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 BACKEND_VERSION = "1.1.0"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
+
+_kite_status_cache: dict = {"connected": None, "checked_at": 0.0, "fail_streak": 0}
+_kite_status_lock = threading.Lock()
+_KITE_CHECK_INTERVAL_SEC = 300  # only call k.profile() once every 5 minutes
+_KITE_FAIL_THRESHOLD = 2        # require 2 consecutive failures before marking expired
+_log = logging.getLogger("dashboard.system")
 
 # NSE market hours IST
 MARKET_OPEN  = dtime(9, 15)
@@ -38,6 +46,68 @@ def _market_status_now() -> str:
     if PREMARKET_START <= now_ist < MARKET_OPEN:
         return "premarket"
     return "closed"
+
+
+def _check_kite_cached() -> tuple:
+    """
+    Return (kite_connected: bool, disconnect_reason: str | None).
+
+    Caches the k.profile() result for _KITE_CHECK_INTERVAL_SEC (5 min) to avoid
+    hammering the Kite API on every health poll. Requires _KITE_FAIL_THRESHOLD
+    consecutive failures before reporting expired — a single transient timeout
+    or rate-limit error won't flip the status.
+
+    NEVER calls _reset_kite() — the Charts module handles its own refresh
+    via token-change detection in _get_kite().
+    """
+    now = time.time()
+    with _kite_status_lock:
+        cached = _kite_status_cache
+        elapsed = now - cached["checked_at"]
+        if cached["connected"] is not None and elapsed < _KITE_CHECK_INTERVAL_SEC:
+            reason = None if cached["connected"] else "token_expired"
+            return cached["connected"], reason
+
+    from dashboard.backend.routes.charts import _get_kite
+    k = _get_kite()
+    if k is None:
+        with _kite_status_lock:
+            _kite_status_cache["connected"] = False
+            _kite_status_cache["checked_at"] = now
+            _kite_status_cache["fail_streak"] = _kite_status_cache.get("fail_streak", 0) + 1
+        return False, "token_expired"
+
+    try:
+        k.profile()
+        with _kite_status_lock:
+            _kite_status_cache["connected"] = True
+            _kite_status_cache["checked_at"] = now
+            _kite_status_cache["fail_streak"] = 0
+        return True, None
+    except Exception as exc:
+        with _kite_status_lock:
+            streak = _kite_status_cache.get("fail_streak", 0) + 1
+            _kite_status_cache["fail_streak"] = streak
+            _kite_status_cache["checked_at"] = now
+            if streak >= _KITE_FAIL_THRESHOLD:
+                _kite_status_cache["connected"] = False
+                _log.warning("Kite profile() failed %d times consecutively: %s", streak, exc)
+                return False, "token_expired"
+            else:
+                prev = _kite_status_cache.get("connected")
+                if prev is True:
+                    _log.debug("Kite profile() transient failure (%d/%d), keeping connected status", streak, _KITE_FAIL_THRESHOLD)
+                    return True, None
+                _kite_status_cache["connected"] = False
+                return False, "token_expired"
+
+
+def invalidate_kite_status_cache():
+    """Call this when a new token is stored so the next health check re-verifies immediately."""
+    with _kite_status_lock:
+        _kite_status_cache["connected"] = None
+        _kite_status_cache["checked_at"] = 0.0
+        _kite_status_cache["fail_streak"] = 0
 
 
 @router.get("/health")
@@ -105,8 +175,6 @@ def system_health():
     kite_hint = None
     kite_disconnect_reason = None
     try:
-        import logging
-        _log = logging.getLogger("dashboard.system")
         from dashboard.backend.kite_auth import (
             get_access_token as get_kite_token,
             get_access_token_ttl_seconds,
@@ -120,16 +188,7 @@ def system_health():
         kite_last_login_utc = get_last_login_utc()
         token_source = get_token_source()
         if token_present:
-            from dashboard.backend.routes.charts import _get_kite, _reset_kite
-            k = _get_kite()
-            if k is not None:
-                try:
-                    k.profile()
-                    kite_connected = True
-                except Exception:
-                    _log.warning("Kite session expired")
-                    kite_disconnect_reason = "token_expired"
-                    _reset_kite()
+            kite_connected, kite_disconnect_reason = _check_kite_cached()
         if not kite_connected:
             if token_source == "env_or_file" and token_present:
                 kite_hint = (

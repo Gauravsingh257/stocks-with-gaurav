@@ -225,8 +225,12 @@ export default function MarketCommandBar() {
       return { text: "Kite ON",       color: "text-green-400",  title: "Kite API connected" };
     if (health.token_present === false)
       return { text: "🔐 Login",      color: "text-yellow-400", title: "Run RUN_ENGINE_ON_RAILWAY.bat to generate a new Zerodha token" };
-    if (health.token_present === true && health.kite_connected === false)
+    if (health.token_present === true && health.kite_connected === false) {
+      const ttl = (health as Record<string, unknown>).token_expires_in_hours as number | undefined;
+      if (ttl != null && ttl > 20)
+        return { text: "Kite checking…", color: "text-yellow-400", title: "Token present, verifying session — may take a minute" };
       return { text: "Kite expired",  color: "text-orange-400", title: "Token invalid or expired — run login bat" };
+    }
     return { text: "Kite OFF", color: "text-gray-400", title: undefined };
   }, [health]);
 
