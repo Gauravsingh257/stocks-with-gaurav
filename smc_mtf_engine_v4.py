@@ -232,7 +232,7 @@ formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
 
-print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now())
+print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now(), "(UTC)" if not os.getenv("TZ") else "")
 
 # =====================================================
 # SHARED ENGINE STATE FOR LOCAL API
@@ -250,10 +250,13 @@ ENGINE_STATE: Dict[str, Any] = {
 
 
 def update_engine_state(**kwargs: Any) -> None:
-    """Thread-safe update of ENGINE_STATE; always refresh timestamp."""
+    """Thread-safe update of ENGINE_STATE; always refresh timestamp in IST."""
     with _ENGINE_STATE_LOCK:
         ENGINE_STATE.update(kwargs)
-        ENGINE_STATE["timestamp"] = datetime.now().isoformat()
+        try:
+            ENGINE_STATE["timestamp"] = now_ist().isoformat()
+        except Exception:
+            ENGINE_STATE["timestamp"] = datetime.now().isoformat()
 
 
 def get_engine_state_snapshot() -> Dict[str, Any]:
@@ -4706,39 +4709,53 @@ def run_live_mode():
                     except Exception as e:
                         print(f"  ⚠️ Zone tap scan error ({index_sym}): {e}")
 
+            _scan_errors = []
+            _scan_data_ok = 0
+            _scan_data_empty = 0
+            _scan_raw_signals = 0
             for symbol in scan_universe:
                 try:
-                    # 1. SCAN FOR NEW SIGNALS
                     signals = scan_symbol(symbol)
-                    
-                    # 1.5 MANUAL SYNC (Run once per loop, not per symbol, but okay here for now or move out)
-                    # Better to move it OUT of the symbol loop to avoid API spam via kite.orders()
                     if signals:
+                        _scan_raw_signals += len(signals)
                         all_signals.extend(signals)
-                    
-                    # 2. MONITOR ACTIVE TRADES (LTP CHECK)
-                    # We need LTP. scan_symbol calls feth_ohlc which gets history.
-                    # Optimization: Get LTP separately or use last Close?
-                    # Using last close from scan is faster/free if we had it.
-                    # But monitor_active_trades is cheap.
-                    # We'll assume engine is fast enough.
-                    # Fetch single LTP for monitoring? Or use last close from fetch_ohlc?
-                    # To remain simple: Just fetch_ltp or last close if we have data.
-                    # scan_symbol doesn't return data.
-                    # Let's simple use kite.ltp or fetch_ohlc(1min).
-                    # Actually, let's just use fetch_ohlc("1minute")[-1]['close'] inside monitor
-                    # But waiting for API calls is slow.
-                    # Let's pass the ltp from scan_symbol? No, complex refactor.
+
+                    tf_check = fetch_multitf(symbol)
+                    if tf_check and tf_check.get("5m"):
+                        _scan_data_ok += 1
+                    else:
+                        _scan_data_empty += 1
+
                     price = fetch_ltp(symbol)
                     if price:
                          monitor_active_trades(symbol, price)
 
                 except Exception as e:
+                    _scan_errors.append(f"{symbol}: {e}")
                     if DEBUG_MODE:
                         logging.error(f"Scan Exception {symbol}: {e}")
                         print(f"Scan Exception {symbol}: {e}")
-                        pass
-    
+
+            if not hasattr(run_live_mode, '_diag_sent'):
+                run_live_mode._diag_sent = True
+                _nifty_ltp = fetch_ltp("NSE:NIFTY 50")
+                _bn_ltp = fetch_ltp("NSE:NIFTY BANK")
+                _diag = (
+                    f"🔍 <b>SCAN DIAGNOSTIC</b> (first cycle)\n"
+                    f"Time: {now_ist().strftime('%H:%M:%S')} IST\n"
+                    f"Symbols scanned: {len(scan_universe)}\n"
+                    f"Data OK: {_scan_data_ok} | Data empty: {_scan_data_empty}\n"
+                    f"Raw signals found: {_scan_raw_signals}\n"
+                    f"Nifty LTP: {_nifty_ltp}\n"
+                    f"BankNifty LTP: {_bn_ltp}\n"
+                    f"Kite obj: {'OK' if kite else 'NONE'}\n"
+                    f"Token: {_current_kite_token[:8] + '...' if _current_kite_token else 'NONE'}\n"
+                    f"Errors: {len(_scan_errors)}"
+                )
+                if _scan_errors:
+                    _diag += f"\nFirst error: {_scan_errors[0][:100]}"
+                telegram_send(_diag)
+
             if not all_signals and not ACTIVE_TRADES:
                 t.sleep(1) # Tiny sleep to prevent CPU burn if list empty, but wait_for_next will handle it.
     
