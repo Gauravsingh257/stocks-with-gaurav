@@ -320,8 +320,27 @@ The watchdog kills the process if `write_last_cycle()` hasn't been called in 180
 
 ### Token Generation
 
+There are two login flows. Both end up storing the token in Redis.
+
+**Flow A — Web Login (recommended, used daily via bat file):**
 ```
 User runs RUN_ENGINE_ON_RAILWAY.bat
+  → Opens browser to https://<Railway-Web>/api/kite/login → Zerodha login page
+  → After login, morning_login.ps1 sends redirect URL to /api/kite/callback
+  → dashboard/backend/routes/kite.py:
+      1. _extract_request_token(url) → request_token
+      2. kite_auth.generate_access_token(request_token) → access_token
+      3. kite_auth.store_access_token(access_token):
+         └── Redis:
+             ├── kite:access_token (TTL 24h)
+             ├── kite:token_ts (naive IST — engine reads this to detect fresh login)
+             └── kite:last_login (UTC ISO — for debugging)
+  → morning_login.ps1 then calls /api/system/health to verify
+```
+
+**Flow B — CLI Login (local development):**
+```
+User runs zerodha_login.py locally
   → Opens browser to Zerodha login
   → User pastes redirect URL in terminal
   → zerodha_login.py:
@@ -343,9 +362,12 @@ User runs RUN_ENGINE_ON_RAILWAY.bat
 
 - Engine polls `get_access_token()` every **120 seconds**
 - If token changed → `kite.set_access_token(new) → kite.profile()` (validated with timeout)
-- If `kite:token_ts` is today's date and time is 09:00–16:10 → `_fresh_token_today = True`
-- `_fresh_token_today` **overrides** the signal window gate → signals start immediately
-- If token is refreshed after 09:15, a catch-up scan runs immediately
+- Engine then reads `kite:token_ts` from Redis:
+  - If `kite:token_ts` date == today AND time is 09:00–16:10 → `_fresh_token_today = True`
+  - `_fresh_token_today` **overrides** the signal window gate → signals start immediately
+  - Telegram sends: "TOKEN REFRESHED — Signals ACTIVE"
+- If token is refreshed after 09:15, a catch-up scan runs immediately (tagged `[CATCH-UP]`)
+- **Critical:** `kite:token_ts` must be set by whichever login flow is used (web or CLI). Both flows now set it.
 
 ### Token Expiry
 
@@ -475,7 +497,8 @@ CMD ["python", "run_engine_railway.py"]
 | Key | Purpose | TTL |
 |-----|---------|-----|
 | `kite:access_token` | Zerodha access token | 24h |
-| `kite:token_ts` | Token generation timestamp | 24h |
+| `kite:token_ts` | Token generation timestamp (naive IST). Set by both web login (`kite_auth.store_access_token`) and CLI login (`zerodha_login.py`). Engine reads this to detect fresh login today → unlock signals immediately. | 24h |
+| `kite:last_login` | UTC ISO timestamp of last web login (debugging). Set by `store_access_token`. | 24h |
 | `engine_lock` | Single-instance lock | 600s (refreshed every 120s) |
 | `engine_heartbeat` | Last heartbeat timestamp | 120s |
 | `engine_last_cycle` | Last main loop timestamp | 300s |
@@ -531,6 +554,18 @@ CMD ["python", "run_engine_railway.py"]
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+### Snapshot Response Fields (Key Frontend-Facing Fields)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `snapshot_time` | ISO string (IST) | When this snapshot was built — used for "X sec ago" |
+| `data_source` | `"live"` \| `"redis"` \| `"memory_cache"` | Where data came from: live engine globals, Redis `engine:snapshot`, or in-process memory fallback |
+| `redis_available` | bool | Whether Redis was reachable when this snapshot was built |
+| `engine_running` | bool | Engine heartbeat seen within 60s |
+| `engine_live` | bool | Engine heartbeat seen within 120s |
+| `index_ltp` | `{"NIFTY 50": float, "NIFTY BANK": float}` | Latest index prices |
+| `memory_cache_age_sec` | float (only when `data_source=memory_cache`) | How old the fallback snapshot is |
+
 ### WebSocket Architecture
 
 - **Vercel limitation:** Vercel does NOT support WebSocket proxy/upgrade
@@ -557,7 +592,7 @@ CMD ["python", "run_engine_railway.py"]
 | `dashboard/backend/routes/system.py` | `/api/system/health` — engine status, Kite status, worker status |
 | `dashboard/frontend/lib/useWebSocket.ts` | WS client with env-based URL resolution, backoff, REST fallback |
 | `dashboard/frontend/lib/api.ts` | REST API client; logs error if `NEXT_PUBLIC_BACKEND_URL` missing on prod |
-| `dashboard/frontend/components/MarketCommandBar.tsx` | Top bar — fetches health + snapshot; removed `if(!base)` guard |
+| `dashboard/frontend/components/MarketCommandBar.tsx` | Top bar — fetches health + snapshot; shows LIVE/DELAYED/DISCONNECTED badge, "X sec ago" timer, and token-aware Kite status |
 
 ---
 
@@ -601,7 +636,8 @@ Trading Algo/
 │   │   ├── engine_api.py         # Engine /health endpoint
 │   │   ├── state_bridge.py       # Engine → dashboard data bridge (reads Redis engine:snapshot in standalone mode)
 │   │   ├── cache.py              # Redis cache layer (incl. get_engine_snapshot_from_redis)
-│   │   ├── routes/               # API route handlers
+│   │   ├── kite_auth.py          # Web login token exchange + Redis storage (kite:access_token, kite:token_ts)
+│   │   ├── routes/               # API route handlers (incl. kite.py for /api/kite/login + /callback)
 │   │   └── db/                   # Database schema
 │   └── frontend/                 # Next.js frontend
 │       ├── app/                  # Pages (live, analytics, OI, etc.)
@@ -647,7 +683,7 @@ Trading Algo/
 | Token expires at midnight | Medium | User must run login bat daily. Engine sends "TOKEN INVALID" alert on failure. |
 | Kite API rate limit (3 req/sec) | Low | `_respect_api_throttle()` enforces 350ms spacing |
 | Railway memory limit | Low | Daily cache clears (EMA_LAST_PROCESSED, DAILY_LOG, MANUAL_ORDER_CACHE) |
-| Redis connection lost | Low | All Redis operations have try/except; engine degrades gracefully |
+| Redis connection lost | Low | `cache.py` retries every 30s and reconnects automatically; `state_bridge.py` serves last-known snapshot from memory (up to 10 min) |
 
 ### Historical Issues (Fixed)
 
@@ -666,6 +702,11 @@ Trading Algo/
 | Worker status overwrites engine status | `system.py` set `engine_status = "stale"` when `MARKET_ENGINE_LAST_UPDATE_KEY` was missing (standalone mode) | Now only downgrades when key exists AND is stale; missing key = standalone, keep heartbeat as source of truth |
 | Engine snapshot TTL too short | `ENGINE_SNAPSHOT_TTL_SEC` was 120s but market-closed sleep is 300s, causing snapshot to expire | Increased to 600s to survive 5-min sleep cycles with margin |
 | Duplicate `write_last_cycle()` in engine_runtime | Two definitions existed; older one lacked watchdog compatibility | Removed the redundant definition |
+| Web login didn't set `kite:token_ts` | `store_access_token()` in `dashboard/backend/kite_auth.py` only set `kite:access_token` + `kite:last_login`, not `kite:token_ts` | Added `kite:token_ts` (naive IST) to `store_access_token()` — engine now detects fresh login via bat file, unlocks signals immediately, fires catch-up scan |
+| Redis SPOF blanks dashboard permanently | `cache._get_redis()` never retried after first failure; `state_bridge` had no fallback | `cache.py` retries Redis every 30s; `state_bridge.py` caches last snapshot in process memory (10 min TTL) — dashboard stays populated during Redis restart |
+| WebSocket didn't recover after tab sleep/mobile | No `visibilitychange` listener; polling mode was permanent once entered | Added `visibilitychange` handler that resets `failCount` and retries WS when tab becomes visible; stale snapshot (>30s) cleared on disconnect |
+| Kite "OFF" showed no actionable info | Generic "Kite OFF" regardless of whether token was missing or expired | Now shows "🔐 Login" (no token), "Kite expired" (token invalid), or "Kite ON" based on `token_present` + `kite_connected` health fields |
+| No data freshness indicator | User couldn't tell if data was live WS, delayed polling, or from stale cache | Added LIVE/DELAYED/DISCONNECTED badge + "X sec ago" timer in command bar; badge turns yellow when serving memory cache |
 
 ---
 
@@ -677,12 +718,12 @@ Trading Algo/
 |---------|-------------|-----------|
 | Signal issues | `smc_mtf_engine_v4.py` | `engine/config.py` (ACTIVE_STRATEGIES) |
 | Crashes / freezes | `engine_runtime.py` | `smc_mtf_engine_v4.py` (run_live_mode) |
-| Token / auth | `config/kite_auth.py` | `zerodha_login.py` |
+| Token / auth | `config/kite_auth.py` | `dashboard/backend/kite_auth.py` (web login stores token + `kite:token_ts`), `zerodha_login.py` (CLI login) |
 | OI / options signals | `engine/options.py` | `engine/oi_short_covering.py` |
 | Zone tap signals | `engine/smc_zone_tap.py` | |
 | Dashboard API | `dashboard/backend/engine_api.py` | `dashboard/backend/state_bridge.py`, `dashboard/backend/cache.py` |
 | WebSocket issues | `dashboard/frontend/lib/useWebSocket.ts` | `dashboard/frontend/.env.production`, `dashboard/frontend/app/oi-intelligence/page.tsx` |
-| Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` |
+| Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` (Redis + memory fallback) |
 | Health/status display | `dashboard/backend/routes/system.py` | `dashboard/frontend/components/MarketCommandBar.tsx` |
 | Risk / position sizing | `risk_management.py` | |
 | SMC detection logic | `smc_detectors.py` | |
@@ -693,7 +734,8 @@ Trading Algo/
 - **`run_engine_railway.py`** — Bootstrap sequence; changing startup order can break Railway healthcheck
 - **`engine_runtime.py` watchdog thresholds** — Changing `ENGINE_CYCLE_WATCHDOG_SEC` without updating `safe_sleep` chunk sizes can cause crash loops
 - **`_respect_api_throttle()` timing** — Lowering below 350ms risks Kite rate limit bans
-- **Redis key names** — Shared between engine, dashboard, and runtime; changing breaks coordination. Key names include: `engine:snapshot`, `ltp:NIFTY`, `ltp:BANKNIFTY`, `engine_heartbeat`, `engine_lock`, `kite:access_token`
+- **Redis key names** — Shared between engine, dashboard, and runtime; changing breaks coordination. Key names include: `engine:snapshot`, `ltp:NIFTY`, `ltp:BANKNIFTY`, `engine_heartbeat`, `engine_lock`, `kite:access_token`, `kite:token_ts`
+- **`kite:token_ts` format** — Must be naive IST (no timezone info) via `.isoformat()`. Both `dashboard/backend/kite_auth.py` and `zerodha_login.py` must produce the same format. The engine parses this with `datetime.fromisoformat()` and compares `.date()` with today
 - **`is_signal_window()` / `is_market_open()`** — Used across multiple files; changes must be synchronized
 - **`_publish_redis_snapshot()`** — Engine→Redis data bridge; removing or breaking it will cause dashboard to show stale/empty data
 - **`dashboard/frontend/.env.production`** — Contains Railway URLs baked into Vercel build; incorrect values break all API + WS connections
@@ -731,13 +773,18 @@ Trading Algo/
 | **Engine crash loop** | 1. Check watchdog Telegram alert — what `stage` is shown? 2. If stage = `MARKET_CLOSED_SLEEP` → `safe_sleep()` is broken 3. If stage = `DATA_FETCH` → Kite API hanging → check `_kite_call` timeout 4. Redis `engine:watchdog_kills` — how many kills in 5 min? |
 | **Signals fire after 16:10** | Check all signal paths have `is_signal_window()` gate. Key files: `engine/smc_zone_tap.py` (1m thread), `engine/options.py` (`send_alert`), `option_monitor_module.py` (`telegram_send`) |
 | **"ENGINE STUCK" once then recovers** | Normal — a single slow Kite API call exceeded timeout. Watchdog restarted, engine recovered. No action needed unless repeated. |
-| **Token not picked up** | 1. Check `kite:access_token` in Redis 2. Check `kite:token_ts` — is it today's date? 3. Engine polls every 120s — wait 2 min 4. Check engine logs for "Kite token refresh failed" |
+| **Token not picked up** | 1. Check `kite:access_token` in Redis 2. Check `kite:token_ts` — is it today's date (naive IST)? 3. Engine polls every 120s — wait 2 min 4. Check engine logs for "Kite token refresh failed" |
+| **Signals don't start after login** | 1. Check `kite:token_ts` in Redis — was it set? Both web login (`kite_auth.store_access_token`) and CLI (`zerodha_login.py`) must set it 2. Is `kite:token_ts` date == today? 3. Is time 09:00–16:10? 4. Check engine logs for "Fresh token detected" — if missing, `_fresh_token_today` is `False` 5. Check Telegram for "TOKEN REFRESHED — Signals ACTIVE" message |
 | **No data / empty scans** | 1. Check `fetch_ohlc` return — is it `[]`? 2. Kite session valid? Run `kite.profile()` 3. Rate limited? Check for "NetworkException" in logs 4. Holiday? Market may be closed |
 | **Dashboard shows stale data** | 1. Check `engine_heartbeat` Redis key — is it recent? 2. Check `engine:snapshot` Redis key — is it present and < 600s old? 3. Check `state_bridge.py` — is it reading snapshot in standalone mode? 4. Frontend: check `NEXT_PUBLIC_BACKEND_URL` env var is set |
 | **WebSocket not connecting** | 1. Check `NEXT_PUBLIC_WS_URL` is set in Vercel to `wss://<Railway-Web>/ws` 2. Check Railway Web service is running and `/ws` is accessible 3. Browser console: look for `WS CONNECTING →`, `WS CONNECTED`, or `WS FAILED` 4. Vercel CANNOT proxy WS — frontend must connect directly to Railway |
 | **NIFTY/BANKNIFTY show "—"** | 1. Check `ltp:NIFTY` and `ltp:BANKNIFTY` Redis keys — present? 2. Engine must call `set_index_ltp()` via `update_engine_state()` 3. Check `engine:snapshot` → `index_ltp` field 4. `state_bridge.py` merges `index_ltp` from snapshot |
 | **Kite shows "OFF" on dashboard** | 1. Check `/api/system/health` → `kite_connected` field 2. Is `kite:access_token` in Redis valid and today's date? 3. Was `MarketCommandBar.tsx` guard (`if (!base) return`) removed? It should be. |
 | **Engine status says "stale" incorrectly** | 1. Check `routes/system.py` — `MARKET_ENGINE_LAST_UPDATE_KEY` logic 2. In standalone mode, if worker key is missing, engine_status should NOT be overwritten 3. Engine heartbeat (30s TTL) is the source of truth |
+| **Dashboard shows DELAYED badge** | 1. Check if Redis is available — snapshot `redis_available` field 2. If `data_source = memory_cache` → Redis is down, Web is serving cached data 3. Check `cache.py` Redis retry (waits 30s between retries) 4. If WS is polling (REST fallback), data is 5s delayed — expected behavior |
+| **Dashboard shows DISCONNECTED badge** | 1. No snapshot received at all OR snapshot is > 60s old 2. Check WS connection — browser console for `WS CONNECTING`/`WS FAILED` logs 3. Check REST fallback — `/api/snapshot` returning 200? 4. Tab was hidden for a long time? Visibility change handler will reconnect WS |
+| **Kite shows "🔐 Login"** | Token is completely missing from Redis AND env AND file. Run `RUN_ENGINE_ON_RAILWAY.bat`. |
+| **Kite shows "Kite expired"** | Token exists but `kite.profile()` fails. Token from yesterday — run `RUN_ENGINE_ON_RAILWAY.bat` again. |
 | **Railway deploy fails** | 1. Check `requirements-engine.txt` — missing dependency? 2. Check `Dockerfile.engine` — syntax ok? 3. Railway dashboard → Build Logs for exact error |
 | **Telegram not sending** | 1. Check `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` env vars 2. Check engine logs for `[Telegram]` lines 3. Bot may be blocked or chat ID wrong — test with `test_telegram.py` |
 

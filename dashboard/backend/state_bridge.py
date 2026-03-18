@@ -22,9 +22,18 @@ import copy
 import json
 import logging
 import os
+import threading as _threading
+import time as _time_mod
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# ── In-memory snapshot fallback (Redis SPOF protection) ──────────────────────
+# When Redis is temporarily unavailable the last good snapshot is served from
+# memory for up to _SNAP_MEMORY_TTL_SEC seconds so the dashboard stays populated.
+_snap_cache: dict = {"snap": None, "ts": 0.0}
+_snap_lock = _threading.Lock()
+_SNAP_MEMORY_TTL_SEC = 600  # 10 min — covers Redis restart + engine cycle duration
 
 try:
     from zoneinfo import ZoneInfo
@@ -274,10 +283,28 @@ def get_engine_snapshot() -> Dict:
             engine_running = False
             engine_live = False
 
-        # Standalone: merge real-time data from engine Redis snapshot (engine:snapshot)
+        # Standalone: merge real-time data from engine Redis snapshot (engine:snapshot).
+        # If Redis is unavailable, fall back to the last in-process memory cache.
         try:
             from dashboard.backend.cache import get_engine_snapshot_from_redis
             redis_snap = get_engine_snapshot_from_redis()
+            if redis_snap is None:
+                # Redis returned nothing — try the in-memory snapshot cache
+                with _snap_lock:
+                    _cached = _snap_cache.get("snap")
+                    _cached_ts = _snap_cache.get("ts", 0.0)
+                if _cached is not None:
+                    _cache_age = _time_mod.time() - _cached_ts
+                    if _cache_age <= _SNAP_MEMORY_TTL_SEC:
+                        logger.debug(
+                            "[StateBridge] Redis unavailable — serving in-memory snapshot (age %.0fs)", _cache_age
+                        )
+                        _mem_result = dict(_cached)
+                        _mem_result["data_source"] = "memory_cache"
+                        _mem_result["memory_cache_age_sec"] = round(_cache_age, 1)
+                        _mem_result["redis_available"] = False
+                        _mem_result["snapshot_time"] = datetime.now(_IST).isoformat()
+                        return _mem_result
             if redis_snap:
                 if isinstance(redis_snap.get("active_trades"), list):
                     active_trades = redis_snap["active_trades"]
@@ -305,7 +332,14 @@ def get_engine_snapshot() -> Dict:
         _engine_version = str(_safe_read("ENGINE_VERSION", "v4")) if _ENGINE_AVAILABLE else "v4"
     _last_cycle_ts, _last_cycle_age = _get_engine_last_cycle_from_cache()
 
-    return {
+    # ── Redis availability flag (frontend uses this to show Redis alert)
+    try:
+        from dashboard.backend.cache import is_redis_available as _is_redis_available
+        _redis_up = _is_redis_available()
+    except Exception:
+        _redis_up = False
+
+    _result = {
         # ── Core trade state
         "active_trades":       active_trades,
         "active_trade_count":  len(active_trades),
@@ -345,7 +379,18 @@ def get_engine_snapshot() -> Dict:
 
         # ── Index LTP from cache or engine Redis snapshot (for real-time command bar / sparklines)
         "index_ltp":           _index_ltp_override if _index_ltp_override is not None else _get_index_ltp_from_cache(),
+
+        # ── Data provenance (frontend uses for LIVE / DELAYED / DISCONNECTED badge)
+        "data_source":         "live" if _ENGINE_AVAILABLE else "redis",
+        "redis_available":     _redis_up,
     }
+
+    # Cache in memory so a Redis restart doesn't blank the dashboard
+    with _snap_lock:
+        _snap_cache["snap"] = _result
+        _snap_cache["ts"] = _time_mod.time()
+
+    return _result
 
 
 def _get_engine_started_at_from_cache() -> Optional[float]:

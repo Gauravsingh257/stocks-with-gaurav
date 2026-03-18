@@ -24,30 +24,61 @@ MARKET_DATA_TTL = 5
 
 _redis_client: Any = None
 _redis_available = False
+_redis_last_ok: float = 0.0        # epoch sec of last successful ping
+_redis_last_attempt: float = 0.0   # epoch sec of last connect attempt
+_REDIS_RETRY_SEC = 30.0            # how long to wait before retrying a failed connection
 _memory_cache: dict[str, tuple[Any, float]] = {}
 _memory_lock = Lock()
 
 
 def _get_redis():
-    """Lazy-init Redis client. Returns None if REDIS_URL not set or connection fails."""
-    global _redis_client, _redis_available
-    if _redis_client is not None:
-        return _redis_client if _redis_available else None
+    """
+    Lazy-init Redis client with automatic reconnect every 30 s.
+    If Redis was unavailable it will be retried after _REDIS_RETRY_SEC — this means
+    a Redis restart no longer permanently blanks the dashboard.
+    """
+    global _redis_client, _redis_available, _redis_last_ok, _redis_last_attempt
+    now = time.time()
+
+    # Fast path: already connected
+    if _redis_available and _redis_client is not None:
+        return _redis_client
+
+    # No REDIS_URL configured — in-memory only
     url = os.getenv("REDIS_URL", "").strip()
     if not url:
-        log.debug("REDIS_URL not set — using in-memory cache")
         return None
+
+    # Rate-limit reconnect attempts so we don't spam the log
+    if now - _redis_last_attempt < _REDIS_RETRY_SEC:
+        return None
+
+    _redis_last_attempt = now
     try:
-        import redis
-        _redis_client = redis.from_url(url, decode_responses=True)
+        import redis as _redis_lib
+        if _redis_client is None:
+            _redis_client = _redis_lib.from_url(url, decode_responses=True)
         _redis_client.ping()
+        was_down = not _redis_available
         _redis_available = True
-        log.info("Redis cache connected")
+        _redis_last_ok = now
+        if was_down:
+            log.info("Redis cache connected/reconnected")
         return _redis_client
     except Exception as e:
-        log.warning("Redis unavailable (%s) — using in-memory cache", e)
+        if _redis_available:
+            log.warning("Redis connection lost (%s) — falling back to in-memory cache", e)
+        else:
+            log.debug("Redis still unavailable: %s", e)
         _redis_available = False
         return None
+
+
+def get_redis_status() -> dict:
+    """Return Redis connectivity info for /api/system/health."""
+    available = _redis_available and _redis_client is not None
+    last_ok_sec_ago = round(time.time() - _redis_last_ok, 1) if _redis_last_ok > 0 else None
+    return {"available": available, "last_ok_sec_ago": last_ok_sec_ago}
 
 
 def get(key: str) -> Any | None:

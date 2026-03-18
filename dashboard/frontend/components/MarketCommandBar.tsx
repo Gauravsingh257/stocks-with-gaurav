@@ -18,6 +18,8 @@ interface HealthData {
   backend_version?: string;
 }
 
+type DataSource = "live" | "delayed" | "disconnected";
+
 interface TickData {
   price: number;
   change: number;
@@ -58,7 +60,7 @@ function pushTick(arr: number[], value: number, max: number): number[] {
 }
 
 export default function MarketCommandBar() {
-  const { snapshot, status } = useEngineSocket();
+  const { snapshot, status, snapshotReceivedAt } = useEngineSocket();
   const [health, setHealth] = useState<HealthData | null>(null);
   const [history, setHistory] = useState<{ NIFTY: number[]; BANKNIFTY: number[] }>({
     NIFTY: [],
@@ -72,6 +74,8 @@ export default function MarketCommandBar() {
   const [apiNifty, setApiNifty] = useState<number | null>(null);
   const [apiBanknifty, setApiBanknifty] = useState<number | null>(null);
   const [signalCount, setSignalCount] = useState<number>(0);
+  // Increments every second to drive "X sec ago" recomputation
+  const [tick, setTick] = useState(0);
   const prevPriceRef = useRef<Record<string, number>>({});
 
   // Health fetch for engine, kite, version only (no market status)
@@ -104,6 +108,12 @@ export default function MarketCommandBar() {
     };
     fetchSnap();
     const t = setInterval(fetchSnap, 10_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 1-second ticker — drives "X sec ago" label recomputation
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 1_000);
     return () => clearInterval(t);
   }, []);
 
@@ -166,6 +176,60 @@ export default function MarketCommandBar() {
     return out;
   }, [snapshot?.index_ltp, snapshot?.snapshot_time]);
 
+  // ── Derived state ──────────────────────────────────────────────────────────
+
+  // Snapshot age in seconds (recomputes every tick via `tick` dependency)
+  const snapshotAgeSeconds = useMemo(() => {
+    void tick; // force recompute every second
+    // Use the WS-received timestamp if available (most accurate), else fall back to
+    // the snapshot_time field from REST polling
+    if (snapshotReceivedAt > 0) return Math.floor((Date.now() - snapshotReceivedAt) / 1_000);
+    const t = snapshot?.snapshot_time ?? backendTimestamp;
+    if (!t) return null;
+    return Math.floor((Date.now() - new Date(t).getTime()) / 1_000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, snapshotReceivedAt, snapshot?.snapshot_time, backendTimestamp]);
+
+  // Human-readable "X sec ago" label
+  const ageLabel = useMemo(() => {
+    if (snapshotAgeSeconds === null) return null;
+    if (snapshotAgeSeconds < 5)    return "just now";
+    if (snapshotAgeSeconds < 60)   return `${snapshotAgeSeconds}s ago`;
+    if (snapshotAgeSeconds < 3600) return `${Math.floor(snapshotAgeSeconds / 60)}m ago`;
+    return `${Math.floor(snapshotAgeSeconds / 3600)}h ago`;
+  }, [snapshotAgeSeconds]);
+
+  // Data source badge: LIVE / DELAYED / DISCONNECTED
+  const dataSource = useMemo<DataSource>(() => {
+    // Redis unavailable flag from snapshot (backend populates this)
+    if ((snapshot as unknown as Record<string, unknown>)?.redis_available === false &&
+        (snapshot as unknown as Record<string, unknown>)?.data_source === "memory_cache")
+      return "delayed";
+    if (status === "connected" && snapshotAgeSeconds !== null && snapshotAgeSeconds < 15) return "live";
+    if (status === "polling"   && snapshotAgeSeconds !== null && snapshotAgeSeconds < 60) return "delayed";
+    if (snapshotAgeSeconds !== null && snapshotAgeSeconds < 60) return "delayed";
+    if (!snapshot) return "disconnected";
+    return "disconnected";
+  }, [status, snapshotAgeSeconds, snapshot]);
+
+  const dataSourceConfig = {
+    live:         { emoji: "🟢", label: "LIVE",         color: "text-green-400",  title: "WebSocket — real-time data" },
+    delayed:      { emoji: "🟡", label: "DELAYED",      color: "text-yellow-400", title: "REST polling or Redis cache — data may be a few seconds old" },
+    disconnected: { emoji: "🔴", label: "DISCONNECTED", color: "text-red-400",    title: "No data source connected" },
+  } as const;
+
+  // Kite / token badge
+  const kiteConfig = useMemo(() => {
+    if (health === null) return { text: "Kite …", color: "text-slate-400", title: undefined };
+    if (health.kite_connected === true)
+      return { text: "Kite ON",       color: "text-green-400",  title: "Kite API connected" };
+    if (health.token_present === false)
+      return { text: "🔐 Login",      color: "text-yellow-400", title: "Run RUN_ENGINE_ON_RAILWAY.bat to generate a new Zerodha token" };
+    if (health.token_present === true && health.kite_connected === false)
+      return { text: "Kite expired",  color: "text-orange-400", title: "Token invalid or expired — run login bat" };
+    return { text: "Kite OFF", color: "text-gray-400", title: undefined };
+  }, [health]);
+
   const session = getMarketSession();
   const marketStatusColor =
     session === "OPEN" ? "text-green-400" : session === "PREOPEN" ? "text-yellow-400" : "text-gray-400";
@@ -174,12 +238,7 @@ export default function MarketCommandBar() {
   const engineOn = hasSnapshot ? Boolean(snapshot.engine_running ?? snapshot.engine_live) : null;
   const sigToday = snapshot?.signals_today ?? signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
-  const kiteOk = health?.kite_connected === true;
-
-  const wsStateLabel =
-    status === "connected" ? "WS" : status === "polling" ? "REST" : "OFF";
-  const wsStateColor =
-    status === "connected" ? "text-green-400" : status === "polling" ? "text-yellow-400" : "text-red-400";
+  const ds = dataSourceConfig[dataSource];
 
   return (
     <div
@@ -190,17 +249,17 @@ export default function MarketCommandBar() {
       <span className="text-gray-400 font-medium uppercase tracking-wider">Indices</span>
 
       {LABELS.map((label) => {
-        const tick = ticks[label];
+        const tickData = ticks[label];
         const short = SHORT_KEYS[label];
         const priceOverride =
           label === "NIFTY 50"
-            ? apiNifty ?? tick?.price
+            ? apiNifty ?? tickData?.price
             : label === "NIFTY BANK"
-            ? apiBanknifty ?? tick?.price
-            : tick?.price;
+            ? apiBanknifty ?? tickData?.price
+            : tickData?.price;
         const price = priceOverride ?? null;
-        const change = tick?.change ?? 0;
-        const percentChange = tick?.percentChange ?? 0;
+        const change = tickData?.change ?? 0;
+        const percentChange = tickData?.percentChange ?? 0;
         const changeColor =
           change > 0 ? "text-green-400" : change < 0 ? "text-red-400" : "text-gray-400";
         const deltaText =
@@ -255,32 +314,32 @@ export default function MarketCommandBar() {
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={`flex items-center gap-1 ${wsStateColor}`}>
-        {status === "connected" ? (
-          <span title="WebSocket connected">🟢</span>
-        ) : status === "polling" ? (
-          <span title="REST fallback">🟡</span>
-        ) : (
-          <span title="Disconnected">🔴</span>
-        )}
-        <span>{wsStateLabel}</span>
+      {/* Data source badge: LIVE / DELAYED / DISCONNECTED */}
+      <span className={`flex items-center gap-1 font-semibold ${ds.color}`} title={ds.title}>
+        <span aria-hidden>{ds.emoji}</span>
+        <span className="uppercase tracking-wide text-xs">{ds.label}</span>
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={kiteOk ? "text-green-400" : "text-gray-400"}>
-        Kite {kiteOk ? "ON" : "OFF"}
+      {/* Kite / token badge */}
+      <span className={kiteConfig.color} title={kiteConfig.title}>
+        {kiteConfig.text}
       </span>
 
-      {health?.backend_version && (
-        <span className="text-slate-600 ml-auto flex items-center gap-3">
-          {backendTimestamp && (
-            <span className="font-mono text-xs text-slate-400">
-              {new Date(backendTimestamp).toLocaleTimeString()}
-            </span>
-          )}
-          <span>v{health.backend_version}</span>
-        </span>
-      )}
+      <span className="text-slate-600 ml-auto flex items-center gap-3">
+        {/* "Last updated: X sec ago" */}
+        {ageLabel && (
+          <span
+            className={`font-mono text-xs ${snapshotAgeSeconds !== null && snapshotAgeSeconds > 30 ? "text-yellow-500" : "text-slate-500"}`}
+            title="Time since last data update"
+          >
+            {ageLabel}
+          </span>
+        )}
+        {health?.backend_version && (
+          <span className="text-slate-600">v{health.backend_version}</span>
+        )}
+      </span>
     </div>
   );
 }

@@ -48,11 +48,13 @@ function getBackendBase(): string {
 const BASE = getBackendBase();
 
 export type WsStatus = "connecting" | "connected" | "disconnected" | "polling";
+export type DataSource = "live" | "delayed" | "disconnected";
 
 export function useEngineSocket() {
-  const [snapshot,  setSnapshot ] = useState<EngineSnapshot | null>(null);
-  const [status,    setStatus   ] = useState<WsStatus>("disconnected");
-  const [lastPing,  setLastPing ] = useState<number>(0);
+  const [snapshot,          setSnapshot         ] = useState<EngineSnapshot | null>(null);
+  const [status,            setStatus           ] = useState<WsStatus>("disconnected");
+  const [lastPing,          setLastPing         ] = useState<number>(0);
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(0);
   const wsRef      = useRef<WebSocket | null>(null);
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -123,11 +125,15 @@ export function useEngineSocket() {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string);
-          if (msg.type === "snapshot" && msg.data) setSnapshot(msg.data as EngineSnapshot);
+          if (msg.type === "snapshot" && msg.data) {
+            setSnapshot(msg.data as EngineSnapshot);
+            setSnapshotReceivedAt(Date.now());
+          }
           if (msg.type === "ltp" && msg.data && typeof msg.data === "object") {
             setSnapshot((prev) =>
               prev ? { ...prev, index_ltp: msg.data as Record<string, number> } : prev
             );
+            setSnapshotReceivedAt(Date.now());
           }
           if (msg.type === "ping" || msg.type === "keepalive") setLastPing(Date.now());
         } catch { /* ignore parse errors */ }
@@ -142,6 +148,15 @@ export function useEngineSocket() {
         if (typeof console !== "undefined") console.warn("WS FAILED (close)");
         setStatus("disconnected");
         failCount.current += 1;
+        // If the snapshot is very stale (> 30s), clear it so the UI shows "—" rather
+        // than confidently displaying old data as if it were current.
+        setSnapshotReceivedAt((prev) => {
+          if (prev > 0 && Date.now() - prev > 30_000) {
+            setSnapshot(null);
+            return 0;
+          }
+          return prev;
+        });
         if (!deadRef.current) {
           const delay = Math.min(
             WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),
@@ -176,5 +191,22 @@ export function useEngineSocket() {
     };
   }, [connect, stopPolling]);
 
-  return { snapshot, status, lastPing };
+  // Reconnect when the tab becomes visible again (handles mobile sleep / network drops).
+  // Also recovers from polling-only mode — resets failCount so WS is tried before REST.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+      const wsAlive = wsRef.current?.readyState === WebSocket.OPEN;
+      if (wsAlive) return; // already connected, nothing to do
+      if (typeof console !== "undefined") console.log("WS — tab visible, attempting reconnect");
+      if (retryRef.current) clearTimeout(retryRef.current);
+      failCount.current = 0; // reset so WS is tried before falling back to polling
+      if (pollingRef.current) stopPolling(); // drop polling — WS takes priority
+      connect();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [connect, stopPolling]);
+
+  return { snapshot, status, lastPing, snapshotReceivedAt };
 }
