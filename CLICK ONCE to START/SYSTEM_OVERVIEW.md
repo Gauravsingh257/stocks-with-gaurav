@@ -3,8 +3,9 @@
 > **Purpose:** Single reference document for any AI agent (Cursor, GPT, Claude, etc.)
 > to understand, debug, and modify this trading system without full codebase context.
 >
-> **Last updated:** 2026-03-18 (architecture fix: WS, REST, Engine→Redis snapshot)
+> **Last updated:** 2026-03-19 (resilience: Redis SPOF fallback, WS visibility reconnect, LIVE/DELAYED badge, Login UX, X-sec-ago)
 > **Engine version:** V4 Modular (smc_mtf_engine_v4.py) — v4.2.1
+> **Latest commits:** `462c7cc` kite:token_ts fix · `6a3ffe7` resilience improvements
 
 ---
 
@@ -429,7 +430,9 @@ Special idle stages: MARKET_CLOSED_SLEEP, SIGNAL_WINDOW_SLEEP, RECOVERY_WAIT
 | Protection | Mechanism |
 |------------|-----------|
 | Lock lost | Engine exits gracefully → Railway restarts |
-| Redis down | `_get_redis()` returns None → features degrade gracefully |
+| Redis down (engine) | `_get_redis()` returns None → engine features degrade gracefully (heartbeat skipped, dedup fail-open) |
+| Redis down (dashboard) | `cache.py` retries reconnect every **30s** automatically; `state_bridge.py` serves last snapshot from process memory for up to 10 min — dashboard stays populated |
+| Redis reconnect after restart | `cache._get_redis()` detects `_redis_available = False` and attempts ping after `_REDIS_RETRY_SEC` (30s); logs "reconnected" on success |
 | Signal dedup fail | Fail-open: sends signal anyway (prevents silent drops) |
 
 ---
@@ -543,14 +546,20 @@ CMD ["python", "run_engine_railway.py"]
 │                                                                      │
 │ Engine ──→ _publish_redis_snapshot() ──→ Redis engine:snapshot        │
 │                                                  │                   │
-│ Web ──→ state_bridge.py reads engine:snapshot ←──┘                   │
-│   ├── /api/snapshot (REST)                                           │
-│   └── /ws (WebSocket — pushes snapshot every ~5s)                    │
+│                                                  ▼                   │
+│ Web → state_bridge.py:                                               │
+│   1. Try Redis engine:snapshot                                       │
+│   2. If Redis down → serve in-memory _snap_cache (10 min TTL)        │
+│   3. Attach: data_source / redis_available / snapshot_time           │
+│   → /api/snapshot (REST)  +  /ws (WebSocket, every ~5s)             │
 │                                                                      │
 │ Frontend (Vercel):                                                   │
 │   ├── WebSocket: wss://Railway-Web/ws (via NEXT_PUBLIC_WS_URL)       │
-│   │   └── exponential backoff, max 5 retries, then fallback to REST  │
-│   └── REST polling: /api/snapshot (via Next.js rewrites)             │
+│   │   ├── exponential backoff, max 5 retries, then fallback to REST  │
+│   │   ├── visibilitychange → auto-reconnect when tab becomes visible │
+│   │   └── stale snapshot (>30s) cleared on disconnect                │
+│   ├── REST polling: /api/snapshot every 5s (when WS fails)           │
+│   └── Command bar reads data_source → shows LIVE/DELAYED badge       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -568,12 +577,41 @@ CMD ["python", "run_engine_railway.py"]
 
 ### WebSocket Architecture
 
-- **Vercel limitation:** Vercel does NOT support WebSocket proxy/upgrade
-- Frontend connects directly to Railway Web URL for WebSocket
+- **Vercel limitation:** Vercel does NOT support WebSocket proxy/upgrade — browser must connect directly to Railway
 - `useWebSocket.ts` resolves WS URL: `NEXT_PUBLIC_WS_URL` → derive from `NEXT_PUBLIC_BACKEND_URL` → `localhost` (dev only)
-- On production, if neither env var is set, WS is disabled (avoids broken same-domain attempts)
-- Reconnect uses exponential backoff (base 2s, max 30s, max 5 attempts)
-- OI Intelligence page (`oi-intelligence/page.tsx`) has its own WS connection with same backoff logic
+- On production with no env vars set → WS disabled (prevents broken same-domain `/ws` attempts)
+- **Reconnect strategy:** exponential backoff (base 2s, max 30s, max 5 attempts before falling back to REST polling)
+- **Visibility reconnect:** `visibilitychange` event resets `failCount` and retries WS when tab comes back from background (handles mobile sleep / screen lock)
+- **Stale state clearing:** if WS closes AND the last snapshot is >30s old, snapshot is nullified so UI shows `—` instead of stale data
+- **REST polling fallback:** 5s interval, pauses when tab is hidden (saves API quota)
+- `snapshotReceivedAt` timestamp tracks exact WS receive time → drives "X sec ago" counter in command bar
+- OI Intelligence page (`oi-intelligence/page.tsx`) has its own WS with the same backoff + visibility logic
+
+### Command Bar UI — What Each Indicator Means
+
+The `MarketCommandBar.tsx` top bar shows the following indicators in order:
+
+| Indicator | Values | Source |
+|-----------|--------|--------|
+| **NIFTY / BANKNIFTY price** | Live number with ▲/▼ + sparkline | `snapshot.index_ltp` from WS or REST |
+| **Market status** | OPEN / PREOPEN / CLOSED | Computed from current IST time (no API call) |
+| **Engine** | `ON` (green) / `OFF` (red) / `…` (loading) | `snapshot.engine_running` \|\| `snapshot.engine_live` |
+| **Signals** | `N/M` (e.g. `2/5`) | `snapshot.signals_today` / `snapshot.max_daily_signals` |
+| **Data source badge** | 🟢 LIVE \| 🟡 DELAYED \| 🔴 DISCONNECTED | Computed from WS status + snapshot age |
+| **Kite status** | `Kite ON` \| `🔐 Login` \| `Kite expired` \| `Kite —` | `health.kite_connected` + `health.token_present` |
+| **"X sec ago"** | `just now` / `5s ago` / `2m ago` | `snapshotReceivedAt` (WS) or `snapshot.snapshot_time` (REST) |
+| **Version** | `v1.1.0` | `health.backend_version` |
+
+**Data source badge logic:**
+- 🟢 **LIVE**: WS connected AND snapshot age < 15s
+- 🟡 **DELAYED**: REST polling mode OR snapshot age < 60s OR `data_source = memory_cache` (Redis down)
+- 🔴 **DISCONNECTED**: no snapshot at all OR snapshot age > 60s
+
+**Kite badge logic:**
+- `Kite ON` — `kite_connected = true`
+- `🔐 Login` — `token_present = false` (no token anywhere — run bat file)
+- `Kite expired` — `token_present = true` but `kite_connected = false` (token rejected by Kite)
+- `Kite —` — health not yet loaded
 
 ### Environment Variables (Vercel)
 
@@ -587,12 +625,14 @@ CMD ["python", "run_engine_railway.py"]
 
 | File | Purpose |
 |------|---------|
-| `dashboard/backend/state_bridge.py` | Builds engine snapshot (merges Redis `engine:snapshot` in standalone mode) |
-| `dashboard/backend/cache.py` | Redis cache layer; includes `get_engine_snapshot_from_redis()` |
-| `dashboard/backend/routes/system.py` | `/api/system/health` — engine status, Kite status, worker status |
-| `dashboard/frontend/lib/useWebSocket.ts` | WS client with env-based URL resolution, backoff, REST fallback |
-| `dashboard/frontend/lib/api.ts` | REST API client; logs error if `NEXT_PUBLIC_BACKEND_URL` missing on prod |
-| `dashboard/frontend/components/MarketCommandBar.tsx` | Top bar — fetches health + snapshot; shows LIVE/DELAYED/DISCONNECTED badge, "X sec ago" timer, and token-aware Kite status |
+| `dashboard/backend/state_bridge.py` | Builds snapshot (direct engine globals in LIVE mode; merges Redis `engine:snapshot` in STANDALONE mode; falls back to `_snap_cache` in-memory if Redis is down). Adds `data_source` + `redis_available` fields. |
+| `dashboard/backend/cache.py` | Redis cache layer with **30s auto-retry** reconnect. Key functions: `get_engine_snapshot_from_redis()`, `get_redis_status()`, `get_ltp()`, `is_redis_available()`. |
+| `dashboard/backend/kite_auth.py` | Web login token exchange. `store_access_token()` writes `kite:access_token` + `kite:token_ts` + `kite:last_login` to Redis. |
+| `dashboard/backend/routes/kite.py` | `/api/kite/login` + `/api/kite/callback` — web login flow. |
+| `dashboard/backend/routes/system.py` | `/api/system/health` — engine status, Kite connected, token present, worker status, Redis info. |
+| `dashboard/frontend/lib/useWebSocket.ts` | WS client: env-based URL, exponential backoff, REST fallback, `visibilitychange` reconnect, stale-snapshot clearing, returns `snapshotReceivedAt`. |
+| `dashboard/frontend/lib/api.ts` | REST API client; logs error if `NEXT_PUBLIC_BACKEND_URL` missing on prod. |
+| `dashboard/frontend/components/MarketCommandBar.tsx` | Top bar: LIVE/DELAYED/DISCONNECTED badge, "X sec ago" timer (1s tick), token-aware Kite status (`🔐 Login` / `Kite expired` / `Kite ON`), index LTP sparklines. |
 
 ---
 
@@ -634,15 +674,15 @@ Trading Algo/
 │   ├── backend/                  # FastAPI backend
 │   │   ├── main.py               # Web service entry
 │   │   ├── engine_api.py         # Engine /health endpoint
-│   │   ├── state_bridge.py       # Engine → dashboard data bridge (reads Redis engine:snapshot in standalone mode)
-│   │   ├── cache.py              # Redis cache layer (incl. get_engine_snapshot_from_redis)
+│   │   ├── state_bridge.py       # Engine → dashboard data bridge; in-memory _snap_cache fallback when Redis is unavailable
+│   │   ├── cache.py              # Redis cache with 30s auto-retry; get_engine_snapshot_from_redis, get_redis_status
 │   │   ├── kite_auth.py          # Web login token exchange + Redis storage (kite:access_token, kite:token_ts)
 │   │   ├── routes/               # API route handlers (incl. kite.py for /api/kite/login + /callback)
 │   │   └── db/                   # Database schema
 │   └── frontend/                 # Next.js frontend
 │       ├── app/                  # Pages (live, analytics, OI, etc.)
 │       ├── components/           # Shared UI components
-│       ├── lib/                  # API client, WebSocket (useWebSocket.ts, api.ts)
+│       ├── lib/                  # API client + WebSocket hook (useWebSocket.ts: backoff, visibility reconnect, snapshotReceivedAt)
 │       └── .env.production       # Baked env vars (BACKEND_URL, WS_URL) for Vercel build
 │
 ├── smc_trading_engine/           # Hierarchical strategy module
@@ -723,7 +763,8 @@ Trading Algo/
 | Zone tap signals | `engine/smc_zone_tap.py` | |
 | Dashboard API | `dashboard/backend/engine_api.py` | `dashboard/backend/state_bridge.py`, `dashboard/backend/cache.py` |
 | WebSocket issues | `dashboard/frontend/lib/useWebSocket.ts` | `dashboard/frontend/.env.production`, `dashboard/frontend/app/oi-intelligence/page.tsx` |
-| Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` (Redis + memory fallback) |
+| Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` (`get_engine_snapshot_from_redis`, `get_redis_status`) |
+| Redis connectivity | `dashboard/backend/cache.py` | `is_redis_available()`, `get_redis_status()` — check these when dashboard shows DELAYED/DISCONNECTED |
 | Health/status display | `dashboard/backend/routes/system.py` | `dashboard/frontend/components/MarketCommandBar.tsx` |
 | Risk / position sizing | `risk_management.py` | |
 | SMC detection logic | `smc_detectors.py` | |
@@ -740,6 +781,8 @@ Trading Algo/
 - **`_publish_redis_snapshot()`** — Engine→Redis data bridge; removing or breaking it will cause dashboard to show stale/empty data
 - **`dashboard/frontend/.env.production`** — Contains Railway URLs baked into Vercel build; incorrect values break all API + WS connections
 - **WebSocket URL resolution in `useWebSocket.ts`** — Production safety logic prevents broken same-domain WS on Vercel; do not revert to relative `/ws`
+- **`_snap_cache` in `state_bridge.py`** — In-memory Redis fallback; must be populated by every successful `get_engine_snapshot()` call. Do not add early returns before the cache write at the bottom of the function
+- **`_REDIS_RETRY_SEC` in `cache.py`** — 30s reconnect throttle; lowering it too much will spam Redis with connection attempts during an outage
 
 ### Safe Areas for Modification
 
