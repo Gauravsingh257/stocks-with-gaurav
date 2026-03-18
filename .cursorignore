@@ -1,0 +1,53 @@
+﻿# .cursorignore - Excludes irrelevant files from Cursor AI context to reduce token usage.
+# Does NOT affect git, Railway, or runtime.
+
+# Logs & runtime state
+logs/
+*.log
+
+# Generated / cached outputs
+backtest_results/
+backtest_results_setup_c/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Large data files
+*.csv
+*.parquet
+*.feather
+*.pkl
+*.pickle
+
+# Node / frontend build artifacts
+dashboard/frontend/node_modules/
+dashboard/frontend/.next/
+dashboard/frontend/out/
+
+# Scratch / analysis files (not production)
+_analysis_today.py
+_perf_mar10.py
+_test_buttons.py
+_test_zt_buttons.py
+
+# Backtest scripts (not needed for live engine work)
+run_backtest_jan_feb.py
+run_backtest_setupd.py
+smc_trading_engine/run_jan2026_backtest.py
+
+# Static assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.woff
+*.woff2
+
+# Secrets - never index these
+.env
+.env.*
+access_token.txt

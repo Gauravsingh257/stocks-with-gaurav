@@ -874,14 +874,15 @@ def _respect_api_throttle(min_interval_sec: float = 0.35):
     """
     Global API pacing guard shared across threads.
     Ensures all Kite historical calls respect minimum spacing.
+    Sleep happens OUTSIDE the lock so other threads are not blocked waiting.
     """
     global LAST_API_CALL
     with API_THROTTLE_LOCK:
         now = t.time()
         wait_for = min_interval_sec - (now - LAST_API_CALL)
-        if wait_for > 0:
-            t.sleep(wait_for)
-        LAST_API_CALL = t.time()
+        LAST_API_CALL = t.time() + max(wait_for, 0)  # Reserve the slot immediately
+    if wait_for > 0:
+        t.sleep(wait_for)
 
 def update_cache(symbol, interval, lookback):
     token = get_token(symbol)
