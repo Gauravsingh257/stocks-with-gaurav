@@ -4406,6 +4406,7 @@ def run_live_mode():
                 if t.time() - _last_lock_refresh >= engine_runtime.ENGINE_LOCK_REFRESH_INTERVAL_SEC:
                     if not engine_runtime.refresh_engine_lock():
                         logging.warning("Lost engine lock; another instance may have taken over. Exiting.")
+                        print("🛑 Engine exiting: Redis lock lost (another instance may be running). Check Railway or other running engine.")
                         _shutdown_handler("redis_lock_lost")
                         return
                     _last_lock_refresh = t.time()
@@ -5091,24 +5092,29 @@ def _release_process_lock():
     except Exception as e:
         logging.error(f"Failed to release lock file: {e}")
 
+_shutdown_telegram_sent = False  # Prevent duplicate Telegram when atexit runs after explicit _shutdown_handler
+
 def _shutdown_handler(reason="unknown"):
     """Save all state on exit — called by atexit, SIGINT, SIGTERM. Releases Redis lock."""
-    logging.info(f"🛑 Engine shutting down (reason: {reason}). Saving state...")
+    global _shutdown_telegram_sent
+    logging.info("🛑 Engine shutting down (reason: %s). Saving state...", reason)
     try:
         save_engine_states()
         persist_active_trades()
         _release_process_lock()  # F1.8
-        if ACTIVE_TRADES:
-            symbols = [t.get("symbol", "?") for t in ACTIVE_TRADES]
-            telegram_send(f"🛑 <b>ENGINE SHUTDOWN</b>\n"
-                          f"Reason: {reason}\n"
-                          f"💾 Saved {len(ACTIVE_TRADES)} active trades:\n"
-                          f"{', '.join(symbols)}\n"
-                          f"<i>Trades will resume on restart.</i>")
-        else:
-            telegram_send(f"🛑 <b>ENGINE SHUTDOWN</b>\nReason: {reason}\nNo active trades.")
+        if not _shutdown_telegram_sent:
+            _shutdown_telegram_sent = True
+            if ACTIVE_TRADES:
+                symbols = [t.get("symbol", "?") for t in ACTIVE_TRADES]
+                telegram_send(f"🛑 <b>ENGINE SHUTDOWN</b>\n"
+                              f"Reason: {reason}\n"
+                              f"💾 Saved {len(ACTIVE_TRADES)} active trades:\n"
+                              f"{', '.join(symbols)}\n"
+                              f"<i>Trades will resume on restart.</i>")
+            else:
+                telegram_send(f"🛑 <b>ENGINE SHUTDOWN</b>\nReason: {reason}\nNo active trades.")
     except Exception as e:
-        logging.error(f"Shutdown save failed: {e}")
+        logging.error("Shutdown save failed: %s", e)
     logging.info("💾 State saved. Goodbye.")
 
 def _sigint_handler(signum, frame):
@@ -5148,6 +5154,7 @@ if __name__ == "__main__":
     while True:
         run_live_mode()
         if not _railway:
+            logging.info("run_live_mode returned (token/data failure or redis_lock_lost). Exiting.")
             break
         logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
         t.sleep(120)

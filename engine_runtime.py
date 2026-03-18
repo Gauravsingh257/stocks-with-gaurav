@@ -132,8 +132,8 @@ def refresh_engine_lock() -> bool:
         _lock_holder = False
         return False
     except Exception as e:
-        log.warning("Failed to refresh engine lock: %s", e)
-        return False
+        log.warning("Failed to refresh engine lock (Redis error — keeping run): %s", e)
+        return True  # Don't exit on transient Redis errors; assume we still hold the lock
 
 
 def release_engine_lock() -> None:
