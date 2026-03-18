@@ -232,7 +232,7 @@ formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console.setFormatter(formatter)
 logging.getLogger('').addHandler(console)
 
-print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now(), "(UTC)" if not os.getenv("TZ") else "")
+print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", now_ist(), "IST")
 
 # =====================================================
 # SHARED ENGINE STATE FOR LOCAL API
@@ -253,10 +253,7 @@ def update_engine_state(**kwargs: Any) -> None:
     """Thread-safe update of ENGINE_STATE; always refresh timestamp in IST."""
     with _ENGINE_STATE_LOCK:
         ENGINE_STATE.update(kwargs)
-        try:
-            ENGINE_STATE["timestamp"] = now_ist().isoformat()
-        except Exception:
-            ENGINE_STATE["timestamp"] = datetime.now().isoformat()
+        ENGINE_STATE["timestamp"] = now_ist().isoformat()
 
 
 def get_engine_state_snapshot() -> Dict[str, Any]:
@@ -457,7 +454,7 @@ MORNING_WATCHLIST_FLAG = "morning_watchlist.flag"
 # =====================================================
 def wait_for_next_minute():
     """Sleeps until the start of the next minute (plus 1s buffer)"""
-    now = datetime.now()
+    now = now_ist()
     sleep_seconds = 60 - now.second + 1
     if sleep_seconds < 0: sleep_seconds = 1 # Safety
     print(f"[INFO] Waiting {sleep_seconds}s for next candle close...")
@@ -620,7 +617,7 @@ def save_json(path: str, data: dict):
 # =====================================================
 
 def already_alerted_today(key: str) -> bool:
-    today = datetime.now().date().isoformat()
+    today = now_ist().date().isoformat()
     data = load_json(ACTIVE_SETUPS_FILE)
 
     if data.get(key) == today:
@@ -635,7 +632,7 @@ def get_daily_trade_count(symbol: str) -> int:
     Counts how many times a symbol has been alerted/traded today.
     Usage: Limit Stocks to 1 trade per day.
     """
-    today = datetime.now().date().isoformat()
+    today = now_ist().date().isoformat()
     data = load_json(ACTIVE_SETUPS_FILE)
     
     count = 0
@@ -677,9 +674,10 @@ _IST = ZoneInfo("Asia/Kolkata")
 
 
 def now_ist() -> datetime:
-    """Current time in IST — use this everywhere instead of datetime.now()
-    so Railway (UTC) and local (IST) both work correctly."""
-    return datetime.now(_IST)
+    """Current time in IST — use this everywhere instead of now_ist()
+    so Railway (UTC) and local (IST) both work correctly.
+    Returns naive datetime (no tzinfo) to avoid tz-aware vs tz-naive comparison errors."""
+    return datetime.now(_IST).replace(tzinfo=None)
 
 
 def is_market_open() -> bool:
@@ -793,8 +791,8 @@ def update_cache(symbol, interval, lookback):
             _respect_api_throttle()
             data = kite.historical_data(
                 token,
-                datetime.now() - timedelta(days=15),
-                datetime.now(),
+                now_ist() - timedelta(days=15),
+                now_ist(),
                 interval
             )
             if data:
@@ -880,8 +878,8 @@ def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
             _respect_api_throttle()
             data = kite.historical_data(
                 token,
-                datetime.now() - timedelta(days=15),
-                datetime.now(),
+                now_ist() - timedelta(days=15),
+                now_ist(),
                 interval
             )
             with OHLC_CACHE_LOCK:
@@ -1262,7 +1260,7 @@ def detect_setup_a(symbol: str, tf_data: dict):
     # CASE: EXISTING STATE
     if state:
         # Check Expiry
-        if (datetime.now() - state["time"]).total_seconds() > 1800:
+        if (now_ist() - state["time"]).total_seconds() > 1800:
             STRUCTURE_STATE.pop(key, None)
             return None
             
@@ -1342,7 +1340,7 @@ def detect_setup_a(symbol: str, tf_data: dict):
             "ob": ob,
             "fvg": fvg,
             "stage": "FORMED",
-            "time": datetime.now()
+            "time": now_ist()
         }
 
         return {
@@ -1876,7 +1874,7 @@ def detect_setup_d(symbol: str, tf_data: dict):
         # window — the gap-down origin is 300-400 pts away, making it impossible
         # to ever "break" yesterday's swing high and fire a bullish CHoCH.
         # Solution: when the day gapped >0.3%, use same-day candles only.
-        _today_date = datetime.now().date()
+        _today_date = now_ist().date()
         _today_ltf  = [c for c in ltf_data if c["date"].date() == _today_date]
         _prev_ltf   = [c for c in ltf_data if c["date"].date() < _today_date]
         _is_gap_day = False
@@ -1957,8 +1955,8 @@ def detect_setup_d(symbol: str, tf_data: dict):
             "choch_idx"          : idx,
             "is_gap_day"         : _is_gap_day,
             "sweep_detected"     : bool(recent_sweep),
-            "choch_time"         : datetime.now(),
-            "time"               : datetime.now(),
+            "choch_time"         : now_ist(),
+            "time"               : now_ist(),
             "ob"                 : None,
             "fvg"                : None,
             # Phase 2 NEW — displacement context carried into scoring
@@ -1982,7 +1980,7 @@ def detect_setup_d(symbol: str, tf_data: dict):
         return None
 
     # -------- COMMON EXPIRY CHECK --------
-    if (datetime.now() - state["time"]).total_seconds() > _expiry_secs:
+    if (now_ist() - state["time"]).total_seconds() > _expiry_secs:
         SETUP_D_STATE.pop(key, None)
         return None
 
@@ -2144,7 +2142,7 @@ def _trace_append(symbol: str, entry: dict) -> None:
     Automatically stamps timestamp and trims to last 50 entries per symbol.
     """
     global SETUP_D_STRUCTURE_TRACE
-    entry.setdefault("timestamp", datetime.now())
+    entry.setdefault("timestamp", now_ist())
     entry.setdefault("symbol", symbol)
     bucket = SETUP_D_STRUCTURE_TRACE.setdefault(symbol, [])
     bucket.append(entry)
@@ -2376,8 +2374,8 @@ def fetch_manual_orders():
                 # Fetch 2 days of 5m data for ATR
                 candles = kite.historical_data(
                     token, 
-                    datetime.now() - timedelta(days=2), 
-                    datetime.now(), 
+                    now_ist() - timedelta(days=2), 
+                    now_ist(), 
                     "5minute"
                 )
                 atr = calculate_atr(candles)
@@ -2405,7 +2403,7 @@ def fetch_manual_orders():
                 "target": round(target, 2),
                 "rr": 2.0,
                 "risk_mult": 1.0,
-                "start_time": datetime.now(),
+                "start_time": now_ist(),
                 "order_id": oid
             }
             
@@ -2424,7 +2422,7 @@ def fetch_manual_orders():
                    f"Auto-Tgt: {round(target, 2)}\n"
                    f"<i>Engine is now managing this trade.</i>")
             _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
-            signal_id = f"manual_0_{_sym}_{datetime.now().timestamp():.0f}"
+            signal_id = f"manual_0_{_sym}_{now_ist().timestamp():.0f}"
             telegram_send(msg, signal_id=signal_id)
             
     except Exception as e:
@@ -2562,7 +2560,7 @@ def scan_symbol(symbol: str):
             if setup_name == "SETUP-D":
                 _sym = sig.get('symbol', 'UNKNOWN')
                 _trace_entry = {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": now_ist().isoformat(),
                     "symbol": _sym,
                     "direction": sig.get("direction"),
                     "entry": sig.get("entry"),
@@ -2678,7 +2676,7 @@ def detect_market_regime():
     """
     global MARKET_REGIME, REGIME_LAST_UPDATE
     
-    now = datetime.now()
+    now = now_ist()
     
     # Refresh every 2 minutes (aligned with OI sentiment refresh)
     if REGIME_LAST_UPDATE and (now - REGIME_LAST_UPDATE).total_seconds() < 120:
@@ -2869,7 +2867,7 @@ def detect_volatility_regime(symbol="NSE:NIFTY 50"):
     
     # Cache for 30 minutes
     if VOL_REGIME_CACHE["updated"]:
-        elapsed = (datetime.now() - VOL_REGIME_CACHE["updated"]).total_seconds()
+        elapsed = (now_ist() - VOL_REGIME_CACHE["updated"]).total_seconds()
         if elapsed < 1800:
             return VOL_REGIME_CACHE["regime"]
     
@@ -2904,7 +2902,7 @@ def detect_volatility_regime(symbol="NSE:NIFTY 50"):
             regime = "NORMAL"
         
         VOLATILITY_REGIME = regime
-        VOL_REGIME_CACHE = {"regime": regime, "updated": datetime.now()}
+        VOL_REGIME_CACHE = {"regime": regime, "updated": now_ist()}
         logging.info(f"📊 VOLATILITY REGIME: {regime} (ATR Rank={rank:.0f}%, Current ATR={current_atr:.1f})")
         return regime
         
@@ -2944,7 +2942,7 @@ def fetch_option_chain_data(index_symbol="NSE:NIFTY 50"):
     
     # Cache for 30 minutes
     if OPTION_CHAIN_DATA["updated"]:
-        elapsed = (datetime.now() - OPTION_CHAIN_DATA["updated"]).total_seconds()
+        elapsed = (now_ist() - OPTION_CHAIN_DATA["updated"]).total_seconds()
         if elapsed < 1800:
             return OPTION_CHAIN_DATA
     
@@ -3008,7 +3006,7 @@ def fetch_option_chain_data(index_symbol="NSE:NIFTY 50"):
             "max_pain": max_pain,
             "total_call_oi": total_call_oi,
             "total_put_oi": total_put_oi,
-            "updated": datetime.now()
+            "updated": now_ist()
         }
         
         logging.info(f"📊 OPTION CHAIN: PCR={pcr:.2f} | Max Pain={max_pain} | "
@@ -3234,7 +3232,7 @@ def _load_recent_setup_performance(window_days: int = 20) -> dict:
     Load recent closed trade performance by setup from yearly trade ledger.
     Returns: {setup: {trades, wins, sum_r, expectancy, win_rate}}
     """
-    now = datetime.now()
+    now = now_ist()
     cache_ts = ADAPTIVE_PERF_CACHE.get("updated")
     if cache_ts and (now - cache_ts).total_seconds() < 600 and ADAPTIVE_PERF_CACHE.get("stats"):
         return ADAPTIVE_PERF_CACHE["stats"]
@@ -3412,7 +3410,7 @@ def rank_signals(signals: list) -> list:
 # =====================================================
 
 def send_morning_watchlist():
-    today = datetime.now().date().isoformat()
+    today = now_ist().date().isoformat()
 
     # Run only once per day
     if os.path.exists(MORNING_WATCHLIST_FLAG):
@@ -3506,7 +3504,7 @@ def telegram_send_with_buttons(message: str, buttons: list):
 def send_hourly_summary(signals: list):
     global LAST_HOURLY_SUMMARY
 
-    current_hour = datetime.now().strftime("%Y-%m-%d %H")
+    current_hour = now_ist().strftime("%Y-%m-%d %H")
 
     if LAST_HOURLY_SUMMARY == current_hour:
         return
@@ -4007,7 +4005,7 @@ def monitor_active_trades(symbol, current_price):
             
             if CONSECUTIVE_LOSSES >= COOLDOWN_AFTER_STREAK:
                 # F1.4: Set proper 60-minute cooldown timer
-                COOLDOWN_UNTIL = datetime.now() + timedelta(minutes=60)
+                COOLDOWN_UNTIL = now_ist() + timedelta(minutes=60)
                 telegram_send(f"⚠️ <b>{CONSECUTIVE_LOSSES} CONSECUTIVE LOSSES</b>\n"
                               f"Entering observation mode until {COOLDOWN_UNTIL.strftime('%H:%M')}.")
                 logging.warning(f"⚠️ COOLDOWN: {CONSECUTIVE_LOSSES} losses — paused until {COOLDOWN_UNTIL.strftime('%H:%M')}")
@@ -4038,7 +4036,7 @@ def log_trade_to_csv(trade_dict: dict):
             pnl_r = -1.0 * risk_mult
 
     trade_data = {
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "date": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
         "symbol": trade_dict["symbol"],
         "direction": trade_dict["direction"],
         "setup": trade_dict["setup"],
@@ -4066,9 +4064,9 @@ def check_multi_day_drawdown() -> bool:
     global MULTI_DAY_HALT_UNTIL
     
     # Check if already in halt period
-    if MULTI_DAY_HALT_UNTIL and datetime.now() < MULTI_DAY_HALT_UNTIL:
+    if MULTI_DAY_HALT_UNTIL and now_ist() < MULTI_DAY_HALT_UNTIL:
         return True
-    elif MULTI_DAY_HALT_UNTIL and datetime.now() >= MULTI_DAY_HALT_UNTIL:
+    elif MULTI_DAY_HALT_UNTIL and now_ist() >= MULTI_DAY_HALT_UNTIL:
         MULTI_DAY_HALT_UNTIL = None  # Expired, clear it
         logging.info("✅ Multi-day drawdown halt expired — resuming trading")
     
@@ -4080,13 +4078,13 @@ def check_multi_day_drawdown() -> bool:
             return False
         
         df["date"] = pd.to_datetime(df["date"], format="mixed", dayfirst=False)
-        cutoff = datetime.now() - timedelta(days=MULTI_DAY_DD_WINDOW)
+        cutoff = now_ist() - timedelta(days=MULTI_DAY_DD_WINDOW)
         recent = df[df["date"] >= cutoff]
         
         rolling_pnl = recent["pnl_r"].sum()
         
         if rolling_pnl <= MULTI_DAY_DD_LIMIT:
-            MULTI_DAY_HALT_UNTIL = datetime.now() + timedelta(hours=MULTI_DAY_HALT_HOURS)
+            MULTI_DAY_HALT_UNTIL = now_ist() + timedelta(hours=MULTI_DAY_HALT_HOURS)
             msg = (f"🛑 <b>MULTI-DAY DRAWDOWN BREAKER</b>\n"
                    f"Rolling {MULTI_DAY_DD_WINDOW}-day PnL: {rolling_pnl:.1f}R "
                    f"(limit: {MULTI_DAY_DD_LIMIT}R)\n"
@@ -4099,7 +4097,7 @@ def check_multi_day_drawdown() -> bool:
                 db.set_value("engine_state", "multi_day_halt", {
                     "halt_until": MULTI_DAY_HALT_UNTIL.isoformat(),
                     "rolling_pnl": rolling_pnl,
-                    "triggered_at": datetime.now().isoformat()
+                    "triggered_at": now_ist().isoformat()
                 })
             except Exception:
                 pass
@@ -4124,7 +4122,7 @@ def send_eod_report():
             df = pd.read_csv("trade_ledger_2026.csv")
             if not df.empty and "date" in df.columns:
                 df["date"] = pd.to_datetime(df["date"])
-                today = datetime.now().date()
+                today = now_ist().date()
                 today_mask = df["date"].dt.date == today
                 today_df = df[today_mask]
                 today_trades = today_df.to_dict("records")
@@ -4189,7 +4187,7 @@ def send_eod_report():
 # =====================================================
 
 def cleanup_structure_state(max_age_seconds=3600):
-    now = datetime.now()
+    now = now_ist()
     for k in list(STRUCTURE_STATE.keys()):
         state = STRUCTURE_STATE.get(k)
         if not state:
@@ -4218,7 +4216,7 @@ def check_token_age(max_hours=20) -> bool:
                     if ts:
                         from datetime import datetime as _dt
                         token_time = _dt.fromisoformat(ts)
-                        age_hours = (datetime.now() - token_time).total_seconds() / 3600
+                        age_hours = (now_ist() - token_time).total_seconds() / 3600
                         if age_hours > max_hours:
                             print(f"❌ Redis token is {age_hours:.1f}h old (max {max_hours}h) — STALE")
                             logging.critical("Token expired: %.1fh old (Redis)", age_hours)
@@ -4240,7 +4238,7 @@ def check_token_age(max_hours=20) -> bool:
             telegram_send("🛑 <b>TOKEN MISSING</b>\naccess_token.txt not found. Run zerodha_login.py!")
             return False
         mod_time = datetime.fromtimestamp(os.path.getmtime(token_file))
-        age_hours = (datetime.now() - mod_time).total_seconds() / 3600
+        age_hours = (now_ist() - mod_time).total_seconds() / 3600
         if age_hours > max_hours:
             msg = (f"🛑 <b>TOKEN EXPIRED</b>\n"
                    f"access_token.txt is {age_hours:.1f} hours old (max: {max_hours}h)\n"
@@ -4325,7 +4323,7 @@ def save_engine_states():
             "consecutive_losses": CONSECUTIVE_LOSSES,
             "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
             "daily_signal_count": DAILY_SIGNAL_COUNT,
-            "saved_date": datetime.now().date().isoformat()
+            "saved_date": now_ist().date().isoformat()
         })
     except Exception as e:
         logging.error(f"Failed to persist circuit breaker state: {e}")
@@ -4351,7 +4349,7 @@ def load_engine_states():
     # F1.3: Restore circuit breaker state (only if same trading day)
     try:
         cb_data = db.get_value("engine_state", "circuit_breaker", default=None)
-        if cb_data and cb_data.get("saved_date") == datetime.now().date().isoformat():
+        if cb_data and cb_data.get("saved_date") == now_ist().date().isoformat():
             DAILY_PNL_R = cb_data.get("daily_pnl_r", 0.0)
             CONSECUTIVE_LOSSES = cb_data.get("consecutive_losses", 0)
             CIRCUIT_BREAKER_ACTIVE = cb_data.get("circuit_breaker_active", False)
@@ -4369,7 +4367,7 @@ def load_engine_states():
         halt_data = db.get_value("engine_state", "multi_day_halt", default=None)
         if halt_data and halt_data.get("halt_until"):
             halt_until = datetime.fromisoformat(halt_data["halt_until"])
-            if datetime.now() < halt_until:
+            if now_ist() < halt_until:
                 MULTI_DAY_HALT_UNTIL = halt_until
                 logging.warning(f"💾 Restored multi-day halt: until {halt_until.strftime('%Y-%m-%d %H:%M')}")
             else:
@@ -4611,8 +4609,8 @@ def run_live_mode():
 
             # F4.3: Multi-day drawdown check (runs once per cycle, lightweight)
             if check_multi_day_drawdown():
-                remaining = (MULTI_DAY_HALT_UNTIL - datetime.now()).total_seconds() / 3600
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Multi-day halt: {remaining:.1f}hrs remaining — monitoring only")
+                remaining = (MULTI_DAY_HALT_UNTIL - now_ist()).total_seconds() / 3600
+                print(f"[{now_ist().strftime('%H:%M:%S')}] 🛑 Multi-day halt: {remaining:.1f}hrs remaining — monitoring only")
                 for sym in [t['symbol'] for t in ACTIVE_TRADES]:
                     price = fetch_ltp(sym)
                     if price:
@@ -4644,8 +4642,8 @@ def run_live_mode():
                 continue
 
             # 🛑 CONSECUTIVE LOSS COOLDOWN (E5) — F1.4: proper 60-minute timer
-            if COOLDOWN_UNTIL and datetime.now() < COOLDOWN_UNTIL:
-                remaining = int(max(0, (COOLDOWN_UNTIL - datetime.now()).total_seconds() // 60))
+            if COOLDOWN_UNTIL and now_ist() < COOLDOWN_UNTIL:
+                remaining = int(max(0, (COOLDOWN_UNTIL - now_ist()).total_seconds() // 60))
                 print(f"[{now.strftime('%H:%M:%S')}] ⚠️ Cooldown active: {remaining}min remaining ({CONSECUTIVE_LOSSES} consecutive losses)")
                 for symbol in [t['symbol'] for t in ACTIVE_TRADES]:
                     price = fetch_ltp(symbol)
@@ -4653,7 +4651,7 @@ def run_live_mode():
                         monitor_active_trades(symbol, price)
                 wait_for_next_minute()
                 continue
-            elif COOLDOWN_UNTIL and datetime.now() >= COOLDOWN_UNTIL:
+            elif COOLDOWN_UNTIL and now_ist() >= COOLDOWN_UNTIL:
                 # Cooldown expired — resume trading
                 logging.info(f"✅ Cooldown expired. Resuming signal generation.")
                 telegram_send(f"✅ <b>COOLDOWN EXPIRED</b>\nResuming signal generation.")
@@ -4851,7 +4849,7 @@ def run_live_mode():
                                 s["adaptive_reason"] = adaptive_reason
                                 if not adaptive_ok:
                                     ADAPTIVE_BLOCK_LOG.append({
-                                        "ts": datetime.now(),
+                                        "ts": now_ist(),
                                         "symbol": s.get("symbol", ""),
                                         "setup": s.get("setup", ""),
                                         "direction": s.get("direction", ""),
@@ -4868,7 +4866,7 @@ def run_live_mode():
                                 s["ai_score"] = ai_score
                                 s["ai_reasons"] = ai_reasons
                                 ADAPTIVE_SCORE_LOG.append({
-                                    "ts": datetime.now(),
+                                    "ts": now_ist(),
                                     "symbol": s.get("symbol", ""),
                                     "setup": s.get("setup", ""),
                                     "direction": s.get("direction", ""),
@@ -5039,11 +5037,11 @@ def run_live_mode():
                         except: pass
                         
                 # 2. Check for Next Minute Start
-                if datetime.now().second == 0:
+                if now_ist().second == 0:
                     break
                 
                 # 3. POLL MANUAL TRADES (Every 5 seconds)
-                if manual_handler and datetime.now().second % 5 == 0:
+                if manual_handler and now_ist().second % 5 == 0:
                     try:
                         manual_handler.poll_manual_trades(ACTIVE_TRADES)
                     except Exception as e:

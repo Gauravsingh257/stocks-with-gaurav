@@ -25,6 +25,12 @@ import logging
 from datetime import datetime, time
 from typing import Optional, Dict, List, Tuple
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 logger = logging.getLogger("MarketState")
 
 # Import SMC detectors
@@ -120,7 +126,7 @@ def update_market_state(
     Returns:
         dict: Current market state
     """
-    now = datetime.now()
+    now = datetime.now(_IST).replace(tzinfo=None)
     
     if not (time(9, 16) <= now.time() <= time(15, 15)):
         return _market_state

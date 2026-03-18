@@ -26,6 +26,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────
@@ -308,7 +314,7 @@ def get_engine_snapshot() -> Dict:
         "engine_version":      _engine_version,
         "engine_last_cycle":   _last_cycle_ts,
         "engine_last_cycle_age_sec": _last_cycle_age,
-        "snapshot_time":       datetime.now().isoformat(),
+        "snapshot_time":       datetime.now(_IST).isoformat(),
 
         # ── Index LTP from cache (for real-time command bar / sparklines)
         "index_ltp":           _get_index_ltp_from_cache(),

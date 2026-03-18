@@ -312,13 +312,13 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
                             "score": 0,
                             "reasons": ["1m tap after 5m zone detected"],
                             "candle_time": c.get("date"),
-                            "timestamp": datetime.now(),
+                            "timestamp": datetime.now(_IST),
                         }
                         # Only fire once per zone per direction
                         if not st["zone_cooldowns"].get(zone_key):
                             from smc_mtf_engine_v4 import handle_zone_tap_signal
                             handle_zone_tap_signal(sig)
-                            st["zone_cooldowns"][zone_key] = datetime.now()
+                            st["zone_cooldowns"][zone_key] = datetime.now(_IST)
                         st["active_1m_scans"][zone_key] = False
                         return
                 _time.sleep(60)

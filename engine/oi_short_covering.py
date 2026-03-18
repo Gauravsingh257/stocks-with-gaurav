@@ -180,7 +180,7 @@ def _persist_sc_snapshot(trade_signals: list, structure_alerts: list):
     import json
 
     try:
-        now = datetime.now()
+        now = datetime.now(_IST)
         history_out = {}
         for symbol, readings in _strike_history.items():
             if not readings:
@@ -317,14 +317,14 @@ def monitor_oi_sc_trades(kite_obj):
             trade["result"] = "LOSS"
             trade["exit_price"] = sl
             trade["pnl_r"] = -1.0
-            trade["exit_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            trade["exit_time"] = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")
             closed.append(trade)
         elif target_hit:
             trade["status"] = "CLOSED"
             trade["result"] = "WIN"
             trade["exit_price"] = target
             trade["pnl_r"] = trade.get("rr", 2.0)
-            trade["exit_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            trade["exit_time"] = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")
             closed.append(trade)
 
     # Log closed trades
@@ -332,7 +332,7 @@ def monitor_oi_sc_trades(kite_obj):
         _log_oi_sc_closed_trade(trade)
 
     # Also expire trades from previous days (EOD auto-close)
-    now = datetime.now()
+    now = datetime.now(_IST)
     for trade in active:
         if trade["status"] != "ACTIVE":
             continue
@@ -362,7 +362,7 @@ def monitor_oi_sc_trades(kite_obj):
 def _log_oi_sc_closed_trade(trade: dict):
     """Log a closed OI SC trade to CSV + dashboard DB."""
     trade_data = {
-        "date": trade.get("entry_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "date": trade.get("entry_time", datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")),
         "symbol": f"NFO:{trade['symbol']}",
         "direction": trade["direction"],
         "setup": "OI-SC",
@@ -439,7 +439,7 @@ def scan_short_covering(kite_obj, telegram_fn=None, fetch_ohlc_fn=None):
     """
     global _last_scan_time
 
-    now = datetime.now()
+    now = datetime.now(_IST)
 
     # Time guard: only scan during market hours
     if not _is_market_hours():
@@ -551,7 +551,7 @@ def _check_smc_structure(underlying, spot, fetch_ohlc_fn):
         }
     Returns None on failure (non-fatal).
     """
-    now = datetime.now()
+    now = datetime.now(_IST)
     cache_key = (underlying, now.date().isoformat())
 
     # Serve from cache if fresh
@@ -923,7 +923,7 @@ def _scan_underlying(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
         logger.warning(f"OI SC: Quote failed for {index_name}: {e}")
         return []
 
-    now = datetime.now()
+    now = datetime.now(_IST)
     signals = []
 
     # 4. Store history + 5. Detect
@@ -985,7 +985,7 @@ def _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn):
     underlying = info["underlying"]
     opt_type = info["opt_type"]
     strike = info["strike"]
-    now = datetime.now()
+    now = datetime.now(_IST)
 
     # Dedup check
     alert_key = f"{underlying}_{opt_type}_{strike}_{now.date().isoformat()}"
@@ -1271,7 +1271,7 @@ def _build_structure_alert(tradingsymbol, info, spot, opt_type, score,
     """
     underlying = info["underlying"]
     strike = info["strike"]
-    now = datetime.now()
+    now = datetime.now(_IST)
 
     # Determine the structural direction to watch
     bias = smc_structure.get("bias")

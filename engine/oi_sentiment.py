@@ -30,6 +30,13 @@ import pickle
 import time as t
 from datetime import datetime, timedelta, date as dt_date
 from collections import deque
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 from engine import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -111,7 +118,7 @@ def get_oi_summary_text():
     if not s["last_update"]:
         return "OI Sentiment: No data yet"
     
-    age_mins = (datetime.now() - s["last_update"]).seconds // 60
+    age_mins = (datetime.now(_IST) - s["last_update"]).seconds // 60
     
     pcr_hist = s["pcr_history"]
     pcr_val = pcr_hist[-1][1] if pcr_hist else "N/A"
@@ -150,7 +157,7 @@ def update_oi_sentiment(kite_obj, fetch_ohlc_fn=None):
         dict: Current OI sentiment state
     """
     
-    now = datetime.now()
+    now = datetime.now(_IST)
     
     # Throttle: only refresh every OI_SENTIMENT_REFRESH_SECS
     if _oi_state["last_update"]:
@@ -482,7 +489,7 @@ def _fetch_index_oi(kite_obj, index_symbol, index_name, step):
             "max_put_strike": max_put_strike,      # Support wall
             "max_call_oi": max_call_oi,
             "max_put_oi": max_put_oi,
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(_IST),
         }
         
     except Exception as e:

@@ -23,7 +23,7 @@ _IST = ZoneInfo("Asia/Kolkata")
 
 
 def _now_ist():
-    return datetime.now(_IST)
+    return datetime.now(_IST).replace(tzinfo=None)
 
 try:
     from kiteconnect import KiteTicker
@@ -88,7 +88,7 @@ class LiveTickStore:
             if oi > 0:
                 if token not in self._oi_history:
                     self._oi_history[token] = deque(maxlen=OPT_OI_HISTORY_SIZE)
-                self._oi_history[token].append((datetime.now(), oi))
+                self._oi_history[token].append((_now_ist(), oi))
 
     def get_tick(self, token):
         with self._lock:
@@ -104,7 +104,7 @@ class LiveTickStore:
             history = self._oi_history.get(token)
             if not history:
                 return []
-            cutoff = datetime.now() - timedelta(seconds=window)
+            cutoff = _now_ist() - timedelta(seconds=window)
             return [(ts, oi) for ts, oi in history if ts >= cutoff]
 
     @property
@@ -504,8 +504,8 @@ class BankNiftySignalEngine:
                     continue
                 data = self.kite.historical_data(
                     token,
-                    datetime.now() - timedelta(hours=2),
-                    datetime.now(),
+                    _now_ist() - timedelta(hours=2),
+                    _now_ist(),
                     "5minute"
                 )
                 if data:
@@ -520,7 +520,7 @@ class BankNiftySignalEngine:
         Returns (None, 0) if no historical data exists.
         """
         try:
-            to_date = datetime.now()
+            to_date = _now_ist()
             
             if isinstance(expiry_date, str):
                 try:
@@ -1328,7 +1328,7 @@ class BankNiftySignalEngine:
             state = {
                 "historical_lows": self.historical_lows,
                 "alerted": {k: v.isoformat() for k, v in self.alerted.items()},
-                "last_update": datetime.now().isoformat()
+                "last_update": _now_ist().isoformat()
             }
             with open(OPT_BN_STATE_FILE, "w") as f:
                 json.dump(state, f, indent=2)

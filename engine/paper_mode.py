@@ -16,6 +16,12 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+_IST = ZoneInfo("Asia/Kolkata")
+
 # Hardcoded ON — safe default until live trading is validated
 # To switch to LIVE, change to: PAPER_MODE = False
 PAPER_MODE = True
@@ -52,7 +58,7 @@ def log_paper_trade(signal: dict):
     _ensure_csv(PAPER_TRADE_LOG, _LOG_FIELDS)
 
     row = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now(_IST).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
         "symbol": signal.get("symbol", ""),
         "setup": signal.get("setup", ""),
         "direction": signal.get("direction", ""),
@@ -83,7 +89,7 @@ def log_paper_outcome(trade: dict, exit_price: float, result: str, pnl_r: float)
     _ensure_csv(PAPER_OUTCOMES_LOG, _OUTCOME_FIELDS)
 
     row = {
-        "timestamp": trade.get("start_time", datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+        "timestamp": trade.get("start_time", datetime.now(_IST).replace(tzinfo=None)).strftime("%Y-%m-%d %H:%M:%S")
             if hasattr(trade.get("start_time", ""), "strftime")
             else str(trade.get("start_time", "")),
         "symbol": trade.get("symbol", ""),
@@ -93,7 +99,7 @@ def log_paper_outcome(trade: dict, exit_price: float, result: str, pnl_r: float)
         "sl": trade.get("sl", ""),
         "target": trade.get("target", ""),
         "exit_price": exit_price,
-        "exit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "exit_time": datetime.now(_IST).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
         "result": result,
         "pnl_r": round(pnl_r, 2),
         "bars_held": trade.get("bars_held", ""),
@@ -121,7 +127,7 @@ def paper_daily_summary() -> str:
     if not Path(PAPER_OUTCOMES_LOG).exists():
         return "[PAPER] No trades recorded today."
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(_IST).replace(tzinfo=None).strftime("%Y-%m-%d")
     wins, losses, total_r = 0, 0, 0.0
 
     try:
