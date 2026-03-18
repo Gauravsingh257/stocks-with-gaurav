@@ -40,6 +40,11 @@ _lock_holder = False
 _lock_refresh_at = 0.0
 _shutdown_registered = False
 _heartbeat_thread_started = False
+_watchdog_thread_started = False
+_last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watchdog
+
+# Watchdog: if main loop doesn't update in this many seconds → force exit (Railway restarts)
+ENGINE_CYCLE_WATCHDOG_SEC = 180  # 3 min; allows for slow data fetches
 
 
 def _get_redis():
@@ -185,6 +190,74 @@ def start_heartbeat_thread() -> None:
     t = threading.Thread(target=_heartbeat_loop, daemon=True)
     t.start()
     log.info("Engine heartbeat thread started (interval=%ss)", ENGINE_HEARTBEAT_INTERVAL_SEC)
+
+
+def write_last_cycle() -> None:
+    """
+    Call this at the TOP of each main scan loop iteration.
+    Updates both local timestamp (watched by watchdog) and Redis key (shown on dashboard).
+    """
+    global _last_cycle_local
+    _last_cycle_local = time.time()
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        r.set(ENGINE_LAST_CYCLE_KEY, str(time.time()), ex=300)
+    except Exception as e:
+        log.debug("write_last_cycle Redis failed: %s", e)
+
+
+def _watchdog_loop() -> None:
+    """
+    Daemon thread: checks that the main engine loop runs at least every
+    ENGINE_CYCLE_WATCHDOG_SEC seconds.  If it stalls longer than that,
+    it is considered frozen — we force os._exit(1) so Railway restarts the container.
+
+    The heartbeat thread runs independently and keeps beating even if the main
+    loop is frozen, which is why we need a SEPARATE watchdog keyed to main-loop progress.
+    """
+    # Give the engine 5 minutes to do initial heavy imports / prefetch before watching.
+    time.sleep(300)
+    log.info("Watchdog active (threshold=%ss)", ENGINE_CYCLE_WATCHDOG_SEC)
+    while True:
+        time.sleep(30)
+        if _last_cycle_local == 0.0:
+            continue  # not yet started
+        age = time.time() - _last_cycle_local
+        if age > ENGINE_CYCLE_WATCHDOG_SEC:
+            log.error(
+                "ENGINE STUCK — main loop last cycled %.0fs ago (limit %ss). "
+                "Forcing exit so Railway can restart.",
+                age, ENGINE_CYCLE_WATCHDOG_SEC,
+            )
+            # Try to send a Telegram alert before dying (best-effort, 5s timeout)
+            try:
+                import os as _os
+                import requests as _req
+                _bot = _os.getenv("TELEGRAM_BOT_TOKEN", "")
+                _cid = _os.getenv("TELEGRAM_CHAT_ID", "")
+                if _bot and _cid:
+                    _req.post(
+                        f"https://api.telegram.org/bot{_bot}/sendMessage",
+                        data={"chat_id": _cid, "text": "⚠️ ENGINE STUCK — main loop frozen. Forcing restart."},
+                        timeout=5,
+                    )
+            except Exception:
+                pass
+            import os
+            os._exit(1)
+
+
+def start_watchdog_thread() -> None:
+    """Start the cycle watchdog daemon thread. Call once after engine starts. Idempotent."""
+    global _watchdog_thread_started
+    if _watchdog_thread_started:
+        return
+    _watchdog_thread_started = True
+    t = threading.Thread(target=_watchdog_loop, daemon=True, name="engine-watchdog")
+    t.start()
+    log.info("Engine cycle watchdog started (max_stall=%ss)", ENGINE_CYCLE_WATCHDOG_SEC)
 
 
 def should_send_signal(signal_id: str) -> bool:

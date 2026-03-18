@@ -193,7 +193,7 @@ def scan_ema_crossover(symbol):
             # Signal ID: strategy_timeframe_symbol_timestamp (stronger dedupe across strategies/timeframes)
             _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
             signal_id = f"ema_5m_{_sym}_{ts.timestamp():.0f}"
-            telegram_send(msg, signal_id=signal_id)
+            telegram_send_signal(msg, signal_id=signal_id)
             print(f"🔥 EMA SIGNAL SENT: {symbol} {action}")
             logging.info(f"EMA SIGNAL: {symbol} {action} @ {entry_p}")
             
@@ -316,7 +316,7 @@ BACKTEST_MODE = os.environ.get("BACKTEST_MODE", "") == "1"
 # =====================================================
 # TELEGRAM CORE (Early Definition for Init)
 # =====================================================
-def telegram_send(message: str, chat_id=None, signal_id=None):
+def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int = 2):
     """
     Send message to Telegram with deduplication, retry on failure, and proper logging.
 
@@ -346,9 +346,8 @@ def telegram_send(message: str, chat_id=None, signal_id=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": target, "text": message, "parse_mode": "HTML"}
 
-    # Retry up to 2 times on network failure
     last_exc = None
-    for attempt in range(2):
+    for attempt in range(_max_retries):
         try:
             resp = requests.post(url, data=payload, timeout=8)
             if resp.ok:
@@ -362,18 +361,44 @@ def telegram_send(message: str, chat_id=None, signal_id=None):
                 return
             else:
                 logging.warning(
-                    "[Telegram] API returned %s: %s (attempt %d)",
-                    resp.status_code, resp.text[:200], attempt + 1,
+                    "[Telegram] API returned %s: %s (attempt %d/%d)",
+                    resp.status_code, resp.text[:200], attempt + 1, _max_retries,
                 )
                 last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
         except requests.exceptions.Timeout:
-            logging.warning("[Telegram] Timeout on attempt %d", attempt + 1)
+            logging.warning("[Telegram] Timeout on attempt %d/%d", attempt + 1, _max_retries)
             last_exc = Exception("Timeout")
         except Exception as exc:
-            logging.warning("[Telegram] Error on attempt %d: %s", attempt + 1, exc)
+            logging.warning("[Telegram] Error on attempt %d/%d: %s", attempt + 1, _max_retries, exc)
             last_exc = exc
+        if attempt < _max_retries - 1:
+            t.sleep(2 ** attempt)  # Exponential backoff between retries
 
-    logging.error("[Telegram] Failed to send after 2 attempts. Last error: %s", last_exc)
+    logging.error("[Telegram] Failed to send after %d attempts. Last error: %s", _max_retries, last_exc)
+
+
+def telegram_send_signal(message: str, signal_id: str = None, chat_id=None):
+    """
+    Send a TRADING SIGNAL to Telegram with 3 retries + critical log on all-fail.
+    Use this for all actual trade signals — never for status/diagnostic messages.
+    This ensures signals are NEVER silently lost.
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        logging.critical(
+            "[SIGNAL LOST] Telegram credentials missing — signal cannot be delivered. "
+            "Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID. Signal: %s",
+            message[:200],
+        )
+        return
+
+    try:
+        telegram_send(message, chat_id=chat_id, signal_id=signal_id, _max_retries=3)
+    except Exception as exc:
+        logging.critical(
+            "[SIGNAL LOST] telegram_send raised after 3 retries (%s). "
+            "Signal text (first 300 chars): %s",
+            exc, message[:300],
+        )
 
 # Current token in use (for refresh comparison). Set after successful set_access_token.
 _current_kite_token = None
@@ -402,10 +427,34 @@ else:
             logging.info("Kite session validated: user=%s", profile.get("user_name", "?"))
         except Exception as sess_e:
             err = str(sess_e).lower()
-            if "api_key" in err or "access_token" in err or "invalid" in err or "token" in err:
+            _token_err = any(k in err for k in ("api_key", "access_token", "invalid", "token", "forbidden", "unauthori"))
+            if _token_err:
                 print("Incorrect api_key or access_token — token may be expired or wrong.")
-                print("Run morning_login.bat (or zerodha_login.py), then restart the engine.")
+                print("Run RUN_ENGINE_ON_RAILWAY.bat (or zerodha_login.py), then restart the engine.")
                 logging.critical("Kite session invalid: %s", sess_e)
+                # Send Telegram alert (best-effort; BOT_TOKEN/CHAT_ID may be set even if kite isn't)
+                try:
+                    import requests as _req
+                    _bot = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                    _cid = os.getenv("TELEGRAM_CHAT_ID", "")
+                    if _bot and _cid:
+                        _req.post(
+                            f"https://api.telegram.org/bot{_bot}/sendMessage",
+                            data={
+                                "chat_id": _cid,
+                                "text": (
+                                    "❌ <b>ENGINE STOPPED — TOKEN INVALID</b>\n\n"
+                                    "Kite access_token is expired or incorrect.\n"
+                                    "👉 Run <code>RUN_ENGINE_ON_RAILWAY.bat</code> to refresh the token, "
+                                    "then redeploy the engine.\n\n"
+                                    f"Error: {str(sess_e)[:200]}"
+                                ),
+                                "parse_mode": "HTML",
+                            },
+                            timeout=8,
+                        )
+                except Exception:
+                    pass
             raise sess_e
 
         # Initialize Manual Trade Handler
@@ -516,20 +565,32 @@ MULTI_DAY_HALT_UNTIL = None  # datetime when multi-day halt expires (None = acti
 # =====================================================
 
 def telegram_send_image(image_path: str, caption: str):
-    try:
-        with open(image_path, "rb") as img:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data={
-                    "chat_id": CHAT_ID,
-                    "caption": caption,
-                    "parse_mode": "HTML"
-                },
-                files={"photo": img},
-                timeout=10
-            )
-    except Exception as e:
-        print("Telegram image error:", e)
+    """Send signal chart image with 3 retries; fall back to text-only on persistent failure."""
+    if not BOT_TOKEN or not CHAT_ID:
+        logging.critical("[SIGNAL LOST] Telegram credentials missing — image signal not delivered. Caption: %s", caption[:200])
+        return
+    last_exc = None
+    for attempt in range(3):
+        try:
+            with open(image_path, "rb") as img:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+                    files={"photo": img},
+                    timeout=15,
+                )
+            if resp.ok:
+                return
+            last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
+            logging.warning("[Telegram] sendPhoto attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
+        except Exception as exc:
+            last_exc = exc
+            logging.warning("[Telegram] sendPhoto attempt %d/%d error: %s", attempt + 1, 3, exc)
+        if attempt < 2:
+            t.sleep(2 ** attempt)
+    # All image retries failed — send text-only fallback so signal is NOT lost
+    logging.critical("[SIGNAL DEGRADED] Image send failed after 3 attempts (%s). Sending text-only fallback.", last_exc)
+    telegram_send_signal(caption)
 
 
 # =====================================================
@@ -658,9 +719,13 @@ def get_token(symbol: str):
         return TOKEN_CACHE[symbol]
 
     try:
-        token = list(kite.ltp(symbol).values())[0]["instrument_token"]
+        result = _kite_call(kite.ltp, symbol)
+        token = list(result.values())[0]["instrument_token"]
         TOKEN_CACHE[symbol] = token
         return token
+    except concurrent.futures.TimeoutError:
+        logging.warning("[get_token] Kite ltp() timed out for %s", symbol)
+        return None
     except Exception:
         return None
 
@@ -767,10 +832,28 @@ telegram_send("🚀 <b>SMC MULTI-TF ENGINE STARTED</b>")
 
 LAST_API_CALL = 0
 import threading
+import concurrent.futures
 OHLC_CACHE = {} 
 OHLC_CACHE_LOCK = threading.Lock()
 PREFETCHER_RUNNING = False
 API_THROTTLE_LOCK = threading.Lock()
+
+
+# ─── KITE TIMEOUT WRAPPER ────────────────────────────────────────────────────
+# Prevents silent engine freeze when historical_data() or ltp() hangs.
+# Railway only restarts on exit, NOT on a hung thread, so we force a timeout.
+_KITE_TIMEOUT_SEC = 10   # 10s max per Kite call; adjust if needed
+
+def _kite_call(fn, *args, timeout=_KITE_TIMEOUT_SEC, **kwargs):
+    """
+    Execute a Kite API call in a thread with a hard timeout.
+    Raises concurrent.futures.TimeoutError if the call hangs beyond `timeout` seconds.
+    This ensures the main loop can never be frozen by a hung network call.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        return future.result(timeout=timeout)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _respect_api_throttle(min_interval_sec: float = 0.35):
@@ -793,11 +876,13 @@ def update_cache(symbol, interval, lookback):
     for attempt in range(3):
         try:
             _respect_api_throttle()
-            data = kite.historical_data(
+            data = _kite_call(
+                kite.historical_data,
                 token,
                 now_ist() - timedelta(days=15),
                 now_ist(),
-                interval
+                interval,
+                timeout=_KITE_TIMEOUT_SEC,
             )
             if data:
                 with OHLC_CACHE_LOCK:
@@ -806,9 +891,13 @@ def update_cache(symbol, interval, lookback):
                         "updated_at": t.time()
                     }
                 return True
+        except concurrent.futures.TimeoutError:
+            logging.warning("[update_cache] historical_data timed out: %s %s", symbol, interval)
+            if attempt < 2:
+                t.sleep(2 ** attempt)
         except Exception:
             if attempt < 2:
-                t.sleep(1)
+                t.sleep(2 ** attempt)
     return False
 
 def data_prefetch_worker():
@@ -848,10 +937,9 @@ def fetch_ltp(symbol: str):
     Lightweight LTP fetch (Issue 5)
     """
     try:
-        quote = kite.ltp(symbol)
+        quote = _kite_call(kite.ltp, symbol)
         if symbol in quote:
             price = quote[symbol]["last_price"]
-            # Update shared engine state for index symbols
             try:
                 if symbol.upper() == "NSE:NIFTY 50":
                     update_engine_state(nifty=price)
@@ -862,6 +950,9 @@ def fetch_ltp(symbol: str):
             except Exception:
                 pass
             return price
+    except concurrent.futures.TimeoutError:
+        logging.warning("[fetch_ltp] Kite ltp() timed out for %s", symbol)
+        return None
     except Exception:
         return None
 
@@ -880,11 +971,13 @@ def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
     for attempt in range(3):
         try:
             _respect_api_throttle()
-            data = kite.historical_data(
+            data = _kite_call(
+                kite.historical_data,
                 token,
                 now_ist() - timedelta(days=15),
                 now_ist(),
-                interval
+                interval,
+                timeout=_KITE_TIMEOUT_SEC,
             )
             with OHLC_CACHE_LOCK:
                 OHLC_CACHE[(symbol, interval)] = {
@@ -893,9 +986,15 @@ def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
                 }
             return data[-lookback:]
 
+        except concurrent.futures.TimeoutError:
+            logging.warning("[fetch_ohlc] historical_data timed out: %s %s (attempt %d)", symbol, interval, attempt + 1)
+            if attempt < 2:
+                t.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s
+            else:
+                return []
         except Exception as e:
             if attempt < 2:
-                t.sleep(1) # Wait 1s and retry
+                t.sleep(2 ** attempt)
             else:
                 if DEBUG_MODE:
                     print(f"OHLC error {symbol} {interval} (Max Retries):", e)
@@ -2429,7 +2528,7 @@ def fetch_manual_orders():
                    f"<i>Engine is now managing this trade.</i>")
             _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
             signal_id = f"manual_0_{_sym}_{now_ist().timestamp():.0f}"
-            telegram_send(msg, signal_id=signal_id)
+            telegram_send_signal(msg, signal_id=signal_id)
             
     except Exception as e:
         print(f"Manual Sync Error: {e}")
@@ -3483,28 +3582,43 @@ def build_scan_universe(stock_universe: list) -> list:
 
 def telegram_send_with_buttons(message: str, buttons: list):
     """
+    Send signal message with inline buttons. 3 retries; falls back to plain text on failure.
+
     buttons format:
     [
         [{"text": "BUY", "callback_data": "BUY_NIFTY"}],
         [{"text": "IGNORE", "callback_data": "IGNORE"}]
     ]
     """
+    if not BOT_TOKEN or not CHAT_ID:
+        logging.critical("[SIGNAL LOST] Telegram credentials missing — button signal not delivered. Message: %s", message[:200])
+        return
     payload = {
         "chat_id": CHAT_ID,
-        "text": message,
+        "text": paper_prefix(message),
         "parse_mode": "HTML",
-        "reply_markup": json.dumps({"inline_keyboard": buttons})
+        "reply_markup": json.dumps({"inline_keyboard": buttons}),
     }
-
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data=payload,
-            timeout=10
-        )
-    except Exception as e:
-        if DEBUG_MODE:
-            print("Telegram button error:", e)
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                data=payload,
+                timeout=10,
+            )
+            if resp.ok:
+                return
+            last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
+            logging.warning("[Telegram] sendMessage(buttons) attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
+        except Exception as exc:
+            last_exc = exc
+            logging.warning("[Telegram] sendMessage(buttons) attempt %d/%d error: %s", attempt + 1, 3, exc)
+        if attempt < 2:
+            t.sleep(2 ** attempt)
+    # All retries failed — fall back to plain text signal
+    logging.critical("[SIGNAL DEGRADED] Button send failed after 3 attempts (%s). Sending plain-text fallback.", last_exc)
+    telegram_send_signal(message)
 # =====================================================
 # HOURLY SUMMARY ENGINE
 # =====================================================
@@ -3944,7 +4058,7 @@ def monitor_active_trades(symbol, current_price):
                    f"Entry: {entry} ➔ Target: {target}\n"
                    f"Result: +{final_r}R Profit 💰\n"
                    f"Trail Stage: {trade.get('trail_stage', 0)}")
-            telegram_send(msg)
+            telegram_send_signal(msg)
             trade["result"] = "WIN"
             trade["exit_price"] = current_price
             trade["exit_r"] = final_r
@@ -3985,7 +4099,7 @@ def monitor_active_trades(symbol, current_price):
                    f"Entry: {entry} ➔ SL: {trade['sl']}\n"
                    f"Result: {'+' if exit_r > 0 else ''}{exit_r}R\n"
                    f"Trail Stage: {trade.get('trail_stage', 0)}")
-            telegram_send(msg)
+            telegram_send_signal(msg)
             trade["exit_price"] = trade["sl"]
             trade["exit_r"] = exit_r
             log_paper_outcome(trade, trade["sl"], trade["result"], exit_r)  # Phase 6
@@ -4484,6 +4598,12 @@ def run_live_mode():
     while True:
         try:
             ENGINE_LAST_LOOP_AT = now_ist()
+            # Notify watchdog that the main loop is alive
+            try:
+                import engine_runtime
+                engine_runtime.write_last_cycle()
+            except Exception:
+                pass
             cleanup_structure_state()
             now = now_ist().time()
 
@@ -4751,6 +4871,9 @@ def run_live_mode():
             if not hasattr(run_live_mode, '_diag_count'):
                 run_live_mode._diag_count = 0
                 run_live_mode._last_diag = 0
+                run_live_mode._session_signals = 0  # cumulative count this session
+            run_live_mode._session_signals += _scan_raw_signals
+
             _should_diag = (run_live_mode._diag_count == 0 or
                             (t.time() - run_live_mode._last_diag) >= 1800)
             if _should_diag:
@@ -4759,18 +4882,50 @@ def run_live_mode():
                 _nifty_ltp = fetch_ltp("NSE:NIFTY 50")
                 _bn_ltp = fetch_ltp("NSE:NIFTY BANK")
                 _time_ist = now_ist().strftime('%H:%M:%S')
+
+                # ── API latency quick probe ──────────────────────────────────
+                _api_latency_ms = "?"
+                try:
+                    _lat_start = t.time()
+                    fetch_ltp("NSE:NIFTY 50")
+                    _api_latency_ms = f"{int((t.time() - _lat_start) * 1000)}ms"
+                except Exception:
+                    _api_latency_ms = "ERR"
+
+                # ── Last cycle age (from watchdog) ───────────────────────────
+                try:
+                    import engine_runtime as _er
+                    _cycle_age = int(t.time() - _er._last_cycle_local)
+                    _loop_ok = "✅" if _cycle_age < 120 else "⚠️"
+                    _loop_label = f"{_loop_ok} {_cycle_age}s ago"
+                except Exception:
+                    _loop_label = "?"
+
+                _kite_status = "✅ OK" if kite else "❌ NONE"
+                _circuit_status = "🔴 ON (HALTED)" if CIRCUIT_BREAKER_ACTIVE else "✅ OFF"
+                _regime_label = MARKET_REGIME or "NEUTRAL"
+
+                # ── Engine health summary header (structured) ────────────────
                 _diag_lines = [
-                    f"🔍 <b>SCAN DIAGNOSTIC</b> (cycle #{run_live_mode._diag_count})",
-                    f"Time: {_time_ist} IST",
-                    f"Scanned: {len(scan_universe)} | Data OK: {_scan_data_ok} | Empty: {_scan_data_empty}",
-                    f"Raw signals (this cycle): {_scan_raw_signals} | Errors: {len(_scan_errors)}",
-                    f"Nifty: {_nifty_ltp} | BN: {_bn_ltp}",
-                    f"Kite: {'OK' if kite else 'NONE'} | Token: {_current_kite_token[:8] + '...' if _current_kite_token else 'NONE'}",
-                    f"Regime: {MARKET_REGIME} | Circuit: {'ON' if CIRCUIT_BREAKER_ACTIVE else 'OFF'}",
-                    f"Active Trades: {len(ACTIVE_TRADES)} | Daily Signals: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}",
+                    f"📊 <b>ENGINE STATUS</b> — {_time_ist} IST",
+                    f"",
+                    f"🔄 Loop running: {_loop_label}",
+                    f"📡 API latency: {_api_latency_ms}",
+                    f"🪙 Kite: {_kite_status} | Token: {(_current_kite_token[:8] + '...') if _current_kite_token else '❌ NONE'}",
+                    f"",
+                    f"📈 Nifty: {_nifty_ltp or '–'}  |  BankNifty: {_bn_ltp or '–'}",
+                    f"📊 Regime: {_regime_label}  |  Circuit: {_circuit_status}",
+                    f"",
+                    f"🎯 Signals today: {run_live_mode._session_signals} total (last cycle: {_scan_raw_signals})",
+                    f"🏦 Active trades: {len(ACTIVE_TRADES)}  |  Daily cap: {DAILY_SIGNAL_COUNT}/{MAX_DAILY_SIGNALS}",
+                    f"🔍 Scanned: {len(scan_universe)} symbols  |  Data OK: {_scan_data_ok}  |  Empty: {_scan_data_empty}",
+                    f"❌ Errors this cycle: {len(_scan_errors)}",
                 ]
 
-                # Per-symbol detailed setup diagnostics
+                if _scan_errors:
+                    _diag_lines.append(f"   ↳ {_scan_errors[0][:120]}")
+
+                # ── Per-symbol setup status ──────────────────────────────────
                 _diag_lines.append("")
                 _diag_lines.append("<b>Per-symbol setup status:</b>")
                 for sym in scan_universe:
@@ -4783,7 +4938,6 @@ def run_live_mode():
                         continue
                     parts.append(f"5m={len(tf.get('5m') or [])} 1h={len(tf.get('1h') or [])} 15m={len(tf.get('15m') or [])}")
 
-                    # Setup A state
                     if ACTIVE_STRATEGIES.get("SETUP_A"):
                         bias = detect_htf_bias(tf.get("1h"))
                         key_a = f"{sym}_{bias}" if bias else None
@@ -4797,7 +4951,6 @@ def run_live_mode():
                             fvg = detect_fvg(tf["5m"], bias)
                             parts.append(f"A={'OB+FVG' if ob and fvg else 'no_ob' if not ob else 'no_fvg'}")
 
-                    # Setup C state
                     if ACTIVE_STRATEGIES.get("SETUP_C"):
                         zs = ZONE_STATE.get(sym, {})
                         zl = zs.get("LONG")
@@ -4809,7 +4962,6 @@ def run_live_mode():
                             c_parts.append(f"S:{zs_short['state']}")
                         parts.append(f"C={','.join(c_parts) if c_parts else 'no_zones'}")
 
-                    # Hierarchical rejection reason
                     if ACTIVE_STRATEGIES.get("HIERARCHICAL"):
                         try:
                             df_15m = pd.DataFrame(tf["15m"])
@@ -4828,11 +4980,11 @@ def run_live_mode():
 
                     _diag_lines.append(f"  {_sym_short}: {' | '.join(parts)}")
 
-                # Zone tap status
+                # ── Sub-engine status ────────────────────────────────────────
                 _diag_lines.append("")
-                _diag_lines.append("<b>Other engines:</b>")
-                _diag_lines.append(f"  BN Signal Engine: {'OK' if bn_signal_engine else 'NONE'}")
-                _diag_lines.append(f"  Option Monitor: {'OK' if option_monitor else 'NONE'}")
+                _diag_lines.append("<b>Sub-engines:</b>")
+                _diag_lines.append(f"  BN Signal Engine: {'✅' if bn_signal_engine else '❌'}")
+                _diag_lines.append(f"  Option Monitor: {'✅' if option_monitor else '❌'}")
                 try:
                     from engine.smc_zone_tap import _state as _zt_state_dict
                     _zt_state_info = []
@@ -4843,8 +4995,6 @@ def run_live_mode():
                 except Exception:
                     _diag_lines.append("  Zone Tap: unknown")
 
-                if _scan_errors:
-                    _diag_lines.append(f"\nErrors: {_scan_errors[0][:100]}")
                 telegram_send("\n".join(_diag_lines))
 
             if not all_signals and not ACTIVE_TRADES:
@@ -5158,7 +5308,7 @@ def run_live_mode():
                                     logging.error(f"OI SC chart/send error: {sc_e}")
                                     # Fallback: send text only
                                     try:
-                                        telegram_send(_format_alert(sc_sig))
+                                        telegram_send_signal(_format_alert(sc_sig))
                                     except Exception:
                                         pass
 
@@ -5343,8 +5493,10 @@ def run_engine_main():
     try:
         import engine_runtime
         engine_runtime.start_heartbeat_thread()
+        engine_runtime.start_watchdog_thread()
+        engine_runtime.write_last_cycle()  # Seed so watchdog doesn't trigger during startup
     except Exception as e:
-        logging.debug("Heartbeat thread not started: %s", e)
+        logging.debug("Heartbeat/watchdog thread not started: %s", e)
     start_data_prefetcher()
     update_engine_state(engine="ON")
     _railway = bool(os.getenv("RAILWAY_ENVIRONMENT", ""))
