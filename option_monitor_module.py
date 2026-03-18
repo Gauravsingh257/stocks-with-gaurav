@@ -55,6 +55,14 @@ class OptionMonitor:
         self.CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-1003268636791")
 
     def telegram_send(self, message):
+        # Enforce signal window — no Telegram signals outside 09:00-16:10 IST
+        try:
+            from smc_mtf_engine_v4 import is_signal_window
+            if not is_signal_window():
+                self.logger.info("OptionMonitor signal suppressed (outside signal window)")
+                return
+        except ImportError:
+            pass
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.BOT_TOKEN}/sendMessage",

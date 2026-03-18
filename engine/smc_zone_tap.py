@@ -318,13 +318,16 @@ def scan_zone_taps(symbol, candles, spot, *, now_override=None):
                             "candle_time": c.get("date"),
                             "timestamp": datetime.now(_IST),
                         }
-                        # Only fire once per zone per direction
+                        # Only fire once per zone per direction — AND only inside signal window
                         if not st["zone_cooldowns"].get(zone_key):
                             try:
-                                from smc_mtf_engine_v4 import telegram_send, paper_prefix, format_zone_tap_alert
-                                msg = format_zone_tap_alert(sig)
-                                msg = paper_prefix(msg)
-                                telegram_send(msg, signal_id=f"zt_1m_{zone_key}_{int(_time.time())}")
+                                from smc_mtf_engine_v4 import telegram_send, paper_prefix, format_zone_tap_alert, is_signal_window
+                                if not is_signal_window():
+                                    logging.info("1m zone tap signal suppressed (outside signal window)")
+                                else:
+                                    msg = format_zone_tap_alert(sig)
+                                    msg = paper_prefix(msg)
+                                    telegram_send(msg, signal_id=f"zt_1m_{zone_key}_{int(_time.time())}")
                             except Exception as _zt_e:
                                 logging.warning("1m zone tap alert failed: %s", _zt_e)
                             st["zone_cooldowns"][zone_key] = datetime.now(_IST)

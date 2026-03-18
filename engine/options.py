@@ -169,6 +169,14 @@ class BankNiftySignalEngine:
 
     # --- Telegram ---
     def send_alert(self, message):
+        # Enforce signal window — no alerts outside 09:00-16:10 IST
+        try:
+            from smc_mtf_engine_v4 import is_signal_window
+            if not is_signal_window():
+                self.logger.info("BankNifty signal suppressed (outside signal window)")
+                return
+        except ImportError:
+            pass
         if self.telegram_fn:
             self.telegram_fn(message)
             return

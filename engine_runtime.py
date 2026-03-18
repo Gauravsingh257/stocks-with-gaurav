@@ -46,6 +46,11 @@ _last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watc
 # Watchdog: if main loop doesn't update in this many seconds → force exit (Railway restarts)
 ENGINE_CYCLE_WATCHDOG_SEC = 180  # 3 min; allows for slow data fetches
 
+# Crash-loop detection: track watchdog kills to detect infinite restart loops
+_watchdog_kill_times: list = []   # timestamps of recent os._exit(1) calls
+_CRASH_LOOP_WINDOW_SEC = 300     # 5 min window
+_CRASH_LOOP_MAX_KILLS = 3        # if >3 kills in 5 min → critical alert
+
 
 def _get_redis():
     """Lazy-init Redis client from REDIS_URL. Returns None if not set or connection fails."""
@@ -231,16 +236,40 @@ def _watchdog_loop() -> None:
                 "Forcing exit so Railway can restart.",
                 age, ENGINE_CYCLE_WATCHDOG_SEC,
             )
-            # Try to send a Telegram alert before dying (best-effort, 5s timeout)
+            # Crash-loop detection via Redis (survives process restarts)
+            _is_crash_loop = False
+            try:
+                _r = _get_redis()
+                if _r:
+                    _crash_key = "engine:watchdog_kills"
+                    _r.rpush(_crash_key, str(time.time()))
+                    _r.ltrim(_crash_key, -10, -1)   # Keep last 10 entries
+                    _r.expire(_crash_key, _CRASH_LOOP_WINDOW_SEC)
+                    _recent = _r.lrange(_crash_key, 0, -1) or []
+                    _cutoff = time.time() - _CRASH_LOOP_WINDOW_SEC
+                    _recent_count = sum(1 for ts in _recent if float(ts) > _cutoff)
+                    _is_crash_loop = _recent_count >= _CRASH_LOOP_MAX_KILLS
+            except Exception:
+                pass
+
+            # Send Telegram alert (best-effort, 5s timeout)
             try:
                 import os as _os
                 import requests as _req
                 _bot = _os.getenv("TELEGRAM_BOT_TOKEN", "")
                 _cid = _os.getenv("TELEGRAM_CHAT_ID", "")
                 if _bot and _cid:
+                    if _is_crash_loop:
+                        _msg = (
+                            "🚨 CRASH LOOP DETECTED — engine has restarted "
+                            f"{len(_watchdog_kill_times)} times in 5 min.\n"
+                            "Investigation needed. Check Railway deploy logs."
+                        )
+                    else:
+                        _msg = "⚠️ ENGINE STUCK — main loop frozen. Forcing restart."
                     _req.post(
                         f"https://api.telegram.org/bot{_bot}/sendMessage",
-                        data={"chat_id": _cid, "text": "⚠️ ENGINE STUCK — main loop frozen. Forcing restart."},
+                        data={"chat_id": _cid, "text": _msg},
                         timeout=5,
                     )
             except Exception:

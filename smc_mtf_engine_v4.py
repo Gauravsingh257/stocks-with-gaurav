@@ -4527,7 +4527,7 @@ def _reinit_kite():
             return True
         new_kite = KiteConnect(api_key=api_key)
         new_kite.set_access_token(access_token)
-        new_kite.profile()
+        _kite_call(new_kite.profile, timeout=_KITE_TIMEOUT_SEC)
         kite = new_kite
         _current_kite_token = access_token
         mask_tok = access_token[:6] + "..." + access_token[-4:] if len(access_token) >= 10 else "****"
@@ -4653,7 +4653,7 @@ def run_live_mode():
                     new_token = get_access_token()
                     if new_token and new_token != _current_kite_token:
                         kite.set_access_token(new_token)
-                        kite.profile()  # validate
+                        _kite_call(kite.profile, timeout=_KITE_TIMEOUT_SEC)
                         _current_kite_token = new_token
                         logging.info("Kite token refreshed from central store (Redis/env/file) — OI/signals will use new token")
 
@@ -4730,7 +4730,15 @@ def run_live_mode():
                 except Exception:
                     pass
                 print(f"[{now_ist().strftime('%H:%M:%S')}] 🛑 Market Closed. Engine sleeping for 5 minutes...")
-                t.sleep(300)
+                # Sleep in short chunks so write_last_cycle() keeps the watchdog happy.
+                # A single t.sleep(300) > watchdog threshold (180s) and causes a crash loop.
+                for _ in range(30):       # 30 x 10s = 5 min total
+                    try:
+                        import engine_runtime
+                        engine_runtime.write_last_cycle()
+                    except Exception:
+                        pass
+                    t.sleep(10)
                 continue
 
             # F4.5: HEARTBEAT — send Telegram alive ping every 30 minutes (market hours only)
@@ -4765,7 +4773,14 @@ def run_live_mode():
                         "Website & health endpoint remain live."
                     )
                     logging.info("Signal window closed at %s IST — engine alive, signals paused.", now_ist().strftime("%H:%M"))
-                t.sleep(60)   # Light sleep; loop keeps running for /health & active trade monitoring
+                # Chunked sleep keeps watchdog alive
+                for _ in range(6):        # 6 x 10s = 60s total
+                    try:
+                        import engine_runtime
+                        engine_runtime.write_last_cycle()
+                    except Exception:
+                        pass
+                    t.sleep(10)
                 continue
             else:
                 # Reset the "paused" notification flag when window re-opens (clock OR fresh token)
@@ -5671,7 +5686,14 @@ def run_engine_main():
             logging.info("run_live_mode returned (token/data failure or redis_lock_lost). Exiting.")
             break
         logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
-        t.sleep(120)
+        # Chunked sleep keeps watchdog happy during recovery wait
+        for _ in range(12):       # 12 x 10s = 120s
+            try:
+                import engine_runtime
+                engine_runtime.write_last_cycle()
+            except Exception:
+                pass
+            t.sleep(10)
 
 
 if __name__ == "__main__":
