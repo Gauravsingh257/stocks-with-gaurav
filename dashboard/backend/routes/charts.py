@@ -225,6 +225,19 @@ def _fetch_ohlc(symbol: str, kite_interval: str, days: int) -> list[dict]:
             ts = int(dt.timestamp())
         else:
             ts = int(datetime.fromisoformat(str(dt)).timestamp())
+
+        # Skip after-hours padding candles: Kite pads missing bars with the last
+        # close repeated (open == high == low == close). These create a flat line
+        # on the chart between sessions. Allow through only if it's within market
+        # hours (09:15–15:30 IST = 03:45–10:00 UTC).
+        bar_hour_utc = (ts % 86400) // 3600
+        bar_min_utc  = (ts % 3600) // 60
+        bar_time_utc = bar_hour_utc * 60 + bar_min_utc  # minutes since UTC midnight
+        # NSE: 09:15–15:30 IST = 03:45–10:00 UTC (225–600 min)
+        in_market_hours = 225 <= bar_time_utc <= 600
+        if not in_market_hours:
+            continue
+
         candles.append({
             "time":   ts,
             "open":   round(float(bar["open"]),  2),
