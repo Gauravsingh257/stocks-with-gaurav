@@ -283,7 +283,9 @@ def monitor_oi_sc_trades(kite_obj):
 
     symbols = [f"NFO:{t['symbol']}" for t in active]
     try:
-        quotes = kite_obj.quote(symbols)
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            quotes = _ex.submit(kite_obj.quote, symbols).result(timeout=8)
     except Exception as e:
         logger.debug(f"OI SC trade monitor quote error: {e}")
         return
@@ -851,15 +853,21 @@ def _scan_underlying(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
         5. Detect short-covering on each strike
         6. Return qualified signals
     """
-    # 1. Get spot
+    # 1. Get spot — wrapped in a hard 8s timeout so a hung Kite call never
+    # freezes the TRADE_MONITOR loop and triggers the watchdog.
     try:
-        ltp_data = kite_obj.ltp([index_symbol])
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            ltp_data = _ex.submit(kite_obj.ltp, [index_symbol]).result(timeout=8)
         if not ltp_data or index_symbol not in ltp_data:
-            return []
+            return [], []
         spot = ltp_data[index_symbol]["last_price"]
+    except _cf.TimeoutError:
+        logger.warning(f"OI SC: ltp() timed out for {index_name} — skipping scan")
+        return [], []
     except Exception as e:
         logger.warning(f"OI SC: Failed to fetch {index_name} spot: {e}")
-        return []
+        return [], []
 
     # 2. ATM±1 strike selection (replaces ±5 range)
     ce_strikes, pe_strikes = get_atm_strikes(spot, step)
@@ -916,12 +924,18 @@ def _scan_underlying(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
     if not symbols_to_query:
         return []
 
-    # 3. Batch quote
+    # 3. Batch quote — hard 12s timeout; quote() fetches many symbols at once
+    # and can hang on network issues, which would freeze the main engine loop.
     try:
-        quotes = kite_obj.quote(symbols_to_query)
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            quotes = _ex.submit(kite_obj.quote, symbols_to_query).result(timeout=12)
+    except _cf.TimeoutError:
+        logger.warning(f"OI SC: quote() timed out for {index_name} — skipping scan")
+        return [], []
     except Exception as e:
         logger.warning(f"OI SC: Quote failed for {index_name}: {e}")
-        return []
+        return [], []
 
     now = datetime.now(_IST)
     signals = []

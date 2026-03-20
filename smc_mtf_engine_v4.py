@@ -5473,8 +5473,19 @@ def run_live_mode():
                 engine_runtime.set_engine_stage("TRADE_MONITOR")
             except Exception:
                 pass
-            # Instead of sleeping blindly, we poll active trades every second
+            # Instead of sleeping blindly, we poll active trades every second.
+            # CRITICAL: call write_last_cycle() at least every 10s so the watchdog
+            # (threshold 180s) never kills the engine during a normal trading minute.
+            _tm_last_cycle_ping = t.time()
             while True:
+                # ── Watchdog keep-alive (every 10s) ──────────────────────────
+                if t.time() - _tm_last_cycle_ping >= 10:
+                    try:
+                        engine_runtime.write_last_cycle()
+                    except Exception:
+                        pass
+                    _tm_last_cycle_ping = t.time()
+
                 # 1. Update Active Trades (Fast Exit)
                 if ACTIVE_TRADES:
                     for t_obj in list(ACTIVE_TRADES):
@@ -5494,83 +5505,79 @@ def run_live_mode():
                     try:
                         manual_handler.poll_manual_trades(ACTIVE_TRADES)
                     except Exception as e:
-                        print(f"Manual Poll Error: {e}")
+                        logging.warning(f"Manual Poll Error: {e}")
 
                 # 4. POLL OPTION MONITOR (Independent Interval checked inside poll)
                 if option_monitor:
                     try:
                         option_monitor.poll()
                     except Exception as e:
-                        print(f"Option Monitor Poll Error: {e}")
+                        logging.warning(f"Option Monitor Poll Error: {e}")
 
                 # 5. POLL BANK NIFTY SIGNAL ENGINE
                 if bn_signal_engine:
                     try:
                         bn_signal_engine.poll()
                     except Exception as e:
-                        print(f"BN Signal Engine Poll Error: {e}")
+                        logging.warning(f"BN Signal Engine Poll Error: {e}")
 
-                # 6. POLL OI SHORT-COVERING DETECTOR (with chart images)
+                # 6. POLL OI SHORT-COVERING DETECTOR
+                # Heavy work (kite.quote + chart generation) is offloaded to a
+                # daemon thread so the monitor loop is never blocked by slow I/O.
                 if kite and not BACKTEST_MODE:
                     try:
                         sc_signals, sc_structure_alerts = scan_short_covering(
                             kite,
-                            telegram_fn=None,  # We handle sending manually now (with charts)
+                            telegram_fn=None,
                             fetch_ohlc_fn=fetch_ohlc
                         )
-                        if sc_signals:
-                            logging.info(
-                                f"OI SC: {len(sc_signals)} short-covering signal(s) fired"
-                            )
-                            for sc_sig in sc_signals:
-                                try:
-                                    from engine.oi_short_covering import _format_alert
-                                    sc_msg = _format_alert(sc_sig)
-                                    sc_msg = paper_prefix(sc_msg)
-                                    # Generate OI chart (sent separately as image)
-                                    sc_chart = generate_oi_chart(sc_sig)
-                                    if sc_chart:
-                                        telegram_send_image(sc_chart, sc_msg)
-                                        if os.path.exists(sc_chart):
-                                            os.remove(sc_chart)
-                                    # Send signal text with trade buttons
-                                    if _TRADE_BUTTONS_AVAILABLE:
-                                        _oi_btn_sig = {
-                                            "underlying": sc_sig.get("underlying", "NIFTY"),
-                                            "direction": "LONG" if sc_sig.get("opt_type") == "CE" else "SHORT",
-                                            "spot": sc_sig.get("spot"),
-                                            "strike": sc_sig.get("strike"),
-                                            "opt_type": sc_sig.get("opt_type"),
-                                            "trade_levels": sc_sig.get("trade_levels"),
-                                            "entry": sc_sig.get("trade_levels", {}).get("entry"),
-                                            "sl": sc_sig.get("trade_levels", {}).get("sl"),
-                                            "tp1": sc_sig.get("trade_levels", {}).get("target"),
-                                        }
-                                        _send_trade_buttons(_oi_btn_sig, sc_msg)
-                                    elif not sc_chart:
-                                        # No chart and no buttons — plain text fallback
-                                        telegram_send(sc_msg)
-                                except Exception as sc_e:
-                                    logging.error(f"OI SC chart/send error: {sc_e}")
-                                    # Fallback: send text only
+                        if sc_signals or sc_structure_alerts:
+                            # Fire-and-forget: send alerts in background thread
+                            def _send_oi_alerts(sigs, s_alerts):
+                                for sc_sig in sigs:
                                     try:
-                                        telegram_send_signal(_format_alert(sc_sig))
-                                    except Exception:
-                                        pass
-
-                        # Send structure contradiction alerts (informational)
-                        if sc_structure_alerts:
-                            logging.info(
-                                f"OI SC: {len(sc_structure_alerts)} structure alert(s)"
+                                        from engine.oi_short_covering import _format_alert
+                                        sc_msg = _format_alert(sc_sig)
+                                        sc_msg = paper_prefix(sc_msg)
+                                        sc_chart = generate_oi_chart(sc_sig)
+                                        if sc_chart:
+                                            telegram_send_image(sc_chart, sc_msg)
+                                            if os.path.exists(sc_chart):
+                                                os.remove(sc_chart)
+                                        if _TRADE_BUTTONS_AVAILABLE:
+                                            _oi_btn_sig = {
+                                                "underlying": sc_sig.get("underlying", "NIFTY"),
+                                                "direction": "LONG" if sc_sig.get("opt_type") == "CE" else "SHORT",
+                                                "spot": sc_sig.get("spot"),
+                                                "strike": sc_sig.get("strike"),
+                                                "opt_type": sc_sig.get("opt_type"),
+                                                "trade_levels": sc_sig.get("trade_levels"),
+                                                "entry": sc_sig.get("trade_levels", {}).get("entry"),
+                                                "sl": sc_sig.get("trade_levels", {}).get("sl"),
+                                                "tp1": sc_sig.get("trade_levels", {}).get("target"),
+                                            }
+                                            _send_trade_buttons(_oi_btn_sig, sc_msg)
+                                        elif not sc_chart:
+                                            telegram_send(sc_msg)
+                                    except Exception as sc_e:
+                                        logging.error(f"OI SC send error: {sc_e}")
+                                for sa in s_alerts:
+                                    try:
+                                        from engine.oi_short_covering import _format_structure_alert
+                                        sa_msg = paper_prefix(_format_structure_alert(sa))
+                                        telegram_send(sa_msg)
+                                    except Exception as sa_e:
+                                        logging.error(f"OI SC structure alert error: {sa_e}")
+                            import threading as _threading
+                            _oi_t = _threading.Thread(
+                                target=_send_oi_alerts,
+                                args=(sc_signals, sc_structure_alerts),
+                                daemon=True,
+                                name="oi-alert-sender",
                             )
-                            for sa in sc_structure_alerts:
-                                try:
-                                    from engine.oi_short_covering import _format_structure_alert
-                                    sa_msg = _format_structure_alert(sa)
-                                    sa_msg = paper_prefix(sa_msg)
-                                    telegram_send(sa_msg)
-                                except Exception as sa_e:
-                                    logging.error(f"OI SC structure alert error: {sa_e}")
+                            _oi_t.start()
+                            logging.info("OI SC: %d signal(s), %d structure alert(s) — sending async",
+                                         len(sc_signals), len(sc_structure_alerts))
                     except Exception as e:
                         logging.error(f"OI Short-Covering Poll Error: {e}")
 

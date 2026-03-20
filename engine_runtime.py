@@ -49,7 +49,8 @@ _watchdog_thread_started = False
 _last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watchdog
 
 # Watchdog: if main loop doesn't update in this many seconds → force exit (Railway restarts)
-ENGINE_CYCLE_WATCHDOG_SEC = 180  # 3 min; allows for slow data fetches
+# TRADE_MONITOR inner loop pings write_last_cycle() every 10s, so 180s gives ample margin.
+ENGINE_CYCLE_WATCHDOG_SEC = 180  # 3 min; TRADE_MONITOR keeps-alive every 10s
 
 # Crash-loop detection (Redis-based, survives restarts)
 _CRASH_LOOP_WINDOW_SEC = 300     # 5 min window
