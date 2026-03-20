@@ -102,6 +102,14 @@ except ImportError:
 
 import logging
 
+# Startup Telegram dedupe: run_live_mode() is re-entered from run_engine_main's outer
+# retry loop (same process) after redis_lock_lost, OI watchdog recovery, etc. Without
+# this, every re-entry fires RECOVERED + ONLINE again. Redis NX also limits duplicate
+# alerts when two engine replicas start within the cooldown window.
+_STARTUP_TELEGRAM_SENT_THIS_PROCESS: bool = False
+_STARTUP_TELEGRAM_COOLDOWN_KEY = "engine:startup_telegram_cooldown"
+_STARTUP_TELEGRAM_COOLDOWN_SEC = 600  # 10 minutes
+
 # =====================================================
 # EMA CROSSOVER SCANNER (MERGED)
 # =====================================================
@@ -711,14 +719,62 @@ def load_active_trades():
         if data:
             ACTIVE_TRADES = [_deserialize_trade(t) for t in data]
             logging.info(f"💾 Restored {len(ACTIVE_TRADES)} active trades from SQLite")
-            if ACTIVE_TRADES:
-                symbols = [t.get("symbol", "?") for t in ACTIVE_TRADES]
-                telegram_send(f"💾 <b>RECOVERED {len(ACTIVE_TRADES)} ACTIVE TRADES</b>\n"
-                              f"{', '.join(symbols)}\n"
-                              f"<i>Resuming monitoring after restart.</i>")
+            # Telegram RECOVERED is sent once per process via _send_startup_telegram_bundle()
+            # so run_live_mode() re-entries (Railway retry loop) do not spam the channel.
     except Exception as e:
         logging.error(f"Failed to load ACTIVE_TRADES: {e}")
         ACTIVE_TRADES = []
+
+
+def _send_startup_telegram_bundle() -> None:
+    """
+    Send RECOVERED (if trades) + ONLINE once per process, with optional Redis cooldown
+    so two replicas or rapid restarts do not duplicate alerts within 10 minutes.
+    """
+    global _STARTUP_TELEGRAM_SENT_THIS_PROCESS
+    if _STARTUP_TELEGRAM_SENT_THIS_PROCESS:
+        return
+
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            import redis as _redis_mod
+            _r = _redis_mod.from_url(redis_url, decode_responses=True)
+            acquired = _r.set(
+                _STARTUP_TELEGRAM_COOLDOWN_KEY,
+                f"{os.getpid()}:{t.time():.0f}",
+                nx=True,
+                ex=_STARTUP_TELEGRAM_COOLDOWN_SEC,
+            )
+            if not acquired:
+                logging.info(
+                    "Startup Telegram suppressed (cooldown %ss) — another instance or recent startup notify",
+                    _STARTUP_TELEGRAM_COOLDOWN_SEC,
+                )
+                _STARTUP_TELEGRAM_SENT_THIS_PROCESS = True
+                return
+        except Exception as _e:
+            logging.debug("Startup Telegram Redis cooldown skipped: %s", _e)
+
+    _STARTUP_TELEGRAM_SENT_THIS_PROCESS = True
+
+    if ACTIVE_TRADES:
+        symbols = [x.get("symbol", "?") for x in ACTIVE_TRADES]
+        telegram_send(
+            f"💾 <b>RECOVERED {len(ACTIVE_TRADES)} ACTIVE TRADES</b>\n"
+            f"{', '.join(symbols)}\n"
+            f"<i>Resuming monitoring after restart.</i>"
+        )
+
+    active_labels = [k for k, v in ACTIVE_STRATEGIES.items() if v]
+    active_text = ", ".join(active_labels) if active_labels else "None"
+    telegram_send(
+        f"🚀 <b>V4 INSTITUTIONAL ENGINE :: ONLINE</b>\n"
+        f"💎 Mode: {ENGINE_MODE}\n"
+        f"🧩 Active Setups: {active_text}\n"
+        f"⚡ EMA 10/20 Crossover: <b>ACTIVE</b>\n"
+        f"📊 Bank Nifty Options Signal: <b>ACTIVE</b>"
+    )
 
 def load_json(path: str) -> dict:
     return db.get_value("legacy_json", path, default={})
@@ -4661,13 +4717,7 @@ def run_live_mode():
     print("⚡ EMA 10/20 CROSSOVER: ON (NIFTY/BANKNIFTY 5m)")
     print("📊 BANK NIFTY OPTIONS SIGNAL ENGINE: ON")
     print("="*50 + "\n")
-    telegram_send(
-        f"🚀 <b>V4 INSTITUTIONAL ENGINE :: ONLINE</b>\n"
-        f"💎 Mode: {ENGINE_MODE}\n"
-        f"🧩 Active Setups: {active_text}\n"
-        f"⚡ EMA 10/20 Crossover: <b>ACTIVE</b>\n"
-        f"📊 Bank Nifty Options Signal: <b>ACTIVE</b>"
-    )
+    _send_startup_telegram_bundle()
 
     while True:
         try:
