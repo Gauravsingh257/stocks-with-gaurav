@@ -236,6 +236,7 @@ export interface SwingIdea {
   technical_factors: Record<string, unknown>;
   fundamental_factors: Record<string, unknown>;
   sentiment_factors: Record<string, unknown>;
+  signals_updated_at: string | null;
   created_at: string;
 }
 
@@ -266,7 +267,12 @@ export interface RunningTradeMonitorItem {
   stop_loss: number;
   targets: number[];
   profit_loss: number;
+  profit_loss_pct: number;
   drawdown: number;
+  drawdown_pct: number;
+  high_since_entry: number | null;
+  low_since_entry: number | null;
+  days_held: number;
   distance_to_target: number | null;
   distance_to_stop_loss: number | null;
   status: string;
@@ -363,7 +369,9 @@ export const api = {
   swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),
   longtermResearch: (limit = 12) => get<{ items: LongTermIdea[]; count: number }>(`/api/research/longterm?limit=${limit}`),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
+  runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
+  trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
 };

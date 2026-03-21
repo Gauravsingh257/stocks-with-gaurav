@@ -12,12 +12,34 @@ function fmt(v: number | null | undefined) {
   return v.toFixed(2);
 }
 
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  } catch {
+    return "-";
+  }
+}
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+  } catch {
+    return "-";
+  }
+}
+
 function signalList(signals: Record<string, string>) {
   return Object.values(signals || {}).filter(Boolean);
 }
 
 function tvUrl(symbol: string, interval = "D") {
-  // TradingView expects symbols like NSE:COALINDIA — already in this format
   return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}&interval=${interval}`;
 }
 
@@ -54,7 +76,6 @@ function LevelsTooltip({ item }: LevelsTooltipProps) {
           whiteSpace: "nowrap",
         }}
       >
-        {/* mini candlestick icon */}
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg">
           <rect x="2" y="4" width="3" height="6" rx="0.5" fill="#5b9cf6"/>
           <line x1="3.5" y1="1" x2="3.5" y2="4" stroke="#5b9cf6" strokeWidth="1.2"/>
@@ -100,7 +121,6 @@ function LevelsTooltip({ item }: LevelsTooltipProps) {
             <span style={{ color: "var(--text-secondary)" }}>R:R</span>
             <span style={{ color: "#f0c060", fontWeight: 600 }}>{item.risk_reward?.toFixed(2) ?? "-"}</span>
           </div>
-          {/* small triangle pointer */}
           <div style={{
             position: "absolute",
             top: -5,
@@ -121,6 +141,8 @@ function LevelsTooltip({ item }: LevelsTooltipProps) {
 }
 
 export function SwingIdeasTable({ items }: Props) {
+  const headers = ["#", "Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Chart", "Recommended", "Analysis Updated", "Reasoning"];
+
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", fontWeight: 600 }}>
@@ -133,49 +155,71 @@ export function SwingIdeasTable({ items }: Props) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
-                {["Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Chart", "Reasoning"].map(h => (
-                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500 }}>{h}</th>
+                {headers.map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {items.map(item => (
+              {items.map((item, idx) => (
                 <tr key={item.id} style={{ borderBottom: "1px solid var(--border-muted)" }}>
-                    <td style={{ padding: "10px 12px", fontWeight: 600 }}>{item.symbol}</td>
-                    <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
-                    <td style={{ padding: "10px 12px" }}>{fmt(item.stop_loss)}</td>
-                    <td style={{ padding: "10px 12px" }}>{fmt(item.target_1)}</td>
-                    <td style={{ padding: "10px 12px" }}>{fmt(item.target_2)}</td>
-                    <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
-                    <td style={{ padding: "10px 12px" }}>
-                      <LevelsTooltip item={item} />
-                    </td>
-                    <td style={{ padding: "10px 12px", color: "var(--text-secondary)", maxWidth: 420 }}>
-                      <details>
-                        <summary style={{ cursor: "pointer", color: "var(--accent)" }}>View reasoning evidence</summary>
-                        <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
-                          <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{item.reasoning_summary}</div>
-                          <div style={{ fontSize: "0.78rem" }}>
-                            <strong>Technical Factors</strong>
-                            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                              {signalList(item.technical_signals).map((s, i) => <li key={`t-${item.id}-${i}`}>{s}</li>)}
-                            </ul>
-                          </div>
-                          <div style={{ fontSize: "0.78rem" }}>
-                            <strong>Fundamental Factors</strong>
-                            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                              {signalList(item.fundamental_signals).map((s, i) => <li key={`f-${item.id}-${i}`}>{s}</li>)}
-                            </ul>
-                          </div>
-                          <div style={{ fontSize: "0.78rem" }}>
-                            <strong>Sentiment Factors</strong>
-                            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                              {signalList(item.sentiment_signals).map((s, i) => <li key={`s-${item.id}-${i}`}>{s}</li>)}
-                            </ul>
-                          </div>
+                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
+                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>{item.symbol}</td>
+                  <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
+                  <td style={{ padding: "10px 12px", color: "#ff4e6a" }}>{fmt(item.stop_loss)}</td>
+                  <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_1)}</td>
+                  <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_2)}</td>
+                  <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <LevelsTooltip item={item} />
+                  </td>
+                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>
+                    {fmtDate(item.created_at)}
+                  </td>
+                  <td style={{ padding: "10px 12px", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
+                    <span
+                      title={`Analysis last refreshed: ${fmtDateTime(item.signals_updated_at ?? item.created_at)}`}
+                      style={{
+                        color: "var(--text-secondary)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        cursor: "default",
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0, opacity: 0.6 }}>
+                        <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+                        <path d="M6 3.5V6L7.5 7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                      </svg>
+                      {fmtDateTime(item.signals_updated_at ?? item.created_at)}
+                    </span>
+                  </td>
+                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", maxWidth: 420 }}>
+                    <details>
+                      <summary style={{ cursor: "pointer", color: "var(--accent)" }}>View reasoning evidence</summary>
+                      <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                        <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{item.reasoning_summary}</div>
+                        <div style={{ fontSize: "0.78rem" }}>
+                          <strong>Technical Factors</strong>
+                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                            {signalList(item.technical_signals).map((s, i) => <li key={`t-${item.id}-${i}`}>{s}</li>)}
+                          </ul>
                         </div>
-                      </details>
-                    </td>
+                        <div style={{ fontSize: "0.78rem" }}>
+                          <strong>Fundamental Factors</strong>
+                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                            {signalList(item.fundamental_signals).map((s, i) => <li key={`f-${item.id}-${i}`}>{s}</li>)}
+                          </ul>
+                        </div>
+                        <div style={{ fontSize: "0.78rem" }}>
+                          <strong>Sentiment Factors</strong>
+                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                            {signalList(item.sentiment_signals).map((s, i) => <li key={`s-${item.id}-${i}`}>{s}</li>)}
+                          </ul>
+                        </div>
+                      </div>
+                    </details>
+                  </td>
                 </tr>
               ))}
             </tbody>

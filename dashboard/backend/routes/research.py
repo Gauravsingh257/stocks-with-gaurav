@@ -45,6 +45,7 @@ def _swing_payload(limit: int) -> dict:
                 "fundamental_factors": row.get("fundamental_factors", {}),
                 "sentiment_factors": row.get("sentiment_factors", {}),
                 "reasoning_summary": row.get("reasoning", ""),
+                "signals_updated_at": row.get("signals_updated_at") or row.get("created_at"),
                 "created_at": row.get("created_at"),
             }
         )
@@ -105,7 +106,12 @@ def _running_trades_payload(limit: int) -> dict:
                 "stop_loss": stop,
                 "targets": targets,
                 "profit_loss": float(row.get("profit_loss", 0)),
+                "profit_loss_pct": float(row.get("profit_loss_pct", 0)),
                 "drawdown": float(row.get("drawdown", 0)),
+                "drawdown_pct": float(row.get("drawdown_pct", 0)),
+                "high_since_entry": row.get("high_since_entry"),
+                "low_since_entry": row.get("low_since_entry"),
+                "days_held": int(row.get("days_held", 0)),
                 "distance_to_target": row.get("distance_to_target"),
                 "distance_to_stop_loss": row.get("distance_to_stop_loss"),
                 "status": row.get("status", "RUNNING"),
@@ -278,3 +284,45 @@ def run_longterm_scan():
             "summary": str(e),
             "result": {},
         }
+
+
+@router.post("/api/research/tracker/refresh")
+@router.post("/research/tracker/refresh")
+def tracker_refresh():
+    """Immediately seed any un-tracked recommendations and update all running trade prices."""
+    try:
+        from services.trade_tracker import refresh_now
+        result = refresh_now()
+        return {"ok": True, "seeded": result["seeded"], "updated": result["updated"]}
+    except Exception as e:
+        log.exception("tracker_refresh failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/research/running-trades/history")
+@router.get("/research/running-trades/history")
+def get_running_trades_history(limit: int = Query(100, ge=1, le=500)):
+    """Return all running trades including closed ones (TARGET_HIT, STOP_HIT)."""
+    from dashboard.backend.db import list_running_trades
+    rows = list_running_trades(limit=limit, active_only=False)
+    items = []
+    for row in rows:
+        targets = [float(t) for t in row.get("targets", [])]
+        items.append({
+            "id": row["id"],
+            "symbol": row["symbol"],
+            "entry_price": float(row["entry_price"]),
+            "current_price": float(row["current_price"]),
+            "stop_loss": float(row["stop_loss"]),
+            "targets": targets,
+            "profit_loss": float(row.get("profit_loss", 0)),
+            "profit_loss_pct": float(row.get("profit_loss_pct", 0)),
+            "drawdown_pct": float(row.get("drawdown_pct", 0)),
+            "high_since_entry": row.get("high_since_entry"),
+            "low_since_entry": row.get("low_since_entry"),
+            "days_held": int(row.get("days_held", 0)),
+            "status": row.get("status", "RUNNING"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        })
+    return {"items": items, "count": len(items)}

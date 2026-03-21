@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS stock_recommendations (
     long_term_target      REAL,
     risk_factors          TEXT,
     reasoning             TEXT NOT NULL DEFAULT '',
+    signals_updated_at    TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_stock_reco_type_created ON stock_recommendations(agent_type, created_at DESC);
@@ -144,7 +145,12 @@ CREATE TABLE IF NOT EXISTS running_trades (
     targets               TEXT NOT NULL DEFAULT '[]',
     current_price         REAL NOT NULL,
     profit_loss           REAL NOT NULL DEFAULT 0,
+    profit_loss_pct       REAL NOT NULL DEFAULT 0,
     drawdown              REAL NOT NULL DEFAULT 0,
+    drawdown_pct          REAL NOT NULL DEFAULT 0,
+    high_since_entry      REAL,
+    low_since_entry       REAL,
+    days_held             INTEGER NOT NULL DEFAULT 0,
     distance_to_target    REAL,
     distance_to_stop_loss REAL,
     status                TEXT NOT NULL DEFAULT 'RUNNING' CHECK(status IN ('RUNNING','TARGET_HIT','STOP_HIT','CLOSED')),
@@ -195,6 +201,7 @@ def init_db() -> None:
     # Migrate agent_logs from old schema if needed
     migrate_agent_logs()
     migrate_stock_recommendations()
+    migrate_running_trades()
 
 
 # ── CSV Watcher state ─────────────────────────────────────────────────────────
@@ -396,9 +403,30 @@ def migrate_stock_recommendations() -> None:
     try:
         cursor = conn.execute("PRAGMA table_info(stock_recommendations)")
         cols = {row[1] for row in cursor.fetchall()}
-        for col_name in ("technical_signals", "fundamental_signals", "sentiment_signals"):
+        for col_name in ("technical_signals", "fundamental_signals", "sentiment_signals", "signals_updated_at"):
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_running_trades() -> None:
+    """Ensure new tracking columns exist in running_trades."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("PRAGMA table_info(running_trades)")
+        cols = {row[1] for row in cursor.fetchall()}
+        new_cols = [
+            ("profit_loss_pct", "REAL NOT NULL DEFAULT 0"),
+            ("drawdown_pct", "REAL NOT NULL DEFAULT 0"),
+            ("high_since_entry", "REAL"),
+            ("low_since_entry", "REAL"),
+            ("days_held", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for col_name, col_def in new_cols:
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE running_trades ADD COLUMN {col_name} {col_def}")
         conn.commit()
     finally:
         conn.close()
@@ -521,24 +549,32 @@ def get_latest_recommendation_by_symbol(symbol: str) -> dict | None:
 def create_running_trade(payload: dict) -> int:
     """Create running trade row and return id."""
     conn = get_connection()
+    entry = float(payload["entry_price"])
+    current = float(payload.get("current_price", entry))
     try:
         cur = conn.execute(
             """
             INSERT INTO running_trades (
                 symbol, recommendation_id, entry_price, stop_loss, targets,
-                current_price, profit_loss, drawdown, distance_to_target,
-                distance_to_stop_loss, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                current_price, profit_loss, profit_loss_pct, drawdown, drawdown_pct,
+                high_since_entry, low_since_entry, days_held,
+                distance_to_target, distance_to_stop_loss, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload["symbol"],
                 payload.get("recommendation_id"),
-                float(payload["entry_price"]),
+                entry,
                 float(payload["stop_loss"]),
                 json.dumps(payload.get("targets", [])),
-                float(payload["current_price"]),
+                current,
                 float(payload.get("profit_loss", 0)),
+                float(payload.get("profit_loss_pct", 0)),
                 float(payload.get("drawdown", 0)),
+                float(payload.get("drawdown_pct", 0)),
+                float(payload.get("high_since_entry", current)),
+                float(payload.get("low_since_entry", current)),
+                int(payload.get("days_held", 0)),
                 float(payload["distance_to_target"]) if payload.get("distance_to_target") is not None else None,
                 float(payload["distance_to_stop_loss"]) if payload.get("distance_to_stop_loss") is not None else None,
                 payload.get("status", "RUNNING"),
@@ -578,7 +614,12 @@ def update_running_trade(
     *,
     current_price: float,
     profit_loss: float,
+    profit_loss_pct: float = 0.0,
     drawdown: float,
+    drawdown_pct: float = 0.0,
+    high_since_entry: float | None = None,
+    low_since_entry: float | None = None,
+    days_held: int = 0,
     distance_to_target: float | None,
     distance_to_stop_loss: float | None,
     status: str,
@@ -589,7 +630,17 @@ def update_running_trade(
         conn.execute(
             """
             UPDATE running_trades
-            SET current_price = ?, profit_loss = ?, drawdown = ?,
+            SET current_price = ?, profit_loss = ?, profit_loss_pct = ?,
+                drawdown = ?, drawdown_pct = ?,
+                high_since_entry = CASE WHEN ? IS NULL THEN high_since_entry
+                                        WHEN high_since_entry IS NULL THEN ?
+                                        WHEN ? > high_since_entry THEN ?
+                                        ELSE high_since_entry END,
+                low_since_entry  = CASE WHEN ? IS NULL THEN low_since_entry
+                                        WHEN low_since_entry IS NULL THEN ?
+                                        WHEN ? < low_since_entry THEN ?
+                                        ELSE low_since_entry END,
+                days_held = ?,
                 distance_to_target = ?, distance_to_stop_loss = ?,
                 status = ?, updated_at = datetime('now')
             WHERE id = ?
@@ -597,7 +648,14 @@ def update_running_trade(
             (
                 float(current_price),
                 float(profit_loss),
+                float(profit_loss_pct),
                 float(drawdown),
+                float(drawdown_pct),
+                # high_since_entry CASE (4 params: sentinel, init, compare, replace)
+                high_since_entry, high_since_entry, high_since_entry, high_since_entry,
+                # low_since_entry CASE
+                low_since_entry, low_since_entry, low_since_entry, low_since_entry,
+                int(days_held),
                 float(distance_to_target) if distance_to_target is not None else None,
                 float(distance_to_stop_loss) if distance_to_stop_loss is not None else None,
                 status,

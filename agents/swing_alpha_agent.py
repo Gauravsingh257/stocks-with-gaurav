@@ -91,3 +91,13 @@ class SwingTradeAlphaAgent(BaseAgent):
         )
         result.findings = findings
         result.summary = f"Swing ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
+
+        # Seed running_trade tracker rows for the new recommendations
+        try:
+            from services.trade_tracker import seed_running_trades
+            seeded = seed_running_trades()
+            if seeded:
+                import logging as _log
+                _log.getLogger("SwingTradeAlphaAgent").info("Trade tracker: seeded %d new rows", seeded)
+        except Exception:
+            pass

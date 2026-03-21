@@ -89,6 +89,12 @@ async def lifespan(app: FastAPI):
         log.info("Agent scheduler started")
     except Exception as exc:
         log.warning("Agent scheduler not started: %s", exc)
+    try:
+        from services.trade_tracker import start_trade_tracker
+        start_trade_tracker()
+        log.info("Trade price tracker started")
+    except Exception as exc:
+        log.warning("Trade tracker not started: %s", exc)
     log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────

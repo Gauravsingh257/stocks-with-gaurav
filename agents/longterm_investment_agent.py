@@ -90,3 +90,9 @@ class LongTermInvestmentAgent(BaseAgent):
         )
         result.findings = findings
         result.summary = f"Long-term ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
+
+        try:
+            from services.trade_tracker import seed_running_trades
+            seed_running_trades()
+        except Exception:
+            pass
