@@ -135,6 +135,39 @@ async def _fetch_daily_df(ingestion: DataIngestion, symbol: str) -> object:
     )
 
 
+def _real_swing_signals(smc: dict) -> tuple[dict[str, str], str]:
+    """Build live technical signal strings from score_swing_candidate result dict."""
+    reasons = smc.get("reasons", [])
+    research = smc.get("research", [])
+    rs = smc.get("rs", 0.0)
+    vol_sig = smc.get("volume", "NEUTRAL")
+    wt = smc.get("weekly_trend", "")
+    ds = smc.get("daily_structure", "")
+    direction = smc.get("direction", "LONG")
+    score = smc.get("score", 0)
+    breakdown = smc.get("breakdown", {})
+    fund = smc.get("fundamentals", {})
+
+    # Build technical signals from real SMC analysis
+    tech = {
+        "weekly_trend": f"Weekly trend: {wt} — {'Higher highs pattern across last 4 weeks' if 'BULL' in wt else 'Lower lows pattern, bearish pressure'}.",
+        "daily_structure": f"Daily {ds} confirmed — price broke {'swing high (BOS)' if 'BOS' in ds else 'previous structure (CHoCH)'}, signalling {'bullish' if direction == 'LONG' else 'bearish'} intent.",
+        "ob_fvg": "; ".join(r for r in reasons if "OB:" in r or "FVG:" in r) or "No OB/FVG zone identified in recent candles.",
+        "relative_strength": f"RS vs NIFTY: {rs:+.1f}% over 10 days — {'outperforming index' if (direction=='LONG' and rs>2) or (direction=='SHORT' and rs<-2) else 'neutral vs index'}.",
+        "volume": f"Volume profile: {vol_sig} — {('institutional buying visible' if vol_sig in ('ACCUMULATION','STRONG_ACCUMULATION') else 'distribution pressure' if vol_sig=='DISTRIBUTION' else 'normal volume')}.",
+        "smc_score": f"SMC quality score: {score}/12 (OB/FVG: {breakdown.get('ob_fvg',0)}/2, RS: {breakdown.get('rs',0)}/2, Vol: {breakdown.get('vol',0)}/1).",
+    }
+
+    # Build reasoning from real research lines and reasons
+    research_lines = [l for l in research if l] if research else []
+    reason_lines = [r for r in reasons if r]
+    full_reason = " | ".join(reason_lines[:4])
+    if research_lines:
+        full_reason += " | " + " | ".join(research_lines[:3])
+
+    return tech, full_reason
+
+
 async def _materialize_swing_idea(
     row: FactorRow,
     rank_score: float,
@@ -143,23 +176,30 @@ async def _materialize_swing_idea(
     nifty_daily: list[dict],
 ) -> RankedIdea | None:
     symbol = row.symbol
-    technical_signals, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
-    reasoning, _ = generate_evidence_reasoning(
-        symbol=symbol,
-        technical_signals=technical_signals,
-        fundamental_signals=fundamental_signals,
-        sentiment_signals=sentiment_signals,
-        min_factors=3,
-        max_factors=6,
-    )
+    _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
     daily_df = await _fetch_daily_df(ingestion, symbol)
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
         log.debug("No OHLC swing levels for %s", symbol)
         return None
-    entry, stop, targets, setup = levels
+    entry, stop, targets, setup, smc_meta = levels
     entry_price = float(entry)
     stop_loss = float(stop)
+
+    # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
+    if smc_meta:
+        technical_signals, reasoning = _real_swing_signals(smc_meta)
+    else:
+        technical_signals = _hash_tech
+        reasoning, _ = generate_evidence_reasoning(
+            symbol=symbol,
+            technical_signals=_hash_tech,
+            fundamental_signals=fundamental_signals,
+            sentiment_signals=sentiment_signals,
+            min_factors=3,
+            max_factors=6,
+        )
+
     confidence = round(rank_score * 100, 2)
     return RankedIdea(
         symbol=symbol,

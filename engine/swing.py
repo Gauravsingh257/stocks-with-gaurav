@@ -306,16 +306,49 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
     else:
         breakdown["vol"] = 0
 
-    # 6. Entry / SL / Target
+    # 6. Entry / SL / Target — SMC zone-based (not CMP)
     atr = calculate_atr(daily_data)
     if direction == "LONG":
-        entry = price
+        # Entry: best available zone in order: FVG midpoint > OB top > pullback to BOS level > CMP
+        if fvg:
+            # Price has moved up past the FVG; entry is at FVG midpoint (demand zone retest)
+            fvg_mid = round((fvg[0] + fvg[1]) / 2, 2)
+            # Only use FVG entry if price is above the FVG (i.e., it's a future pullback entry)
+            entry = fvg_mid if price > fvg[1] else price
+        elif ob:
+            # OB top as entry (first candle above the OB that impulse moved from)
+            entry = round(ob[1], 2)
+        else:
+            # Fall back to BOS level (prior swing high broken = now support) or CMP
+            bos_level = ds_info.get("level", price)
+            # Enter on pullback to BOS level if price is above it, else CMP
+            entry = round(bos_level, 2) if price > bos_level * 1.005 else price
+
         sl = (ob[0] - atr * 0.3) if ob else ((ds_info.get("swing_low", price - atr * 2)) - atr * 0.3)
-        target = entry + (entry - sl) * 3
+        # Ensure SL is below entry; if zone-based entry pulls entry below SL, fall back to CMP entry
+        if sl >= entry:
+            entry = price
+            sl = (ob[0] - atr * 0.3) if ob else ((ds_info.get("swing_low", price - atr * 2)) - atr * 0.3)
+        sl = round(sl, 2)
+        target = round(entry + (entry - sl) * 3, 2)
     else:
-        entry = price
+        # SHORT entry: FVG midpoint > OB low > CHoCH level > CMP
+        if fvg:
+            fvg_mid = round((fvg[0] + fvg[1]) / 2, 2)
+            entry = fvg_mid if price < fvg[0] else price
+        elif ob:
+            entry = round(ob[0], 2)
+        else:
+            bos_level = ds_info.get("level", price)
+            entry = round(bos_level, 2) if price < bos_level * 0.995 else price
+
         sl = (ob[1] + atr * 0.3) if ob else ((ds_info.get("swing_high", price + atr * 2)) + atr * 0.3)
-        target = entry - (sl - entry) * 3
+        if sl <= entry:
+            entry = price
+            sl = (ob[1] + atr * 0.3) if ob else ((ds_info.get("swing_high", price + atr * 2)) + atr * 0.3)
+        sl = round(sl, 2)
+        target = round(entry - (sl - entry) * 3, 2)
+
     risk = abs(entry - sl)
     reward = abs(target - entry)
     rr = round(reward / risk, 2) if risk > 0 else 0

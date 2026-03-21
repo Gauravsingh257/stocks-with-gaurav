@@ -40,9 +40,12 @@ def _synthetic_uptrend_days(n: int = 120, start: float = 100.0) -> list[dict]:
 
 
 def test_entry_vs_close_sane():
+    # Default RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = 0.30
     assert entry_vs_close_sane(100.0, 100.0) is True
-    assert entry_vs_close_sane(115.0, 100.0) is False  # 15% > default 12%
-    assert entry_vs_close_sane(102.0, 100.0) is True  # 2%
+    assert entry_vs_close_sane(135.0, 100.0) is False  # 35% > 30%
+    assert entry_vs_close_sane(102.0, 100.0) is True   # 2%
+    assert entry_vs_close_sane(72.0, 100.0) is True    # 28% — within 30%
+    assert entry_vs_close_sane(69.0, 100.0) is False   # 31% > 30%
 
 
 def test_df_to_candles_roundtrip():
@@ -78,8 +81,12 @@ def test_build_longterm_trade_levels():
     lt = build_longterm_trade_levels(df)
     assert lt is not None
     entry, stop, targets, long_target, zone, setup = lt
-    assert setup.startswith("LONGTERM_OHLC_")
-    assert abs(entry - raw[-1]["close"]) < 0.02
+    assert setup.startswith("LONGTERM_")
+    # Entry is a demand zone or pullback BELOW CMP (not necessarily at CMP)
+    close = raw[-1]["close"]
+    assert entry <= close, "Long-term entry must be at or below current price"
+    assert stop < entry, "Stop must be below entry"
+    assert long_target > close, "Long-term target must be above current price"
     assert len(zone) == 2
     assert targets[0] == long_target
 
@@ -104,7 +111,8 @@ def test_build_swing_trade_levels_with_monkeypatched_swing(monkeypatch):
     monkeypatch.setattr(rl, "score_swing_candidate", fake_score)
     out = rl.build_swing_trade_levels("NSE:TEST", df, [])
     assert out is not None
-    entry, sl, targets, setup = out
+    entry, sl, targets, setup, smc_meta = out
     assert "SMC_SWING" in setup
     assert len(targets) == 2
     assert sl < entry
+    assert smc_meta is not None
