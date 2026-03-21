@@ -324,6 +324,8 @@ def get_engine_snapshot() -> Dict:
                     engine_mode = redis_snap["engine_mode"]
                 if isinstance(redis_snap.get("index_ltp"), dict):
                     _index_ltp_override = {k: float(v) for k, v in redis_snap["index_ltp"].items() if isinstance(v, (int, float))}
+                    # Fill any missing index prices (e.g. BANKNIFTY when Kite not streaming) via yfinance
+                    _fill_missing_index_ltp(_index_ltp_override)
         except Exception as e:
             logger.debug("Redis engine snapshot merge failed: %s", e)
 
@@ -423,6 +425,31 @@ def _get_engine_last_cycle_from_cache() -> tuple[Optional[float], Optional[float
         return (ts, age)
     except Exception:
         return (None, None)
+
+
+def _fill_missing_index_ltp(ltp_dict: Dict[str, float]) -> None:
+    """
+    For any index label missing from ltp_dict, fetch from yfinance and insert in-place.
+    Called after the engine Redis snapshot so BANKNIFTY still shows when Kite isn't streaming.
+    """
+    needed = {
+        "NIFTY 50":  "^NSEI",
+        "NIFTY BANK": "^NSEBANK",
+    }
+    missing = [label for label in needed if label not in ltp_dict]
+    if not missing:
+        return
+    try:
+        import yfinance as yf
+        for label in missing:
+            try:
+                hist = yf.Ticker(needed[label]).history(period="1d", interval="1m")
+                if not hist.empty:
+                    ltp_dict[label] = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _get_index_ltp_from_cache() -> Dict[str, float]:
