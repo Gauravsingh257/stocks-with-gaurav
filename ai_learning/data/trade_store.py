@@ -45,6 +45,17 @@ class TradeStore:
             if col not in existing:
                 conn.execute(sql)
 
+    def _migrate_signal_log(self, conn) -> None:
+        """Add columns to signal_log on existing DBs."""
+        try:
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(signal_log)").fetchall()}
+        except sqlite3.OperationalError:
+            return
+        if "signal_kind" not in existing:
+            conn.execute("ALTER TABLE signal_log ADD COLUMN signal_kind TEXT DEFAULT ''")
+        if "delivery_channel" not in existing:
+            conn.execute("ALTER TABLE signal_log ADD COLUMN delivery_channel TEXT DEFAULT 'telegram'")
+
     def _init_db(self):
         with self._conn() as conn:
             conn.executescript("""
@@ -150,10 +161,13 @@ class TradeStore:
                     result          TEXT,
                     pnl_r           REAL,
                     signal_json     TEXT,
+                    signal_kind     TEXT DEFAULT '',
+                    delivery_channel TEXT DEFAULT 'telegram',
                     created_at      TEXT DEFAULT (datetime('now'))
                 );
             """)
             self._migrate_db(conn)
+            self._migrate_signal_log(conn)
 
     # ─── Manual Trades CRUD ───────────────────────────────────────────
 
@@ -352,12 +366,13 @@ class TradeStore:
 
     def log_signal(self, signal_dict: dict):
         with self._conn() as conn:
+            self._migrate_signal_log(conn)
             conn.execute("""
                 INSERT INTO signal_log
                 (signal_id, timestamp, symbol, direction, strategy_name,
                  entry, stop_loss, target1, target2, score, confidence,
-                 signal_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 result, pnl_r, signal_json, signal_kind, delivery_channel)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 signal_dict.get("signal_id", f"SIG-{uuid.uuid4().hex[:8]}"),
                 signal_dict.get("timestamp"), signal_dict.get("symbol"),
@@ -365,7 +380,10 @@ class TradeStore:
                 signal_dict.get("entry"), signal_dict.get("stop_loss"),
                 signal_dict.get("target1"), signal_dict.get("target2"),
                 signal_dict.get("score"), signal_dict.get("confidence"),
-                json.dumps(signal_dict)
+                signal_dict.get("result"), signal_dict.get("pnl_r"),
+                json.dumps(signal_dict),
+                signal_dict.get("signal_kind") or "",
+                signal_dict.get("delivery_channel") or "telegram",
             ))
 
     def get_signal_history(self, limit: int = 100) -> List[dict]:

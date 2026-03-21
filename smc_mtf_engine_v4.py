@@ -201,7 +201,19 @@ def scan_ema_crossover(symbol):
             # Signal ID: strategy_timeframe_symbol_timestamp (stronger dedupe across strategies/timeframes)
             _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
             signal_id = f"ema_5m_{_sym}_{ts.timestamp():.0f}"
-            telegram_send_signal(msg, signal_id=signal_id)
+            telegram_send_signal(
+                msg,
+                signal_id=signal_id,
+                signal_meta={
+                    "signal_kind": "EMA_CROSS",
+                    "symbol": symbol,
+                    "direction": action,
+                    "strategy_name": "EMA_CROSSOVER",
+                    "entry": entry_p,
+                    "stop_loss": sl_p,
+                    "target1": tp_p,
+                },
+            )
             print(f"🔥 EMA SIGNAL SENT: {symbol} {action}")
             logging.info(f"EMA SIGNAL: {symbol} {action} @ {entry_p}")
             
@@ -367,19 +379,21 @@ BACKTEST_MODE = os.environ.get("BACKTEST_MODE", "") == "1"
 # =====================================================
 # TELEGRAM CORE (Early Definition for Init)
 # =====================================================
-def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int = 2):
+def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int = 2) -> bool:
     """
     Send message to Telegram with deduplication, retry on failure, and proper logging.
 
     Dedup: if signal_id is set, check Redis before sending. If Redis is unavailable,
     the check is skipped (fail-open) so signals are NOT silently dropped.
+
+    Returns True if the message was delivered to Telegram; False if skipped, failed, or misconfigured.
     """
     if not BOT_TOKEN:
         logging.error("[Telegram] BOT_TOKEN not set — cannot send message")
-        return
+        return False
     if not (chat_id or CHAT_ID):
         logging.error("[Telegram] CHAT_ID not set — cannot send message")
-        return
+        return False
 
     # Deduplication via Redis (fail-open: skip check if Redis is down)
     if signal_id:
@@ -387,7 +401,7 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
             import engine_runtime
             if not engine_runtime.should_send_signal(signal_id):
                 logging.debug("[Telegram] Signal dedupe skip: %s", signal_id)
-                return
+                return False
         except Exception as e:
             logging.warning("[Telegram] Signal dedupe check failed (sending anyway): %s", e)
 
@@ -409,7 +423,7 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
                         engine_runtime.mark_signal_sent(signal_id)
                     except Exception:
                         pass
-                return
+                return True
             else:
                 logging.warning(
                     "[Telegram] API returned %s: %s (attempt %d/%d)",
@@ -426,13 +440,21 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
             t.sleep(2 ** attempt)  # Exponential backoff between retries
 
     logging.error("[Telegram] Failed to send after %d attempts. Last error: %s", _max_retries, last_exc)
+    return False
 
 
-def telegram_send_signal(message: str, signal_id: str = None, chat_id=None):
+def telegram_send_signal(
+    message: str,
+    signal_id: str = None,
+    chat_id=None,
+    signal_meta: dict = None,
+):
     """
     Send a TRADING SIGNAL to Telegram with 3 retries + critical log on all-fail.
     Use this for all actual trade signals — never for status/diagnostic messages.
     This ensures signals are NEVER silently lost.
+
+    On successful delivery, appends to ai_learning signal_log (for dashboard/journal/analytics).
     """
     if not BOT_TOKEN or not (chat_id or CHAT_ID):
         logging.critical(
@@ -443,7 +465,14 @@ def telegram_send_signal(message: str, signal_id: str = None, chat_id=None):
         return
 
     try:
-        telegram_send(message, chat_id=chat_id, signal_id=signal_id, _max_retries=3)
+        sent = telegram_send(message, chat_id=chat_id, signal_id=signal_id, _max_retries=3)
+        if sent:
+            try:
+                from utils.telegram_signal_log import persist_telegram_signal
+
+                persist_telegram_signal(message, signal_id, signal_meta)
+            except Exception as _log_exc:
+                logging.warning("[Telegram] signal_log persist failed: %s", _log_exc)
     except Exception as exc:
         logging.critical(
             "[SIGNAL LOST] telegram_send raised after 3 retries (%s). "
@@ -621,11 +650,17 @@ MULTI_DAY_HALT_UNTIL = None  # datetime when multi-day halt expires (None = acti
 # TELEGRAM CORE
 # =====================================================
 
-def telegram_send_image(image_path: str, caption: str):
+def telegram_send_image(
+    image_path: str,
+    caption: str,
+    signal_id: str = None,
+    signal_meta: dict = None,
+):
     """Send signal chart image with 3 retries; fall back to text-only on persistent failure."""
     if not BOT_TOKEN or not CHAT_ID:
         logging.critical("[SIGNAL LOST] Telegram credentials missing — image signal not delivered. Caption: %s", caption[:200])
         return
+    meta_base = dict(signal_meta or {})
     last_exc = None
     for attempt in range(3):
         try:
@@ -637,6 +672,13 @@ def telegram_send_image(image_path: str, caption: str):
                     timeout=15,
                 )
             if resp.ok:
+                try:
+                    from utils.telegram_signal_log import persist_telegram_signal
+
+                    m = {**meta_base, "delivery_format": "photo"}
+                    persist_telegram_signal(caption, signal_id, m)
+                except Exception as _log_exc:
+                    logging.warning("[Telegram] signal_log persist (photo) failed: %s", _log_exc)
                 return
             last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
             logging.warning("[Telegram] sendPhoto attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
@@ -647,7 +689,8 @@ def telegram_send_image(image_path: str, caption: str):
             t.sleep(2 ** attempt)
     # All image retries failed — send text-only fallback so signal is NOT lost
     logging.critical("[SIGNAL DEGRADED] Image send failed after 3 attempts (%s). Sending text-only fallback.", last_exc)
-    telegram_send_signal(caption)
+    fb_meta = {**meta_base, "delivery_format": "text_fallback_after_photo_fail"}
+    telegram_send_signal(caption, signal_id=signal_id, signal_meta=fb_meta)
 
 
 # =====================================================
@@ -2648,7 +2691,19 @@ def fetch_manual_orders():
                    f"<i>Engine is now managing this trade.</i>")
             _sym = (symbol or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
             signal_id = f"manual_0_{_sym}_{now_ist().timestamp():.0f}"
-            telegram_send_signal(msg, signal_id=signal_id)
+            telegram_send_signal(
+                msg,
+                signal_id=signal_id,
+                signal_meta={
+                    "signal_kind": "MANUAL_DETECT",
+                    "symbol": symbol,
+                    "direction": direction,
+                    "strategy_name": "MANUAL",
+                    "entry": entry_price,
+                    "stop_loss": round(sl, 2),
+                    "target1": round(target, 2),
+                },
+            )
             
     except Exception as e:
         print(f"Manual Sync Error: {e}")
@@ -3700,7 +3755,7 @@ def build_scan_universe(stock_universe: list) -> list:
 # TELEGRAM BUTTONS (INLINE KEYBOARD)
 # =====================================================
 
-def telegram_send_with_buttons(message: str, buttons: list):
+def telegram_send_with_buttons(message: str, buttons: list, signal_id: str = None, signal_meta: dict = None):
     """
     Send signal message with inline buttons. 3 retries; falls back to plain text on failure.
 
@@ -3713,6 +3768,7 @@ def telegram_send_with_buttons(message: str, buttons: list):
     if not BOT_TOKEN or not CHAT_ID:
         logging.critical("[SIGNAL LOST] Telegram credentials missing — button signal not delivered. Message: %s", message[:200])
         return
+    meta_base = dict(signal_meta or {})
     payload = {
         "chat_id": CHAT_ID,
         "text": paper_prefix(message),
@@ -3728,6 +3784,13 @@ def telegram_send_with_buttons(message: str, buttons: list):
                 timeout=10,
             )
             if resp.ok:
+                try:
+                    from utils.telegram_signal_log import persist_telegram_signal
+
+                    m = {**meta_base, "delivery_format": "inline_buttons"}
+                    persist_telegram_signal(message, signal_id, m)
+                except Exception as _log_exc:
+                    logging.warning("[Telegram] signal_log persist (buttons) failed: %s", _log_exc)
                 return
             last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
             logging.warning("[Telegram] sendMessage(buttons) attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
@@ -3738,7 +3801,8 @@ def telegram_send_with_buttons(message: str, buttons: list):
             t.sleep(2 ** attempt)
     # All retries failed — fall back to plain text signal
     logging.critical("[SIGNAL DEGRADED] Button send failed after 3 attempts (%s). Sending plain-text fallback.", last_exc)
-    telegram_send_signal(message)
+    fb_meta = {**meta_base, "delivery_format": "text_fallback_after_buttons_fail"}
+    telegram_send_signal(message, signal_id=signal_id, signal_meta=fb_meta)
 # =====================================================
 # HOURLY SUMMARY ENGINE
 # =====================================================
@@ -4178,7 +4242,20 @@ def monitor_active_trades(symbol, current_price):
                    f"Entry: {entry} ➔ Target: {target}\n"
                    f"Result: +{final_r}R Profit 💰\n"
                    f"Trail Stage: {trade.get('trail_stage', 0)}")
-            telegram_send_signal(msg)
+            _exit_sid = f"exit_tgt_{trade['symbol'].replace(':', '_')}_{now_ist().strftime('%Y%m%d%H%M%S')}"
+            telegram_send_signal(
+                msg,
+                signal_id=_exit_sid,
+                signal_meta={
+                    "signal_kind": "EXIT_TARGET",
+                    "symbol": trade.get("symbol"),
+                    "direction": direction,
+                    "strategy_name": trade.get("setup"),
+                    "entry": entry,
+                    "result": "WIN",
+                    "pnl_r": final_r,
+                },
+            )
             trade["result"] = "WIN"
             trade["exit_price"] = current_price
             trade["exit_r"] = final_r
@@ -4219,7 +4296,21 @@ def monitor_active_trades(symbol, current_price):
                    f"Entry: {entry} ➔ SL: {trade['sl']}\n"
                    f"Result: {'+' if exit_r > 0 else ''}{exit_r}R\n"
                    f"Trail Stage: {trade.get('trail_stage', 0)}")
-            telegram_send_signal(msg)
+            _res = "WIN" if trade.get("result") == "WIN" else "LOSS"
+            _exit_sid = f"exit_sl_{trade['symbol'].replace(':', '_')}_{now_ist().strftime('%Y%m%d%H%M%S')}"
+            telegram_send_signal(
+                msg,
+                signal_id=_exit_sid,
+                signal_meta={
+                    "signal_kind": "EXIT_STOP",
+                    "symbol": trade.get("symbol"),
+                    "direction": direction,
+                    "strategy_name": trade.get("setup"),
+                    "entry": entry,
+                    "result": _res,
+                    "pnl_r": exit_r,
+                },
+            )
             trade["exit_price"] = trade["sl"]
             trade["exit_r"] = exit_r
             log_paper_outcome(trade, trade["sl"], trade["result"], exit_r)  # Phase 6
@@ -4950,7 +5041,21 @@ def run_live_mode():
                                         f"<i>⚠️ Price-based on current market — verify before acting.</i>"
                                     )
                                     _cu_sid = f"catchup_{_cu_sig['symbol'].replace(':', '_')}_{_cu_sig['setup']}_{now_ist().strftime('%Y%m%d')}"
-                                    telegram_send_signal(_cu_text, signal_id=_cu_sid)
+                                    telegram_send_signal(
+                                        _cu_text,
+                                        signal_id=_cu_sid,
+                                        signal_meta={
+                                            "signal_kind": "CATCHUP",
+                                            "symbol": _cu_sig.get("symbol"),
+                                            "direction": _cu_sig.get("direction"),
+                                            "strategy_name": _cu_sig.get("setup"),
+                                            "entry": _cu_sig.get("entry"),
+                                            "stop_loss": _cu_sig.get("sl"),
+                                            "target1": _cu_sig.get("target"),
+                                            "score": _cu_sig.get("smc_score"),
+                                            "confidence": _cu_sig.get("ai_score"),
+                                        },
+                                    )
                                     _cu_sent += 1
                                 except Exception as _cu_e:
                                     logging.warning("[CATCH-UP] Signal send error: %s", _cu_e)
@@ -5507,13 +5612,31 @@ def run_live_mode():
                         {"text": "❌ IGNORE", "callback_data": "IGNORE"}
                     ]
                 ]
-    
+
+                _entry_sid = (
+                    f"smc_{sig['symbol'].replace(':', '_').replace(' ', '_')}_"
+                    f"{sig.get('setup', 'UNK')}_{now_ist().strftime('%Y%m%d%H%M%S')}"
+                )
+                _entry_meta = {
+                    "signal_kind": "ENTRY",
+                    "symbol": sig.get("symbol"),
+                    "direction": sig.get("direction"),
+                    "strategy_name": sig.get("setup"),
+                    "entry": sig.get("entry"),
+                    "stop_loss": sig.get("sl"),
+                    "target1": sig.get("target"),
+                    "score": sig.get("smc_score"),
+                    "confidence": sig.get("ai_score"),
+                    "grade": sig.get("grade"),
+                    "rr": sig.get("rr"),
+                }
+
                 if chart:
-                    telegram_send_image(chart, text)
+                    telegram_send_image(chart, text, signal_id=_entry_sid, signal_meta=_entry_meta)
                     if os.path.exists(chart):
                         os.remove(chart)
                 else:
-                    telegram_send_with_buttons(text, buttons)
+                    telegram_send_with_buttons(text, buttons, signal_id=_entry_sid, signal_meta=_entry_meta)
     
             # -----------------------------
             # SMART WAIT (ZERO LATENCY MONITOR)

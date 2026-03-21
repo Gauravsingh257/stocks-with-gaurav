@@ -4,10 +4,22 @@
  * Filterable, paginated trade history + Today's live signal log.
  */
 import { useEffect, useState, useCallback } from "react";
-import { api, JournalTrade, SignalToday } from "@/lib/api";
+import { api, JournalTrade, SignalLogEntry } from "@/lib/api";
 import { Search, TrendingUp, TrendingDown, ChevronLeft, ChevronRight, Zap } from "lucide-react";
 
 const LIMIT = 50;
+const SIGNAL_LIMIT = 50;
+
+const SIGNAL_KINDS = [
+  "",
+  "ENTRY",
+  "EXIT_TARGET",
+  "EXIT_STOP",
+  "EMA_CROSS",
+  "CATCHUP",
+  "MANUAL_DETECT",
+  "ZONE_TAP_1M",
+] as const;
 
 function fmt(v: number | null | undefined, decimals = 2) {
   if (v === null || v === undefined) return "—";
@@ -24,18 +36,43 @@ function timeLabel(ts: string | null | undefined): string {
   }
 }
 
-// ─── Today's Signals Section ───────────────────────────────────────────────
-function TodaySignals() {
-  const [signals, setSignals] = useState<SignalToday[]>([]);
-  const [date, setDate] = useState("");
+function localISODate(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// ─── Telegram signal log (signal_log DB) ─────────────────────────────────────
+function TelegramSignalLog() {
+  const [signals, setSignals] = useState<SignalLogEntry[]>([]);
+  const [rangeLabel, setRangeLabel] = useState("");
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [dateFrom, setDateFrom] = useState(localISODate);
+  const [dateTo, setDateTo] = useState(localISODate);
+  const [symFilter, setSymFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState("");
 
   const load = useCallback(() => {
-    api.signalsToday()
-      .then((r) => { setSignals(r.signals); setDate(r.date); })
+    setLoading(true);
+    api.signals({
+      date_from: dateFrom,
+      date_to: dateTo,
+      symbol: symFilter.trim() || undefined,
+      signal_kind: kindFilter || undefined,
+      limit: SIGNAL_LIMIT,
+      offset,
+    })
+      .then((r) => {
+        setSignals(r.signals);
+        setTotal(r.total);
+        setRangeLabel(`${r.date_from} → ${r.date_to}`);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  }, [dateFrom, dateTo, symFilter, kindFilter, offset]);
 
   useEffect(() => {
     load();
@@ -45,82 +82,130 @@ function TodaySignals() {
     return () => clearInterval(t);
   }, [load]);
 
+  const totalPages = Math.max(1, Math.ceil(total / SIGNAL_LIMIT));
+  const page = Math.floor(offset / SIGNAL_LIMIT) + 1;
+
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
       <div style={{
         padding: "14px 18px",
         borderBottom: "1px solid var(--border)",
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: 8,
       }}>
         <Zap size={15} style={{ color: "#f0c060" }} />
-        <span style={{ fontWeight: 600 }}>Today&apos;s Signals</span>
+        <span style={{ fontWeight: 600 }}>Telegram signal log</span>
         <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-          {date} · auto-refresh 30s
+          {rangeLabel} · {total} row(s) · auto-refresh 30s
         </span>
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center p-3 border-b" style={{ borderColor: "var(--border)" }}>
+        <input type="date" className="input-dark" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setOffset(0); }} title="From" />
+        <input type="date" className="input-dark" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setOffset(0); }} title="To" />
+        <input className="input-dark" placeholder="Symbol…" value={symFilter}
+          onChange={(e) => { setSymFilter(e.target.value.toUpperCase()); setOffset(0); }} style={{ width: 120 }} />
+        <select className="input-dark" value={kindFilter} onChange={(e) => { setKindFilter(e.target.value); setOffset(0); }} style={{ width: 160 }}>
+          <option value="">All kinds</option>
+          {SIGNAL_KINDS.filter(Boolean).map((k) => (
+            <option key={k} value={k}>{k}</option>
+          ))}
+        </select>
+        <button className="btn-accent" type="button" onClick={() => { setDateFrom(localISODate()); setDateTo(localISODate()); setSymFilter(""); setKindFilter(""); setOffset(0); }}>
+          Today
+        </button>
       </div>
 
       {loading ? (
         <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>Loading…</div>
       ) : signals.length === 0 ? (
         <div style={{ padding: "24px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-          No signals generated today yet. Signals appear here as the engine fires them during market hours.
+          No rows in signal_log for this range. Entries appear when the engine successfully sends Telegram alerts (and on exits). Ensure the engine runs against this machine&apos;s <code style={{ fontSize: "0.8rem" }}>ai_learning/data/trade_learning.db</code>.
         </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Symbol</th>
-                <th>Dir</th>
-                <th>Setup</th>
-                <th>Entry</th>
-                <th>Stop Loss</th>
-                <th>Target 1</th>
-                <th>Target 2</th>
-                <th>Score</th>
-                <th>Confidence</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {signals.map((s) => (
-                <tr key={s.signal_id}>
-                  <td style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
-                    {timeLabel(s.created_at)}
-                  </td>
-                  <td style={{ fontWeight: 600 }}>{s.symbol?.replace("NSE:", "") ?? "—"}</td>
-                  <td>
-                    <span className={`badge ${s.direction === "LONG" ? "badge-long" : "badge-short"}`}>
-                      {s.direction === "LONG" ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                      {s.direction ?? "—"}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: "0.77rem", color: "var(--text-secondary)" }}>{s.strategy_name ?? "—"}</td>
-                  <td style={{ fontFamily: "monospace" }}>{fmt(s.entry)}</td>
-                  <td style={{ fontFamily: "monospace", color: "#ff4e6a" }}>{fmt(s.stop_loss)}</td>
-                  <td style={{ fontFamily: "monospace", color: "#00d18c" }}>{fmt(s.target1)}</td>
-                  <td style={{ fontFamily: "monospace", color: "#00d18c" }}>{fmt(s.target2)}</td>
-                  <td style={{ fontFamily: "monospace" }}>{fmt(s.score)}</td>
-                  <td style={{ fontFamily: "monospace" }}>
-                    {s.confidence != null ? `${fmt(s.confidence, 1)}%` : "—"}
-                  </td>
-                  <td>
-                    {s.result ? (
-                      <span className={`badge ${s.result === "WIN" ? "badge-win" : s.result === "LOSS" ? "badge-loss" : "badge-neutral"}`}>
-                        {s.result}
-                      </span>
-                    ) : (
-                      <span className="badge badge-neutral">PENDING</span>
-                    )}
-                  </td>
+        <>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Kind</th>
+                  <th>Symbol</th>
+                  <th>Dir</th>
+                  <th>Setup</th>
+                  <th>Entry</th>
+                  <th>Stop Loss</th>
+                  <th>Target 1</th>
+                  <th>Target 2</th>
+                  <th>Score</th>
+                  <th>Conf</th>
+                  <th>Result</th>
+                  <th>PnL R</th>
+                  <th>Format</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {signals.map((s) => (
+                  <tr key={s.signal_id}>
+                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                      {timeLabel(s.created_at)}
+                    </td>
+                    <td style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>{s.signal_kind || "—"}</td>
+                    <td style={{ fontWeight: 600 }}>{s.symbol?.replace("NSE:", "") ?? "—"}</td>
+                    <td>
+                      <span className={`badge ${s.direction === "LONG" ? "badge-long" : "badge-short"}`}>
+                        {s.direction === "LONG" ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                        {s.direction ?? "—"}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: "0.77rem", color: "var(--text-secondary)" }}>{s.strategy_name ?? "—"}</td>
+                    <td style={{ fontFamily: "monospace" }}>{fmt(s.entry)}</td>
+                    <td style={{ fontFamily: "monospace", color: "#ff4e6a" }}>{fmt(s.stop_loss)}</td>
+                    <td style={{ fontFamily: "monospace", color: "#00d18c" }}>{fmt(s.target1)}</td>
+                    <td style={{ fontFamily: "monospace", color: "#00d18c" }}>{fmt(s.target2)}</td>
+                    <td style={{ fontFamily: "monospace" }}>{fmt(s.score)}</td>
+                    <td style={{ fontFamily: "monospace" }}>
+                      {s.confidence != null ? `${fmt(s.confidence, 1)}%` : "—"}
+                    </td>
+                    <td>
+                      {s.result ? (
+                        <span className={`badge ${s.result === "WIN" ? "badge-win" : s.result === "LOSS" ? "badge-loss" : "badge-neutral"}`}>
+                          {s.result}
+                        </span>
+                      ) : (
+                        <span className="badge badge-neutral">—</span>
+                      )}
+                    </td>
+                    <td style={{ fontFamily: "monospace" }}>{s.pnl_r != null ? `${s.pnl_r >= 0 ? "+" : ""}${fmt(s.pnl_r)}` : "—"}</td>
+                    <td style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>{s.delivery_format ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{
+            padding: "10px 14px", borderTop: "1px solid var(--border)",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+              Page {page} / {totalPages}
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button className="btn-accent" type="button" disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - SIGNAL_LIMIT))}
+                style={{ padding: "4px 10px", opacity: offset === 0 ? 0.4 : 1 }}>
+                <ChevronLeft size={14} />
+              </button>
+              <button className="btn-accent" type="button" disabled={offset + SIGNAL_LIMIT >= total}
+                onClick={() => setOffset(offset + SIGNAL_LIMIT)}
+                style={{ padding: "4px 10px", opacity: offset + SIGNAL_LIMIT >= total ? 0.4 : 1 }}>
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -184,8 +269,8 @@ export default function JournalPage() {
         </p>
       </div>
 
-      {/* Today's live signals — always shown at top */}
-      <TodaySignals />
+      {/* Telegram signal_log — same DB the engine writes after each delivered alert */}
+      <TelegramSignalLog />
 
       {/* Filters */}
       <div className="glass flex flex-col md:flex-row flex-wrap gap-3 md:gap-2.5 items-center p-4 md:px-4 md:py-3.5">

@@ -6,6 +6,7 @@ Trade journal — filterable, sortable trade history from dashboard.db.
 import os
 import sqlite3
 import logging
+import json
 from datetime import date
 from pathlib import Path
 
@@ -35,6 +36,98 @@ class TradeRow(BaseModel):
 
 def _rows_to_dicts(rows) -> list:
     return [dict(r) for r in rows]
+
+
+def _migrate_signal_log_columns(conn: sqlite3.Connection) -> None:
+    """Match ai_learning TradeStore migrations for read-only journal queries."""
+    try:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(signal_log)").fetchall()}
+    except sqlite3.OperationalError:
+        return
+    if "signal_kind" not in existing:
+        conn.execute("ALTER TABLE signal_log ADD COLUMN signal_kind TEXT DEFAULT ''")
+    if "delivery_channel" not in existing:
+        conn.execute("ALTER TABLE signal_log ADD COLUMN delivery_channel TEXT DEFAULT 'telegram'")
+
+
+def _query_signal_log(
+    date_from: Optional[str],
+    date_to: Optional[str],
+    symbol: Optional[str],
+    signal_kind: Optional[str],
+    limit: int,
+    offset: int,
+) -> tuple[list, int]:
+    """
+    Rows from ai_learning signal_log (Telegram-delivered signals + metadata).
+    date_from / date_to: YYYY-MM-DD, inclusive, applied to DATE(created_at).
+    """
+    if not _AI_LEARNING_DB.exists():
+        return [], 0
+
+    clauses: list[str] = []
+    params: list = []
+
+    if date_from:
+        clauses.append("DATE(created_at) >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("DATE(created_at) <= ?")
+        params.append(date_to)
+    if symbol:
+        clauses.append("UPPER(COALESCE(symbol,'')) LIKE ?")
+        params.append(f"%{symbol.strip().upper()}%")
+    if signal_kind:
+        clauses.append("UPPER(COALESCE(signal_kind,'')) = ?")
+        params.append(signal_kind.strip().upper())
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    try:
+        conn = sqlite3.connect(str(_AI_LEARNING_DB))
+        conn.row_factory = sqlite3.Row
+        try:
+            _migrate_signal_log_columns(conn)
+            conn.commit()
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM signal_log{where_sql}",
+                params,
+            ).fetchone()
+            total = int(count_row[0]) if count_row else 0
+            rows = conn.execute(
+                f"""
+                SELECT signal_id, timestamp, symbol, direction, strategy_name,
+                       entry, stop_loss, target1, target2, score, confidence,
+                       result, pnl_r, created_at, signal_json, signal_kind, delivery_channel
+                FROM signal_log
+                {where_sql}
+                ORDER BY datetime(created_at) DESC
+                LIMIT ? OFFSET ?
+                """,
+                params + [limit, offset],
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                sj = d.get("signal_json")
+                if sj and isinstance(sj, str):
+                    try:
+                        parsed = json.loads(sj)
+                        d["delivery_format"] = parsed.get("delivery_format")
+                        if not d.get("signal_kind") and parsed.get("signal_kind"):
+                            d["signal_kind"] = parsed.get("signal_kind")
+                    except json.JSONDecodeError:
+                        pass
+                out.append(d)
+            return out, total
+        except sqlite3.OperationalError as exc:
+            logger.warning("signal_log query error: %s", exc)
+            return [], 0
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error("signal_log query failed: %s", exc)
+        return [], 0
 
 
 @router.get("")
@@ -177,6 +270,44 @@ def add_trade_note(trade_id: int, note: str = Query(...)):
     return {"status": "ok", "trade_id": trade_id, "note": note}
 
 
+@router.get("/signals")
+def get_signals(
+    date_from: Optional[str] = Query(default=None, description="YYYY-MM-DD inclusive"),
+    date_to: Optional[str] = Query(default=None, description="YYYY-MM-DD inclusive"),
+    symbol: Optional[str] = Query(default=None),
+    signal_kind: Optional[str] = Query(default=None, description="e.g. ENTRY, EXIT_TARGET, EMA_CROSS"),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    Telegram-delivered signals from signal_log (all kinds: entries, exits, catch-up, etc.).
+    If neither date_from nor date_to is set, uses today only (server local date).
+    """
+    today_str = date.today().isoformat()
+    if not date_from and not date_to:
+        d_from = d_to = today_str
+    elif date_from and not date_to:
+        d_from = d_to = date_from
+    elif date_to and not date_from:
+        d_from = d_to = date_to
+    else:
+        d_from, d_to = date_from, date_to
+
+    signals, total = _query_signal_log(d_from, d_to, symbol, signal_kind, limit, offset)
+    src = "signal_log" if _AI_LEARNING_DB.exists() else "none"
+    return {
+        "signals": signals,
+        "count": len(signals),
+        "total": total,
+        "date_from": d_from,
+        "date_to": d_to,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + limit) < total,
+        "source": src,
+    }
+
+
 @router.get("/signals-today")
 def get_signals_today():
     """
@@ -184,37 +315,18 @@ def get_signals_today():
     Falls back to empty list if the DB doesn't exist or is not accessible.
     """
     today_str = date.today().isoformat()
-    signals: list = []
-
+    signals, total = _query_signal_log(today_str, today_str, None, None, 500, 0)
     if not _AI_LEARNING_DB.exists():
-        logger.warning(f"AI learning DB not found at {_AI_LEARNING_DB}")
-        return {"signals": signals, "count": 0, "date": today_str, "source": "none"}
+        logger.warning("AI learning DB not found at %s", _AI_LEARNING_DB)
+        return {"signals": [], "count": 0, "total": 0, "date": today_str, "source": "none"}
 
-    try:
-        conn = sqlite3.connect(str(_AI_LEARNING_DB))
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                """
-                SELECT signal_id, timestamp, symbol, direction, strategy_name,
-                       entry, stop_loss, target1, target2, score, confidence,
-                       result, pnl_r, created_at
-                FROM signal_log
-                WHERE DATE(created_at) = ?
-                ORDER BY created_at DESC
-                """,
-                (today_str,),
-            ).fetchall()
-            signals = [dict(r) for r in rows]
-        except sqlite3.OperationalError:
-            # Table may not exist yet on a fresh DB
-            logger.warning("signal_log table not found in ai_learning DB")
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.error(f"signals-today error: {exc}")
-
-    return {"signals": signals, "count": len(signals), "date": today_str, "source": "signal_log"}
+    return {
+        "signals": signals,
+        "count": len(signals),
+        "total": total,
+        "date": today_str,
+        "source": "signal_log",
+    }
 
 
 @router.get("/sync")

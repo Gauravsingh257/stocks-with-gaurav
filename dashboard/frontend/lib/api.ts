@@ -181,21 +181,41 @@ export interface JournalTrade {
   notes:       string | null;
 }
 
-export interface SignalToday {
-  signal_id:     string;
-  timestamp:     string | null;
-  symbol:        string;
-  direction:     string;
-  strategy_name: string;
-  entry:         number | null;
-  stop_loss:     number | null;
-  target1:       number | null;
-  target2:       number | null;
-  score:         number | null;
-  confidence:    number | null;
-  result:        string | null;
-  pnl_r:         number | null;
-  created_at:    string;
+/** Row from ai_learning signal_log (Telegram + metadata); used by journal + analytics fallback. */
+export interface SignalLogEntry {
+  signal_id:         string;
+  timestamp:         string | null;
+  symbol:            string | null;
+  direction:         string | null;
+  strategy_name:     string | null;
+  entry:             number | null;
+  stop_loss:         number | null;
+  target1:           number | null;
+  target2:           number | null;
+  score:             number | null;
+  confidence:        number | null;
+  result:            string | null;
+  pnl_r:             number | null;
+  created_at:        string;
+  signal_kind?:      string | null;
+  delivery_channel?: string | null;
+  delivery_format?:  string | null;
+  signal_json?:      string | null;
+}
+
+/** @deprecated Prefer SignalLogEntry — kept for older imports. */
+export type SignalToday = SignalLogEntry;
+
+export interface SignalLogPage {
+  signals:    SignalLogEntry[];
+  count:      number;
+  total:      number;
+  date_from:  string;
+  date_to:    string;
+  limit:      number;
+  offset:     number;
+  has_more:   boolean;
+  source:     string;
 }
 
 export interface SwingIdea {
@@ -318,7 +338,24 @@ export const api = {
   },
   symbols:       () => get<{ symbols: string[] }>("/api/journal/symbols"),
   setups:        () => get<{ setups:  string[] }>("/api/journal/setups"),
-  signalsToday:  () => get<{ signals: SignalToday[]; count: number; date: string; source: string }>("/api/journal/signals-today"),
+  /** Telegram signal_log with optional filters; defaults to today if no dates passed (server local date). */
+  signals: (params?: {
+    date_from?: string;
+    date_to?: string;
+    symbol?: string;
+    signal_kind?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    });
+    const qs = q.toString();
+    return get<SignalLogPage>(`/api/journal/signals${qs ? `?${qs}` : ""}`);
+  },
+  /** Same data as a signals query for calendar today (backward compatible). */
+  signalsToday:  () => get<{ signals: SignalLogEntry[]; count: number; total?: number; date: string; source: string }>("/api/journal/signals-today"),
 
   // AI Research Center
   swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),
