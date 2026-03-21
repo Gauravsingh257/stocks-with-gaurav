@@ -95,6 +95,10 @@ OI_SC_MAX_PER_UL_DAY = getattr(cfg, "OI_SC_MAX_PER_UL_DAY", 1)
 OI_SC_SL_ATR_MULT = getattr(cfg, "OI_SC_SL_ATR_MULT", 1.2)
 OI_SC_TARGET_RR = getattr(cfg, "OI_SC_TARGET_RR", 2.0)
 OI_SC_ALERT_COOLDOWN_SECS = getattr(cfg, "OI_SC_ALERT_COOLDOWN_SECS", 300)
+# Hard-block when 5m bias contradicts signal AND score (after all adjustments) <= this
+OI_SC_BIAS_CONFLICT_HARD_BLOCK = getattr(cfg, "OI_SC_BIAS_CONFLICT_HARD_BLOCK", 5)
+# Consecutive same-direction 5m candles that constitute exhaustion (suppress signal)
+OI_SC_EXHAUSTION_CANDLES = getattr(cfg, "OI_SC_EXHAUSTION_CANDLES", 4)
 
 
 # =====================================================
@@ -981,6 +985,64 @@ def _scan_underlying(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
 
 
 # =====================================================
+# MOMENTUM EXHAUSTION CHECK
+# =====================================================
+
+def _count_consecutive_candles(candles: list, direction: str) -> int:
+    """
+    Count how many of the most recent 5m candles are consecutive
+    same-direction closes (direction='bull' = close > open, 'bear' = close < open).
+    Only today's candles are considered.
+    Returns the streak count (0 if candles is empty or direction not matched).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    today_c = [c for c in candles if c["date"].date() == today]
+    if not today_c:
+        return 0
+    streak = 0
+    for c in reversed(today_c):
+        o, cl = c.get("open", 0), c.get("close", 0)
+        if direction == "bull" and cl > o:
+            streak += 1
+        elif direction == "bear" and cl < o:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _check_momentum_exhaustion(opt_type: str, fetch_ohlc_fn, underlying: str) -> tuple[bool, str]:
+    """
+    Return (exhausted: bool, reason: str).
+
+    Exhaustion definition:
+      CE (bullish signal) — 4+ consecutive green 5m candles ending at current price
+      PE (bearish signal) — 4+ consecutive red 5m candles ending at current price
+
+    When exhausted, the short-covering rally or flush is already priced in;
+    the initiation already happened several candles ago.
+    """
+    try:
+        idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+        candles = fetch_ohlc_fn(idx_sym, "5minute", 40)
+        if not candles or len(candles) < 5:
+            return False, ""
+        candle_dir = "bull" if opt_type == "CE" else "bear"
+        streak = _count_consecutive_candles(candles, candle_dir)
+        if streak >= OI_SC_EXHAUSTION_CANDLES:
+            label = "green" if opt_type == "CE" else "red"
+            reason = f"{streak} consecutive {label} 5m candles — rally exhausted, not initiating"
+            return True, reason
+    except Exception:
+        pass
+    return False, ""
+
+
+# =====================================================
 # CORE DETECTION: Per-Strike Short Covering
 # =====================================================
 
@@ -1170,6 +1232,41 @@ def _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn):
                 rolling_oi_drop, price_rise, peak_drop, velocity, volume_ok
             )
         return None
+
+    # -------------------------------------------------
+    # BIAS-CONFLICT HARD FILTER
+    # Even if score technically passes, kill signals where the 5m bias
+    # directly opposes the OI SC direction and confidence is low.
+    # Soft penalty (-2) already applied in _smc_score_adjustment; this
+    # hard-blocks the borderline cases where score just scraped past min.
+    # -------------------------------------------------
+    if smc_structure:
+        _bias = smc_structure.get("bias")
+        _bias_conflicts = (
+            (opt_type == "CE" and _bias == "SHORT") or
+            (opt_type == "PE" and _bias == "LONG")
+        )
+        if _bias_conflicts and score <= OI_SC_BIAS_CONFLICT_HARD_BLOCK:
+            logger.info(
+                f"OI SC HARD-BLOCKED (bias conflict): {tradingsymbol} "
+                f"5m bias={_bias} contradicts {opt_type}-SC | score={score}/10"
+            )
+            return None
+
+    # -------------------------------------------------
+    # MOMENTUM EXHAUSTION CHECK
+    # Suppress signals that fire after 4+ consecutive same-direction
+    # candles — the short-covering move is already priced in.
+    # -------------------------------------------------
+    try:
+        _exhausted, _ex_reason = _check_momentum_exhaustion(opt_type, fetch_ohlc_fn, underlying)
+        if _exhausted:
+            logger.info(
+                f"OI SC SUPPRESSED (exhaustion): {tradingsymbol} | {_ex_reason}"
+            )
+            return None
+    except Exception:
+        pass  # non-fatal, don't block signal on check failure
 
     # -------------------------------------------------
     # Direction

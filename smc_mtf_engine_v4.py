@@ -1920,19 +1920,20 @@ def detect_setup_c(symbol: str, tf_data: dict):
         if ob_long:
             z_low, z_high = ob_long
             fvg = detect_fvg(htf_data, "LONG")
-            if fvg: # Confluence Required
+            if fvg:
                  f_low, f_high = fvg
                  if f_low >= z_low:
-                     z_high = max(z_high, f_high) # Union
-                     # Update only if closer to price (higher z_high for LONG)
-                     current_zone = ZONE_STATE[symbol]["LONG"]
-                     if not current_zone or z_high > current_zone["zone"][1]:
-                         ZONE_STATE[symbol]["LONG"] = {
-                             "zone": (z_low, z_high),
-                             "state": "ACTIVE",
-                             "tf": interval,
-                             "created": htf_data[-1]["date"]
-                         }
+                     z_high = max(z_high, f_high)  # expand zone to include FVG
+            # Allow OB-only LONG zones (demand zone retests are valid without FVG)
+            current_zone = ZONE_STATE[symbol]["LONG"]
+            if not current_zone or z_high > current_zone["zone"][1]:
+                ZONE_STATE[symbol]["LONG"] = {
+                    "zone": (z_low, z_high),
+                    "state": "ACTIVE",
+                    "tf": interval,
+                    "created": htf_data[-1]["date"],
+                    "has_fvg": fvg is not None,
+                }
 
         # Update SHORT Zone
         ob_short = detect_order_block(htf_data, "SHORT")
@@ -1943,15 +1944,18 @@ def detect_setup_c(symbol: str, tf_data: dict):
                  f_low, f_high = fvg  # detect_fvg always returns (low, high)
                  if f_high <= z_high:
                      z_low = min(z_low, f_low)
-                     # Update only if closer to price (lower z_low for SHORT)
-                     current_zone = ZONE_STATE[symbol]["SHORT"]
-                     if not current_zone or z_low < current_zone["zone"][0]:
-                         ZONE_STATE[symbol]["SHORT"] = {
-                             "zone": (z_low, z_high),
-                             "state": "ACTIVE",
-                             "tf": interval,
-                             "created": htf_data[-1]["date"]
-                         }
+            # Allow OB-only SHORT zones (swing-high supply zones are valid even
+            # without a coincident FVG — requiring FVG confluence was causing the
+            # algo to miss clean bearish OB retests like the Mar 21 23,310-23,344 zone)
+            current_zone = ZONE_STATE[symbol]["SHORT"]
+            if not current_zone or z_low < current_zone["zone"][0]:
+                ZONE_STATE[symbol]["SHORT"] = {
+                    "zone": (z_low, z_high),
+                    "state": "ACTIVE",
+                    "tf": interval,
+                    "created": htf_data[-1]["date"],
+                    "has_fvg": fvg is not None,
+                }
 
     # -------------------------------------------------
     # PHASE 2: STATE MACHINE (Reaction on 5m)
@@ -2002,11 +2006,12 @@ def detect_setup_c(symbol: str, tf_data: dict):
                             symbol, _gap_pct, GAP_UP_PCT, ltf_candle["date"],
                         )
                     else:
-                        # P0 FIX: DEDUP — Block if symbol already traded today
+                        # DEDUP — direction-aware: LONG gets its own key so a
+                        # prior SHORT on the same symbol doesn't block a LONG retest
                         clean_sym = clean_symbol(symbol)
-                        if clean_sym in TRADED_TODAY:
+                        if f"{clean_sym}_LONG" in TRADED_TODAY:
                             if DEBUG_MODE: logging.debug(
-                                "[SETUP_C] BLOCKED %s UNIVERSAL-LONG (Already traded today)", symbol
+                                "[SETUP_C] BLOCKED %s UNIVERSAL-LONG (Already traded LONG today)", symbol
                             )
                             return signals
                         # HTF TREND FILTER (LONG)
@@ -2055,8 +2060,7 @@ def detect_setup_c(symbol: str, tf_data: dict):
                                 "_wide_open": _is_wide_open,
                             }
                             signals.append(sig_data)
-                            TRADED_TODAY.add(clean_symbol(symbol))
-                            ZONE_STATE[symbol]["SHORT"] = None
+                            TRADED_TODAY.add(f"{clean_symbol(symbol)}_LONG")
                             long_state["state"] = "FIRED"
                             if "FIN SERVICE" in symbol:
                                 SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1
@@ -2096,16 +2100,37 @@ def detect_setup_c(symbol: str, tf_data: dict):
                             symbol, _gap_pct, GAP_DOWN_PCT, ltf_candle["date"],
                         )
                     else:
-                        # P0 FIX: DEDUP
+                        # DEDUP — direction-aware: SHORT gets its own key
                         clean_sym = clean_symbol(symbol)
-                        if clean_sym in TRADED_TODAY:
+                        if f"{clean_sym}_SHORT" in TRADED_TODAY:
                             if DEBUG_MODE: logging.debug(
-                                "[SETUP_C] BLOCKED %s UNIVERSAL-SHORT (Already traded today)", symbol
+                                "[SETUP_C] BLOCKED %s UNIVERSAL-SHORT (Already traded SHORT today)", symbol
                             )
                             return signals
                         # HTF TREND FILTER (SHORT)
-                        if htf_bias == "LONG" and MARKET_REGIME != "BEARISH":
-                            should_fire = False
+                        # Zone-proximity override: if price has tapped into the
+                        # bearish OB (which is true here — we're in TAPPED state),
+                        # the zone itself is the edge. A supply zone retest is a
+                        # valid SHORT even when the 1h bias is still reading LONG
+                        # from the prior session's rally. Only hard-block when both
+                        # HTF bias AND market regime confirm bullish momentum AND the
+                        # zone has no FVG backing (pure OB-only, lower confidence).
+                        _zone_has_fvg = short_state.get("has_fvg", False)
+                        _htf_conflict = (htf_bias == "LONG" and MARKET_REGIME != "BEARISH")
+                        if _htf_conflict and not _zone_has_fvg:
+                            # OB-only zone against bullish bias → require extra caution
+                            # but don't hard-block: fire with high-confluence flag
+                            should_fire = True
+                            sig_require_high_confluence = True
+                            logging.info(
+                                "[SETUP_C] %s UNIVERSAL-SHORT at supply zone — HTF bias LONG "
+                                "but zone has no FVG; firing with HIGH_CONFLUENCE flag", symbol
+                            )
+                        elif _htf_conflict and _zone_has_fvg:
+                            # OB+FVG zone at supply despite bullish bias → high-probability
+                            # zone retest, allow with normal confluence
+                            should_fire = True
+                            sig_require_high_confluence = False
                         elif htf_bias is None:
                             should_fire = True
                             sig_require_high_confluence = True
@@ -2146,8 +2171,7 @@ def detect_setup_c(symbol: str, tf_data: dict):
                                 "_wide_open": _is_wide_open,
                             }
                             signals.append(sig_data)
-                            TRADED_TODAY.add(clean_symbol(symbol))
-                            ZONE_STATE[symbol]["LONG"] = None
+                            TRADED_TODAY.add(f"{clean_symbol(symbol)}_SHORT")
                             short_state["state"] = "FIRED"
                             if "FIN SERVICE" in symbol:
                                 SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1
