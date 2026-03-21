@@ -1792,8 +1792,22 @@ def detect_setup_c(symbol: str, tf_data: dict):
     1. Scan All TFs for Zones (OB+FVG). Store best active zone in ZONE_STATE.
     2. Monitor LTF (5m) for Tap -> Wait -> Reaction.
     3. Trigger Entry only if Candle Closes OUTSIDE Zone.
+
+    Guards added:
+    - GAP filter: suppress when open gaps >0.75% vs prior day close (gap-up for LONG,
+      gap-down for SHORT) — chasing a gap has poor expectancy.
+    - SAME-CANDLE guard: tap and reaction must not happen on the same 5m candle.
+      Reaction candle's open must NOT equal the tap candle's timestamp.
+    - WIDE-OPEN guard: if the opening 5m candle range > 1.5× ATR the signal is
+      downgraded to grade B (still fires but analyst can choose to skip).
     """
-    
+
+    # ─── gap-filter constants (tunable) ───────────────────────────────────────
+    GAP_UP_PCT   = 0.75   # % gap-up threshold to suppress LONG (chasing)
+    GAP_DOWN_PCT = 0.75   # % gap-down threshold to suppress SHORT (chasing)
+    WIDE_OPEN_ATR_MULT = 1.5   # opening candle range > X×ATR → downgrade
+    # ──────────────────────────────────────────────────────────────────────────
+
     ltf_data = tf_data.get("5m")
     if not ltf_data: return []
 
@@ -1810,7 +1824,7 @@ def detect_setup_c(symbol: str, tf_data: dict):
     # even if the limit check is disabled.
     current_date = ltf_data[-1]["date"].date().isoformat()
     key = f"{symbol}_{current_date}"
-    
+
     # THROTTLE (Restored for FIN SERVICE only - Max 1 Trade)
     if "FIN SERVICE" in symbol:
         if SETUP_C_DAILY_COUNT.get(key, 0) >= 1: return []
@@ -1819,6 +1833,46 @@ def detect_setup_c(symbol: str, tf_data: dict):
     atr = calculate_atr(ltf_data)
     current_price = ltf_data[-1]["close"]
     ltf_candle = ltf_data[-1]
+
+    # -------------------------------------------------
+    # GAP DETECTION — find prior session close and today's first bar
+    # -------------------------------------------------
+    today_date = ltf_candle["date"].date()
+    # First candle of today in the 5m data
+    _first_today = next(
+        (c for c in ltf_data if c["date"].date() == today_date), None
+    )
+    # Last candle of the previous session
+    _last_prev = next(
+        (c for c in reversed(ltf_data) if c["date"].date() < today_date), None
+    )
+    prior_close = _last_prev["close"] if _last_prev else None
+    today_open  = _first_today["open"] if _first_today else None
+    today_open_range = (
+        (_first_today["high"] - _first_today["low"]) if _first_today else 0
+    )
+
+    # % gap relative to prior close
+    if prior_close and today_open:
+        _gap_pct = (today_open - prior_close) / prior_close * 100
+    else:
+        _gap_pct = 0.0
+
+    _is_gap_up   = _gap_pct >  GAP_UP_PCT     # strong gap-up  → LONG  risky
+    _is_gap_down = _gap_pct < -GAP_DOWN_PCT    # strong gap-down → SHORT risky
+    _is_wide_open = atr > 0 and today_open_range > WIDE_OPEN_ATR_MULT * atr
+
+    if _is_gap_up or _is_gap_down:
+        logging.debug(
+            "[SETUP_C] %s gap %.2f%% (up=%s down=%s) — suppressing signal on gap day",
+            symbol, _gap_pct, _is_gap_up, _is_gap_down,
+        )
+
+    if _is_wide_open:
+        logging.debug(
+            "[SETUP_C] %s wide opening candle %.0f pts vs ATR %.0f pts",
+            symbol, today_open_range, atr,
+        )
     
     # Initialize State for Symbol if missing
     if symbol not in ZONE_STATE:
@@ -1908,139 +1962,195 @@ def detect_setup_c(symbol: str, tf_data: dict):
     if long_state:
         z_low, z_high = long_state["zone"]
         state = long_state["state"]
-        
+
         # Check Tap (Low touched zone)
         if ltf_candle["low"] <= z_high:
             if state == "ACTIVE":
                 long_state["state"] = "TAPPED"
-                long_state["tap_time"] = ltf_candle["date"] # Record Time
-                # print(f"DEBUG: {symbol} LONG Zone Tapped!")
-        
+                long_state["tap_time"] = ltf_candle["date"]  # Record Time
+                long_state["tap_candle_ts"] = ltf_candle["date"]  # for same-candle guard
+
         # Check Reaction (Only if Tapped)
         if state == "TAPPED":
             # 1. Close must be GREEN
             is_green = ltf_candle["close"] > ltf_candle["open"]
             # 2. Close must be ABOVE Zone High (Exit Zone)
             is_outside = ltf_candle["close"] > z_high
-            
+
             if is_green and is_outside:
-                # ---------------------------------------------
-                # P0 FIX: DEDUP — Block if symbol already traded today
-                # ---------------------------------------------
-                clean_sym = clean_symbol(symbol)
-                if clean_sym in TRADED_TODAY:
-                    if DEBUG_MODE: logging.debug(f"🚫 BLOCKED {symbol} UNIVERSAL-LONG (Already traded today)")
-                    return signals  # Skip this signal
-                # ---------------------------------------------
-                # HTF TREND FILTER (LONG) — P0 FIX: Handle None bias
-                # REGIME OVERRIDE: If market regime is BULLISH (OI+EMA confirmed),
-                # allow LONG even if HTF swing bias is stale "SHORT"
-                # ---------------------------------------------
-                if htf_bias == "SHORT" and MARKET_REGIME != "BULLISH":
-                    should_fire = False
-                elif htf_bias is None:
-                    # P0 FIX: Unknown trend = require higher confluence
-                    should_fire = True  # Allow but flag for higher score requirement
-                    sig_require_high_confluence = True
+                # ── SAME-CANDLE GUARD ──────────────────────────────────────
+                # Tap and reaction on the same 5m candle = unreliable (gap-open
+                # with wick + recovery in a single bar). Require the reaction
+                # candle to be strictly AFTER the tap candle.
+                tap_ts  = long_state.get("tap_candle_ts")
+                same_candle = (tap_ts is not None and ltf_candle["date"] == tap_ts)
+                if same_candle:
+                    logging.debug(
+                        "[SETUP_C] %s LONG same-candle tap+react suppressed (%s)",
+                        symbol, ltf_candle["date"],
+                    )
+                    # Do NOT return — let the machine stay TAPPED so the NEXT
+                    # candle can attempt a clean reaction.
+                    long_state["state"] = "TAPPED"
                 else:
-                    should_fire = True
-                    sig_require_high_confluence = False
+                # ── GAP-UP FILTER ──────────────────────────────────────────
+                # Gap-up > GAP_UP_PCT from prior close → we are chasing a
+                # momentum open, not a clean zone reaction. Suppress.
+                    if _is_gap_up:
+                        logging.info(
+                            "[SETUP_C] %s LONG suppressed — gap-up %.2f%% (>%.2f%%) on %s",
+                            symbol, _gap_pct, GAP_UP_PCT, ltf_candle["date"],
+                        )
+                    else:
+                        # P0 FIX: DEDUP — Block if symbol already traded today
+                        clean_sym = clean_symbol(symbol)
+                        if clean_sym in TRADED_TODAY:
+                            if DEBUG_MODE: logging.debug(
+                                "[SETUP_C] BLOCKED %s UNIVERSAL-LONG (Already traded today)", symbol
+                            )
+                            return signals
+                        # HTF TREND FILTER (LONG)
+                        # REGIME OVERRIDE: allow LONG even if HTF swing bias is
+                        # stale "SHORT" when market regime is BULLISH.
+                        if htf_bias == "SHORT" and MARKET_REGIME != "BULLISH":
+                            should_fire = False
+                        elif htf_bias is None:
+                            should_fire = True
+                            sig_require_high_confluence = True
+                        else:
+                            should_fire = True
+                            sig_require_high_confluence = False
 
-                        
-                if should_fire:
-                    # DYNAMIC BUFFER
-                    buffer = compute_dynamic_buffer(symbol, atr)
-                    sl = z_low - buffer
-                    target = current_price + (current_price - sl) * 2
-                    
-                    tap_time_str = long_state.get("tap_time", "Unknown") # Retrieve Time
+                        if should_fire:
+                            buffer = compute_dynamic_buffer(symbol, atr)
+                            sl     = z_low - buffer
+                            target = current_price + (current_price - sl) * 2
 
-                    sig_data = {
-                        "setup": "UNIVERSAL-LONG",
-                        "symbol": symbol,
-                        "direction": "LONG",
-                        "entry": current_price,
-                        "sl": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": 1.6 if "FIN SERVICE" in symbol else 2.0,
-                        "option": option_strike(current_price, "LONG"),
-                        "ob": long_state["zone"],
-                        "ltf": ltf_data[-80:],
-                        "analysis": f"Reaction from {long_state['tf']} Zone (Tapped at {tap_time_str})",
-                        "_require_high_confluence": sig_require_high_confluence if 'sig_require_high_confluence' in dir() else False
-                    }
-                    signals.append(sig_data)
-                    # P0 FIX: Mark symbol as traded today
-                    TRADED_TODAY.add(clean_symbol(symbol))
-                    # Strong Control: Reset Opposite Zone
-                    ZONE_STATE[symbol]["SHORT"] = None
-                    long_state["state"] = "FIRED" 
-                    if "FIN SERVICE" in symbol:
-                        SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1 
+                            tap_time_str = long_state.get("tap_time", "Unknown")
+
+                            # Wide-open candle note for the signal text
+                            quality_note = " [WIDE OPEN — verify manually]" if _is_wide_open else ""
+
+                            sig_data = {
+                                "setup": "UNIVERSAL-LONG",
+                                "symbol": symbol,
+                                "direction": "LONG",
+                                "entry": current_price,
+                                "sl": round(sl, 2),
+                                "target": round(target, 2),
+                                "rr": 1.6 if "FIN SERVICE" in symbol else 2.0,
+                                "option": option_strike(current_price, "LONG"),
+                                "ob": long_state["zone"],
+                                "ltf": ltf_data[-80:],
+                                "analysis": (
+                                    f"Reaction from {long_state['tf']} Zone "
+                                    f"(Tapped at {tap_time_str}){quality_note}"
+                                ),
+                                "_require_high_confluence": (
+                                    sig_require_high_confluence
+                                    if "sig_require_high_confluence" in dir()
+                                    else False
+                                ),
+                                "_gap_pct": round(_gap_pct, 2),
+                                "_wide_open": _is_wide_open,
+                            }
+                            signals.append(sig_data)
+                            TRADED_TODAY.add(clean_symbol(symbol))
+                            ZONE_STATE[symbol]["SHORT"] = None
+                            long_state["state"] = "FIRED"
+                            if "FIN SERVICE" in symbol:
+                                SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1
 
     # --- SHORT MACHINE ---
     short_state = ZONE_STATE[symbol]["SHORT"]
     if short_state:
         z_low, z_high = short_state["zone"]
         state = short_state["state"]
-        
+
         if ltf_candle["high"] >= z_low:
-             if state == "ACTIVE":
-                 short_state["state"] = "TAPPED"
-                 short_state["tap_time"] = ltf_candle["date"] # Record Time
-        
+            if state == "ACTIVE":
+                short_state["state"] = "TAPPED"
+                short_state["tap_time"] = ltf_candle["date"]
+                short_state["tap_candle_ts"] = ltf_candle["date"]  # same-candle guard
+
         if state == "TAPPED":
-            is_red = ltf_candle["close"] < ltf_candle["open"]
+            is_red     = ltf_candle["close"] < ltf_candle["open"]
             is_outside = ltf_candle["close"] < z_low
-            
+
             if is_red and is_outside:
-                # P0 FIX: DEDUP — Block if symbol already traded today
-                clean_sym = clean_symbol(symbol)
-                if clean_sym in TRADED_TODAY:
-                    if DEBUG_MODE: logging.debug(f"🚫 BLOCKED {symbol} UNIVERSAL-SHORT (Already traded today)")
-                    return signals
-                # HTF TREND FILTER (SHORT) — P0 FIX: Handle None bias
-                # REGIME OVERRIDE: If market regime is BEARISH (OI+EMA confirmed),
-                # allow SHORT even if HTF swing bias is stale "LONG"
-                if htf_bias == "LONG" and MARKET_REGIME != "BEARISH":
-                     should_fire = False
-                elif htf_bias is None:
-                     should_fire = True
-                     sig_require_high_confluence = True
+                # ── SAME-CANDLE GUARD ──────────────────────────────────────
+                tap_ts      = short_state.get("tap_candle_ts")
+                same_candle = (tap_ts is not None and ltf_candle["date"] == tap_ts)
+                if same_candle:
+                    logging.debug(
+                        "[SETUP_C] %s SHORT same-candle tap+react suppressed (%s)",
+                        symbol, ltf_candle["date"],
+                    )
+                    short_state["state"] = "TAPPED"  # stay TAPPED for next bar
                 else:
-                     should_fire = True
-                     sig_require_high_confluence = False
+                # ── GAP-DOWN FILTER ────────────────────────────────────────
+                # Gap-down > GAP_DOWN_PCT → chasing a bearish momentum open.
+                    if _is_gap_down:
+                        logging.info(
+                            "[SETUP_C] %s SHORT suppressed — gap-down %.2f%% (<-%.2f%%) on %s",
+                            symbol, _gap_pct, GAP_DOWN_PCT, ltf_candle["date"],
+                        )
+                    else:
+                        # P0 FIX: DEDUP
+                        clean_sym = clean_symbol(symbol)
+                        if clean_sym in TRADED_TODAY:
+                            if DEBUG_MODE: logging.debug(
+                                "[SETUP_C] BLOCKED %s UNIVERSAL-SHORT (Already traded today)", symbol
+                            )
+                            return signals
+                        # HTF TREND FILTER (SHORT)
+                        if htf_bias == "LONG" and MARKET_REGIME != "BEARISH":
+                            should_fire = False
+                        elif htf_bias is None:
+                            should_fire = True
+                            sig_require_high_confluence = True
+                        else:
+                            should_fire = True
+                            sig_require_high_confluence = False
 
-                        
-                if should_fire:
-                    # DYNAMIC BUFFER
-                    buffer = compute_dynamic_buffer(symbol, atr)
-                    sl = z_high + buffer
-                    target = current_price - (sl - current_price) * 2
-                    
-                    tap_time_str = short_state.get("tap_time", "Unknown")
+                        if should_fire:
+                            buffer = compute_dynamic_buffer(symbol, atr)
+                            sl     = z_high + buffer
+                            target = current_price - (sl - current_price) * 2
 
-                    sig_data = {
-                        "setup": "UNIVERSAL-SHORT",
-                        "symbol": symbol,
-                        "direction": "SHORT",
-                        "entry": current_price,
-                        "sl": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": 1.6 if "FIN SERVICE" in symbol else 2.0,
-                        "option": option_strike(current_price, "SHORT"),
-                        "ob": short_state["zone"],
-                        "ltf": ltf_data[-80:],
-                        "analysis": f"Reaction from {short_state['tf']} Zone (Tapped at {tap_time_str})",
-                        "_require_high_confluence": sig_require_high_confluence if 'sig_require_high_confluence' in dir() else False
-                    }
-                    signals.append(sig_data)
-                    # P0 FIX: Mark symbol as traded today
-                    TRADED_TODAY.add(clean_symbol(symbol))
-                    ZONE_STATE[symbol]["LONG"] = None
-                    short_state["state"] = "FIRED"
-                    if "FIN SERVICE" in symbol:
-                        SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1
+                            tap_time_str = short_state.get("tap_time", "Unknown")
+
+                            quality_note = " [WIDE OPEN — verify manually]" if _is_wide_open else ""
+
+                            sig_data = {
+                                "setup": "UNIVERSAL-SHORT",
+                                "symbol": symbol,
+                                "direction": "SHORT",
+                                "entry": current_price,
+                                "sl": round(sl, 2),
+                                "target": round(target, 2),
+                                "rr": 1.6 if "FIN SERVICE" in symbol else 2.0,
+                                "option": option_strike(current_price, "SHORT"),
+                                "ob": short_state["zone"],
+                                "ltf": ltf_data[-80:],
+                                "analysis": (
+                                    f"Reaction from {short_state['tf']} Zone "
+                                    f"(Tapped at {tap_time_str}){quality_note}"
+                                ),
+                                "_require_high_confluence": (
+                                    sig_require_high_confluence
+                                    if "sig_require_high_confluence" in dir()
+                                    else False
+                                ),
+                                "_gap_pct": round(_gap_pct, 2),
+                                "_wide_open": _is_wide_open,
+                            }
+                            signals.append(sig_data)
+                            TRADED_TODAY.add(clean_symbol(symbol))
+                            ZONE_STATE[symbol]["LONG"] = None
+                            short_state["state"] = "FIRED"
+                            if "FIN SERVICE" in symbol:
+                                SETUP_C_DAILY_COUNT[key] = SETUP_C_DAILY_COUNT.get(key, 0) + 1
 
     return signals
 
