@@ -2,6 +2,7 @@ import asyncio
 import os
 
 os.environ.setdefault("TECH_SCANNER_USE_HASH_ONLY", "1")
+os.environ.setdefault("FUND_USE_HASH_ONLY", "1")
 
 from services.fundamental_analysis import analyze_fundamentals
 from services.news_analysis import analyze_news_sentiment

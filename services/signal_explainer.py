@@ -52,6 +52,102 @@ class SignalEvidence:
         }
 
 
+def _fmt_real_or_score(raw: float | None, label: str, unit: str, fallback_score: float, fallback_label: str) -> str:
+    if raw is not None:
+        return f"{label}: {raw}{unit}"
+    return f"{fallback_label} score {_pct(fallback_score)}."
+
+
+def _build_fundamental_signals_swing(fundamental: "FundamentalSnapshot") -> dict[str, str]:
+    f = fundamental
+    # Revenue growth
+    if f.raw_revenue_growth_pct is not None:
+        rev = f"Revenue growth: {f.raw_revenue_growth_pct:+.1f}% YoY (live from yfinance)."
+    else:
+        rev = f"Estimated revenue growth {_yoy_from_score(f.revenue_growth)} from factor score {_pct(f.revenue_growth)}."
+
+    # Earnings growth
+    if f.raw_earnings_growth_pct is not None:
+        earn = f"Earnings growth: {f.raw_earnings_growth_pct:+.1f}% YoY (live from yfinance)."
+    else:
+        earn = f"Estimated earnings growth {_yoy_from_score(f.earnings_growth, base=7.0, scale=28.0)} from score {_pct(f.earnings_growth)}."
+
+    # PE & PB for sector context
+    if f.raw_pe is not None and f.raw_pb is not None:
+        sector = f"Valuation: PE {f.raw_pe}x | PB {f.raw_pb}x — {_descriptor(f.sector_strength, 'attractively priced vs peers', 'fairly valued', 'stretched valuation, risk to downside')}."
+    elif f.raw_pe is not None:
+        sector = f"PE ratio {f.raw_pe}x — {_descriptor(f.sector_strength, 'reasonable entry valuation', 'fairly valued', 'expensive vs historical')}."
+    else:
+        sector = f"Sector strength score {_pct(f.sector_strength)} suggests {_descriptor(f.sector_strength, 'sector outperformance', 'stable sector support', 'sector underperformance risk')}."
+
+    # Promoter
+    if f.raw_promoter_pct is not None:
+        promoter = f"Promoter holding: {f.raw_promoter_pct:.1f}% — {'high conviction, low dilution risk' if f.raw_promoter_pct >= 50 else 'moderate holding, watch for pledging'}."
+    else:
+        promoter = f"Promoter stability score {_pct(f.promoter_holdings)} with {'stable' if f.promoter_holdings >= 0.55 else 'watchlist'} holding trend."
+
+    # Institutional
+    if f.raw_institutional_pct is not None:
+        inst = f"Institutional holding: {f.raw_institutional_pct:.1f}% — {'strong FII/DII accumulation' if f.raw_institutional_pct >= 20 else 'limited institutional interest'}."
+    else:
+        inst = f"Institutional accumulation score {_pct(f.institutional_accumulation)}."
+
+    delivery = f"Delivery trend score {_pct(f.delivery_volume_trend)} indicates {'accumulation' if f.delivery_volume_trend >= 0.58 else 'mixed participation'}."
+
+    return {
+        "revenue_growth": rev,
+        "profit_growth": earn,
+        "sector_strength": sector,
+        "promoter_holding": promoter,
+        "institutional_accumulation": inst,
+        "delivery_volume": delivery,
+    }
+
+
+def _build_fundamental_signals_longterm(fundamental: "FundamentalSnapshot") -> dict[str, str]:
+    f = fundamental
+
+    if f.raw_revenue_growth_pct is not None:
+        rev_cagr = f"Revenue growth: {f.raw_revenue_growth_pct:+.1f}% YoY — {'strong expansion' if f.raw_revenue_growth_pct > 15 else 'steady growth' if f.raw_revenue_growth_pct > 5 else 'slow growth, watch triggers'}."
+    else:
+        rev_cagr = f"Revenue CAGR proxy {_yoy_from_score(f.revenue_growth, base=8.0, scale=24.0)}."
+
+    if f.raw_earnings_growth_pct is not None:
+        profit = f"Earnings growth: {f.raw_earnings_growth_pct:+.1f}% YoY — {'strong profitability' if f.raw_earnings_growth_pct > 18 else 'moderate earnings expansion' if f.raw_earnings_growth_pct > 5 else 'weak earnings, requires catalyst'}."
+    else:
+        profit = f"Profit growth proxy {_yoy_from_score(f.earnings_growth, base=9.0, scale=26.0)}."
+
+    if f.raw_roe_pct is not None:
+        roce_roe = f"ROE: {f.raw_roe_pct:.1f}% — {'capital-efficient compounder' if f.raw_roe_pct >= 18 else 'average capital returns' if f.raw_roe_pct >= 10 else 'below-average returns on equity'}."
+    else:
+        roce_roe = f"ROCE/ROE quality composite {_pct((f.roce + f.roe) / 2)}."
+
+    if f.raw_debt_equity is not None:
+        debt = f"Debt/Equity: {f.raw_debt_equity:.2f}x — {'low leverage, resilient balance sheet' if f.raw_debt_equity < 0.5 else 'moderate debt, manageable' if f.raw_debt_equity < 1.5 else 'high leverage, watch interest coverage'}."
+    else:
+        debt = f"Debt quality score {_pct(f.debt_quality)}."
+
+    if f.raw_pe is not None:
+        sector = f"PE: {f.raw_pe}x — {_descriptor(f.sector_strength, 'value zone, strong margin of safety', 'fairly priced for long-term entry', 'high PE, growth must sustain')}."
+    else:
+        sector = f"Sector growth score {_pct(f.sector_strength)}."
+
+    if f.raw_institutional_pct is not None:
+        inst = f"Institutional holding: {f.raw_institutional_pct:.1f}% — {'significant smart-money accumulation' if f.raw_institutional_pct >= 20 else 'moderate institutional presence'}."
+    else:
+        inst = f"Institutional accumulation {_pct(f.institutional_accumulation)}."
+
+    return {
+        "revenue_cagr": rev_cagr,
+        "profit_growth": profit,
+        "roce_roe": roce_roe,
+        "debt_levels": debt,
+        "sector_growth": sector,
+        "management_quality": f"Management quality score {_pct(f.management_quality)}.",
+        "institutional_flows": inst,
+    }
+
+
 def extract_swing_signals(
     symbol: str,
     technical: TechnicalSnapshot,
@@ -73,14 +169,7 @@ def extract_swing_signals(
         "relative_strength": f"Multi-timeframe alignment {_pct(technical.mtf_alignment)} implies relative strength {relative_strength:+.1f}% vs NIFTY proxy.",
     }
 
-    fundamental_signals = {
-        "revenue_growth": f"Estimated revenue growth {_yoy_from_score(fundamental.revenue_growth)} from factor score {_pct(fundamental.revenue_growth)}.",
-        "profit_growth": f"Estimated profit growth {_yoy_from_score(fundamental.earnings_growth, base=7.0, scale=28.0)} from earnings score {_pct(fundamental.earnings_growth)}.",
-        "sector_strength": f"Sector strength score {_pct(fundamental.sector_strength)} suggests {_descriptor(fundamental.sector_strength, 'sector outperformance', 'stable sector support', 'sector underperformance risk')}.",
-        "promoter_holding": f"Promoter stability score {_pct(fundamental.promoter_holdings)} with {'stable' if fundamental.promoter_holdings >= 0.55 else 'watchlist'} holding trend.",
-        "institutional_accumulation": f"Institutional accumulation score {_pct(fundamental.institutional_accumulation)}.",
-        "delivery_volume": f"Delivery trend score {_pct(fundamental.delivery_volume_trend)} indicates {'accumulation' if fundamental.delivery_volume_trend >= 0.58 else 'mixed participation'}.",
-    }
+    fundamental_signals = _build_fundamental_signals_swing(fundamental)
 
     sentiment_signals = {
         "news_sentiment": f"Financial-news sentiment score {_pct(sentiment.financial_news)} with {_descriptor(sentiment.financial_news, 'positive earnings/news bias', 'balanced tone', 'cautious tone')}.",
@@ -110,15 +199,7 @@ def extract_longterm_signals(
         "breakout_structure": f"Breakout structure score {_pct(technical.trend_structure)} over higher timeframe.",
         "relative_strength": f"Relative strength estimate {rs:+.1f}% vs index from alignment {_pct(technical.mtf_alignment)}.",
     }
-    fundamental_signals = {
-        "revenue_cagr": f"Revenue CAGR proxy {_yoy_from_score(fundamental.revenue_growth, base=8.0, scale=24.0)}.",
-        "profit_growth": f"Profit growth proxy {_yoy_from_score(fundamental.earnings_growth, base=9.0, scale=26.0)}.",
-        "roce_roe": f"ROCE/ROE quality composite {_pct((fundamental.roce + fundamental.roe) / 2)}.",
-        "debt_levels": f"Debt quality score {_pct(fundamental.debt_quality)}.",
-        "sector_growth": f"Sector growth score {_pct(fundamental.sector_strength)}.",
-        "management_quality": f"Management quality score {_pct(fundamental.management_quality)}.",
-        "institutional_flows": f"Institutional accumulation {_pct(fundamental.institutional_accumulation)}.",
-    }
+    fundamental_signals = _build_fundamental_signals_longterm(fundamental)
     sentiment_signals = {
         "industry_tailwinds": f"Industry tailwind score {_pct((fundamental.sector_strength + sentiment.sector_rotation) / 2)}.",
         "policy_impact": f"Policy sensitivity score {_pct(sentiment.macro_sentiment)}.",
