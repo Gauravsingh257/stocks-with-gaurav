@@ -17,6 +17,7 @@ export default function ResearchPage() {
   const [loading, setLoading] = useState(true);
   const [runningScan, setRunningScan] = useState<"swing" | "longterm" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -58,11 +59,15 @@ export default function ResearchPage() {
     async (scan: "swing" | "longterm") => {
       try {
         setError(null);
+        setScanNotice(null);
         setRunningScan(scan);
-        if (scan === "swing") {
-          await api.runSwingScan();
-        } else {
-          await api.runLongtermScan();
+        const res =
+          scan === "swing" ? await api.runSwingScan() : await api.runLongtermScan();
+        const note = res.summary || res.message;
+        if (res.ok && note) {
+          setScanNotice(note);
+        } else if (!res.ok) {
+          setError((res.message as string | undefined) || `${scan} scan failed`);
         }
         await refresh();
       } catch (err) {
@@ -114,6 +119,11 @@ export default function ResearchPage() {
       </div>
 
       {error && <div className="glass" style={{ padding: 12, color: "var(--danger)" }}>{error}</div>}
+      {scanNotice && !error && (
+        <div className="glass" style={{ padding: 12, color: "var(--accent)", border: "1px solid rgba(0,212,255,0.25)" }}>
+          {scanNotice}
+        </div>
+      )}
       {loading && <div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div>}
 
       <ResearchCoverageCard coverage={coverage} />

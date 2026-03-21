@@ -4,6 +4,7 @@ Research Center APIs for swing ideas, long-term ideas, and running trades.
 """
 
 import logging
+import threading
 from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.backend.db import get_ranking_runs, get_stock_recommendations, list_running_trades
@@ -182,7 +183,7 @@ def get_research_ranking_runs(
 
 
 def _run_scan(agent_name: str, label: str) -> dict:
-    """Run a research scan agent. Returns dict with ok/status/result or error."""
+    """Run a research scan agent synchronously. Returns dict with ok/status/result or error."""
     try:
         from agents.runner import run_agent_now
         result = run_agent_now(agent_name)
@@ -197,6 +198,7 @@ def _run_scan(agent_name: str, label: str) -> dict:
             "agent": agent_name,
             "status": "error",
             "message": result["error"],
+            "summary": str(result.get("error", "")),
             "result": result,
         }
 
@@ -206,18 +208,46 @@ def _run_scan(agent_name: str, label: str) -> dict:
         "agent": agent_name,
         "status": result.get("status", "OK"),
         "summary": result.get("summary", ""),
+        "message": result.get("summary", ""),
         "result": result,
+    }
+
+
+def _start_research_scan_background(agent_name: str, label: str) -> dict:
+    """
+    Run ranking agent in a daemon thread so the HTTP request returns immediately.
+    Full scans can take minutes (OHLC for finalist pool); avoids gateway timeouts on Railway/Vercel.
+    """
+    from agents.runner import run_agent_now
+
+    def _job() -> None:
+        try:
+            out = run_agent_now(agent_name)
+            if isinstance(out, dict) and out.get("error"):
+                log.error("[%s] background scan error: %s", agent_name, out["error"])
+            else:
+                log.info("[%s] background scan finished: %s", agent_name, out.get("summary", out))
+        except Exception:
+            log.exception("[%s] background scan failed", agent_name)
+
+    threading.Thread(target=_job, daemon=True, name=f"research_{label}").start()
+    return {
+        "ok": True,
+        "scan": label,
+        "agent": agent_name,
+        "status": "accepted",
+        "summary": "Scan started in the background. Refresh in 1–3 minutes for results.",
+        "message": "Scan started in the background. Refresh in 1–3 minutes for results.",
+        "result": {},
     }
 
 
 @router.post("/api/research/run/swing")
 @router.post("/research/run/swing")
 def run_swing_scan():
-    """Trigger swing scan. Always returns JSON; never 502."""
+    """Trigger swing scan. Returns immediately; work runs in a background thread."""
     try:
-        return _run_scan("SwingTradeAlphaAgent", "swing")
-    except HTTPException:
-        raise
+        return _start_research_scan_background("SwingTradeAlphaAgent", "swing")
     except Exception as e:
         log.exception("run_swing_scan failed: %s", e)
         return {
@@ -226,6 +256,7 @@ def run_swing_scan():
             "agent": "SwingTradeAlphaAgent",
             "status": "error",
             "message": str(e),
+            "summary": str(e),
             "result": {},
         }
 
@@ -233,11 +264,9 @@ def run_swing_scan():
 @router.post("/api/research/run/longterm")
 @router.post("/research/run/longterm")
 def run_longterm_scan():
-    """Trigger long-term scan. Always returns JSON; never 502."""
+    """Trigger long-term scan. Returns immediately; work runs in a background thread."""
     try:
-        return _run_scan("LongTermInvestmentAgent", "longterm")
-    except HTTPException:
-        raise
+        return _start_research_scan_background("LongTermInvestmentAgent", "longterm")
     except Exception as e:
         log.exception("run_longterm_scan failed: %s", e)
         return {
@@ -246,5 +275,6 @@ def run_longterm_scan():
             "agent": "LongTermInvestmentAgent",
             "status": "error",
             "message": str(e),
+            "summary": str(e),
             "result": {},
         }

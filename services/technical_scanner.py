@@ -198,12 +198,29 @@ def _snapshot_hash(symbol: str) -> TechnicalSnapshot:
     )
 
 
-async def scan_technical(symbols: list[str]) -> dict[str, TechnicalSnapshot]:
+def _use_hash_for_universe_ranking() -> bool:
     """
-    Technical scores from daily OHLC when available (yfinance/Kite via DataIngestion cache).
-    Falls back to deterministic hash scores when data is missing or TECH_SCANNER_USE_HASH_ONLY is set.
+    Full-universe OHLC technicals are too slow for HTTP-bound scans (hundreds of yfinance calls).
+    Default: hash-based scores for cross-sectional ranking only; real OHLC is applied in
+    services.research_levels when materializing top picks (see ranking_engine._collect_ideas_from_pool).
+    Set RESEARCH_TECH_OHLC_FULL_UNIVERSE=1 to fetch daily bars for every symbol (dev/stress only).
     """
     if os.getenv("TECH_SCANNER_USE_HASH_ONLY", "").lower() in ("1", "true", "yes"):
+        return True
+    if os.getenv("RESEARCH_TECH_OHLC_FULL_UNIVERSE", "").lower() in ("1", "true", "yes"):
+        return False
+    return True
+
+
+async def scan_technical(symbols: list[str]) -> dict[str, TechnicalSnapshot]:
+    """
+    Cross-sectional technical scores for ranking.
+
+    Default uses deterministic hash scores (fast). Real entry/SL/targets still come from OHLC in
+    research_levels for the finalist pool. Enable RESEARCH_TECH_OHLC_FULL_UNIVERSE=1 for per-symbol
+    OHLC technicals (slow; not recommended behind a web request).
+    """
+    if _use_hash_for_universe_ranking():
         return {s: _snapshot_hash(s) for s in symbols}
 
     from data.ingestion import DataIngestion

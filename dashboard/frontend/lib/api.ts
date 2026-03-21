@@ -281,7 +281,9 @@ export interface ResearchRunResponse {
   scan: "swing" | "longterm";
   agent: string;
   status: string;
-  summary: string;
+  /** Human-readable outcome (sync run or background accepted message) */
+  summary?: string;
+  message?: string;
   result: Record<string, unknown>;
 }
 
