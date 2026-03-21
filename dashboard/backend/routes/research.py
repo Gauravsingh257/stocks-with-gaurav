@@ -22,7 +22,9 @@ def _swing_payload(limit: int) -> dict:
         target_2 = float(targets[1]) if len(targets) > 1 else None
         entry = float(row["entry_price"])
         stop = float(row["stop_loss"]) if row.get("stop_loss") is not None else entry * 0.95
-        rr = ((target_2 or target_1 or entry) - entry) / max(entry - stop, 0.01)
+        risk = abs(entry - stop)
+        reward = abs((target_2 or target_1 or entry) - entry)
+        rr = reward / max(risk, 0.01)
         items.append(
             {
                 "id": row["id"],

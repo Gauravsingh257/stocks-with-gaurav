@@ -214,3 +214,6 @@ EXPIRY_ATM_DRIFT_CHECK_SECS = 120   # Check ATM drift every 2 minutes
 # =====================================================
 MAX_SWING_PICKS = 4
 MIN_SWING_QUALITY = 7
+# Inclusive CMP band for score_swing_candidate (₹); widened vs legacy 100–15000 for mid/small caps
+SWING_CANDIDATE_MIN_PRICE = float(os.getenv("SWING_CANDIDATE_MIN_PRICE", "5.0"))
+SWING_CANDIDATE_MAX_PRICE = float(os.getenv("SWING_CANDIDATE_MAX_PRICE", "100000.0"))

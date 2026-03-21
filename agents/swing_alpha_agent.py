@@ -28,7 +28,9 @@ class SwingTradeAlphaAgent(BaseAgent):
             stop_loss = idea.stop_loss
             target_1 = idea.targets[0] if idea.targets else None
             target_2 = idea.targets[1] if len(idea.targets) > 1 else None
-            rr = ((target_2 or target_1 or entry_price) - entry_price) / max(entry_price - stop_loss, 0.01)
+            risk = abs(entry_price - stop_loss)
+            reward = abs((target_2 or target_1 or entry_price) - entry_price)
+            rr = reward / max(risk, 0.01)
 
             row = {
                 "symbol": symbol,

@@ -246,7 +246,7 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
     if not daily_data or len(daily_data) < 30 or not weekly_data or len(weekly_data) < 12:
         return None
     price = daily_data[-1]["close"]
-    if price < 100 or price > 15000:
+    if price < cfg.SWING_CANDIDATE_MIN_PRICE or price > cfg.SWING_CANDIDATE_MAX_PRICE:
         return None
     avg_vol = sum(c["volume"] for c in daily_data[-20:]) / 20
     if avg_vol < 500000:
