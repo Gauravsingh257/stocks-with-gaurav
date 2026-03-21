@@ -172,12 +172,137 @@ def _build_system_prompt() -> tuple[str, dict]:
     except Exception:
         agent_summary = "\n  Agent data unavailable"
 
+    # ── All-time intraday stats ───────────────────────────────────────────────
+    intraday_all_text = ""
+    try:
+        from dashboard.backend.db import get_connection as _gc2
+        conn3 = _gc2()
+        all_trades = conn3.execute(
+            "SELECT result, pnl_r, setup FROM trades WHERE result IN ('WIN','LOSS')"
+        ).fetchall()
+        conn3.close()
+        if all_trades:
+            aw = [r for r in all_trades if r["result"] == "WIN"]
+            al = [r for r in all_trades if r["result"] == "LOSS"]
+            a_total = len(all_trades)
+            a_wr    = round(len(aw) / a_total * 100, 1)
+            a_r     = round(sum(r["pnl_r"] or 0 for r in all_trades), 2)
+            a_gp    = sum(r["pnl_r"] or 0 for r in aw)
+            a_gl    = abs(sum(r["pnl_r"] or 0 for r in al))
+            a_pf    = round(a_gp / a_gl, 2) if a_gl > 0 else 0
+            a_exp   = round(a_r / a_total, 3)
+            # Best/worst setup
+            setup_map: dict = {}
+            for r in all_trades:
+                s = (r["setup"] or "Unknown").strip() or "Unknown"
+                setup_map.setdefault(s, {"wins": 0, "total": 0, "r": 0})
+                setup_map[s]["total"] += 1
+                setup_map[s]["r"] += r["pnl_r"] or 0
+                if r["result"] == "WIN":
+                    setup_map[s]["wins"] += 1
+            best_setup  = max(setup_map, key=lambda s: setup_map[s]["r"]) if setup_map else "N/A"
+            worst_setup = min(setup_map, key=lambda s: setup_map[s]["r"]) if setup_map else "N/A"
+            intraday_all_text = (
+                f"Total: {a_total} | WR: {a_wr}% | PF: {a_pf} | "
+                f"Total R: {a_r:+.2f} | Expectancy: {a_exp:+.3f}R/trade\n"
+                f"Best setup: {best_setup} ({setup_map.get(best_setup,{}).get('r',0):+.2f}R) | "
+                f"Worst setup: {worst_setup} ({setup_map.get(worst_setup,{}).get('r',0):+.2f}R)"
+            )
+            ctx["intraday_all_time"] = {
+                "total": a_total, "win_rate_pct": a_wr, "profit_factor": a_pf,
+                "total_r": a_r, "expectancy": a_exp,
+                "best_setup": best_setup, "worst_setup": worst_setup,
+            }
+        else:
+            intraday_all_text = "  No closed intraday trades yet"
+    except Exception as e:
+        logger.warning("[Chat] All-time intraday stats failed: %s", e)
+        intraday_all_text = "  Data unavailable"
+
+    # ── Swing & Long-term research performance ───────────────────────────────
+    research_text = ""
+    try:
+        from dashboard.backend.db import get_connection as _gc3
+        conn4 = _gc3()
+        rt_all = conn4.execute(
+            """SELECT sr.agent_type, sr.symbol, rt.status, rt.profit_loss_pct, rt.days_held
+               FROM running_trades rt
+               JOIN stock_recommendations sr ON rt.recommendation_id = sr.id
+               WHERE sr.agent_type IN ('SWING','LONGTERM')""",
+        ).fetchall()
+        # Last 5 swing + 3 LT recommendations
+        last_swing_recs = conn4.execute(
+            """SELECT sr.symbol, sr.entry_price, sr.setup, sr.created_at,
+                      rt.current_price, rt.profit_loss_pct, rt.status
+               FROM stock_recommendations sr
+               LEFT JOIN running_trades rt
+                   ON rt.recommendation_id = sr.id
+                   AND rt.id = (SELECT MAX(id) FROM running_trades WHERE recommendation_id = sr.id)
+               WHERE sr.agent_type = 'SWING'
+               ORDER BY sr.created_at DESC LIMIT 5""",
+        ).fetchall()
+        last_lt_recs = conn4.execute(
+            """SELECT sr.symbol, sr.entry_price, sr.setup, sr.created_at,
+                      rt.current_price, rt.profit_loss_pct, rt.status
+               FROM stock_recommendations sr
+               LEFT JOIN running_trades rt
+                   ON rt.recommendation_id = sr.id
+                   AND rt.id = (SELECT MAX(id) FROM running_trades WHERE recommendation_id = sr.id)
+               WHERE sr.agent_type = 'LONGTERM'
+               ORDER BY sr.created_at DESC LIMIT 3""",
+        ).fetchall()
+        conn4.close()
+
+        def _research_block(horizon: str, rows) -> str:
+            subset = [r for r in rows if r["agent_type"] == horizon]
+            if not subset:
+                return f"No {horizon} data yet."
+            closed   = [r for r in subset if r["status"] in ("TARGET_HIT", "STOP_HIT")]
+            hits     = [r for r in subset if r["status"] == "TARGET_HIT"]
+            active   = [r for r in subset if r["status"] == "RUNNING"]
+            hit_rate = round(len(hits) / len(closed) * 100, 1) if closed else 0
+            avg_pnl  = round(sum(r["profit_loss_pct"] for r in subset) / len(subset), 2)
+            best = max(subset, key=lambda r: r["profit_loss_pct"])
+            worst = min(subset, key=lambda r: r["profit_loss_pct"])
+            return (
+                f"Total: {len(subset)} | Active: {len(active)} | Hit Rate: {hit_rate}%\n"
+                f"Avg P&L: {avg_pnl:+.1f}% | Best: {best['symbol']} ({best['profit_loss_pct']:+.1f}%) "
+                f"| Worst: {worst['symbol']} ({worst['profit_loss_pct']:+.1f}%)"
+            )
+
+        swing_perf_text = _research_block("SWING", rt_all)
+        lt_perf_text    = _research_block("LONGTERM", rt_all)
+
+        def _rec_line(r) -> str:
+            pnl = r["profit_loss_pct"] or 0
+            cmp = r["current_price"] or r["entry_price"]
+            sign = "+" if pnl >= 0 else ""
+            status = r["status"] or "PENDING"
+            return f"  {r['symbol']} | Entry ₹{r['entry_price']} | CMP ₹{cmp} | P&L {sign}{pnl:.1f}% | {status}"
+
+        swing_recs_text = "\n".join(_rec_line(r) for r in last_swing_recs) or "  None"
+        lt_recs_text    = "\n".join(_rec_line(r) for r in last_lt_recs) or "  None"
+
+        research_text = (
+            f"SWING PERFORMANCE:\n{swing_perf_text}\n"
+            f"LONGTERM PERFORMANCE:\n{lt_perf_text}"
+        )
+        ctx["research_performance"] = {
+            "swing": swing_perf_text,
+            "longterm": lt_perf_text,
+            "last_5_swing": [dict(r) for r in last_swing_recs],
+            "last_3_lt": [dict(r) for r in last_lt_recs],
+        }
+    except Exception as e:
+        logger.warning("[Chat] Research performance context failed: %s", e)
+        swing_recs_text = lt_recs_text = research_text = "  Data unavailable"
+
     # ── Assemble the system prompt ────────────────────────────────────────────
     today_str = datetime.now().strftime("%A, %d %B %Y %H:%M IST")
     paper_str = " (PAPER MODE)" if paper_mode else ""
 
-    prompt = f"""You are an expert SMC (Smart Money Concepts) trading assistant for an Indian index options trader.
-You have LIVE access to the trader's engine state and trade journal. Today is {today_str}.
+    prompt = f"""You are an expert SMC (Smart Money Concepts) trading assistant for an Indian equity/index options trader.
+You have LIVE access to the trader's engine state, intraday trade journal, swing picks, and long-term ideas. Today is {today_str}.
 
 === ENGINE STATUS{paper_str} ===
 Mode: {engine_mode}
@@ -189,7 +314,7 @@ Signals Today: {signals_today}/{max_signals}
 Index Only: {"Yes" if index_only else "No"}
 Engine Live: {"Yes (real-time)" if engine_live else "No (standalone)"}
 
-=== ACTIVE TRADES ({len(active_trades)}) ===
+=== ACTIVE INTRADAY TRADES ({len(active_trades)}) ===
 {active_trades_text}
 
 === TODAY — {datetime.now().date().isoformat()} ===
@@ -199,17 +324,29 @@ Recent trades:{today_trade_text}
 === ROLLING 20-TRADE STATS ===
 Total: {r20_total} | Wins: {r20_wins} | WR: {r20_wr:.1f}% | PF: {r20_pf:.2f} | Total R: {r20_pnl:+.2f}R
 
+=== ALL-TIME INTRADAY STATS ===
+{intraday_all_text}
+
+=== SWING & LONG-TERM RESEARCH PERFORMANCE ===
+{research_text}
+
+=== LAST 5 SWING RECOMMENDATIONS ===
+{swing_recs_text}
+
+=== LAST 3 LONG-TERM RECOMMENDATIONS ===
+{lt_recs_text}
+
 === RECENT AGENT RUNS ===
 {agent_summary}
 
 === YOUR ROLE ===
-1. Answer questions about the trader's live P&L, positions, regime, risk, and performance.
-2. Compute derived stats on request (expectancy, drawdown, best setup, etc.) using the data above.
-3. Offer actionable, context-aware insights — e.g. warn if CB is close, suggest regime-appropriate setups.
-4. Be concise and precise. Use R-multiples. Prefer tables or bullet lists for data.
-5. If asked about something outside your context (e.g. macro news, stock prices), say so clearly.
+1. Answer questions about live P&L, positions, regime, risk, and performance across ALL horizons (intraday, swing, long-term).
+2. Compute derived stats on request (expectancy, drawdown, hit rate, best/worst pick, etc.) using the data above.
+3. Offer actionable, context-aware insights — e.g. warn if CB is close, highlight the best-performing setup or stock pick.
+4. Be concise and precise. Use R-multiples for intraday, P&L% for swing/LT. Prefer tables or bullet lists.
+5. If asked about something outside your context (e.g. live prices, macro news), say so clearly.
 6. Never advise taking a specific trade you haven't been asked to evaluate.
-7. When showing numbers, format them clearly: +2.40R, 42.8% WR, PF 1.83, etc.
+7. When showing numbers, format clearly: +2.40R, 42.8% WR, PF 1.83, +12.4% gain, etc.
 """
 
     return prompt, ctx
@@ -248,7 +385,7 @@ def _stream_chat(messages: list[ChatMessage], system_prompt: str) -> Generator[s
             oai_messages.append({"role": m.role, "content": m.content})
 
         with client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=oai_messages,
             max_tokens=1024,
             temperature=0.3,

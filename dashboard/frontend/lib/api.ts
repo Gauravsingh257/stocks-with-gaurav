@@ -313,6 +313,118 @@ export interface ResearchCoverageResponse {
   };
 }
 
+// ── Research Performance & Journal interfaces ──────────────────────────────
+
+export interface ResearchPickRow {
+  symbol: string;
+  entry_price: number;
+  current_price: number | null;
+  recommended_at: string;
+  setup: string | null;
+  confidence_score: number;
+  profit_loss_pct: number;
+  profit_loss: number;
+  days_held: number;
+  status: "RUNNING" | "TARGET_HIT" | "STOP_HIT" | "PENDING";
+  high_since_entry: number | null;
+  low_since_entry: number | null;
+  updated_at: string | null;
+}
+
+export interface ResearchPerformanceSummary {
+  total: number;
+  active: number;
+  target_hit: number;
+  stop_hit: number;
+  hit_rate_pct: number;
+  avg_pnl_pct: number;
+  best_pnl_pct: number;
+  worst_pnl_pct: number;
+  best_symbol: string | null;
+  worst_symbol: string | null;
+}
+
+export interface ResearchPerformanceResponse {
+  summary: ResearchPerformanceSummary;
+  picks: ResearchPickRow[];
+}
+
+export interface ScanRunRow {
+  run_time: string;
+  horizon: "SWING" | "LONGTERM";
+  universe_requested: number;
+  universe_scanned: number;
+  quality_passed: number;
+  ranked_candidates: number;
+  selected_count: number;
+  notes: string | null;
+}
+
+export interface ScanHistoryResponse {
+  runs: ScanRunRow[];
+  swing_count: number;
+  longterm_count: number;
+  total: number;
+}
+
+export interface PerformanceSnapshot {
+  id: number;
+  snapshot_date: string;
+  horizon: "INTRADAY" | "SWING" | "LONGTERM" | "OVERALL";
+  total_trades: number;
+  win_count: number;
+  loss_count: number;
+  win_rate_pct: number;
+  total_r: number;
+  profit_factor: number;
+  avg_pnl_pct: number;
+  hit_rate_pct: number;
+  best_symbol: string | null;
+  worst_symbol: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface JournalIdeaRow {
+  id: number;
+  symbol: string;
+  setup: string | null;
+  entry_price: number;
+  stop_loss: number | null;
+  targets: number[];
+  confidence_score: number;
+  expected_holding_period: string | null;
+  reasoning_summary: string;
+  recommended_at: string;
+  current_price: number | null;
+  profit_loss: number;
+  profit_loss_pct: number;
+  drawdown_pct: number;
+  days_held: number;
+  status: "RUNNING" | "TARGET_HIT" | "STOP_HIT" | "PENDING";
+  high_since_entry: number | null;
+  low_since_entry: number | null;
+  updated_at: string | null;
+}
+
+export interface JournalIdeasPage {
+  ideas: JournalIdeaRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  agent_type: string;
+}
+
+export interface JournalIdeasParams {
+  symbol?: string;
+  status?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -364,6 +476,29 @@ export const api = {
   },
   /** Same data as a signals query for calendar today (backward compatible). */
   signalsToday:  () => get<{ signals: SignalLogEntry[]; count: number; total?: number; date: string; source: string }>("/api/journal/signals-today"),
+
+  // ── Research Performance Analytics ────────────────────────────────────────
+  swingPerformance: () => get<ResearchPerformanceResponse>("/api/analytics/research/swing-performance"),
+  longtermPerformance: () => get<ResearchPerformanceResponse>("/api/analytics/research/longterm-performance"),
+  scanHistory: (limit = 50) => get<ScanHistoryResponse>(`/api/analytics/research/scan-history?limit=${limit}`),
+  performanceSnapshots: (horizon?: string, limit = 60) => {
+    const q = new URLSearchParams();
+    if (horizon) q.set("horizon", horizon);
+    q.set("limit", String(limit));
+    return get<{ snapshots: PerformanceSnapshot[] }>(`/api/analytics/performance-snapshots?${q}`);
+  },
+
+  // ── Journal: swing & long-term ideas ─────────────────────────────────────
+  swingIdeas: (params?: JournalIdeasParams) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return get<JournalIdeasPage>(`/api/journal/swing-ideas?${q}`);
+  },
+  longtermIdeas: (params?: JournalIdeasParams) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return get<JournalIdeasPage>(`/api/journal/longterm-ideas?${q}`);
+  },
 
   // AI Research Center
   swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),

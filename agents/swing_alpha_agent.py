@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance
 from services import generate_rankings
 
 
@@ -99,5 +99,11 @@ class SwingTradeAlphaAgent(BaseAgent):
             if seeded:
                 import logging as _log
                 _log.getLogger("SwingTradeAlphaAgent").info("Trade tracker: seeded %d new rows", seeded)
+        except Exception:
+            pass
+
+        # Persist daily performance snapshot
+        try:
+            snapshot_performance()
         except Exception:
             pass

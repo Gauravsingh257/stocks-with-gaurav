@@ -17,6 +17,7 @@ from .schema import (
     list_running_trades,
     log_ranking_run,
     get_ranking_runs,
+    snapshot_performance,
     DB_PATH,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "list_running_trades",
     "log_ranking_run",
     "get_ranking_runs",
+    "snapshot_performance",
     "DB_PATH",
 ]

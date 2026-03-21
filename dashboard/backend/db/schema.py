@@ -176,6 +176,29 @@ CREATE TABLE IF NOT EXISTS ranking_runs (
     notes                 TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ranking_runs_horizon_time ON ranking_runs(horizon, run_time DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 9: performance_snapshots (daily algo performance archive)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS performance_snapshots (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    horizon       TEXT NOT NULL CHECK(horizon IN ('INTRADAY','SWING','LONGTERM','OVERALL')),
+    total_trades  INTEGER DEFAULT 0,
+    win_count     INTEGER DEFAULT 0,
+    loss_count    INTEGER DEFAULT 0,
+    win_rate_pct  REAL DEFAULT 0,
+    total_r       REAL DEFAULT 0,
+    profit_factor REAL DEFAULT 0,
+    avg_pnl_pct   REAL DEFAULT 0,
+    hit_rate_pct  REAL DEFAULT 0,
+    best_symbol   TEXT,
+    worst_symbol  TEXT,
+    notes         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_perf_snap_date_horizon ON performance_snapshots(snapshot_date, horizon);
+CREATE INDEX IF NOT EXISTS idx_perf_snap_date ON performance_snapshots(snapshot_date DESC);
 """
 
 
@@ -202,6 +225,7 @@ def init_db() -> None:
     migrate_agent_logs()
     migrate_stock_recommendations()
     migrate_running_trades()
+    # performance_snapshots is created by DDL above (IF NOT EXISTS — always safe)
 
 
 # ── CSV Watcher state ─────────────────────────────────────────────────────────
@@ -430,6 +454,86 @@ def migrate_running_trades() -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def snapshot_performance(snapshot_date: str | None = None) -> int:
+    """
+    Compute and persist daily performance snapshots for INTRADAY, SWING, LONGTERM, and OVERALL.
+    Upserts by (snapshot_date, horizon) so it's safe to call multiple times per day.
+    Returns number of rows upserted.
+    """
+    from datetime import date as _date
+    snap_date = snapshot_date or _date.today().isoformat()
+    conn = get_connection()
+    rows_written = 0
+    try:
+        # ── INTRADAY ──────────────────────────────────────────────────────────
+        trades = conn.execute(
+            "SELECT result, pnl_r, setup FROM trades WHERE result IN ('WIN','LOSS') ORDER BY date ASC"
+        ).fetchall()
+        if trades:
+            wins = [r for r in trades if r["result"] == "WIN"]
+            losses = [r for r in trades if r["result"] == "LOSS"]
+            total = len(trades)
+            total_r = sum(r["pnl_r"] or 0 for r in trades)
+            gp = sum(r["pnl_r"] or 0 for r in wins)
+            gl = abs(sum(r["pnl_r"] or 0 for r in losses))
+            pf = round(gp / gl, 4) if gl > 0 else 0
+            conn.execute(
+                """INSERT OR REPLACE INTO performance_snapshots
+                   (snapshot_date, horizon, total_trades, win_count, loss_count,
+                    win_rate_pct, total_r, profit_factor, notes)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (snap_date, "INTRADAY", total, len(wins), len(losses),
+                 round(len(wins) / total * 100, 2), round(total_r, 4), pf,
+                 f"Intraday trades snapshot {snap_date}"),
+            )
+            rows_written += 1
+
+        # ── SWING / LONGTERM ─────────────────────────────────────────────────
+        for horizon_label in ("SWING", "LONGTERM"):
+            rt_rows = conn.execute(
+                """SELECT rt.symbol, rt.profit_loss_pct, rt.status, rt.entry_price
+                   FROM running_trades rt
+                   JOIN stock_recommendations sr ON rt.recommendation_id = sr.id
+                   WHERE sr.agent_type = ? AND rt.status IN ('TARGET_HIT','STOP_HIT','RUNNING')""",
+                (horizon_label,),
+            ).fetchall()
+            if rt_rows:
+                closed = [r for r in rt_rows if r["status"] in ("TARGET_HIT", "STOP_HIT")]
+                hits = [r for r in closed if r["status"] == "TARGET_HIT"]
+                hit_rate = round(len(hits) / len(closed) * 100, 2) if closed else 0
+                avg_pnl = round(sum(r["profit_loss_pct"] for r in rt_rows) / len(rt_rows), 2)
+                best = max(rt_rows, key=lambda r: r["profit_loss_pct"], default=None)
+                worst = min(rt_rows, key=lambda r: r["profit_loss_pct"], default=None)
+                conn.execute(
+                    """INSERT OR REPLACE INTO performance_snapshots
+                       (snapshot_date, horizon, total_trades, win_count, loss_count,
+                        win_rate_pct, avg_pnl_pct, hit_rate_pct, best_symbol, worst_symbol, notes)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (snap_date, horizon_label, len(rt_rows), len(hits),
+                     len(closed) - len(hits), hit_rate, avg_pnl, hit_rate,
+                     best["symbol"] if best else None, worst["symbol"] if worst else None,
+                     f"{horizon_label} snapshot {snap_date}"),
+                )
+                rows_written += 1
+
+        # ── OVERALL ──────────────────────────────────────────────────────────
+        conn.execute(
+            """INSERT OR REPLACE INTO performance_snapshots
+               (snapshot_date, horizon, notes)
+               VALUES (?, 'OVERALL', ?)""",
+            (snap_date, f"Overall algo snapshot {snap_date}"),
+        )
+        rows_written += 1
+        conn.commit()
+        logger.info("[DB] performance_snapshots: wrote %d rows for %s", rows_written, snap_date)
+    except Exception as exc:
+        logger.error("[DB] snapshot_performance failed: %s", exc)
+        conn.rollback()
+    finally:
+        conn.close()
+    return rows_written
 
 
 def log_regime_change(regime: str, bull_score: int = 0, bear_score: int = 0, oi_pcr: float = None) -> None:

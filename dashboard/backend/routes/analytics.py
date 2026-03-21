@@ -408,3 +408,169 @@ def force_sync():
         "sync_time":   info["last_sync"],
         "db_trade_count": info["db_trade_count"],
     }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Research (Swing + Long-Term) Performance Analytics
+# ────────────────────────────────────────────────────────────────────────────
+
+def _research_performance(agent_type: str) -> dict:
+    """
+    Compute performance metrics for swing or long-term recommendations.
+    Joins running_trades ← stock_recommendations to get live P&L, status, days held.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                sr.symbol,
+                sr.entry_price,
+                sr.confidence_score,
+                sr.created_at AS recommended_at,
+                sr.setup,
+                rt.current_price,
+                rt.profit_loss_pct,
+                rt.profit_loss,
+                rt.days_held,
+                rt.status,
+                rt.high_since_entry,
+                rt.low_since_entry,
+                rt.updated_at
+            FROM stock_recommendations sr
+            LEFT JOIN running_trades rt
+                ON rt.recommendation_id = sr.id
+                AND rt.id = (
+                    SELECT MAX(id) FROM running_trades
+                    WHERE recommendation_id = sr.id
+                )
+            WHERE sr.agent_type = ?
+            ORDER BY sr.created_at DESC
+            """,
+            (agent_type,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {
+            "summary": {
+                "total": 0, "active": 0, "target_hit": 0, "stop_hit": 0,
+                "hit_rate_pct": 0, "avg_pnl_pct": 0, "best_pnl_pct": 0,
+                "worst_pnl_pct": 0, "best_symbol": None, "worst_symbol": None,
+            },
+            "picks": [],
+        }
+
+    picks = []
+    for r in rows:
+        picks.append({
+            "symbol": r["symbol"],
+            "entry_price": r["entry_price"],
+            "current_price": r["current_price"],
+            "recommended_at": r["recommended_at"],
+            "setup": r["setup"],
+            "confidence_score": r["confidence_score"],
+            "profit_loss_pct": r["profit_loss_pct"] or 0.0,
+            "profit_loss": r["profit_loss"] or 0.0,
+            "days_held": r["days_held"] or 0,
+            "status": r["status"] or "PENDING",
+            "high_since_entry": r["high_since_entry"],
+            "low_since_entry": r["low_since_entry"],
+            "updated_at": r["updated_at"],
+        })
+
+    active = [p for p in picks if p["status"] == "RUNNING"]
+    hits   = [p for p in picks if p["status"] == "TARGET_HIT"]
+    stops  = [p for p in picks if p["status"] == "STOP_HIT"]
+    closed = hits + stops
+    tracked = [p for p in picks if p["status"] in ("RUNNING", "TARGET_HIT", "STOP_HIT")]
+
+    hit_rate = round(len(hits) / len(closed) * 100, 1) if closed else 0
+    avg_pnl  = round(sum(p["profit_loss_pct"] for p in tracked) / len(tracked), 2) if tracked else 0
+
+    best  = max(tracked, key=lambda p: p["profit_loss_pct"], default=None)
+    worst = min(tracked, key=lambda p: p["profit_loss_pct"], default=None)
+
+    return {
+        "summary": {
+            "total": len(picks),
+            "active": len(active),
+            "target_hit": len(hits),
+            "stop_hit": len(stops),
+            "hit_rate_pct": hit_rate,
+            "avg_pnl_pct": avg_pnl,
+            "best_pnl_pct": round(best["profit_loss_pct"], 2) if best else 0,
+            "worst_pnl_pct": round(worst["profit_loss_pct"], 2) if worst else 0,
+            "best_symbol": best["symbol"] if best else None,
+            "worst_symbol": worst["symbol"] if worst else None,
+        },
+        "picks": picks,
+    }
+
+
+@router.get("/research/swing-performance")
+def get_swing_performance():
+    """Swing scan recommendation performance: hit rate, avg P&L%, per-symbol table."""
+    return _research_performance("SWING")
+
+
+@router.get("/research/longterm-performance")
+def get_longterm_performance():
+    """Long-term recommendation performance: hit rate, avg P&L%, per-symbol table."""
+    return _research_performance("LONGTERM")
+
+
+@router.get("/research/scan-history")
+def get_scan_history(limit: int = Query(default=50, ge=1, le=200)):
+    """Timeline of all ranking runs (SWING + LONGTERM) for sparkline/audit view."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT run_time, horizon, universe_requested, universe_scanned,
+                   quality_passed, ranked_candidates, selected_count, notes
+            FROM ranking_runs
+            ORDER BY run_time DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = [dict(r) for r in rows]
+    swing_runs = [r for r in items if r["horizon"] == "SWING"]
+    lt_runs    = [r for r in items if r["horizon"] == "LONGTERM"]
+
+    return {
+        "runs": items,
+        "swing_count": len(swing_runs),
+        "longterm_count": len(lt_runs),
+        "total": len(items),
+    }
+
+
+@router.get("/performance-snapshots")
+def get_performance_snapshots(
+    horizon: str = Query(default=None, description="INTRADAY|SWING|LONGTERM|OVERALL"),
+    limit: int = Query(default=60, ge=1, le=365),
+):
+    """Historical daily performance snapshots for trend charts."""
+    conn = get_connection()
+    try:
+        if horizon:
+            rows = conn.execute(
+                "SELECT * FROM performance_snapshots WHERE horizon = ? ORDER BY snapshot_date DESC LIMIT ?",
+                (horizon.upper(), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM performance_snapshots ORDER BY snapshot_date DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    except Exception:
+        rows = []
+    finally:
+        conn.close()
+    return {"snapshots": [dict(r) for r in rows]}

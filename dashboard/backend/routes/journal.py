@@ -379,3 +379,129 @@ def sync_trades(
     finally:
         conn.close()
     return {"status": "ok", "synced": inserted}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Swing & Long-Term ideas journal (from stock_recommendations + running_trades)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ideas_journal(
+    agent_type: str,
+    symbol: Optional[str],
+    status: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    limit: int,
+    offset: int,
+) -> dict:
+    conn = get_connection()
+    try:
+        clauses = ["sr.agent_type = ?"]
+        params: list = [agent_type]
+
+        if symbol:
+            clauses.append("sr.symbol LIKE ?")
+            params.append(f"%{symbol.upper()}%")
+        if date_from:
+            clauses.append("DATE(sr.created_at) >= ?")
+            params.append(date_from)
+        if date_to:
+            clauses.append("DATE(sr.created_at) <= ?")
+            params.append(date_to)
+        if status:
+            clauses.append("rt.status = ?")
+            params.append(status.upper())
+
+        where = " AND ".join(clauses)
+        count_sql = f"""
+            SELECT COUNT(*) FROM stock_recommendations sr
+            LEFT JOIN running_trades rt
+                ON rt.recommendation_id = sr.id
+                AND rt.id = (SELECT MAX(id) FROM running_trades WHERE recommendation_id = sr.id)
+            WHERE {where}
+        """
+        query_sql = f"""
+            SELECT
+                sr.id, sr.symbol, sr.agent_type, sr.entry_price, sr.stop_loss,
+                sr.targets, sr.confidence_score, sr.setup, sr.expected_holding_period,
+                sr.reasoning, sr.created_at AS recommended_at,
+                rt.current_price, rt.profit_loss, rt.profit_loss_pct,
+                rt.days_held, rt.status, rt.high_since_entry, rt.low_since_entry,
+                rt.updated_at, rt.drawdown_pct
+            FROM stock_recommendations sr
+            LEFT JOIN running_trades rt
+                ON rt.recommendation_id = sr.id
+                AND rt.id = (SELECT MAX(id) FROM running_trades WHERE recommendation_id = sr.id)
+            WHERE {where}
+            ORDER BY sr.created_at DESC
+            LIMIT ? OFFSET ?
+        """
+        total = conn.execute(count_sql, params).fetchone()[0]
+        rows = conn.execute(query_sql, params + [limit, offset]).fetchall()
+
+        items = []
+        for r in rows:
+            import json as _json
+            targets_raw = r["targets"] if isinstance(r["targets"], str) else "[]"
+            try:
+                targets = _json.loads(targets_raw)
+            except Exception:
+                targets = []
+            items.append({
+                "id": r["id"],
+                "symbol": r["symbol"],
+                "setup": r["setup"],
+                "entry_price": r["entry_price"],
+                "stop_loss": r["stop_loss"],
+                "targets": targets,
+                "confidence_score": r["confidence_score"],
+                "expected_holding_period": r["expected_holding_period"],
+                "reasoning_summary": (r["reasoning"] or "")[:300],
+                "recommended_at": r["recommended_at"],
+                "current_price": r["current_price"],
+                "profit_loss": r["profit_loss"] or 0.0,
+                "profit_loss_pct": r["profit_loss_pct"] or 0.0,
+                "drawdown_pct": r["drawdown_pct"] or 0.0,
+                "days_held": r["days_held"] or 0,
+                "status": r["status"] or "PENDING",
+                "high_since_entry": r["high_since_entry"],
+                "low_since_entry": r["low_since_entry"],
+                "updated_at": r["updated_at"],
+            })
+    finally:
+        conn.close()
+
+    return {
+        "ideas": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + limit) < total,
+        "agent_type": agent_type,
+    }
+
+
+@router.get("/swing-ideas")
+def get_swing_ideas(
+    symbol: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None, description="RUNNING|TARGET_HIT|STOP_HIT|PENDING"),
+    date_from: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """All swing recommendations with live tracking data. Filterable."""
+    return _ideas_journal("SWING", symbol, status, date_from, date_to, limit, offset)
+
+
+@router.get("/longterm-ideas")
+def get_longterm_ideas(
+    symbol: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None, description="RUNNING|TARGET_HIT|STOP_HIT|PENDING"),
+    date_from: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """All long-term recommendations with live tracking data. Filterable."""
+    return _ideas_journal("LONGTERM", symbol, status, date_from, date_to, limit, offset)
