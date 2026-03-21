@@ -103,3 +103,6 @@ cloudflared.exe
 # --- TEMP SCRIPTS (prefixed with _) ---
 _*.py
 _*.txt
+
+# Content engine generated images
+content_engine/generated_posts/*.png

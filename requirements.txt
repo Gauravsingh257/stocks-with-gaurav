@@ -23,6 +23,15 @@ kiteconnect>=4.2.0
 requests>=2.31.0
 httpx>=0.27.0
 
+# --- AI / LLM (content_engine) ---
+openai>=1.30.0
+
+# --- Chart generation (content_engine) ---
+yfinance>=0.2.40
+mplfinance>=0.12.10b0
+matplotlib>=3.8.0
+playwright>=1.40.0
+
 # --- Utilities ---
 orjson>=3.9.0
 pandas>=2.1.0
