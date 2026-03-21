@@ -20,10 +20,11 @@ interface Message {
 const STARTERS = [
   "How is my P&L today?",
   "Which setup has the best win rate?",
-  "Am I in any active trades?",
+  "Which swing pick is performing best?",
+  "What is my all-time win rate and profit factor?",
+  "Show me my last 5 swing recommendations",
   "What is the current market regime?",
-  "Show me my last 5 trades",
-  "Is my system still profitable?",
+  "Am I in any active trades?",
   "Are there any risk alerts I should know about?",
 ];
 
@@ -60,7 +61,7 @@ export default function ChatPage() {
     {
       id:      uid(),
       role:    "assistant",
-      content: "Hello! I'm your SMC Trading Assistant powered by GPT-3.5.\n\nI have live access to your **engine state**, **today's trades**, **rolling P&L**, **active positions**, and **agent logs**.\n\nAsk me anything about your trading system.",
+      content: "Hello! I'm your SMC Trading Assistant powered by GPT-4o mini.\n\nI have live access to your **engine state**, **today's trades**, **rolling P&L**, **active positions**, **agent logs**, **swing picks**, **long-term ideas**, and **all-time performance stats**.\n\nAsk me anything about your trading system.",
       ts:      "",
     },
   ]);
@@ -218,11 +219,11 @@ export default function ChatPage() {
         <div>
           <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0">AI Assistant</h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
-            GPT-3.5 &middot; Live engine context &middot; Streaming
+            GPT-4o mini &middot; Live engine context &middot; Streaming
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {apiKeySet === true  && <span className="badge badge-live"    style={{ fontSize: "0.72rem" }}><Sparkles size={10}/> GPT-3.5</span>}
+          {apiKeySet === true  && <span className="badge badge-live"    style={{ fontSize: "0.72rem" }}><Sparkles size={10}/> GPT-4o mini</span>}
           {apiKeySet === false && <span className="badge badge-warning" style={{ fontSize: "0.72rem" }}><Settings size={10}/> No API Key</span>}
           <button onClick={clearChat}
             style={{ padding: "5px 12px", borderRadius: 6, fontSize: "0.74rem", cursor: "pointer",
@@ -314,7 +315,7 @@ export default function ChatPage() {
         fontSize: "0.73rem", color: "var(--text-secondary)", display: "flex", gap: 8, alignItems: "center",
       }}>
         <Sparkles size={11} color="var(--accent)" style={{ flexShrink: 0 }} />
-        Context injected on every message: engine state &middot; today&apos;s trades &middot; rolling 20-trade stats &middot; active positions &middot; recent agent runs
+        Context injected on every message: engine state &middot; today&apos;s trades &middot; rolling 20-trade stats &middot; all-time intraday stats &middot; swing &amp; long-term picks performance &middot; last 5 swing recs &middot; agent runs
         &middot; debug: <a href={`${BASE}/api/chat/context`} target="_blank" rel="noreferrer"
           style={{ color: "var(--accent)", textDecoration: "none" }}>/api/chat/context</a>
       </div>

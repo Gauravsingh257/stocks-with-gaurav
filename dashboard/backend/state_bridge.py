@@ -426,7 +426,7 @@ def _get_engine_last_cycle_from_cache() -> tuple[Optional[float], Optional[float
 
 
 def _get_index_ltp_from_cache() -> Dict[str, float]:
-    """Read LTP from Redis (realtime tick stream) first; fallback to OHLC last close (worker)."""
+    """Read LTP from Redis (realtime tick stream) first; fallback to OHLC last close; final fallback to yfinance."""
     out: Dict[str, float] = {}
     try:
         from dashboard.backend.cache import get_ltp, get as cache_get, ohlc_key
@@ -443,6 +443,17 @@ def _get_index_ltp_from_cache() -> Dict[str, float]:
                 last = candles[-1]
                 if isinstance(last, dict) and isinstance(last.get("close"), (int, float)):
                     out[label] = float(last["close"])
+                    continue
+            # Final fallback: yfinance (delayed ~15min but always available)
+            try:
+                import yfinance as yf
+                yf_sym = "^NSEI" if redis_sym == "NIFTY" else "^NSEBANK"
+                ticker = yf.Ticker(yf_sym)
+                hist = ticker.history(period="1d", interval="1m")
+                if not hist.empty:
+                    out[label] = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
     except Exception:
         pass
     return out
