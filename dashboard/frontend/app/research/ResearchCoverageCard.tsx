@@ -33,10 +33,18 @@ export function ResearchCoverageCard({ coverage }: Props) {
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Swing Weekly Run</div>
           {swing ? (
             <div style={{ fontSize: "0.78rem", display: "grid", gap: 3 }}>
+              {swing.run_time && (
+                <div style={{ color: "var(--text-dim)" }}>Last run: {String(swing.run_time).slice(0, 19).replace("T", " ")}</div>
+              )}
               <div>Scanned: {swing.universe_scanned}/{swing.universe_requested} ({pct(swing.coverage_pct)})</div>
               <div>Quality Passed: {swing.quality_passed}</div>
               <div>Ranked: {swing.ranked_candidates}</div>
               <div>Selected: {swing.selected_count}</div>
+              {swing.selected_count === 0 && swing.ranked_candidates > 0 && (
+                <div style={{ color: "var(--warning)", marginTop: 4 }}>
+                  No ideas materialized (SMC/levels). Check logs or run again after deploy.
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>No run yet.</div>
@@ -46,10 +54,18 @@ export function ResearchCoverageCard({ coverage }: Props) {
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Long-Term Weekly Run</div>
           {longterm ? (
             <div style={{ fontSize: "0.78rem", display: "grid", gap: 3 }}>
+              {longterm.run_time && (
+                <div style={{ color: "var(--text-dim)" }}>Last run: {String(longterm.run_time).slice(0, 19).replace("T", " ")}</div>
+              )}
               <div>Scanned: {longterm.universe_scanned}/{longterm.universe_requested} ({pct(longterm.coverage_pct)})</div>
               <div>Quality Passed: {longterm.quality_passed}</div>
               <div>Ranked: {longterm.ranked_candidates}</div>
               <div>Selected: {longterm.selected_count}</div>
+              {longterm.selected_count === 0 && longterm.ranked_candidates > 0 && (
+                <div style={{ color: "var(--warning)", marginTop: 4 }}>
+                  No long-term ideas saved — levels or filters excluded all candidates.
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>No run yet.</div>

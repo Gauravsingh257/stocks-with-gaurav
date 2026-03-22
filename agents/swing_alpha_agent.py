@@ -15,10 +15,6 @@ class SwingTradeAlphaAgent(BaseAgent):
 
     def run(self, result: AgentResult) -> None:
         ranking = asyncio.run(generate_rankings("SWING", top_k=10, target_universe=1800))
-        if not ranking.ideas:
-            result.status = "WARNING"
-            result.summary = "No symbols passed ranking quality gates."
-            return
 
         saved = 0
         findings: list[dict] = []
@@ -80,6 +76,7 @@ class SwingTradeAlphaAgent(BaseAgent):
             "requested_universe_size": ranking.universe.requested_size,
             "actual_universe_size": ranking.universe.actual_size,
         }
+        # Always log so Research UI shows last run (coverage card) even when 0 ideas saved.
         log_ranking_run(
             horizon="SWING",
             universe_requested=ranking.universe.requested_size,
@@ -87,9 +84,19 @@ class SwingTradeAlphaAgent(BaseAgent):
             quality_passed=ranking.quality_passed,
             ranked_candidates=ranking.ranked_candidates,
             selected_count=saved,
-            notes=f"sources={ranking.universe.sources}",
+            notes=f"sources={ranking.universe.sources}|saved={saved}",
         )
         result.findings = findings
+        if saved == 0:
+            result.status = "WARNING"
+            result.summary = (
+                f"Swing scan finished: 0 ideas saved (scanned {ranking.scanned} symbols, "
+                f"{ranking.quality_passed} quality pass, {ranking.ranked_candidates} ranked). "
+                "SMC may have returned SHORT or no signal for the candidate pool; "
+                "ensure RESEARCH_SWING_ATR_FALLBACK=1 (default) for ATR when SMC is silent."
+            )
+            return
+
         result.summary = f"Swing ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
 
         # Seed running_trade tracker rows for the new recommendations

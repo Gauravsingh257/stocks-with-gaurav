@@ -114,14 +114,15 @@ def test_swing_short_smc_rejected_for_long_only_research(monkeypatch):
     assert out is None
 
 
-def test_swing_atr_fallback_only_when_env_enabled(monkeypatch):
-    """Default: SMC None → no levels. With RESEARCH_SWING_ATR_FALLBACK=1 → ATR long."""
+def test_swing_atr_fallback_respects_env(monkeypatch):
+    """RESEARCH_SWING_ATR_FALLBACK=0 → no ATR when SMC None. =1 (default) → ATR long."""
     from services import research_levels as rl
 
     raw = _synthetic_uptrend_days(80)
     df = pd.DataFrame(raw)
     monkeypatch.setattr(rl, "score_swing_candidate", lambda *a, **k: None)
 
+    monkeypatch.setenv("RESEARCH_SWING_ATR_FALLBACK", "0")
     out = build_swing_trade_levels("NSE:TEST", df, [])
     assert out is None
 

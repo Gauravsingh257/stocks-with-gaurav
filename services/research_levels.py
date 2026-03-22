@@ -24,12 +24,15 @@ log = logging.getLogger("services.research_levels")
 
 NIFTY_DAILY_SYMBOL = os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50")
 RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_PCT", "0.30"))
-RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "5")))
+RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
 
 
 def _swing_atr_fallback_enabled() -> bool:
-    """Off by default — only SMC-confirmed LONG swing ideas unless explicitly enabled."""
-    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
+    """
+    Default ON: when SMC returns None (no signal), still materialize ATR-based long levels.
+    SHORT signals are never replaced by ATR (see build_swing_trade_levels). Set to 0 to require SMC LONG only.
+    """
+    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "1").strip().lower() not in ("0", "false", "no")
 
 
 def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:

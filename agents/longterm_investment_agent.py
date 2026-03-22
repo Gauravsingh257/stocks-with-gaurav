@@ -15,10 +15,6 @@ class LongTermInvestmentAgent(BaseAgent):
 
     def run(self, result: AgentResult) -> None:
         ranking = asyncio.run(generate_rankings("LONGTERM", top_k=10, target_universe=1800))
-        if not ranking.ideas:
-            result.status = "WARNING"
-            result.summary = "No symbols passed ranking quality gates."
-            return
 
         saved = 0
         findings: list[dict] = []
@@ -86,9 +82,17 @@ class LongTermInvestmentAgent(BaseAgent):
             quality_passed=ranking.quality_passed,
             ranked_candidates=ranking.ranked_candidates,
             selected_count=saved,
-            notes=f"sources={ranking.universe.sources}",
+            notes=f"sources={ranking.universe.sources}|saved={saved}",
         )
         result.findings = findings
+        if saved == 0:
+            result.status = "WARNING"
+            result.summary = (
+                f"Long-term scan finished: 0 ideas saved (scanned {ranking.scanned} symbols, "
+                f"{ranking.quality_passed} quality pass, {ranking.ranked_candidates} ranked)."
+            )
+            return
+
         result.summary = f"Long-term ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
 
         try:
