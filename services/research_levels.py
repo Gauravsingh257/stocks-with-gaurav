@@ -1,7 +1,12 @@
 """
-OHLC-backed trade levels for AI Research Center (replaces hash-based placeholders).
+OHLC-backed trade levels for AI Research Center.
 
-Uses engine.swing.score_swing_candidate when possible; otherwise ATR-based fallback.
+Swing (long-only):
+  - Primary: ``score_swing_candidate`` must return direction LONG with valid entry/SL/targets.
+  - If SMC says SHORT (bearish structure), the symbol is **excluded** — we do not fabricate a
+    conflicting "long" plan for the same name (that looked random vs the prior short plan).
+  - Optional ATR fallback only when ``RESEARCH_SWING_ATR_FALLBACK=1`` and SMC returns None
+    (failed quality gate), never as a substitute for an explicit SHORT signal.
 """
 
 from __future__ import annotations
@@ -20,6 +25,11 @@ log = logging.getLogger("services.research_levels")
 NIFTY_DAILY_SYMBOL = os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50")
 RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_PCT", "0.30"))
 RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "5")))
+
+
+def _swing_atr_fallback_enabled() -> bool:
+    """Off by default — only SMC-confirmed LONG swing ideas unless explicitly enabled."""
+    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 
 
 def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:
@@ -159,8 +169,10 @@ def build_swing_trade_levels(
 ) -> tuple[float, float, list[float], str, dict[str, Any] | None] | None:
     """
     Returns (entry, stop_loss, [t1, t2], setup_label, smc_meta) or None.
-    smc_meta is the raw score_swing_candidate result dict (has real reasons, rs, research etc.)
-    when the SMC path was used; None for ATR fallback.
+
+    Long-only list: we only emit levels when SMC agrees on LONG. If SMC says SHORT, we return
+    None (symbol skipped for swing-long — no synthetic long to replace a bearish thesis).
+    smc_meta is set only for real SMC LONG paths; ATR fallback (if enabled) sets smc_meta=None.
     """
     candles = df_to_candles(daily_df)
     if len(candles) < 30:
@@ -168,36 +180,43 @@ def build_swing_trade_levels(
     close = candles[-1]["close"]
     weekly = daily_candles_to_weekly(candles)
     sw = score_swing_candidate(symbol, candles, weekly, nifty_daily)
-    if sw:
-        direction = str(sw.get("direction") or "LONG")
-        # Stock swing research is long-only (buy/hold). SHORT SMC plans must not appear as "swing buys".
-        if direction != "LONG":
-            log.debug("Swing SMC returned SHORT for %s — research is long-only, using ATR long fallback", symbol)
-            sw = None
-        else:
-            entry = float(sw["entry"])
-            sl = float(sw["sl"])
-            target = float(sw["target"])
-            if not entry_vs_close_sane(entry, close):
-                log.debug("Swing levels failed CMP sanity for %s", symbol)
-                sw = None
-            else:
-                t1, t2 = _split_targets("LONG", entry, target)
-                if not long_swing_geometry_ok(entry, sl, [t1, t2]):
-                    log.debug("Swing LONG geometry invalid for %s (entry=%s sl=%s t=%s/%s) — ATR long fallback",
-                              symbol, entry, sl, t1, t2)
-                    sw = None
-                else:
-                    wt = sw.get("weekly_trend", "?")
-                    ds = sw.get("daily_structure", "?")
-                    setup = f"SMC_SWING_{wt}_{ds}"
-                    return entry, sl, [t1, t2], setup, sw
 
-    fb = atr_fallback_levels(symbol, candles, force_long=True)
-    if fb:
-        entry, sl, targets, setup = fb
-        return entry, sl, targets, setup, None
-    return None
+    if not sw:
+        if _swing_atr_fallback_enabled():
+            fb = atr_fallback_levels(symbol, candles, force_long=True)
+            if fb:
+                entry, sl, targets, setup = fb
+                return entry, sl, targets, setup, None
+        return None
+
+    direction = str(sw.get("direction") or "LONG")
+    if direction != "LONG":
+        log.info(
+            "[research] %s excluded from swing-long: SMC direction SHORT (bearish structure). "
+            "Not emitting a substitute long plan.",
+            symbol,
+        )
+        return None
+
+    entry = float(sw["entry"])
+    sl = float(sw["sl"])
+    target = float(sw["target"])
+    if not entry_vs_close_sane(entry, close):
+        log.debug("Swing levels failed CMP sanity for %s", symbol)
+        return None
+
+    t1, t2 = _split_targets("LONG", entry, target)
+    if not long_swing_geometry_ok(entry, sl, [t1, t2]):
+        log.debug(
+            "Swing LONG geometry invalid for %s (entry=%s sl=%s t=%s/%s) — skip",
+            symbol, entry, sl, t1, t2,
+        )
+        return None
+
+    wt = sw.get("weekly_trend", "?")
+    ds = sw.get("daily_structure", "?")
+    setup = f"SMC_SWING_{wt}_{ds}"
+    return entry, sl, [t1, t2], setup, sw
 
 
 def _find_weekly_demand_zone(weekly: list[dict[str, Any]], atr: float) -> tuple[float, float] | None:

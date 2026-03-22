@@ -92,7 +92,7 @@ def test_long_swing_geometry_ok():
 
 
 def test_swing_short_smc_rejected_for_long_only_research(monkeypatch):
-    """SHORT SMC must not surface as swing 'buy' — fallback to ATR long."""
+    """SHORT SMC must not appear as swing-long — exclude symbol (no fake long substitute)."""
     from services import research_levels as rl
 
     raw = _synthetic_uptrend_days(80)
@@ -111,11 +111,28 @@ def test_swing_short_smc_rejected_for_long_only_research(monkeypatch):
 
     monkeypatch.setattr(rl, "score_swing_candidate", fake_short)
     out = build_swing_trade_levels("NSE:TEST", df, [])
-    assert out is not None
-    entry, sl, targets, setup, smc_meta = out
+    assert out is None
+
+
+def test_swing_atr_fallback_only_when_env_enabled(monkeypatch):
+    """Default: SMC None → no levels. With RESEARCH_SWING_ATR_FALLBACK=1 → ATR long."""
+    from services import research_levels as rl
+
+    raw = _synthetic_uptrend_days(80)
+    df = pd.DataFrame(raw)
+    monkeypatch.setattr(rl, "score_swing_candidate", lambda *a, **k: None)
+
+    out = build_swing_trade_levels("NSE:TEST", df, [])
+    assert out is None
+
+    monkeypatch.setenv("RESEARCH_SWING_ATR_FALLBACK", "1")
+    out2 = build_swing_trade_levels("NSE:TEST", df, [])
+    assert out2 is not None
+    entry, sl, targets, setup, smc_meta = out2
     assert smc_meta is None
     assert "ATR_FALLBACK_LONG" in setup
     assert long_swing_geometry_ok(entry, sl, targets)
+    monkeypatch.delenv("RESEARCH_SWING_ATR_FALLBACK", raising=False)
 
 
 def test_build_longterm_trade_levels():
