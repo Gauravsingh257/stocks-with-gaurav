@@ -12,9 +12,11 @@ os.environ.setdefault("TECH_SCANNER_USE_HASH_ONLY", "1")
 from services.research_levels import (
     atr_fallback_levels,
     build_longterm_trade_levels,
+    build_swing_trade_levels,
     daily_candles_to_weekly,
     df_to_candles,
     entry_vs_close_sane,
+    long_swing_geometry_ok,
 )
 
 
@@ -73,6 +75,47 @@ def test_atr_fallback_produces_cmp_entry():
     assert len(targets) == 2
     if "LONG" in setup:
         assert sl < entry < targets[1]
+
+
+def test_atr_fallback_force_long_always_long_setup():
+    raw = _synthetic_uptrend_days(80)
+    out = atr_fallback_levels("NSE:TEST", raw, force_long=True)
+    assert out is not None
+    entry, sl, targets, _setup = out
+    assert long_swing_geometry_ok(entry, sl, targets)
+
+
+def test_long_swing_geometry_ok():
+    assert long_swing_geometry_ok(100.0, 95.0, [110.0, 120.0]) is True
+    assert long_swing_geometry_ok(100.0, 100.0, [110.0]) is False  # SL not below entry
+    assert long_swing_geometry_ok(100.0, 95.0, [90.0]) is False   # target below entry (short-like)
+
+
+def test_swing_short_smc_rejected_for_long_only_research(monkeypatch):
+    """SHORT SMC must not surface as swing 'buy' — fallback to ATR long."""
+    from services import research_levels as rl
+
+    raw = _synthetic_uptrend_days(80)
+    df = pd.DataFrame(raw)
+
+    def fake_short(symbol, daily, weekly, nifty):
+        return {
+            "symbol": symbol,
+            "direction": "SHORT",
+            "entry": daily[-1]["close"],
+            "sl": daily[-1]["close"] * 1.05,
+            "target": daily[-1]["close"] * 0.9,
+            "weekly_trend": "STRONG_BEAR",
+            "daily_structure": "BEARISH_BOS",
+        }
+
+    monkeypatch.setattr(rl, "score_swing_candidate", fake_short)
+    out = build_swing_trade_levels("NSE:TEST", df, [])
+    assert out is not None
+    entry, sl, targets, setup, smc_meta = out
+    assert smc_meta is None
+    assert "ATR_FALLBACK_LONG" in setup
+    assert long_swing_geometry_ok(entry, sl, targets)
 
 
 def test_build_longterm_trade_levels():
