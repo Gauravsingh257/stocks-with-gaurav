@@ -1,0 +1,78 @@
+# =====================================================
+# .claudeignore — Reduce Claude Code token consumption
+# =====================================================
+
+# === DATA FILES (large, regenerated at runtime) ===
+nfo_instruments.json
+*.db
+*.csv
+*.log
+*.log.*
+*.pkl
+*.parquet
+
+# === RUNTIME STATE JSONs ===
+active_trades.json
+active_fvg_ob.json
+active_setups.json
+bn_signal_state.json
+daily_log.json
+ob_alerted.json
+oi_intelligence_snapshot.json
+oi_sc_active_trades.json
+oi_sc_snapshot.json
+option_active_trades.json
+option_monthly_lows.json
+option_notified_taps.json
+option_tap_state.json
+position_cache.json
+positions_state.json
+_temp_queue.json
+stock_universe_500.json
+stock_universe_fno.json
+
+# === BUILD / DEPS / ENVS ===
+.venv/
+node_modules/
+.next/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+dashboard/frontend/.next/
+dashboard/frontend/node_modules/
+content_engine/.venv/
+
+# === STATIC ASSETS ===
+charts/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.woff
+*.woff2
+dashboard/frontend/public/
+
+# === ARCHIVED DOCS ===
+docs/archive/
+
+# === BACKTEST OUTPUT (stale) ===
+backtest_results/
+backtest_results_setup_c/
+smc_trading_engine/backtest/
+smc_trading_engine/execution/
+smc_trading_engine/data/
+smc_trading_engine/tests/
+
+# === LAUNCHER SCRIPTS (moved) ===
+scripts/launchers/
+
+# === OTHER ===
+_TEMP_CLAUDE_FILES/
+content_engine/
+data/
+logs/
+.cursor/
+.vscode/
+.git/

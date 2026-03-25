@@ -1,43 +1,54 @@
-﻿# .cursorignore - Excludes irrelevant files from Cursor AI context to reduce token usage.
+# =====================================================
+# .cursorignore — Reduce Cursor AI token consumption
+# Synced with .claudeignore for consistency
 # Does NOT affect git, Railway, or runtime.
+# =====================================================
 
-# Logs & runtime state
-logs/
-*.log
-
-# Generated / cached outputs
-backtest_results/
-backtest_results_setup_c/
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.mypy_cache/
-
-# Large data files
+# === DATA FILES (large, regenerated at runtime) ===
+nfo_instruments.json
+*.db
 *.csv
+*.log
+*.log.*
+*.pkl
 *.parquet
 *.feather
-*.pkl
 *.pickle
 
-# Node / frontend build artifacts
-dashboard/frontend/node_modules/
+# === RUNTIME STATE JSONs ===
+active_trades.json
+active_fvg_ob.json
+active_setups.json
+bn_signal_state.json
+daily_log.json
+ob_alerted.json
+oi_intelligence_snapshot.json
+oi_sc_active_trades.json
+oi_sc_snapshot.json
+option_active_trades.json
+option_monthly_lows.json
+option_notified_taps.json
+option_tap_state.json
+position_cache.json
+positions_state.json
+_temp_queue.json
+stock_universe_500.json
+stock_universe_fno.json
+
+# === BUILD / DEPS / ENVS ===
+.venv/
+node_modules/
+.next/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
 dashboard/frontend/.next/
+dashboard/frontend/node_modules/
 dashboard/frontend/out/
+content_engine/.venv/
 
-# Scratch / analysis files (not production)
-_analysis_today.py
-_perf_mar10.py
-_test_buttons.py
-_test_zt_buttons.py
-
-# Backtest scripts (not needed for live engine work)
-run_backtest_jan_feb.py
-run_backtest_setupd.py
-smc_trading_engine/run_jan2026_backtest.py
-
-# Static assets
+# === STATIC ASSETS ===
+charts/
 *.png
 *.jpg
 *.jpeg
@@ -46,8 +57,31 @@ smc_trading_engine/run_jan2026_backtest.py
 *.ico
 *.woff
 *.woff2
+dashboard/frontend/public/
 
-# Secrets - never index these
+# === ARCHIVED DOCS ===
+docs/archive/
+
+# === BACKTEST OUTPUT (stale) ===
+backtest_results/
+backtest_results_setup_c/
+smc_trading_engine/backtest/
+smc_trading_engine/execution/
+smc_trading_engine/data/
+smc_trading_engine/tests/
+
+# === LAUNCHER SCRIPTS (moved) ===
+scripts/launchers/
+
+# === SECRETS ===
 .env
 .env.*
 access_token.txt
+
+# === OTHER ===
+_TEMP_CLAUDE_FILES/
+content_engine/
+data/
+logs/
+.cursor/
+.vscode/

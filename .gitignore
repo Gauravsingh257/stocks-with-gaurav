@@ -103,3 +103,15 @@ cloudflared.exe
 # --- TEMP SCRIPTS (prefixed with _) ---
 _*.py
 _*.txt
+
+# --- LARGE GENERATED FILES (not needed in repo) ---
+nfo_instruments.json
+backtest_results/
+backtest_results_setup_c/
+charts/*.png
+oi_chart_*.png
+test_bounce.txt
+test_results_session.txt
+backtest_*_trades.csv
+oi_unwinding_backtest_results.csv
+backtest_setupd_*.csv
