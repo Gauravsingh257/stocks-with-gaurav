@@ -203,6 +203,16 @@ OI_SC_SL_ATR_MULT = 1.2             # SL = 1.2× ATR
 OI_SC_TARGET_RR = 2.0               # 2R minimum target
 OI_SC_ALERT_COOLDOWN_SECS = 300     # 5 min cooldown between alerts per strike
 
+# V4.3r — Bias/Entry 2-Layer System
+OI_SC_BIAS_WINDOW_MINS = 30           # Bias expires after N min with no entry
+OI_SC_SIGNAL_LOCK_MINS = 60           # Block same (underlying, direction) for N min
+OI_SC_MIN_RR = 1.5                    # Reject entries below this RR
+OI_SC_IMPULSE_ATR_MULT = 2.0          # Block if 30-min move > N × 5m ATR
+OI_SC_RANGE_EXPANSION_BLOCK = 1.5     # Block OI-SC if day range > N × daily ATR
+OI_SC_PULLBACK_RETRACE_PCT = 0.40     # Deep pullback exception threshold (40%)
+OI_SC_SL_STRUCTURE_BUFFER = 0.2       # ATR fraction below zone edge for SL
+OI_SC_CONFIRMATION_WICK_PCT = 0.55    # Min rejection wick % for confirmation candle
+
 # =====================================================
 # EXPIRY MANAGEMENT CONFIG
 # =====================================================

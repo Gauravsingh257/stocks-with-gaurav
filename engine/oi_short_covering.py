@@ -53,6 +53,7 @@ import pickle
 import csv
 from datetime import datetime, time, timedelta, date as dt_date
 from collections import deque
+from enum import Enum
 from pathlib import Path
 
 try:
@@ -98,6 +99,16 @@ OI_SC_BIAS_CONFLICT_HARD_BLOCK = getattr(cfg, "OI_SC_BIAS_CONFLICT_HARD_BLOCK", 
 # Consecutive same-direction 5m candles that constitute exhaustion (suppress signal)
 OI_SC_EXHAUSTION_CANDLES = getattr(cfg, "OI_SC_EXHAUSTION_CANDLES", 4)
 
+# V4.3r — Bias/Entry 2-Layer System
+OI_SC_BIAS_WINDOW_MINS = getattr(cfg, "OI_SC_BIAS_WINDOW_MINS", 30)
+OI_SC_SIGNAL_LOCK_MINS = getattr(cfg, "OI_SC_SIGNAL_LOCK_MINS", 60)
+OI_SC_MIN_RR = getattr(cfg, "OI_SC_MIN_RR", 1.5)
+OI_SC_IMPULSE_ATR_MULT = getattr(cfg, "OI_SC_IMPULSE_ATR_MULT", 2.0)
+OI_SC_RANGE_EXPANSION_BLOCK = getattr(cfg, "OI_SC_RANGE_EXPANSION_BLOCK", 1.5)
+OI_SC_PULLBACK_RETRACE_PCT = getattr(cfg, "OI_SC_PULLBACK_RETRACE_PCT", 0.40)
+OI_SC_SL_STRUCTURE_BUFFER = getattr(cfg, "OI_SC_SL_STRUCTURE_BUFFER", 0.2)
+OI_SC_CONFIRMATION_WICK_PCT = getattr(cfg, "OI_SC_CONFIRMATION_WICK_PCT", 0.55)
+
 
 # =====================================================
 # STATE — Module-Level
@@ -125,6 +136,760 @@ _instruments_cache = None
 
 # Active OI SC trades being monitored for outcome
 _oi_sc_active_trades = []  # list of {symbol, entry, sl, target, entry_time, ...}
+
+# V4.3r — Bias/Entry 2-Layer State
+_signal_locks = {}      # {(underlying, direction): expiry_datetime}
+_active_biases = []     # bias objects awaiting pullback entry
+_daily_atr_cache = {}   # {f"{underlying}_{date}": float}
+
+
+# =====================================================
+# V4.3r — MARKET PHASE ENUM
+# =====================================================
+
+class MarketPhase(Enum):
+    OPENING = "OPENING"                # 09:15-09:45, unstable
+    EARLY_TREND = "EARLY_TREND"        # directional, range building
+    EXTENDED_TREND = "EXTENDED_TREND"  # range > 1.5x daily ATR, still impulsive
+    CONSOLIDATION = "CONSOLIDATION"    # low range or stalled within trend
+    DISTRIBUTION = "DISTRIBUTION"      # reversing from extreme
+    LATE_SESSION = "LATE_SESSION"      # after 14:00, avoid new entries
+
+
+# =====================================================
+# V4.3r — SIGNAL LOCK SYSTEM
+# =====================================================
+
+def is_signal_locked(underlying: str, direction: str) -> bool:
+    """Check if (underlying, direction) combo is locked."""
+    key = (underlying, direction)
+    if key not in _signal_locks:
+        return False
+    if datetime.now(_IST) >= _signal_locks[key]:
+        del _signal_locks[key]
+        return False
+    return True
+
+
+def register_signal_lock(underlying: str, direction: str):
+    """Lock (underlying, direction) for OI_SC_SIGNAL_LOCK_MINS."""
+    key = (underlying, direction)
+    _signal_locks[key] = datetime.now(_IST) + timedelta(minutes=OI_SC_SIGNAL_LOCK_MINS)
+    logger.info(
+        "OI-SC lock: %s %s until %s",
+        underlying, direction, _signal_locks[key].strftime("%H:%M")
+    )
+
+
+def _cleanup_expired_locks():
+    """Remove stale locks."""
+    now = datetime.now(_IST)
+    expired = [k for k, v in _signal_locks.items() if now >= v]
+    for k in expired:
+        del _signal_locks[k]
+
+
+# =====================================================
+# V4.3r — MARKET PHASE DETECTION
+# =====================================================
+
+def _get_daily_atr(underlying: str, fetch_ohlc_fn) -> float:
+    """Compute daily ATR from 1H candles (cached per day). Fallback: BN=550, NF=180."""
+    today = datetime.now(_IST).date().isoformat()
+    cache_key = f"{underlying}_{today}"
+    if cache_key in _daily_atr_cache:
+        return _daily_atr_cache[cache_key]
+
+    try:
+        idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+        candles_1h = fetch_ohlc_fn(idx_sym, "60minute", 30)
+        if candles_1h and len(candles_1h) >= 10:
+            daily_atr = smc.calculate_atr(candles_1h, period=10) * 4
+            if daily_atr > 0:
+                _daily_atr_cache[cache_key] = daily_atr
+                return daily_atr
+    except Exception:
+        pass
+
+    fallback = {"NIFTY": 180, "BANKNIFTY": 550}
+    val = fallback.get(underlying, 300)
+    _daily_atr_cache[cache_key] = val
+    return val
+
+
+def detect_market_phase(underlying: str, fetch_ohlc_fn) -> MarketPhase:
+    """Classify current market phase using time, range expansion, and structure."""
+    now = datetime.now(_IST)
+    minutes_since_open = (now.hour - 9) * 60 + now.minute - 15
+
+    if minutes_since_open < 30:
+        return MarketPhase.OPENING
+    if now.hour >= 14:
+        return MarketPhase.LATE_SESSION
+
+    idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+    try:
+        candles = fetch_ohlc_fn(idx_sym, "5minute", 80)
+        if not candles or len(candles) < 10:
+            return MarketPhase.EARLY_TREND
+    except Exception:
+        return MarketPhase.EARLY_TREND
+
+    today = now.date()
+    today_candles = [c for c in candles if c["date"].date() == today]
+    if len(today_candles) < 5:
+        return MarketPhase.EARLY_TREND
+
+    open_price = today_candles[0]["open"]
+    day_high = max(c["high"] for c in today_candles)
+    day_low = min(c["low"] for c in today_candles)
+    day_range = day_high - day_low
+    spot = today_candles[-1]["close"]
+    daily_atr = _get_daily_atr(underlying, fetch_ohlc_fn)
+
+    range_expansion = day_range / daily_atr if daily_atr > 0 else 0
+    position = (spot - day_low) / day_range if day_range > 0 else 0.5
+
+    n_recent = min(6, len(today_candles))
+    recent = today_candles[-n_recent:]
+    recent_move = recent[-1]["close"] - recent[0]["open"]
+    day_move = spot - open_price
+
+    atr_5m = smc.calculate_atr(today_candles) if len(today_candles) > 15 else daily_atr / 10
+
+    # EXTENDED_TREND: range exceeds typical daily range
+    if range_expansion >= OI_SC_RANGE_EXPANSION_BLOCK:
+        # If recent 30-min move is small → consolidation within trend, allow entry
+        if abs(recent_move) < atr_5m * 0.3:
+            return MarketPhase.CONSOLIDATION
+        return MarketPhase.EXTENDED_TREND
+
+    # DISTRIBUTION: large range + price reversing from extreme
+    if range_expansion > 0.8:
+        reversing_from_high = (day_move > 0 and position < 0.65 and recent_move < 0)
+        reversing_from_low = (day_move < 0 and position > 0.35 and recent_move > 0)
+        if reversing_from_high or reversing_from_low:
+            return MarketPhase.DISTRIBUTION
+
+    # CONSOLIDATION: small range, no strong move
+    if range_expansion < 0.4 and abs(recent_move) < atr_5m * 0.5:
+        return MarketPhase.CONSOLIDATION
+
+    return MarketPhase.EARLY_TREND
+
+
+def is_phase_allowed(phase: MarketPhase, direction: str) -> tuple:
+    """Return (allowed, reason) for OI-SC signal in given phase."""
+    rules = {
+        MarketPhase.OPENING: (False, "Opening phase (09:15-09:45) - unstable"),
+        MarketPhase.EARLY_TREND: (True, "Early trend - allowed with pullback"),
+        MarketPhase.EXTENDED_TREND: (False, "Range > %.1fx daily ATR" % OI_SC_RANGE_EXPANSION_BLOCK),
+        MarketPhase.CONSOLIDATION: (True, "Consolidation - allowed"),
+        MarketPhase.DISTRIBUTION: (False, "Distribution - prefer reversal setups"),
+        MarketPhase.LATE_SESSION: (False, "After 14:00 - no new OI-SC entries"),
+    }
+    return rules.get(phase, (True, ""))
+
+
+# =====================================================
+# V4.3r — IMPULSE EXHAUSTION
+# =====================================================
+
+def is_impulse_exhausted(underlying: str, direction: str, fetch_ohlc_fn) -> tuple:
+    """
+    Block if 30-min move > OI_SC_IMPULSE_ATR_MULT * ATR OR 5+ consecutive candles.
+    Returns (exhausted: bool, reason: str).
+    """
+    try:
+        idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+        candles = fetch_ohlc_fn(idx_sym, "5minute", 40)
+        if not candles or len(candles) < 8:
+            return False, ""
+
+        today = datetime.now(_IST).date()
+        today_candles = [c for c in candles if c["date"].date() == today]
+        if len(today_candles) < 6:
+            return False, ""
+
+        atr = smc.calculate_atr(today_candles) if len(today_candles) > 15 else smc.calculate_atr(candles)
+        if atr <= 0:
+            return False, ""
+
+        # Check 1: 30-min move magnitude
+        recent_6 = today_candles[-6:]
+        recent_move = recent_6[-1]["close"] - recent_6[0]["open"]
+        threshold = atr * OI_SC_IMPULSE_ATR_MULT
+
+        if direction == "BULLISH" and recent_move > threshold:
+            return True, "30-min rally %.0fpts > %.0fpt threshold" % (recent_move, threshold)
+        if direction == "BEARISH" and recent_move < -threshold:
+            return True, "30-min drop %.0fpts > %.0fpt threshold" % (abs(recent_move), threshold)
+
+        # Check 2: 5+ consecutive directional candles
+        streak = 0
+        for c in reversed(today_candles):
+            if direction == "BULLISH" and c["close"] > c["open"]:
+                streak += 1
+            elif direction == "BEARISH" and c["close"] < c["open"]:
+                streak += 1
+            else:
+                break
+        if streak >= 5:
+            color = "green" if direction == "BULLISH" else "red"
+            return True, "%d consecutive %s candles" % (streak, color)
+
+    except Exception:
+        pass
+    return False, ""
+
+
+# =====================================================
+# V4.3r — LAYER 2: ENTRY QUALIFICATION
+# =====================================================
+
+def _find_qualifying_zone(bias: dict, spot: float, today_candles: list) -> dict:
+    """Find nearest qualifying zone (FVG/OB/swing) that price is inside. Returns dict or None."""
+    direction = bias["direction"]
+    zones = bias.get("frozen_zones", {})
+
+    # Check FVG first (most precise)
+    fvg_key = "fvg_long" if direction == "BULLISH" else "fvg_short"
+    fvg = zones.get(fvg_key)
+    if fvg and fvg[0] <= spot <= fvg[1]:
+        return {"type": "FVG", "low": fvg[0], "high": fvg[1]}
+
+    # Check OB second
+    ob_key = "ob_long" if direction == "BULLISH" else "ob_short"
+    ob = zones.get(ob_key)
+    if ob and ob[0] <= spot <= ob[1]:
+        return {"type": "OB", "low": ob[0], "high": ob[1]}
+
+    # Check swing zone fallback
+    swing = _build_swing_zone(direction, spot, today_candles)
+    if swing and swing["low"] <= spot <= swing["high"]:
+        return swing
+
+    return None
+
+
+def _build_swing_zone(direction: str, spot: float, today_candles: list) -> dict:
+    """Build zone from most recent swing point. Returns dict or None."""
+    if len(today_candles) < 10:
+        return None
+    try:
+        atr = smc.calculate_atr(today_candles) if len(today_candles) > 15 else 0
+        if atr <= 0:
+            return None
+        swing_highs, swing_lows = smc.detect_swing_points(today_candles, left=2, right=2)
+        if direction == "BULLISH" and swing_lows:
+            last_sl = swing_lows[-1][1]
+            return {"type": "SWING", "low": last_sl - atr * 0.2, "high": last_sl + atr * 0.3}
+        if direction == "BEARISH" and swing_highs:
+            last_sh = swing_highs[-1][1]
+            return {"type": "SWING", "low": last_sh - atr * 0.3, "high": last_sh + atr * 0.2}
+    except Exception:
+        pass
+    return None
+
+
+def _has_confirmation_candle(direction: str, today_candles: list) -> bool:
+    """Last closed 5m candle must show rejection or structure hold."""
+    if len(today_candles) < 3:
+        return False
+    last = today_candles[-2]  # last closed
+    prev = today_candles[-3]
+    candle_range = last["high"] - last["low"]
+    if candle_range <= 0:
+        return False
+
+    if direction == "BULLISH":
+        is_green = last["close"] > last["open"]
+        higher_low = last["low"] > prev["low"]
+        body_low = min(last["open"], last["close"])
+        rejection = ((body_low - last["low"]) / candle_range) > OI_SC_CONFIRMATION_WICK_PCT
+        return is_green or higher_low or rejection
+    else:
+        is_red = last["close"] < last["open"]
+        lower_high = last["high"] < prev["high"]
+        body_high = max(last["open"], last["close"])
+        rejection = ((last["high"] - body_high) / candle_range) > OI_SC_CONFIRMATION_WICK_PCT
+        return is_red or lower_high or rejection
+
+
+def _qualifies_pullback_exception(bias: dict, spot: float, today_candles: list) -> bool:
+    """
+    Override phase block if price retraced >= OI_SC_PULLBACK_RETRACE_PCT of last impulse
+    AND has confirmation candle.
+    """
+    direction = bias["direction"]
+    n = min(12, len(today_candles))
+    recent = today_candles[-n:]
+    impulse_high = max(c["high"] for c in recent)
+    impulse_low = min(c["low"] for c in recent)
+    impulse_range = impulse_high - impulse_low
+    if impulse_range <= 0:
+        return False
+
+    if direction == "BULLISH":
+        retracement = (impulse_high - spot) / impulse_range
+    else:
+        retracement = (spot - impulse_low) / impulse_range
+
+    if retracement < OI_SC_PULLBACK_RETRACE_PCT:
+        return False
+    return _has_confirmation_candle(direction, today_candles)
+
+
+def is_near_key_level(direction: str, spot: float, today_candles: list) -> bool:
+    """Block if entry is within 0.5x ATR of day high (BULLISH) or day low (BEARISH)."""
+    day_high = max(c["high"] for c in today_candles)
+    day_low = min(c["low"] for c in today_candles)
+    try:
+        atr = smc.calculate_atr(today_candles) if len(today_candles) > 15 else 0
+    except Exception:
+        atr = 0
+    if atr <= 0:
+        return False
+    buffer = atr * 0.5
+    if direction == "BULLISH":
+        return (day_high - spot) < buffer
+    return (spot - day_low) < buffer
+
+
+# =====================================================
+# V4.3r — RISK ENGINE (SL / TARGET / STRIKE)
+# =====================================================
+
+def _select_itm_strike(underlying: str, spot: float, opt_type: str) -> tuple:
+    """Select 1-strike ITM. Returns (strike, step)."""
+    step = 100 if underlying == "BANKNIFTY" else 50
+    atm = round(spot / step) * step
+    if opt_type == "CE":
+        return int(atm - step), step
+    return int(atm + step), step
+
+
+def _estimate_delta(spot: float, strike: int, opt_type: str) -> float:
+    """Estimate delta from moneyness (no live Greeks needed)."""
+    if opt_type == "CE":
+        moneyness = (spot - strike) / strike
+    else:
+        moneyness = (strike - spot) / strike
+
+    if moneyness > 0.03:
+        return 0.80
+    if moneyness > 0.015:
+        return 0.65
+    if moneyness > 0.005:
+        return 0.55
+    if moneyness > -0.005:
+        return 0.50
+    if moneyness > -0.015:
+        return 0.35
+    if moneyness > -0.03:
+        return 0.25
+    return 0.15
+
+
+def compute_trade_levels_v43(direction: str, entry_spot: float, zone: dict,
+                              atr: float, bias: dict) -> dict:
+    """
+    V4.3r SL/target computation using hybrid structure+ATR stop loss.
+    Returns trade levels dict or None if invalid.
+    """
+    underlying = bias["underlying"]
+    opt_type = bias["opt_type"]
+
+    # Hybrid SL: wider of structure-based and ATR-based
+    if direction == "BULLISH":
+        structure_sl = zone["low"] - (atr * OI_SC_SL_STRUCTURE_BUFFER)
+        atr_sl = entry_spot - (atr * OI_SC_SL_ATR_MULT)
+        sl_spot = min(structure_sl, atr_sl)  # wider = further from entry
+    else:
+        structure_sl = zone["high"] + (atr * OI_SC_SL_STRUCTURE_BUFFER)
+        atr_sl = entry_spot + (atr * OI_SC_SL_ATR_MULT)
+        sl_spot = max(structure_sl, atr_sl)
+
+    risk_spot = abs(entry_spot - sl_spot)
+    if risk_spot <= 0:
+        return None
+
+    # Target at 2R
+    if direction == "BULLISH":
+        target_spot = entry_spot + (risk_spot * OI_SC_TARGET_RR)
+    else:
+        target_spot = entry_spot - (risk_spot * OI_SC_TARGET_RR)
+
+    actual_rr = abs(target_spot - entry_spot) / risk_spot
+    if actual_rr < OI_SC_MIN_RR:
+        return None
+
+    # Strike selection: 1 ITM
+    strike, step = _select_itm_strike(underlying, entry_spot, opt_type)
+    delta = _estimate_delta(entry_spot, strike, opt_type)
+
+    return {
+        "entry_spot": round(entry_spot, 2),
+        "sl_spot": round(sl_spot, 2),
+        "target_spot": round(target_spot, 2),
+        "risk_spot": round(risk_spot, 2),
+        "rr": round(actual_rr, 2),
+        "strike": strike,
+        "delta_estimate": delta,
+        "sl_method": "hybrid",
+        "structure_sl": round(structure_sl, 2),
+        "atr_sl": round(atr_sl, 2),
+        "zone_type": zone["type"],
+        "zone_low": round(zone["low"], 2),
+        "zone_high": round(zone["high"], 2),
+    }
+
+
+# =====================================================
+# V4.3r — BIAS WRAPPER + ENTRY MANAGER
+# =====================================================
+
+def _detect_oi_sc_bias(tradingsymbol, info, spot, fetch_ohlc_fn):
+    """
+    Layer 1: Detect OI-SC and create BIAS object (not a trade signal).
+    Calls existing _detect_strike_short_covering() for scoring, then
+    applies V4.3r gates (lock, phase, impulse). Returns bias dict or None.
+    """
+    underlying = info["underlying"]
+    opt_type = info["opt_type"]
+    direction = "BULLISH" if opt_type == "CE" else "BEARISH"
+
+    # V4.3r gate 1: Signal lock
+    if is_signal_locked(underlying, direction):
+        return None
+
+    # Run existing detection (all scoring, SMC adjustment, bias-conflict, etc.)
+    signal = _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn)
+    if signal is None:
+        return None
+
+    # Structure alerts pass through unchanged (not a trade signal)
+    if signal.get("signal_type") == "OI_SC_STRUCTURE_ALERT":
+        return signal  # pass through for separate handling
+
+    # V4.3r gate 2: Market phase
+    try:
+        phase = detect_market_phase(underlying, fetch_ohlc_fn)
+        allowed, phase_reason = is_phase_allowed(phase, direction)
+        if not allowed:
+            # Check deep pullback exception
+            idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+            try:
+                candles = fetch_ohlc_fn(idx_sym, "5minute", 40)
+                today = datetime.now(_IST).date()
+                today_candles = [c for c in candles if c["date"].date() == today] if candles else []
+            except Exception:
+                today_candles = []
+
+            fake_bias = {"direction": direction}
+            if today_candles and _qualifies_pullback_exception(fake_bias, spot, today_candles):
+                logger.info(
+                    "OI-SC phase %s overridden by pullback exception for %s %s",
+                    phase.value, underlying, direction
+                )
+            else:
+                logger.info(
+                    "OI-SC BIAS blocked by phase %s: %s %s | %s",
+                    phase.value, underlying, direction, phase_reason
+                )
+                return None
+    except Exception as e:
+        logger.debug("OI-SC phase check failed (non-fatal): %s", e)
+        phase = MarketPhase.EARLY_TREND  # fail open
+
+    # V4.3r gate 3: Impulse exhaustion
+    try:
+        exhausted, ex_reason = is_impulse_exhausted(underlying, direction, fetch_ohlc_fn)
+        if exhausted:
+            logger.info("OI-SC BIAS blocked (impulse exhausted): %s %s | %s", underlying, direction, ex_reason)
+            return None
+    except Exception:
+        pass  # fail open
+
+    # Freeze SMC zones from signal's structure data
+    smc_data = signal.get("smc_structure", {})
+    frozen_zones = {
+        "fvg_long": smc_data.get("fvg_long"),
+        "fvg_short": smc_data.get("fvg_short"),
+        "ob_long": smc_data.get("ob_long"),
+        "ob_short": smc_data.get("ob_short"),
+        "atr": smc_data.get("atr", 0) if isinstance(smc_data, dict) else 0,
+        "snapshot_time": datetime.now(_IST),
+    }
+
+    # Build bias object
+    now = datetime.now(_IST)
+    score = signal.get("score", 5)
+    # Adaptive window: higher score = longer wait
+    window = 45 if score >= 8 else (30 if score >= 7 else 20)
+
+    bias = {
+        "id": "BIAS-%s-%s-%s" % (underlying, direction, now.strftime("%H%M%S")),
+        "underlying": underlying,
+        "direction": direction,
+        "opt_type": opt_type,
+        "trigger_strike": info["strike"],
+        "trigger_tradingsymbol": tradingsymbol,
+        "trigger_spot": spot,
+        "trigger_ltp": signal.get("current_ltp", 0),
+        "score": score,
+        "score_breakdown": signal.get("score_breakdown", {}),
+        "trigger_time": now,
+        "expiry_time": now + timedelta(minutes=window),
+        "frozen_zones": frozen_zones,
+        "phase_at_trigger": phase.value if isinstance(phase, MarketPhase) else str(phase),
+        "oi_data": {
+            "current_oi": signal.get("current_oi", 0),
+            "peak_oi": signal.get("peak_oi", 0),
+        },
+        "original_signal": signal,  # keep full signal for original alert format
+        "status": "WAITING_ENTRY",
+        "entry_attempts": 0,
+    }
+
+    register_signal_lock(underlying, direction)
+    return bias
+
+
+def check_entry_for_bias(bias: dict, fetch_ohlc_fn, kite_obj) -> dict:
+    """
+    Layer 2: Check if current price qualifies for entry on this bias.
+    Returns trade signal dict or None.
+    """
+    underlying = bias["underlying"]
+    direction = bias["direction"]
+    idx_sym = "NSE:NIFTY 50" if underlying == "NIFTY" else "NSE:NIFTY BANK"
+
+    # Get current spot
+    try:
+        ltp_data = kite_obj.ltp([idx_sym])
+        spot = ltp_data[idx_sym]["last_price"]
+    except Exception:
+        return None
+
+    # Get today's 5m candles
+    try:
+        candles = fetch_ohlc_fn(idx_sym, "5minute", 40)
+        if not candles or len(candles) < 10:
+            return None
+        today = datetime.now(_IST).date()
+        today_candles = [c for c in candles if c["date"].date() == today]
+        if len(today_candles) < 5:
+            return None
+    except Exception:
+        return None
+
+    # RULE 1: Price must have pulled back from trigger
+    trigger_spot = bias["trigger_spot"]
+    if direction == "BULLISH" and spot >= trigger_spot:
+        return None
+    if direction == "BEARISH" and spot <= trigger_spot:
+        return None
+
+    # RULE 2: Price inside qualifying zone
+    zone = _find_qualifying_zone(bias, spot, today_candles)
+    if zone is None:
+        if _qualifies_pullback_exception(bias, spot, today_candles):
+            zone = _build_swing_zone(direction, spot, today_candles)
+        if zone is None:
+            return None
+
+    # RULE 3: Confirmation candle
+    # Relaxed for deep retrace (>60%) + high score (7+)
+    if not _has_confirmation_candle(direction, today_candles):
+        impulse_high = max(c["high"] for c in today_candles[-12:]) if len(today_candles) >= 12 else 0
+        impulse_low = min(c["low"] for c in today_candles[-12:]) if len(today_candles) >= 12 else 0
+        imp_range = impulse_high - impulse_low
+        if imp_range > 0 and bias["score"] >= 7:
+            if direction == "BULLISH":
+                retrace = (impulse_high - spot) / imp_range
+            else:
+                retrace = (spot - impulse_low) / imp_range
+            if retrace < 0.60:
+                return None  # not deep enough to skip confirmation
+        else:
+            return None
+
+    # RULE 4: Not too close to key level
+    if is_near_key_level(direction, spot, today_candles):
+        return None
+
+    # RULE 5: Compute levels + RR check
+    atr = bias["frozen_zones"].get("atr", 0)
+    if not atr or atr <= 0:
+        try:
+            atr = smc.calculate_atr(today_candles) if len(today_candles) > 15 else smc.calculate_atr(candles)
+        except Exception:
+            return None
+    if atr <= 0:
+        return None
+
+    levels = compute_trade_levels_v43(direction, spot, zone, atr, bias)
+    if levels is None:
+        return None
+    if levels["rr"] < OI_SC_MIN_RR:
+        return None
+
+    # Build entry signal (compatible with existing _log_oi_sc_trade_entry format)
+    now = datetime.now(_IST)
+    opt_type = bias["opt_type"]
+    strike = levels["strike"]
+    trade_action = "BUY_%s" % opt_type
+
+    return {
+        "signal_type": "OI_SC_ENTRY",
+        "tradingsymbol": bias["trigger_tradingsymbol"],
+        "underlying": underlying,
+        "strike": strike,
+        "opt_type": opt_type,
+        "spot": spot,
+        "trade_action": trade_action,
+        "underlying_bias": direction,
+        "score": bias["score"],
+        "score_breakdown": bias["score_breakdown"],
+        "current_oi": bias["oi_data"].get("current_oi", 0),
+        "peak_oi": bias["oi_data"].get("peak_oi", 0),
+        "current_ltp": bias["trigger_ltp"],
+        "trade_levels": {
+            "entry": levels["entry_spot"],
+            "sl": levels["sl_spot"],
+            "target": levels["target_spot"],
+            "risk": levels["risk_spot"],
+            "rr": levels["rr"],
+        },
+        "bias_id": bias["id"],
+        "entry_zone_type": zone["type"],
+        "trigger_to_entry_mins": (now - bias["trigger_time"]).total_seconds() / 60,
+        "phase_at_trigger": bias["phase_at_trigger"],
+        "timestamp": now,
+        "smc_structure": bias.get("frozen_zones", {}),
+    }
+
+
+def _manage_active_biases(fetch_ohlc_fn, kite_obj) -> list:
+    """Check all active biases for entry qualification. Returns list of entry signals."""
+    now = datetime.now(_IST)
+    signals = []
+
+    for bias in _active_biases:
+        if bias["status"] != "WAITING_ENTRY":
+            continue
+
+        if now >= bias["expiry_time"]:
+            bias["status"] = "EXPIRED"
+            logger.info("Bias expired: %s (no entry in %d attempts)", bias["id"], bias["entry_attempts"])
+            continue
+
+        bias["entry_attempts"] += 1
+
+        try:
+            signal = check_entry_for_bias(bias, fetch_ohlc_fn, kite_obj)
+            if signal:
+                bias["status"] = "ENTRY_FOUND"
+                signals.append(signal)
+                logger.info("Bias %s -> ENTRY at %.2f (zone: %s)", bias["id"], signal["spot"], signal["entry_zone_type"])
+        except Exception as e:
+            logger.debug("Bias entry check failed for %s: %s", bias["id"], e)
+
+    # Cleanup completed/expired
+    _active_biases[:] = [b for b in _active_biases if b["status"] == "WAITING_ENTRY"]
+
+    return signals
+
+
+# =====================================================
+# V4.3r — TELEGRAM FORMATTERS
+# =====================================================
+
+def _format_bias_alert(bias: dict) -> str:
+    """Format a BIAS-only Telegram alert (no trade yet)."""
+    underlying = bias["underlying"]
+    direction = bias["direction"]
+    score = bias["score"]
+    spot = bias["trigger_spot"]
+    opt_type = bias["opt_type"]
+    strike = bias["trigger_strike"]
+    window = int((bias["expiry_time"] - bias["trigger_time"]).total_seconds() / 60)
+
+    tier = "HIGHEST" if score >= 8 else ("HIGH" if score >= 6 else "MEDIUM")
+    dir_emoji = "BULLISH" if direction == "BULLISH" else "BEARISH"
+
+    # Zone info
+    zones = bias.get("frozen_zones", {})
+    fvg_key = "fvg_long" if direction == "BULLISH" else "fvg_short"
+    fvg = zones.get(fvg_key)
+    ob_key = "ob_long" if direction == "BULLISH" else "ob_short"
+    ob = zones.get(ob_key)
+
+    zone_lines = []
+    if fvg:
+        zone_lines.append("  FVG: %.1f - %.1f" % (fvg[0], fvg[1]))
+    if ob:
+        zone_lines.append("  OB: %.1f - %.1f" % (ob[0], ob[1]))
+    zone_text = "\n".join(zone_lines) if zone_lines else "  (scanning for zones)"
+
+    ts = bias["trigger_time"].strftime("%H:%M:%S")
+
+    msg = (
+        "[PAPER] OI SHORT COVERING BIAS\n"
+        "Score: %d/10 (%s)\n"
+        "==============================\n\n"
+        "%s %d %s\n"
+        "Spot: %s\n"
+        "Direction: %s\n\n"
+        "WAITING FOR PULLBACK ENTRY\n"
+        "Window: %d minutes\n\n"
+        "ZONES TO WATCH:\n%s\n\n"
+        "Time: %s"
+    ) % (score, tier, underlying, strike, opt_type, "%.2f" % spot, dir_emoji, window, zone_text, ts)
+
+    return msg
+
+
+def _format_entry_alert(signal: dict) -> str:
+    """Format a V4.3r ENTRY alert (trade signal from pullback)."""
+    underlying = signal["underlying"]
+    direction = signal["underlying_bias"]
+    score = signal["score"]
+    spot = signal["spot"]
+    opt_type = signal["opt_type"]
+    strike = signal.get("strike", 0)
+    levels = signal.get("trade_levels", {})
+    zone_type = signal.get("entry_zone_type", "?")
+    mins = signal.get("trigger_to_entry_mins", 0)
+
+    tier = "HIGHEST" if score >= 8 else ("HIGH" if score >= 6 else "MEDIUM")
+
+    msg = (
+        "[PAPER] OI-SC PULLBACK ENTRY\n"
+        "Score: %d/10 (%s)\n"
+        "==============================\n\n"
+        "%s %d %s\n"
+        "Spot: %.2f\n"
+        "Direction: %s\n"
+        "Entry Zone: %s\n"
+        "Bias->Entry: %.0f min\n\n"
+        "TRADE PLAN:\n"
+        "Action: BUY %s %d %s\n"
+        "Entry: %.2f\n"
+        "SL: %.2f\n"
+        "Target: %.2f (RR: %.1f)\n\n"
+        "Time: %s"
+    ) % (
+        score, tier, underlying, strike, opt_type,
+        spot, direction, zone_type, mins,
+        underlying, strike, opt_type,
+        levels.get("entry", 0), levels.get("sl", 0),
+        levels.get("target", 0), levels.get("rr", 0),
+        signal["timestamp"].strftime("%H:%M:%S"),
+    )
+
+    return msg
 
 
 # =====================================================
@@ -416,28 +1181,20 @@ _load_oi_sc_trades()
 
 def scan_short_covering(kite_obj, telegram_fn=None, fetch_ohlc_fn=None):
     """
-    Main entry point.  Called from main engine loop or BankNiftySignalEngine.poll().
-
-    Scans ±N strikes around ATM for both NIFTY and BANKNIFTY,
-    stores OI+LTP history, and detects short-covering patterns.
-
-    Args:
-        kite_obj:      Kite API instance
-        telegram_fn:   Function to send Telegram alerts (optional)
-        fetch_ohlc_fn: Function to fetch OHLC candles (for ATR, optional)
+    V4.3r: 2-phase OI-SC scan.
+    Phase 1: Detect new biases (OI-SC condition met, waiting for pullback entry).
+    Phase 2: Check active biases for entry qualification (pullback + zone + confirmation).
 
     Returns:
-        list of signal dicts (empty if no signals)
+        (entry_signals, structure_alerts)
     """
     global _last_scan_time
 
     now = datetime.now(_IST)
 
-    # Time guard: only scan during market hours
     if not _is_market_hours():
         return [], []
 
-    # Throttle
     if _last_scan_time:
         elapsed = (now - _last_scan_time).total_seconds()
         if elapsed < OI_SC_REFRESH_SECS:
@@ -448,49 +1205,67 @@ def scan_short_covering(kite_obj, telegram_fn=None, fetch_ohlc_fn=None):
     if not kite_obj:
         return [], []
 
-    # Daily reset check
     _check_daily_reset()
+    _cleanup_expired_locks()
 
-    signals = []
+    # === PHASE 1: Detect new biases ===
+    new_biases = []
     structure_alerts = []
 
     for ul in cfg.OPT_UNDERLYINGS:
-        sym = ul["symbol"]       # e.g. "NSE:NIFTY 50"
-        name = ul["name"]        # e.g. "NIFTY"
-        step = ul["step"]        # 50 or 100
+        sym = ul["symbol"]
+        name = ul["name"]
+        step = ul["step"]
 
         try:
-            strike_signals, strike_alerts = _scan_underlying(
+            biases, alerts = _scan_underlying_v43(
                 kite_obj, sym, name, step, fetch_ohlc_fn
             )
-            signals.extend(strike_signals)
-            structure_alerts.extend(strike_alerts)
+            new_biases.extend(biases)
+            structure_alerts.extend(alerts)
         except Exception as e:
-            logger.error(f"OI SC scan error for {name}: {e}")
+            logger.error("OI SC v43 scan error for %s: %s", name, e)
 
-    # Send alerts for qualified signals
-    for sig in signals:
+    # Add new biases to active list and send bias alerts
+    for bias in new_biases:
+        _active_biases.append(bias)
         if telegram_fn:
-            msg = _format_alert(sig)
-            telegram_fn(msg)
-        # Log trade entry for outcome tracking
+            try:
+                # Send bias alert (uses original signal format for backward compat)
+                original_sig = bias.get("original_signal")
+                if original_sig:
+                    msg = _format_alert(original_sig)
+                else:
+                    msg = _format_bias_alert(bias)
+                telegram_fn(msg)
+            except Exception:
+                pass
+
+    # === PHASE 2: Check active biases for entry ===
+    entry_signals = _manage_active_biases(fetch_ohlc_fn, kite_obj)
+
+    for sig in entry_signals:
+        if telegram_fn:
+            try:
+                msg = _format_entry_alert(sig)
+                telegram_fn(msg)
+            except Exception:
+                pass
         _log_oi_sc_trade_entry(sig)
 
-    # Monitor existing OI SC trades for SL/target hits
+    # Monitor existing trades for SL/target hits (unchanged)
     monitor_oi_sc_trades(kite_obj)
 
-    if signals:
-        logger.info(
-            f"🔍 OI SHORT COVERING: {len(signals)} signal(s) detected"
-        )
+    if new_biases:
+        logger.info("OI-SC v43: %d new bias(es) detected", len(new_biases))
+    if entry_signals:
+        logger.info("OI-SC v43: %d entry signal(s) from biases", len(entry_signals))
     if structure_alerts:
-        logger.info(
-            f"📋 OI SC: {len(structure_alerts)} structure alert(s) generated"
-        )
+        logger.info("OI-SC: %d structure alert(s)", len(structure_alerts))
 
-    _persist_sc_snapshot(signals, structure_alerts)
+    _persist_sc_snapshot(entry_signals, structure_alerts)
 
-    return signals, structure_alerts
+    return entry_signals, structure_alerts
 
 
 def get_strike_history(symbol=None):
@@ -508,7 +1283,11 @@ def reset_state():
     _alerted_today.clear()
     _daily_trade_count.clear()
     _last_scan_time = None
-    logger.info("OI Short Covering: State reset")
+    # V4.3r state
+    _signal_locks.clear()
+    _active_biases.clear()
+    _daily_atr_cache.clear()
+    logger.info("OI Short Covering: State reset (incl. V4.3r locks/biases)")
 
 
 # =====================================================
@@ -968,6 +1747,115 @@ def _scan_underlying(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
     structure_alerts = [s for s in signals if s.get("signal_type") == "OI_SC_STRUCTURE_ALERT"]
 
     return trade_signals, structure_alerts
+
+
+def _scan_underlying_v43(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn):
+    """
+    V4.3r scan: same OI history storage as _scan_underlying, but uses
+    _detect_oi_sc_bias() to produce bias objects instead of trade signals.
+    Returns (biases, structure_alerts).
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+
+    now = datetime.now(_IST)
+
+    # 1. Get spot price (same logic as _scan_underlying)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(kite_obj.ltp, [index_symbol])
+            ltp_data = fut.result(timeout=8)
+        spot = ltp_data[index_symbol]["last_price"]
+    except Exception as e:
+        logger.warning("OI SC v43: spot fetch failed for %s: %s", index_name, e)
+        return [], []
+
+    # 2-3. ATM strikes + instruments + expiries (reuse existing helpers)
+    try:
+        atm_strikes = get_atm_strikes(spot, step)
+    except Exception:
+        return [], []
+
+    global _instruments_cache
+    if _instruments_cache is None:
+        try:
+            _instruments_cache = kite_obj.instruments("NFO")
+        except Exception:
+            return [], []
+
+    try:
+        target_expiries = get_target_expiries(index_name, _instruments_cache)
+    except Exception:
+        return [], []
+
+    # 4. Build symbols to query
+    symbols_to_query = []
+    sym_info_map = {}
+    for inst in _instruments_cache:
+        if inst["name"] != index_name:
+            continue
+        if inst["instrument_type"] not in ("CE", "PE"):
+            continue
+        if inst["strike"] not in atm_strikes:
+            continue
+        if inst["expiry"] not in target_expiries:
+            continue
+        tsym = inst["tradingsymbol"]
+        nfo_sym = "NFO:%s" % tsym
+        symbols_to_query.append(nfo_sym)
+        sym_info_map[nfo_sym] = {
+            "tradingsymbol": tsym,
+            "underlying": index_name,
+            "opt_type": inst["instrument_type"],
+            "strike": inst["strike"],
+            "expiry": inst["expiry"],
+        }
+
+    if not symbols_to_query:
+        return [], []
+
+    # 5. Fetch quotes
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(kite_obj.quote, symbols_to_query)
+            quotes = fut.result(timeout=12)
+    except Exception as e:
+        logger.warning("OI SC v43: quote fetch failed for %s: %s", index_name, e)
+        return [], []
+
+    # 6. Store history + detect biases
+    biases = []
+    structure_alerts = []
+
+    for nfo_sym, data in quotes.items():
+        info = sym_info_map.get(nfo_sym)
+        if not info:
+            continue
+        oi = data.get("oi", 0)
+        ltp = data.get("last_price", 0)
+        volume = data.get("volume", 0)
+        if oi <= 0 or ltp <= 0:
+            continue
+
+        tsym = info["tradingsymbol"]
+
+        # Store in history (same as original)
+        if tsym not in _strike_history:
+            _strike_history[tsym] = deque(maxlen=OI_SC_HISTORY_SIZE)
+        _strike_history[tsym].append((now, oi, ltp, volume))
+
+        if tsym not in _strike_peak_oi or oi > _strike_peak_oi[tsym]:
+            _strike_peak_oi[tsym] = oi
+
+        # V4.3r detection: returns bias dict or structure alert or None
+        result = _detect_oi_sc_bias(tsym, info, spot, fetch_ohlc_fn)
+
+        if result:
+            if result.get("signal_type") == "OI_SC_STRUCTURE_ALERT":
+                structure_alerts.append(result)
+            elif result.get("status") == "WAITING_ENTRY":
+                biases.append(result)
+
+    return biases, structure_alerts
 
 
 # =====================================================
@@ -1917,6 +2805,16 @@ def _check_daily_reset():
         k for k in _alerted_today
         if today not in k
     ]
+
+    # Also check signal locks for stale date keys
+    if not stale_keys:
+        for key in list(_signal_locks.keys()):
+            if hasattr(key, '__iter__') and len(key) >= 2:
+                # Lock keys are (underlying, direction) — check expiry time
+                expiry = _signal_locks.get(key)
+                if expiry and expiry.date().isoformat() != today:
+                    stale_keys.append(str(key))
+                    break
 
     if stale_keys:
         reset_state()
