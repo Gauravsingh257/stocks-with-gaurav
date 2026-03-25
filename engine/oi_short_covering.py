@@ -51,7 +51,6 @@ import logging
 import os
 import pickle
 import csv
-import sqlite3
 from datetime import datetime, time, timedelta, date as dt_date
 from collections import deque
 from pathlib import Path
@@ -73,7 +72,6 @@ logger = logging.getLogger(__name__)
 # Workspace root (for CSV/DB paths)
 _WORKSPACE = Path(__file__).resolve().parents[1]
 _TRADE_LEDGER = _WORKSPACE / "trade_ledger_2026.csv"
-_DASHBOARD_DB = _WORKSPACE / "dashboard.db"
 _OI_SC_TRADES_FILE = _WORKSPACE / "oi_sc_active_trades.json"
 _OI_SC_SNAPSHOT_FILE = _WORKSPACE / "oi_sc_snapshot.json"
 
@@ -389,20 +387,13 @@ def _log_oi_sc_closed_trade(trade: dict):
     except Exception as e:
         logger.error(f"Failed to log OI SC trade to CSV: {e}")
 
-    # Write to dashboard DB
+    # Sync to dashboard web service (Railway cross-container)
     try:
-        conn = sqlite3.connect(str(_DASHBOARD_DB))
-        conn.execute(
-            "INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r) VALUES (?,?,?,?,?,?,?,?)",
-            (trade_data["date"], trade_data["symbol"], trade_data["direction"],
-             trade_data["setup"], trade_data["entry"], trade_data["exit_price"],
-             trade_data["result"], trade_data["pnl_r"])
-        )
-        conn.commit()
-        conn.close()
+        from services.dashboard_sync import sync_trade_to_dashboard
+        sync_trade_to_dashboard(trade_data)
         logger.info(f"OI-SC TRADE CLOSED: {trade['symbol']} {trade['result']} {trade['pnl_r']:+.2f}R")
     except Exception as e:
-        logger.error(f"Failed to log OI SC trade to DB: {e}")
+        logger.error(f"Failed to sync OI SC trade to dashboard: {e}")
 
     # Check if we've hit 30 OI-SC trades — trigger stats alert
     _check_oi_sc_milestone()
@@ -410,14 +401,9 @@ def _log_oi_sc_closed_trade(trade: dict):
 
 def _check_oi_sc_milestone():
     """After 30+ OI SC trades, log a milestone for review."""
-    try:
-        conn = sqlite3.connect(str(_DASHBOARD_DB))
-        count = conn.execute("SELECT COUNT(*) FROM trades WHERE setup='OI-SC'").fetchone()[0]
-        conn.close()
-        if count == 30:
-            logger.info("*** MILESTONE: 30 OI-SC trades recorded! Run stats analysis to evaluate edge. ***")
-    except Exception:
-        pass
+    closed = [t for t in _oi_sc_active_trades if t.get("status") == "CLOSED"]
+    if len(closed) == 30:
+        logger.info("*** MILESTONE: 30 OI-SC trades recorded! Run stats analysis to evaluate edge. ***")
 
 
 # Load persisted trades on module import

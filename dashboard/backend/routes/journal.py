@@ -308,16 +308,46 @@ def get_signals(
     }
 
 
+def _query_signals_from_redis(date_str: str) -> list:
+    """Read today's signals from Redis list (cross-container on Railway)."""
+    try:
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+        if r is None:
+            return []
+        key = f"signals:today:{date_str}"
+        raw_items = r.lrange(key, 0, -1)
+        if not raw_items:
+            return []
+        return [json.loads(item) for item in raw_items]
+    except Exception as exc:
+        logger.debug("Redis signal query failed: %s", exc)
+        return []
+
+
 @router.get("/signals-today")
 def get_signals_today():
     """
-    Return all signals generated today from the ai_learning signal_log table.
-    Falls back to empty list if the DB doesn't exist or is not accessible.
+    Return all signals generated today.
+    Tries Redis first (works cross-container on Railway),
+    falls back to local ai_learning signal_log SQLite.
     """
     today_str = date.today().isoformat()
+
+    # Redis first (engine pushes signals here on Railway)
+    redis_signals = _query_signals_from_redis(today_str)
+    if redis_signals:
+        return {
+            "signals": redis_signals,
+            "count": len(redis_signals),
+            "total": len(redis_signals),
+            "date": today_str,
+            "source": "redis",
+        }
+
+    # Fallback: local SQLite (works in local dev)
     signals, total = _query_signal_log(today_str, today_str, None, None, 500, 0)
     if not _AI_LEARNING_DB.exists():
-        logger.warning("AI learning DB not found at %s", _AI_LEARNING_DB)
         return {"signals": [], "count": 0, "total": 0, "date": today_str, "source": "none"}
 
     return {
@@ -379,6 +409,66 @@ def sync_trades(
     finally:
         conn.close()
     return {"status": "ok", "synced": inserted}
+
+
+@router.post("/trade")
+def upsert_single_trade(
+    trade: TradeRow,
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
+    """
+    Upsert a single trade from the engine (fire-and-forget from engine worker).
+    Duplicate detection: same (date, symbol, setup) = update; otherwise insert.
+    """
+    sync_key = os.getenv("TRADES_SYNC_KEY", "").strip()
+    if sync_key and x_sync_key != sync_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Sync-Key")
+
+    if not (trade.date and trade.symbol):
+        raise HTTPException(status_code=400, detail="date and symbol are required")
+
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM trades WHERE date = ? AND symbol = ? AND setup = ?",
+            (trade.date.strip(), trade.symbol.strip().upper(), (trade.setup or "").strip()),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "UPDATE trades SET direction=?, entry=?, exit_price=?, result=?, pnl_r=? WHERE id=?",
+                (
+                    (trade.direction or "LONG")[:5].upper(),
+                    trade.entry,
+                    trade.exit_price,
+                    (trade.result or "RUNNING")[:10].upper(),
+                    trade.pnl_r,
+                    existing[0],
+                ),
+            )
+            action = "updated"
+            trade_id = existing[0]
+        else:
+            cur = conn.execute(
+                "INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    trade.date.strip(),
+                    trade.symbol.strip().upper(),
+                    (trade.direction or "LONG")[:5].upper(),
+                    (trade.setup or "").strip(),
+                    trade.entry,
+                    trade.exit_price,
+                    (trade.result or "RUNNING")[:10].upper(),
+                    trade.pnl_r,
+                ),
+            )
+            action = "inserted"
+            trade_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "action": action, "trade_id": trade_id}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

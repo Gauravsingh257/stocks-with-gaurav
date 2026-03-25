@@ -4519,6 +4519,13 @@ def log_trade_to_csv(trade_dict: dict):
     except Exception as e:
         print(f"Failed to log trade: {e}")
 
+    # Sync to dashboard web service (Railway cross-container)
+    try:
+        from services.dashboard_sync import sync_trade_to_dashboard
+        sync_trade_to_dashboard(trade_data)
+    except Exception:
+        pass
+
 # =====================================================
 # F4.3: MULTI-DAY DRAWDOWN CHECK
 # =====================================================

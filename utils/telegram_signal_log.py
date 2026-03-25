@@ -118,16 +118,53 @@ def build_signal_record(
     return payload
 
 
+def push_signal_to_redis(signal_record: dict[str, Any]) -> None:
+    """Push signal to Redis list for dashboard consumption (cross-container on Railway)."""
+    try:
+        import os
+        import redis as redis_lib
+        from datetime import date as _date
+
+        url = os.getenv("REDIS_URL", "").strip()
+        if not url:
+            return
+        key = f"signals:today:{_date.today().isoformat()}"
+        # Only send fields the dashboard needs (exclude large HTML blobs)
+        payload = {
+            "signal_id": signal_record.get("signal_id"),
+            "timestamp": signal_record.get("timestamp"),
+            "symbol": signal_record.get("symbol"),
+            "direction": signal_record.get("direction"),
+            "strategy_name": signal_record.get("strategy_name"),
+            "entry": signal_record.get("entry"),
+            "stop_loss": signal_record.get("stop_loss"),
+            "target1": signal_record.get("target1"),
+            "target2": signal_record.get("target2"),
+            "score": signal_record.get("score"),
+            "confidence": signal_record.get("confidence"),
+            "result": signal_record.get("result"),
+            "pnl_r": signal_record.get("pnl_r"),
+            "signal_kind": signal_record.get("signal_kind", ""),
+            "delivery_channel": signal_record.get("delivery_channel", "telegram"),
+        }
+        r = redis_lib.from_url(url, decode_responses=True)
+        r.rpush(key, json.dumps(payload, default=str))
+        r.expire(key, 86400)
+    except Exception as exc:
+        logger.debug("push_signal_to_redis failed: %s", exc)
+
+
 def persist_telegram_signal(
     message: str,
     signal_id: str | None,
     signal_meta: dict[str, Any] | None = None,
 ) -> None:
-    """Append one row to signal_log. Swallows errors so Telegram delivery is never blocked."""
+    """Append one row to signal_log + push to Redis. Swallows errors so Telegram delivery is never blocked."""
     try:
         from ai_learning.data.trade_store import TradeStore
 
         rec = build_signal_record(message, signal_id, signal_meta)
         TradeStore().log_signal(rec)
+        push_signal_to_redis(rec)
     except Exception as exc:
         logger.warning("signal_log persist failed: %s", exc)
