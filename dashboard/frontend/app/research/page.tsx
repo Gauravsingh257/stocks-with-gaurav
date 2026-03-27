@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, RefreshCw } from "lucide-react";
 
-import { api, type LongTermIdea, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
+import { api, type LongTermIdea, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
 import { LongTermIdeasCard } from "./LongTermIdeasCard";
+import { PerformanceOverview } from "./PerformanceOverview";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
@@ -14,6 +15,7 @@ export default function ResearchPage() {
   const [longterm, setLongterm] = useState<LongTermIdea[]>([]);
   const [running, setRunning] = useState<RunningTradeMonitorItem[]>([]);
   const [coverage, setCoverage] = useState<ResearchCoverageResponse | null>(null);
+  const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
   const [loading, setLoading] = useState(true);
   const [runningScan, setRunningScan] = useState<"swing" | "longterm" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -24,10 +26,11 @@ export default function ResearchPage() {
     const results = await Promise.allSettled([
       api.swingResearch(12),
       api.longtermResearch(12),
-      api.runningTradesResearch(40),
+      api.runningTradesHistory(100),
       api.researchCoverage(1800),
+      api.researchPerformance(),
     ]);
-    const [swingRes, longtermRes, runningRes, coverageRes] = results;
+    const [swingRes, longtermRes, runningRes, coverageRes, perfRes] = results;
     if (swingRes.status === "fulfilled") {
       setSwing(swingRes.value?.items ?? []);
     }
@@ -39,6 +42,9 @@ export default function ResearchPage() {
     }
     if (coverageRes.status === "fulfilled") {
       setCoverage(coverageRes.value ?? null);
+    }
+    if (perfRes.status === "fulfilled") {
+      setPerf(perfRes.value ?? null);
     }
     const failed = results.filter((r) => r.status === "rejected").length;
     if (failed > 0) {
@@ -127,6 +133,7 @@ export default function ResearchPage() {
       {loading && <div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div>}
 
       <ResearchCoverageCard coverage={coverage} />
+      <PerformanceOverview data={perf} />
       <SwingIdeasTable items={swing} />
       <LongTermIdeasCard items={longterm} />
       <RunningTradesMonitor items={running} />

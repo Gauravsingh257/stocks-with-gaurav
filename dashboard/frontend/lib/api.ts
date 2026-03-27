@@ -360,6 +360,24 @@ export interface ScanRunRow {
   notes: string | null;
 }
 
+export interface ResearchAggregatePerformance {
+  total_recommendations: number;
+  active: number;
+  target_hit: number;
+  stop_hit: number;
+  closed: number;
+  resolved: number;
+  hit_rate_pct: number;
+  avg_closed_pnl_pct: number;
+  avg_open_pnl_pct: number;
+  total_pnl_pct: number;
+  best_trade: { symbol: string; pnl_pct: number } | null;
+  worst_trade: { symbol: string; pnl_pct: number } | null;
+  avg_days_held: number;
+  swing_scans: number;
+  longterm_scans: number;
+}
+
 export interface ScanHistoryResponse {
   runs: ScanRunRow[];
   swing_count: number;
@@ -563,6 +581,7 @@ export const api = {
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
+  researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),

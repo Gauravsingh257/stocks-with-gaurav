@@ -7,7 +7,7 @@ import logging
 import threading
 from fastapi import APIRouter, HTTPException, Query
 
-from dashboard.backend.db import get_ranking_runs, get_stock_recommendations, list_running_trades
+from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
 
 router = APIRouter(tags=["research"])
@@ -326,3 +326,68 @@ def get_running_trades_history(limit: int = Query(100, ge=1, le=500)):
             "updated_at": row.get("updated_at"),
         })
     return {"items": items, "count": len(items)}
+
+
+@router.get("/api/research/performance")
+@router.get("/research/performance")
+def get_research_performance():
+    """Aggregate performance stats from all tracked recommendations."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'TARGET_HIT' THEN 1 ELSE 0 END) AS target_hit,
+                SUM(CASE WHEN status = 'STOP_HIT' THEN 1 ELSE 0 END) AS stop_hit,
+                SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                AVG(CASE WHEN status IN ('TARGET_HIT','STOP_HIT','CLOSED') THEN profit_loss_pct END) AS avg_pnl_pct,
+                AVG(CASE WHEN status = 'RUNNING' THEN profit_loss_pct END) AS avg_open_pnl_pct,
+                SUM(CASE WHEN status IN ('TARGET_HIT','STOP_HIT','CLOSED') THEN profit_loss_pct ELSE 0 END) AS total_pnl_pct,
+                MAX(profit_loss_pct) AS best_pnl_pct,
+                MIN(CASE WHEN status IN ('TARGET_HIT','STOP_HIT','CLOSED') THEN profit_loss_pct END) AS worst_pnl_pct,
+                AVG(CASE WHEN status IN ('TARGET_HIT','STOP_HIT','CLOSED') THEN days_held END) AS avg_days_held
+            FROM running_trades
+            """
+        ).fetchone()
+
+        total = rows["total"] or 0
+        target_hit = rows["target_hit"] or 0
+        stop_hit = rows["stop_hit"] or 0
+        closed_count = rows["closed"] or 0
+        resolved = target_hit + stop_hit + closed_count
+
+        hit_rate = round((target_hit / resolved) * 100, 1) if resolved > 0 else 0
+
+        best = conn.execute(
+            "SELECT symbol, profit_loss_pct FROM running_trades WHERE status IN ('TARGET_HIT','STOP_HIT','CLOSED') ORDER BY profit_loss_pct DESC LIMIT 1"
+        ).fetchone()
+        worst = conn.execute(
+            "SELECT symbol, profit_loss_pct FROM running_trades WHERE status IN ('TARGET_HIT','STOP_HIT','CLOSED') ORDER BY profit_loss_pct ASC LIMIT 1"
+        ).fetchone()
+
+        scan_rows = conn.execute(
+            "SELECT COUNT(*) AS cnt, horizon FROM ranking_runs GROUP BY horizon"
+        ).fetchall()
+        scan_counts = {r["horizon"]: r["cnt"] for r in scan_rows}
+
+        return {
+            "total_recommendations": total,
+            "active": rows["active"] or 0,
+            "target_hit": target_hit,
+            "stop_hit": stop_hit,
+            "closed": closed_count,
+            "resolved": resolved,
+            "hit_rate_pct": hit_rate,
+            "avg_closed_pnl_pct": round(float(rows["avg_pnl_pct"] or 0), 2),
+            "avg_open_pnl_pct": round(float(rows["avg_open_pnl_pct"] or 0), 2),
+            "total_pnl_pct": round(float(rows["total_pnl_pct"] or 0), 2),
+            "best_trade": {"symbol": best["symbol"], "pnl_pct": round(best["profit_loss_pct"], 2)} if best else None,
+            "worst_trade": {"symbol": worst["symbol"], "pnl_pct": round(worst["profit_loss_pct"], 2)} if worst else None,
+            "avg_days_held": round(float(rows["avg_days_held"] or 0), 1),
+            "swing_scans": scan_counts.get("SWING", 0),
+            "longterm_scans": scan_counts.get("LONGTERM", 0),
+        }
+    finally:
+        conn.close()
