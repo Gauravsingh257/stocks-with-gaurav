@@ -54,14 +54,29 @@ SETUP_WINRATES = {
 DAILY_LOG_FILE = "daily_pnl_log.csv"
 POSITION_CACHE_FILE = "position_cache.json"
 
+# P0-5: Position size upper bounds — prevent exchange rejection & runaway exposure
+# These are absolute maximum quantities regardless of risk calculation
+MAX_POSITION_LIMITS = {
+    "NIFTY": 1800,        # 75 per lot × 24 lots max
+    "NIFTY 50": 1800,
+    "BANKNIFTY": 900,     # 30 per lot × 30 lots max
+    "NIFTY BANK": 900,
+    "FINNIFTY": 1200,     # 40 per lot × 30 lots max
+    "DEFAULT_INDEX": 900,
+    "DEFAULT_STOCK": 5000,  # Hard cap on any single stock
+}
+MAX_PORTFOLIO_EXPOSURE_PCT = 0.10  # No single position > 10% of account
+
 # =====================================================
 # RISK CALCULATION
 # =====================================================
 
 def calculate_position_size(entry: float, sl: float, account_size: float = ACCOUNT_SIZE, 
-                           risk_per_trade: float = RISK_PER_TRADE) -> float:
+                           risk_per_trade: float = RISK_PER_TRADE,
+                           symbol: str = "") -> int:
     """
-    Calculates position size in units based on risk per trade
+    Calculates position size in units based on risk per trade.
+    P0-5: Applies upper bound caps to prevent exchange rejection & runaway exposure.
     
     Formula: Position Size = (Account Size * Risk %) / (Entry - SL)
     
@@ -70,9 +85,10 @@ def calculate_position_size(entry: float, sl: float, account_size: float = ACCOU
         sl: Stop loss price
         account_size: Total capital
         risk_per_trade: Risk percentage per trade (0.01 = 1%)
+        symbol: Trading symbol (for position limit lookup)
     
     Returns:
-        Quantity in units
+        Quantity in units (capped at exchange/portfolio limits)
     """
     risk_amount = account_size * risk_per_trade
     price_risk = abs(entry - sl)
@@ -80,8 +96,29 @@ def calculate_position_size(entry: float, sl: float, account_size: float = ACCOU
     if price_risk <= 0:
         return 0
     
-    position_size = risk_amount / price_risk
-    return int(position_size)  # Round down to whole units
+    position_size = int(risk_amount / price_risk)  # Round down to whole units
+    
+    # P0-R3: Explicit MIN of three caps — risk-based, exchange lot limit, portfolio exposure
+    # 1. Exchange lot limit
+    symbol_clean = symbol.replace("NSE:", "").replace("NFO:", "").strip() if symbol else ""
+    exchange_cap = MAX_POSITION_LIMITS.get(symbol_clean)
+    if exchange_cap is None:
+        for key, limit in MAX_POSITION_LIMITS.items():
+            if key in symbol_clean:
+                exchange_cap = limit
+                break
+    if exchange_cap is None:
+        exchange_cap = MAX_POSITION_LIMITS.get("DEFAULT_STOCK", 5000)
+    
+    # 2. Portfolio exposure limit (no single position > 10% of account)
+    exposure_cap = exchange_cap  # fallback if entry is invalid
+    if entry > 0:
+        exposure_cap = int((account_size * MAX_PORTFOLIO_EXPOSURE_PCT) / entry)
+    
+    # 3. Final size = minimum of all three
+    position_size = min(position_size, exchange_cap, exposure_cap)
+    
+    return max(position_size, 0)  # Never negative
 
 
 def calculate_rr_ratio(entry: float, sl: float, target: float, direction: str) -> float:
@@ -370,8 +407,8 @@ class RiskManager:
     def __init__(self, params: RiskParams = None):
         self.params = params if params else RiskParams()
 
-    def calculate_position_size(self, entry, sl):
-        return calculate_position_size(entry, sl, self.params.account_size, self.params.risk_pct)
+    def calculate_position_size(self, entry, sl, symbol=""):
+        return calculate_position_size(entry, sl, self.params.account_size, self.params.risk_pct, symbol=symbol)
 
     def validate_setup(self, entry, sl, target):
         return validate_rr_ratio(entry, sl, target, self.params.min_rr)

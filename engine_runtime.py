@@ -86,10 +86,18 @@ def acquire_engine_lock() -> bool:
     Try to acquire the global engine lock in Redis (NX + TTL).
     On success, writes engine_started_at = time.time() for dashboard uptime.
     Returns True if this process acquired the lock, False if another instance holds it.
+    
+    P0-4: On Railway (RAILWAY_ENVIRONMENT set), Redis is REQUIRED — fail-closed.
+    Locally (no RAILWAY_ENVIRONMENT), allow run without Redis for dev convenience.
     """
     r = _get_redis()
     if r is None:
-        return True  # No Redis: allow run (e.g. local dev without Redis)
+        if os.getenv("RAILWAY_ENVIRONMENT"):
+            log.critical("Redis unavailable on Railway — refusing to start (fail-closed). "
+                         "Risk: duplicate engine instances without Redis lock.")
+            return False
+        log.warning("No Redis — running without lock (local dev mode)")
+        return True  # Local dev: allow run without Redis
     try:
         acquired = r.set(ENGINE_LOCK_KEY, str(os.getpid()), nx=True, ex=ENGINE_LOCK_TTL_SEC)
         if acquired:
@@ -103,6 +111,9 @@ def acquire_engine_lock() -> bool:
         return False
     except Exception as e:
         log.error("Failed to acquire engine lock: %s", e)
+        if os.getenv("RAILWAY_ENVIRONMENT"):
+            log.critical("Redis lock acquisition failed on Railway — refusing to start (fail-closed).")
+            return False
         return False
 
 
@@ -208,13 +219,52 @@ def set_index_ltp(nifty: Optional[float] = None, banknifty: Optional[float] = No
         log.debug("set_index_ltp failed: %s", e)
 
 
+# Redis runtime health: consecutive failures before forced shutdown on Railway
+_REDIS_HEALTH_MAX_FAILURES = 5  # 5 × 30s heartbeat interval = 2.5 min tolerance
+_redis_consecutive_failures: int = 0
+
+
 def _heartbeat_loop() -> None:
-    """Dedicated loop: write heartbeat every 30s. Runs in daemon thread so engine stall doesn't stop heartbeat."""
+    """Dedicated loop: write heartbeat every 30s. Runs in daemon thread so engine stall doesn't stop heartbeat.
+    P0-R2: Also monitors Redis connectivity — if lost on Railway for too long, force shutdown."""
+    global _redis_consecutive_failures
     while True:
-        try:
-            write_heartbeat()
-        except Exception as e:
-            log.debug("Heartbeat loop: %s", e)
+        write_heartbeat()
+        # P0-R2: Explicit Redis health probe (write_heartbeat swallows errors)
+        if os.getenv("RAILWAY_ENVIRONMENT"):
+            try:
+                r = _get_redis()
+                if r is not None:
+                    r.ping()
+                    _redis_consecutive_failures = 0
+                else:
+                    raise ConnectionError("Redis client is None")
+            except Exception:
+                # Force client re-creation on next call
+                global _redis_client
+                _redis_client = None
+                _redis_consecutive_failures += 1
+                log.warning("Redis health check failed (%d/%d)",
+                            _redis_consecutive_failures, _REDIS_HEALTH_MAX_FAILURES)
+                if _redis_consecutive_failures >= _REDIS_HEALTH_MAX_FAILURES:
+                    log.critical("Redis unreachable for %d consecutive heartbeats on Railway — "
+                                 "forcing shutdown (risk: duplicate instances without lock)",
+                                 _redis_consecutive_failures)
+                    try:
+                        import requests as _req
+                        _bot = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                        _cid = os.getenv("TELEGRAM_CHAT_ID", "")
+                        if _bot and _cid:
+                            _req.post(
+                                f"https://api.telegram.org/bot{_bot}/sendMessage",
+                                data={"chat_id": _cid,
+                                      "text": "🚨 ENGINE SHUTDOWN: Redis lost for >2.5 min on Railway. "
+                                              "Lock integrity at risk. Forcing restart."},
+                                timeout=5,
+                            )
+                    except Exception:
+                        pass
+                    os._exit(1)
         time.sleep(ENGINE_HEARTBEAT_INTERVAL_SEC)
 
 

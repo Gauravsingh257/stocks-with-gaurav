@@ -262,6 +262,7 @@ print("ENGINE BOOTED (V4 MODULAR - ZERODHA MODE)", datetime.now(_BootZI("Asia/Ko
 # SHARED ENGINE STATE FOR LOCAL API
 # =====================================================
 _ENGINE_STATE_LOCK = threading.Lock()
+ACTIVE_TRADES_LOCK = threading.Lock()  # P0-1: Protect ACTIVE_TRADES from concurrent access
 ENGINE_STATE: Dict[str, Any] = {
     "engine": "OFF",
     "market": "CLOSED",
@@ -305,18 +306,19 @@ def _publish_redis_snapshot() -> None:
     Safe to call at any point in the loop — never raises."""
     try:
         import engine_runtime
-        _snap = {
-            "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
-            "signals_today": DAILY_SIGNAL_COUNT,
-            "daily_pnl_r": DAILY_PNL_R,
-            "traded_today": list(TRADED_TODAY),
-            "consecutive_losses": CONSECUTIVE_LOSSES,
-            "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
-            "market_regime": str(MARKET_REGIME),
-            "engine_mode": ENGINE_MODE,
-            "index_ltp": {},
-            "timestamp": now_ist().isoformat(),
-        }
+        with ACTIVE_TRADES_LOCK:
+            _snap = {
+                "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
+                "signals_today": DAILY_SIGNAL_COUNT,
+                "daily_pnl_r": DAILY_PNL_R,
+                "traded_today": list(TRADED_TODAY),
+                "consecutive_losses": CONSECUTIVE_LOSSES,
+                "circuit_breaker_active": CIRCUIT_BREAKER_ACTIVE,
+                "market_regime": str(MARKET_REGIME),
+                "engine_mode": ENGINE_MODE,
+                "index_ltp": {},
+                "timestamp": now_ist().isoformat(),
+            }
         _n = ENGINE_STATE.get("nifty")
         _b = ENGINE_STATE.get("banknifty")
         if _n is not None:
@@ -746,10 +748,15 @@ def _deserialize_trade(data: dict) -> dict:
                 pass
     return data
 
-def persist_active_trades():
-    """Save ACTIVE_TRADES list to SQLite for crash recovery"""
+def persist_active_trades(snapshot=None):
+    """Save ACTIVE_TRADES list to SQLite for crash recovery.
+    If snapshot is provided (already serialized under lock), skip re-locking."""
     try:
-        serialized = [_serialize_trade(t) for t in ACTIVE_TRADES]
+        if snapshot is None:
+            with ACTIVE_TRADES_LOCK:
+                serialized = [_serialize_trade(t) for t in ACTIVE_TRADES]
+        else:
+            serialized = snapshot
         db.set_value("engine_state", "active_trades", serialized)
     except Exception as e:
         logging.error(f"Failed to persist ACTIVE_TRADES: {e}")
@@ -760,13 +767,15 @@ def load_active_trades():
     try:
         data = db.get_value("engine_state", "active_trades", default=[])
         if data:
-            ACTIVE_TRADES = [_deserialize_trade(t) for t in data]
+            with ACTIVE_TRADES_LOCK:
+                ACTIVE_TRADES = [_deserialize_trade(t) for t in data]
             logging.info(f"💾 Restored {len(ACTIVE_TRADES)} active trades from SQLite")
             # Telegram RECOVERED is sent once per process via _send_startup_telegram_bundle()
             # so run_live_mode() re-entries (Railway retry loop) do not spam the channel.
     except Exception as e:
         logging.error(f"Failed to load ACTIVE_TRADES: {e}")
-        ACTIVE_TRADES = []
+        with ACTIVE_TRADES_LOCK:
+            ACTIVE_TRADES = []
 
 
 def _send_startup_telegram_bundle() -> None:
@@ -801,10 +810,12 @@ def _send_startup_telegram_bundle() -> None:
 
     _STARTUP_TELEGRAM_SENT_THIS_PROCESS = True
 
-    if ACTIVE_TRADES:
-        symbols = [x.get("symbol", "?") for x in ACTIVE_TRADES]
+    with ACTIVE_TRADES_LOCK:
+        _trades_copy = list(ACTIVE_TRADES)
+    if _trades_copy:
+        symbols = [x.get("symbol", "?") for x in _trades_copy]
         telegram_send(
-            f"💾 <b>RECOVERED {len(ACTIVE_TRADES)} ACTIVE TRADES</b>\n"
+            f"💾 <b>RECOVERED {len(_trades_copy)} ACTIVE TRADES</b>\n"
             f"{', '.join(symbols)}\n"
             f"<i>Resuming monitoring after restart.</i>"
         )
@@ -2762,8 +2773,9 @@ def fetch_manual_orders():
             MANUAL_ORDER_CACHE.add(oid)
             
             # 2. Dedup against active trades
-            if any(t["symbol"] == symbol for t in ACTIVE_TRADES):
-                continue
+            with ACTIVE_TRADES_LOCK:
+                if any(t["symbol"] == symbol for t in ACTIVE_TRADES):
+                    continue
                 
             # 3. Adopt
             direction = "LONG" if o["transaction_type"] == "BUY" else "SHORT"
@@ -2809,10 +2821,12 @@ def fetch_manual_orders():
                 "order_id": oid
             }
             
-            ACTIVE_TRADES.append(trade)
+            with ACTIVE_TRADES_LOCK:
+                ACTIVE_TRADES.append(trade)
             persist_active_trades()  # F1.2: crash recovery
             try:
-                update_engine_state(trades=list(ACTIVE_TRADES))
+                with ACTIVE_TRADES_LOCK:
+                    update_engine_state(trades=list(ACTIVE_TRADES))
                 print("API update:", get_engine_state_snapshot())
             except Exception:
                 pass
@@ -4288,8 +4302,9 @@ def monitor_active_trades(symbol, current_price):
     global ACTIVE_TRADES, DAILY_LOG, DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE
     global COOLDOWN_UNTIL  # F1.4
     
-    # Filter trades for this symbol
-    trades = [t for t in ACTIVE_TRADES if t["symbol"] == symbol]
+    # Filter trades for this symbol (under lock for safe read)
+    with ACTIVE_TRADES_LOCK:
+        trades = [t for t in ACTIVE_TRADES if t["symbol"] == symbol]
     
     for trade in trades:
         r_mult = trade.get("risk_mult", 1.0)
@@ -4396,10 +4411,14 @@ def monitor_active_trades(symbol, current_price):
             log_paper_outcome(trade, current_price, "WIN", final_r)  # Phase 6
             DAILY_LOG.append(trade)
             log_trade_to_csv(trade)
-            ACTIVE_TRADES.remove(trade)
-            persist_active_trades()  # F1.2: crash recovery
+            # P0-R1: Single lock acquisition for remove + snapshot
+            with ACTIVE_TRADES_LOCK:
+                ACTIVE_TRADES.remove(trade)
+                _remaining = list(ACTIVE_TRADES)
+                _persist_snap = [_serialize_trade(t) for t in ACTIVE_TRADES]
+            persist_active_trades(snapshot=_persist_snap)  # F1.2: crash recovery
             try:
-                update_engine_state(trades=list(ACTIVE_TRADES))
+                update_engine_state(trades=_remaining)
                 print("API update:", get_engine_state_snapshot())
             except Exception:
                 pass
@@ -4450,10 +4469,14 @@ def monitor_active_trades(symbol, current_price):
             log_paper_outcome(trade, trade["sl"], trade["result"], exit_r)  # Phase 6
             DAILY_LOG.append(trade)
             log_trade_to_csv(trade)
-            ACTIVE_TRADES.remove(trade)
-            persist_active_trades()  # F1.2: crash recovery
+            # P0-R1: Single lock acquisition for remove + snapshot
+            with ACTIVE_TRADES_LOCK:
+                ACTIVE_TRADES.remove(trade)
+                _remaining = list(ACTIVE_TRADES)
+                _persist_snap = [_serialize_trade(t) for t in ACTIVE_TRADES]
+            persist_active_trades(snapshot=_persist_snap)  # F1.2: crash recovery
             try:
-                update_engine_state(trades=list(ACTIVE_TRADES))
+                update_engine_state(trades=_remaining)
                 print("API update:", get_engine_state_snapshot())
             except Exception:
                 pass
@@ -4465,6 +4488,7 @@ def monitor_active_trades(symbol, current_price):
             # W2: Check circuit breaker
             if DAILY_PNL_R <= MAX_DAILY_LOSS_R:
                 CIRCUIT_BREAKER_ACTIVE = True
+                save_engine_states()  # P0-3: Persist immediately so restart can't bypass
                 telegram_send(f"🛑 <b>CIRCUIT BREAKER ACTIVATED</b>\n"
                               f"Daily PnL: {DAILY_PNL_R:.1f}R (limit: {MAX_DAILY_LOSS_R}R)\n"
                               f"No new entries for rest of day.")
@@ -5702,7 +5726,8 @@ def run_live_mode():
                     sig["adaptive_risk_mult"] = adaptive_mult
                     sig["_registered_today"] = True  # E7: for expiry trade cap
     
-                    ACTIVE_TRADES.append(sig)
+                    with ACTIVE_TRADES_LOCK:
+                        ACTIVE_TRADES.append(sig)
                     DAILY_SIGNAL_COUNT += 1
                     log_paper_trade(sig)  # Phase 6: paper trade log
                     persist_active_trades()  # F1.2: crash recovery

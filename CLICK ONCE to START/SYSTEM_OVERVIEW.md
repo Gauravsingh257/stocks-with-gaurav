@@ -3,9 +3,9 @@
 > **Purpose:** Single reference document for any AI agent (Cursor, GPT, Claude, etc.)
 > to understand, debug, and modify this trading system without full codebase context.
 >
-> **Last updated:** 2026-03-19 (resilience: Redis SPOF fallback, WS visibility reconnect, LIVE/DELAYED badge, Login UX, X-sec-ago)
-> **Engine version:** V4 Modular (smc_mtf_engine_v4.py) — v4.2.1
-> **Latest commits:** `462c7cc` kite:token_ts fix · `6a3ffe7` resilience improvements
+> **Last updated:** 2026-03-28 (P0 risk hardening: thread safety, Redis fail-closed + runtime health, circuit breaker persistence, position caps)
+> **Engine version:** V4 Modular (smc_mtf_engine_v4.py) — V4.3r
+> **Latest commits:** `0952083` P0 + refinements (thread safety, redis health, position caps)
 
 ---
 
@@ -430,6 +430,9 @@ Special idle stages: MARKET_CLOSED_SLEEP, SIGNAL_WINDOW_SLEEP, RECOVERY_WAIT
 | Protection | Mechanism |
 |------------|-----------|
 | Lock lost | Engine exits gracefully → Railway restarts |
+| **Startup (Railway)** | `acquire_engine_lock()` is **fail-closed** — refuses to start without Redis. Prevents duplicate instances. (P0-4) |
+| **Startup (local)** | Allows run without Redis for dev convenience |
+| **Runtime health (Railway)** | Heartbeat loop pings Redis every 30s. **5 consecutive failures → forced shutdown** (`os._exit(1)`) + Telegram alert. Cached Redis client is reset on failure for reconnection. (P0-R2) |
 | Redis down (engine) | `_get_redis()` returns None → engine features degrade gracefully (heartbeat skipped, dedup fail-open) |
 | Redis down (dashboard) | `cache.py` retries reconnect every **30s** automatically; `state_bridge.py` serves last snapshot from process memory for up to 10 min — dashboard stays populated |
 | Redis reconnect after restart | `cache._get_redis()` detects `_redis_available = False` and attempts ping after `_REDIS_RETRY_SEC` (30s); logs "reconnected" on success |
@@ -716,6 +719,60 @@ Trading Algo/
 
 ## 11. Known Risks / Edge Cases
 
+### Risk Controls (V4.3r)
+
+#### Thread Safety — ACTIVE_TRADES
+
+`ACTIVE_TRADES` (in-memory list in `smc_mtf_engine_v4.py`) is the single source of truth for open positions. It is accessed from:
+- Main scan loop (append on new trade)
+- `monitor_active_trades()` (read, mutate trail SL, remove on exit)
+- `_publish_redis_snapshot()` (read for dashboard)
+- `persist_active_trades()` (read for crash recovery)
+
+All access is protected by `ACTIVE_TRADES_LOCK` (`threading.Lock()`). Exit paths use a **single lock acquisition** for remove + snapshot + persist to avoid TOCTOU races (P0-R1).
+
+#### Position Sizing Caps
+
+`risk_management.py` enforces a **triple MIN** on every position:
+
+```
+final_qty = min(risk_based_qty, exchange_lot_cap, portfolio_exposure_cap)
+```
+
+| Cap | Value | Source |
+|-----|-------|--------|
+| NIFTY lot cap | 1,800 qty | `MAX_POSITION_LIMITS` |
+| BANKNIFTY lot cap | 900 qty | `MAX_POSITION_LIMITS` |
+| FINNIFTY lot cap | 1,200 qty | `MAX_POSITION_LIMITS` |
+| Default stock cap | 5,000 qty | `MAX_POSITION_LIMITS` |
+| Portfolio exposure | 10% of account per position | `MAX_PORTFOLIO_EXPOSURE_PCT` |
+
+#### Circuit Breaker
+
+- Triggers when `DAILY_PNL_R <= MAX_DAILY_LOSS_R` (default: -3R)
+- Immediately persists state to SQLite via `save_engine_states()` (P0-3) — **survives restart**
+- Blocks all new entries for rest of day
+- Cooldown after streak: 60-min pause after N consecutive losses
+
+#### Engine Shutdown Conditions
+
+The engine will force-exit (`os._exit(1)`) and Railway will restart the container when:
+
+1. **Watchdog stall** — Main loop hasn't cycled in 180s → stage-annotated Telegram alert → exit
+2. **Redis lost on Railway** — 5 consecutive ping failures (2.5 min) → Telegram alert → exit
+3. **Lock stolen** — Another instance holds the Redis lock → graceful exit
+4. **SIGTERM** — Railway sends on deploy/restart → release lock → exit
+
+#### Threading Model
+
+| Lock | Protects | File |
+|------|----------|------|
+| `ACTIVE_TRADES_LOCK` | `ACTIVE_TRADES` list | `smc_mtf_engine_v4.py` |
+| `_RISK_STATE_LOCK` | Mutable risk state in config | `engine/config.py` |
+| `_ENGINE_STATE_LOCK` | Engine state dict | `smc_mtf_engine_v4.py` |
+| `OHLC_CACHE_LOCK` | OHLC data cache | `smc_mtf_engine_v4.py` |
+| `API_THROTTLE_LOCK` | Kite API rate limiter | `smc_mtf_engine_v4.py` |
+
 ### Active Risks
 
 | Risk | Severity | Mitigation |
@@ -723,7 +780,7 @@ Trading Algo/
 | Token expires at midnight | Medium | User must run login bat daily. Engine sends "TOKEN INVALID" alert on failure. |
 | Kite API rate limit (3 req/sec) | Low | `_respect_api_throttle()` enforces 350ms spacing |
 | Railway memory limit | Low | Daily cache clears (EMA_LAST_PROCESSED, DAILY_LOG, MANUAL_ORDER_CACHE) |
-| Redis connection lost | Low | `cache.py` retries every 30s and reconnects automatically; `state_bridge.py` serves last-known snapshot from memory (up to 10 min) |
+| Redis connection lost | Low | Engine: runtime health check → forced restart after 2.5 min. Dashboard: `cache.py` retries every 30s; `state_bridge.py` serves cached snapshot (10 min) |
 
 ### Historical Issues (Fixed)
 
@@ -766,7 +823,7 @@ Trading Algo/
 | Engine→Dashboard data | `dashboard/backend/state_bridge.py` | `engine_runtime.py` (`write_engine_snapshot`), `dashboard/backend/cache.py` (`get_engine_snapshot_from_redis`, `get_redis_status`) |
 | Redis connectivity | `dashboard/backend/cache.py` | `is_redis_available()`, `get_redis_status()` — check these when dashboard shows DELAYED/DISCONNECTED |
 | Health/status display | `dashboard/backend/routes/system.py` | `dashboard/frontend/components/MarketCommandBar.tsx` |
-| Risk / position sizing | `risk_management.py` | |
+| Risk / position sizing | `risk_management.py` | `MAX_POSITION_LIMITS`, `MAX_PORTFOLIO_EXPOSURE_PCT` |
 | SMC detection logic | `smc_detectors.py` | |
 | Deployment | `Dockerfile.engine` + `railway-engine.toml` | `run_engine_railway.py` |
 
@@ -786,9 +843,9 @@ Trading Algo/
 
 ### Safe Areas for Modification
 
-- **`engine/config.py`** — Strategy toggles, parameters, thresholds
+- **`engine/config.py`** — Strategy toggles, parameters, thresholds (has `_RISK_STATE_LOCK` for mutable state)
 - **`smc_detectors.py`** — Pure detection functions (no side effects)
-- **`risk_management.py`** — Risk thresholds and position sizing
+- **`risk_management.py`** — Risk thresholds, position sizing, `MAX_POSITION_LIMITS`
 - **Individual strategy functions** — `detect_setup_a/c/d` in `smc_mtf_engine_v4.py`
 - **Dashboard frontend** — `dashboard/frontend/` (isolated from engine)
 - **Test files** — `tests/` (no production impact)

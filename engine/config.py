@@ -76,10 +76,23 @@ INDEX_SYMBOLS = [
 # =====================================================
 # MUTABLE GLOBAL STATE
 # =====================================================
+# MUTABLE RUNTIME STATE — WARNING: Thread-safety rules
+# =====================================================
 # These are modified at runtime by various engine components.
 # Access via `from engine.config import VAR` and mutate in place
 # (for dicts/lists) or reassign via `engine.config.VAR = val`.
+#
+# P0-2 THREADING RULES:
+# - ACTIVE_TRADES: ALWAYS access under ACTIVE_TRADES_LOCK (defined in smc_mtf_engine_v4.py)
+# - DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE: Write only from main loop thread
+# - HTF_CACHE, TOKEN_CACHE: Write only from data_prefetch_worker thread
+# - ZONE_STATE, STRUCTURE_STATE, SETUP_D_STATE: Write only from main loop thread
+#
+# If you need cross-thread access to risk state, read via get_engine_state_snapshot()
 
+import threading
+
+# Cache state (written by prefetch worker, read by main loop)
 HTF_CACHE = {}
 STRUCTURE_STATE = {}
 HTF_CACHE_TIME = {}
@@ -87,6 +100,7 @@ TOKEN_CACHE = {}
 LAST_HOURLY_SUMMARY = None
 TRADING_MODE = "AGGRESSIVE"
 
+# Setup state (main loop only)
 ZONE_STATE = {}  # { "symbol": { "LONG": zone, "SHORT": zone } }
 ACTIVE_TRADES = []
 DAILY_LOG = []
@@ -94,7 +108,8 @@ EOD_SENT = False
 SWING_SCAN_SENT = False
 ACTIVE_SWING_TRADES = []
 
-# Circuit breaker
+# Risk state — P0-2: protected by _RISK_STATE_LOCK for atomic reads across fields
+_RISK_STATE_LOCK = threading.Lock()
 DAILY_PNL_R = 0.0
 CONSECUTIVE_LOSSES = 0
 MAX_DAILY_LOSS_R = -3.0

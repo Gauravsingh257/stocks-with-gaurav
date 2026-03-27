@@ -115,3 +115,8 @@ test_results_session.txt
 backtest_*_trades.csv
 oi_unwinding_backtest_results.csv
 backtest_setupd_*.csv
+
+# Separate project — not part of this repo
+content_engine/
+demo_viral_posts.py
+package.json
