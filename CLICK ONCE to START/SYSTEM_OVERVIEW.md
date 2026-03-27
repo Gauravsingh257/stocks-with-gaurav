@@ -5,7 +5,7 @@
 >
 > **Last updated:** 2026-03-28 (P0 risk hardening: thread safety, Redis fail-closed + runtime health, circuit breaker persistence, position caps)
 > **Engine version:** V4 Modular (smc_mtf_engine_v4.py) — V4.3r
-> **Latest commits:** `0952083` P0 + refinements (thread safety, redis health, position caps)
+> **Latest commits:** `59e8038` P0 + refinements (thread safety, redis health, position caps)
 
 ---
 

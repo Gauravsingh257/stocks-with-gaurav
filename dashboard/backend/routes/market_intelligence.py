@@ -51,7 +51,7 @@ def get_macro():
 
 @router.get("/fx")
 def get_fx():
-    """USD/INR exchange rate from exchangerate.host."""
+    """USD/INR exchange rate from Frankfurter API."""
     from services.market_intelligence import fetch_usd_inr
     fx = fetch_usd_inr()
     return fx.as_dict()
