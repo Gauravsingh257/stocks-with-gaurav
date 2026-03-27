@@ -14,7 +14,8 @@ from .oi_intelligence   import router as oi_intelligence_router
 from .engine_router     import router as engine_router  # Phase 7: decision trace API
 from .research          import router as research_router
 from .kite              import router as kite_router
+from .market_intelligence import router as market_intelligence_router
 
 __all__ = ["trades_router", "analytics_router", "journal_router", "agents_router",
            "charts_router", "chat_router", "system_router", "oi_intelligence_router",
-           "engine_router", "research_router", "kite_router"]
+           "engine_router", "research_router", "kite_router", "market_intelligence_router"]

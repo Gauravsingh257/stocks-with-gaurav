@@ -425,6 +425,63 @@ export interface JournalIdeasParams {
   offset?: number;
 }
 
+// ── Market Intelligence Types ─────────────────────────────────────────────
+
+export interface MIHoliday {
+  date: string;
+  name: string;
+  country_code: string;
+}
+
+export interface MIFXSnapshot {
+  usd_inr: number;
+  usd_inr_prev: number | null;
+  chg_pct: number;
+  source: string;
+  fetched_at: string;
+}
+
+export interface MIFREDMacro {
+  fed_funds_rate: number | null;
+  us_10y_yield: number | null;
+  dxy_index: number | null;
+  us_cpi_yoy: number | null;
+  source: string;
+  fetched_at: string;
+}
+
+export interface MIMFFlow {
+  scheme_code: string;
+  scheme_name: string;
+  fund_house: string;
+  nav: number;
+  nav_date: string;
+  nav_prev: number;
+  chg_pct: number;
+}
+
+export interface MIMFFlowData {
+  top_equity_funds: MIMFFlow[];
+  fetched_at: string;
+}
+
+export interface MISnapshot {
+  holidays: MIHoliday[];
+  is_holiday_today: boolean;
+  next_holiday: MIHoliday | null;
+  fx: MIFXSnapshot | null;
+  macro: MIFREDMacro | null;
+  mf_flows: MIMFFlowData | null;
+  fetched_at: string;
+}
+
+export interface MIHolidayResponse {
+  holidays: MIHoliday[];
+  is_holiday_today: boolean;
+  next_holiday: MIHoliday | null;
+  count: number;
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -509,4 +566,14 @@ export const api = {
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
+
+  // ── Market Intelligence ───────────────────────────────────────────────────
+  marketIntelSnapshot: () => get<MISnapshot>("/api/market-intelligence/snapshot"),
+  marketIntelHolidays: (year?: number) => {
+    const q = year ? `?year=${year}` : "";
+    return get<MIHolidayResponse>(`/api/market-intelligence/holidays${q}`);
+  },
+  marketIntelMacro: () => get<MIFREDMacro>("/api/market-intelligence/macro"),
+  marketIntelFX: () => get<MIFXSnapshot>("/api/market-intelligence/fx"),
+  marketIntelMFFlows: () => get<MIMFFlowData>("/api/market-intelligence/mf-flows"),
 };

@@ -25,6 +25,61 @@ from agents.base import BaseAgent, AgentResult
 
 log = logging.getLogger("agents.pre_market")
 
+
+# ─────────────────────────────────────────────────────────────
+# GLOBAL MACRO HELPER (runs outside the agent class — pure utility)
+# ─────────────────────────────────────────────────────────────
+
+def _get_global_macro() -> dict:
+    """
+    Fetch US market closes + USD/INR from yfinance for macro context.
+    Returns a dict with individual market data and a 'summary' string.
+    Falls back gracefully — never raises.
+    """
+    macro: dict = {}
+    try:
+        import yfinance as yf
+
+        tickers = {
+            "SPX":    "^GSPC",   # S&P 500
+            "NASDAQ": "^IXIC",   # NASDAQ Composite
+            "VIX":    "^VIX",    # CBOE VIX
+            "USDINR": "INR=X",   # USD/INR spot
+        }
+        parts: list[str] = []
+        for name, sym in tickers.items():
+            try:
+                hist = yf.Ticker(sym).history(period="2d", interval="1d")
+                if not hist.empty:
+                    close   = float(hist["Close"].iloc[-1])
+                    prev    = float(hist["Close"].iloc[-2]) if len(hist) > 1 else close
+                    chg_pct = (close - prev) / prev * 100 if prev else 0.0
+                    macro[name] = {"close": round(close, 2), "chg_pct": round(chg_pct, 2)}
+                    arrow = "+" if chg_pct >= 0 else ""
+                    parts.append(f"{name} {arrow}{chg_pct:.1f}%")
+            except Exception:
+                pass
+
+        macro["summary"] = " | ".join(parts) if parts else "unavailable"
+
+        # Simple bias: positive S&P + low VIX → bullish; negative or high VIX → bearish
+        spx_chg = macro.get("SPX", {}).get("chg_pct", 0)
+        vix_lvl = macro.get("VIX", {}).get("close", 20)
+        if spx_chg > 0.5 and vix_lvl < 20:
+            macro["bias"] = "BULLISH"
+        elif spx_chg < -0.5 or vix_lvl > 25:
+            macro["bias"] = "BEARISH"
+        else:
+            macro["bias"] = "NEUTRAL"
+
+    except ImportError:
+        macro = {"summary": "yfinance not available", "bias": "NEUTRAL"}
+    except Exception as exc:
+        log.warning("Global macro fetch failed: %s", exc)
+        macro = {"summary": "fetch failed", "bias": "NEUTRAL"}
+
+    return macro
+
 # ─────────────────────────────────────────────────────────────
 # THRESHOLDS & CLASSIFICATION TABLES
 # ─────────────────────────────────────────────────────────────
@@ -208,6 +263,52 @@ class PreMarketBriefing(BaseAgent):
         except Exception:
             pass
 
+        # 1j. Global macro snapshot (US markets previous close)
+        global_macro = _get_global_macro()
+        log.info("Global macro: %s [%s]", global_macro.get("summary", "n/a"), global_macro.get("bias", "?"))
+
+        # 1j-ext. Market Intelligence APIs (holiday, FX, FRED, MF flows)
+        market_intel: dict = {}
+        try:
+            from services.market_intelligence import (
+                is_holiday_today as _mi_is_holiday,
+                next_holiday as _mi_next_holiday,
+                fetch_usd_inr, fetch_fred_macro, fetch_mf_flows,
+            )
+            mi_holiday = _mi_is_holiday()
+            mi_next = _mi_next_holiday()
+            mi_fx = fetch_usd_inr()
+            mi_fred = fetch_fred_macro()
+            mi_mf = fetch_mf_flows()
+
+            market_intel = {
+                "is_holiday_today": mi_holiday,
+                "next_holiday": mi_next.as_dict() if mi_next else None,
+                "usd_inr": mi_fx.usd_inr if mi_fx.usd_inr else global_macro.get("USDINR", {}).get("close"),
+                "fred": mi_fred.as_dict(),
+                "mf_flow_count": len(mi_mf.top_equity_funds),
+                "mf_avg_chg_pct": (
+                    round(sum(f["chg_pct"] for f in mi_mf.top_equity_funds) / len(mi_mf.top_equity_funds), 2)
+                    if mi_mf.top_equity_funds else 0.0
+                ),
+            }
+            if mi_holiday:
+                log.warning("TODAY IS A PUBLIC HOLIDAY — trading may not be available")
+            if mi_next:
+                log.info("Next holiday: %s (%s)", mi_next.name, mi_next.date)
+        except Exception as exc:
+            log.warning("Market Intelligence enrichment failed (non-fatal): %s", exc)
+            market_intel = {"error": str(exc)}
+
+        # 1k. Historical trade context from ledger (lightweight RAG)
+        trade_history_context = ""
+        try:
+            from agents.trade_rag import TradeRAG
+            trade_history_context = TradeRAG().get_premarket_context(days=30)
+            log.info("Trade RAG: %s", trade_history_context[:80])
+        except Exception as exc:
+            log.warning("TradeRAG context failed: %s", exc)
+
         # ================================================================
         # STEP 2 — PERFORMANCE CLASSIFICATION
         # ================================================================
@@ -323,6 +424,11 @@ class PreMarketBriefing(BaseAgent):
             "wr_state":          wr_state,
             "dd_state":          dd_state,
             "cl_state":          cl_state,
+            # Global macro context
+            "global_macro":           global_macro,
+            "macro_bias":             global_macro.get("bias", "NEUTRAL"),
+            "market_intel":           market_intel,
+            "trade_history_context":  trade_history_context,
             # Raw inputs for transparency
             "inputs": {
                 "win_rate_20":        round(win_rate_20, 3),
@@ -407,6 +513,11 @@ class PreMarketBriefing(BaseAgent):
                 "WARNING", "expiry_day",
                 "Expiry day — manipulation risk high. OTM trades restricted.")
 
+        if market_intel.get("is_holiday_today"):
+            result.add_finding(
+                "CRITICAL", "holiday_today",
+                "TODAY IS A PUBLIC HOLIDAY — NSE is closed. No trading.")
+
         if cb_active:
             result.add_finding(
                 "CRITICAL", "cb_active",
@@ -452,7 +563,17 @@ class PreMarketBriefing(BaseAgent):
                     f"\u25CF {focus_line}{disable_line}\n\n"
                     f"Yesterday: {yest_total} trades, {yest_pnl:+.2f}R\n"
                     f"Rolling 20: WR={win_rate_20*100:.1f}% PF={pf_display}"
-                    f"{alert_block}"
+                    + (
+                        f"\n\u25CF Global: {global_macro.get('summary', 'N/A')}"
+                        f" [{global_macro.get('bias', 'N/A')}]"
+                        if global_macro.get("summary") not in ("", "unavailable", "fetch failed")
+                        else ""
+                    )
+                    + (
+                        f"\n\u25CF Portfolio: {trade_history_context}"
+                        if trade_history_context else ""
+                    )
+                    + f"{alert_block}"
                 )
             },
             requires_approval=False,
