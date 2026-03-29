@@ -49,6 +49,7 @@ SETUP_WINRATES = {
     "OI-UNWIND-PE": 0.50,  # OI Unwinding → Buy PE — untested, forward validate
     "EMA-CROSSOVER": 0.45, # Merged EMA strategy — untested
     "HIERARCHICAL": 0.45,  # Rarely triggers
+    "SECOND-RED-BREAK": 0.31,  # Backtested: 31.3% WR on NIFTY, +1304 pts over 6 months, 3R target
 }
 
 DAILY_LOG_FILE = "daily_pnl_log.csv"

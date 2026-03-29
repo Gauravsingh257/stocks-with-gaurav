@@ -80,6 +80,15 @@ try:
     _TRADE_BUTTONS_AVAILABLE = True
 except ImportError:
     _TRADE_BUTTONS_AVAILABLE = False
+# ── Second Red Break Strategy (Full-Auto) ──────────────────────
+try:
+    from strategies.second_red_break.live_scanner import scan_second_red_break, get_scanner as _get_srb_scanner
+    from strategies.second_red_break.live_executor import execute_srb_trade as _execute_srb_trade
+    from strategies.second_red_break.live_executor import modify_srb_gtt as _modify_srb_gtt
+    _SRB_AVAILABLE = True
+except ImportError as _srb_e:
+    _SRB_AVAILABLE = False
+    logging.warning("SRB strategy not available: %s", _srb_e)
 from engine.market_state_engine import (
     update_market_state, get_market_state, get_market_state_label,
     reset_market_state,
@@ -5390,6 +5399,102 @@ def run_live_mode():
                     except Exception as e:
                         print(f"  ⚠️ Zone tap scan error ({index_sym}): {e}")
 
+            # ========================================
+            # 🔴 SECOND RED BREAK SCAN (EVERY 5 MIN)
+            # ========================================
+            if _SRB_AVAILABLE and now_ist().minute % 5 == 0:
+                try:
+                    _srb_candles = fetch_ohlc("NSE:NIFTY 50", "5minute", 80)
+                    if _srb_candles:
+                        _srb_sig = scan_second_red_break(_srb_candles, "NIFTY")
+                        if _srb_sig:
+                            # ── Auto-execute: place PUT order immediately ──
+                            _srb_result = _execute_srb_trade(
+                                signal=_srb_sig,
+                                kite=kite,
+                                paper_mode=PAPER_MODE,
+                            )
+                            _srb_success = _srb_result.get("success", False)
+                            _srb_tsym = _srb_result.get("tradingsymbol", "?")
+                            _srb_qty = _srb_result.get("qty", 0)
+                            _srb_oid = _srb_result.get("order_id", "")
+                            _srb_gid = _srb_result.get("gtt_id", "")
+
+                            # ── Register in ACTIVE_TRADES for monitoring ──
+                            _srb_sig["setup"] = "SECOND-RED-BREAK"
+                            _srb_sig["_registered_today"] = True
+                            _srb_sig["option"] = _srb_tsym
+                            _srb_sig["srb_order_id"] = _srb_oid
+                            _srb_sig["srb_gtt_id"] = _srb_gid
+                            _srb_sig["srb_executed"] = _srb_success
+                            _srb_sig["srb_qty"] = _srb_qty
+                            _srb_sig["srb_opt_entry"] = _srb_result.get("opt_ltp", 0)
+                            _srb_sig["srb_opt_sl"] = _srb_result.get("opt_sl", 0)
+                            _srb_sig["srb_opt_target"] = _srb_result.get("opt_target", 0)
+                            _srb_sig["srb_opt_risk"] = max(_srb_result.get("opt_ltp", 0) - _srb_result.get("opt_sl", 0), 0)
+                            _srb_sig["srb_sl_trailed"] = False
+
+                            with ACTIVE_TRADES_LOCK:
+                                ACTIVE_TRADES.append(_srb_sig)
+                            DAILY_SIGNAL_COUNT += 1
+                            log_paper_trade(_srb_sig)
+                            persist_active_trades()
+
+                            # ── Telegram notification ──
+                            _srb_status = "✅ EXECUTED" if _srb_success else "❌ FAILED"
+                            _srb_sl_method = _srb_result.get("sl_method", "?")
+                            _exec_detail = ""
+                            if _srb_success:
+                                _exec_detail = (
+                                    f"\n\n💰 <b>AUTO-EXECUTED:</b>\n"
+                                    f"Option: {_srb_tsym}\n"
+                                    f"Qty: {_srb_qty}\n"
+                                    f"LTP: {_srb_result.get('opt_ltp', '?')}\n"
+                                    f"Opt SL: {_srb_result.get('opt_sl', '?')}\n"
+                                    f"Opt TGT: {_srb_result.get('opt_target', '?')}\n"
+                                    f"SL Method: {_srb_sl_method}\n"
+                                    f"Order: {_srb_oid}\n"
+                                    f"GTT: {_srb_gid}"
+                                )
+                            else:
+                                _exec_detail = f"\n\n❌ Error: {_srb_result.get('error', 'unknown')}"
+
+                            _srb_msg = (
+                                f"🔴 <b>SECOND RED BREAK — {_srb_status}</b>\n"
+                                f"{'📝 [PAPER] ' if PAPER_MODE else ''}"
+                                f"<b>{_srb_sig['symbol']}</b> | PUT\n\n"
+                                f"2nd Red: {_srb_sig.get('srb_second_red_time', '?')}\n"
+                                f"2nd Red Low: {_srb_sig.get('srb_second_red_low', '?')}\n"
+                                f"Entry (index): {_srb_sig['entry']}\n"
+                                f"SL (index): {_srb_sig['sl']}\n"
+                                f"Target (index): {_srb_sig['target']}\n"
+                                f"RR: {_srb_sig['rr']}"
+                                f"{_exec_detail}"
+                            )
+                            _srb_sid = f"srb_NIFTY_{now_ist().strftime('%Y%m%d%H%M%S')}"
+                            telegram_send_signal(
+                                paper_prefix(_srb_msg),
+                                signal_id=_srb_sid,
+                                signal_meta={
+                                    "signal_kind": "ENTRY",
+                                    "symbol": _srb_sig["symbol"],
+                                    "direction": "SHORT",
+                                    "strategy_name": "SECOND-RED-BREAK",
+                                    "entry": _srb_sig["entry"],
+                                    "stop_loss": _srb_sig["sl"],
+                                    "target1": _srb_sig["target"],
+                                    "score": _srb_sig.get("smc_score"),
+                                    "confidence": _srb_sig.get("ai_score"),
+                                    "grade": _srb_sig.get("grade"),
+                                    "rr": _srb_sig["rr"],
+                                },
+                            )
+                            print(f"  🔴 SRB: NIFTY ENTRY @ {_srb_sig['entry']} | SL={_srb_sig['sl']} "
+                                  f"TGT={_srb_sig['target']} | {_srb_status}")
+                except Exception as _srb_err:
+                    logging.error("SRB scan/execute error: %s", _srb_err)
+                    print(f"  ⚠️ SRB error: {_srb_err}")
+
             try:
                 import engine_runtime
                 engine_runtime.set_engine_stage("STRATEGY_SCAN")
@@ -5834,6 +5939,44 @@ def run_live_mode():
                             if price:
                                 monitor_active_trades(t_obj["symbol"], price)
                         except Exception: pass
+
+                    # ── SRB 2R Trail: monitor option price, trail SL to entry+5 ──
+                    if _SRB_AVAILABLE:
+                        for t_obj in list(ACTIVE_TRADES):
+                            if t_obj.get("setup") != "SECOND-RED-BREAK":
+                                continue
+                            if t_obj.get("srb_sl_trailed") or not t_obj.get("srb_executed"):
+                                continue
+                            _opt_sym = t_obj.get("option", "")
+                            _opt_entry = t_obj.get("srb_opt_entry", 0)
+                            _opt_risk = t_obj.get("srb_opt_risk", 0)
+                            if not _opt_sym or _opt_entry <= 0 or _opt_risk <= 0:
+                                continue
+                            try:
+                                _opt_ltp_data = kite.ltp([f"NFO:{_opt_sym}"])
+                                _opt_ltp = _opt_ltp_data[f"NFO:{_opt_sym}"]["last_price"]
+                                _opt_profit_r = (_opt_ltp - _opt_entry) / _opt_risk
+                                if _opt_profit_r >= 2.0:
+                                    _trail_res = _modify_srb_gtt(kite, t_obj)
+                                    if _trail_res.get("success"):
+                                        t_obj["srb_sl_trailed"] = True
+                                        t_obj["srb_gtt_id"] = _trail_res["new_gtt_id"]
+                                        t_obj["srb_opt_sl"] = _trail_res["new_sl"]
+                                        persist_active_trades()
+                                        _trail_msg = (
+                                            f"📈 <b>SRB 2R TRAIL — SL MOVED</b>\n"
+                                            f"<b>{t_obj['symbol']}</b> | {_opt_sym}\n\n"
+                                            f"Option LTP: {_opt_ltp:.2f}\n"
+                                            f"Profit: {_opt_profit_r:.1f}R\n"
+                                            f"Old SL: {_opt_entry - _opt_risk:.2f}\n"
+                                            f"New SL: {_trail_res['new_sl']:.2f} (entry+5)\n"
+                                            f"Target: {t_obj.get('srb_opt_target', '?')}\n"
+                                            f"💰 Profit locked!"
+                                        )
+                                        telegram_send_signal(_trail_msg, signal_id=f"srb_trail_{now_ist().strftime('%H%M%S')}")
+                                        print(f"  📈 SRB 2R Trail: {_opt_sym} SL → {_trail_res['new_sl']}")
+                            except Exception as _trail_err:
+                                logging.debug("SRB trail check error: %s", _trail_err)
                         
                 # 2. Check for Next Minute Start
                 if now_ist().second == 0:
