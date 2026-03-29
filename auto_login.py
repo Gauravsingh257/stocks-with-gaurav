@@ -53,7 +53,7 @@ TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-BACKEND_URL = os.getenv("API_HOST", "https://web-production-2781a.up.railway.app").strip().rstrip("/")
+BACKEND_URL = os.getenv("RAILWAY_BACKEND_URL", "https://web-production-2781a.up.railway.app").strip().rstrip("/")
 
 # ── Logging ────────────────────────────────────────────────────────
 _scheduled = "--scheduled" in sys.argv
