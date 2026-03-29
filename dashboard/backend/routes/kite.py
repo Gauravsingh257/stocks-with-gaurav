@@ -71,7 +71,7 @@ def kite_callback(request_token: str | None = Query(None, alias="request_token")
             request_reconnect()
         except Exception:
             pass
-        return {"status": "connected", "message": "Kite session established"}
+        return {"status": "connected", "message": "Kite session established", "access_token": access_token}
     except ValueError:
         return JSONResponse(
             status_code=400,
@@ -123,7 +123,11 @@ def kite_token_from_paste(body: TokenInput):
             request_reconnect()
         except Exception:
             pass
-        return {"status": "connected", "message": "Token stored in Redis — dashboard and engine will use it."}
+        return {
+            "status": "connected",
+            "message": "Kite session established via paste.",
+            "access_token": access_token,
+        }
     except ValueError:
         return JSONResponse(
             status_code=400,
@@ -134,5 +138,63 @@ def kite_token_from_paste(body: TokenInput):
     except Exception as e:
         return JSONResponse(
             status_code=400,
+            content={"status": "error", "message": str(e)},
+        )
+
+
+@router.get("/current-token")
+def kite_current_token():
+    """
+    Return the current access_token from Redis so local scripts can sync.
+    Used by morning_login.ps1 to save token locally after Railway login.
+    """
+    try:
+        token = kite_auth.get_access_token()
+        if token:
+            return {"status": "ok", "access_token": token}
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": "No token found in Redis."},
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)},
+        )
+
+
+class AccessTokenInput(BaseModel):
+    """Body for POST /api/kite/store-token — push a pre-exchanged access_token."""
+    access_token: str
+
+
+@router.post("/store-token")
+def kite_store_token(body: AccessTokenInput):
+    """
+    Accept a pre-exchanged access_token and store it in Redis.
+    Used by auto_login.py to push the token from local machine to Railway.
+    """
+    token = (body.access_token or "").strip()
+    if not token or len(token) < 10:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Invalid access_token."},
+        )
+    try:
+        kite_auth.store_access_token(token)
+        try:
+            from dashboard.backend.routes.charts import _reset_kite
+            _reset_kite()
+        except Exception:
+            pass
+        try:
+            from dashboard.backend.realtime import request_reconnect
+            request_reconnect()
+        except Exception:
+            pass
+        return {"status": "ok", "message": "Token stored in Redis."}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
             content={"status": "error", "message": str(e)},
         )
