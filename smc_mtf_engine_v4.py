@@ -5531,15 +5531,15 @@ def run_live_mode():
                         logging.error(f"Scan Exception {symbol}: {e}")
                         print(f"Scan Exception {symbol}: {e}")
 
-            # Periodic diagnostic telegram (first cycle + every 30 min)
+            # Periodic diagnostic telegram (first cycle only + on errors)
             if not hasattr(run_live_mode, '_diag_count'):
                 run_live_mode._diag_count = 0
                 run_live_mode._last_diag = 0
                 run_live_mode._session_signals = 0  # cumulative count this session
             run_live_mode._session_signals += _scan_raw_signals
 
-            _should_diag = (run_live_mode._diag_count == 0 or
-                            (t.time() - run_live_mode._last_diag) >= 1800)
+            _has_errors = len(_scan_errors) > 0
+            _should_diag = (run_live_mode._diag_count == 0 or _has_errors)
             if _should_diag:
                 run_live_mode._diag_count += 1
                 run_live_mode._last_diag = t.time()
