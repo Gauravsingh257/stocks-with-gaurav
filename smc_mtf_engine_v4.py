@@ -351,7 +351,7 @@ if ENGINE_MODE == "CONSERVATIVE":
 elif ENGINE_MODE == "BALANCED":
     ACTIVE_STRATEGIES = {"SETUP_A": False, "SETUP_B": False, "SETUP_C": False, "SETUP_D": False, "HIERARCHICAL": True}
 elif ENGINE_MODE == "AGGRESSIVE":
-    ACTIVE_STRATEGIES = {"SETUP_A": True, "SETUP_B": False, "SETUP_C": True, "SETUP_D": True, "HIERARCHICAL": True}
+    ACTIVE_STRATEGIES = {"SETUP_A": True, "SETUP_B": False, "SETUP_C": False, "SETUP_D": True, "HIERARCHICAL": True}
     # F1.5: SETUP_D re-enabled for INDEX instruments only (Phase 8 upgrade — BOS+FVG pipeline)
     # SETUP_D is gated inside scan_symbol to indices: NIFTY/BANKNIFTY. Negative expectancy on stocks still holds.
     # SWEEP-B: SETUP_B disabled — grid search showed -0.31R expectancy, worst setup by far
