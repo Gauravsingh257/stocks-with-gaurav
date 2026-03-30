@@ -22,9 +22,9 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo  # type: ignore
 _IST = ZoneInfo("Asia/Kolkata")
 
-# Hardcoded ON — safe default until live trading is validated
-# To switch to LIVE, change to: PAPER_MODE = False
-PAPER_MODE = True
+# Hardcoded OFF — SRB strategy validated (backtest +2034 pts, Strategy 6 trail)
+# To switch back to paper, change to: PAPER_MODE = True
+PAPER_MODE = False
 
 # File paths
 PAPER_TRADE_LOG = "paper_trade_log.csv"
