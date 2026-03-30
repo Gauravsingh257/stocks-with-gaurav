@@ -20,7 +20,7 @@ from typing import List, Optional
 
 # ── Index configuration ────────────────────────────────────────────────
 INDEX_CONFIG = {
-    "NIFTY": {"step": 50, "lot_size": 75, "exchange_symbol": "NSE:NIFTY 50"},
+    "NIFTY": {"step": 50, "lot_size": 65, "exchange_symbol": "NSE:NIFTY 50"},
     "BANKNIFTY": {"step": 100, "lot_size": 30, "exchange_symbol": "NSE:NIFTY BANK"},
 }
 
