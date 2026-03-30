@@ -37,9 +37,14 @@ class DayState:
     max_entry_hour: int = 23       # skip breakdown if candle hour >= this (23 = off)
     max_sl_pts: float = 99999.0   # skip if SL distance > this (99999 = off)
     use_partial_exit: bool = False  # partial exit at 1.5R, trail rest to 3R
-    # ── Partial exit tracking ──────────────────────────────────────
+    use_full_trail: bool = True     # Strategy 6: full trail from 3R, 1.5R gap
+    # ── Partial / trail tracking ───────────────────────────────────
     partial_target: float = 0.0
     partial_hit: bool = False
+    trail_active: bool = False     # trailing mode activated (3R reached)
+    trail_peak_r: float = 0.0     # highest R seen since entry
+    trail_sl: float = 0.0         # current trailing SL price
+    TRAIL_GAP_R: float = 1.5      # gap between peak and trailing SL in R
 
 
 def reset_day(
@@ -48,6 +53,7 @@ def reset_day(
     max_entry_hour: int = 23,
     max_sl_pts: float = 99999.0,
     use_partial_exit: bool = False,
+    use_full_trail: bool = True,
 ) -> DayState:
     """Fresh state for a new trading day."""
     return DayState(
@@ -56,6 +62,7 @@ def reset_day(
         max_entry_hour=max_entry_hour,
         max_sl_pts=max_sl_pts,
         use_partial_exit=use_partial_exit,
+        use_full_trail=use_full_trail,
     )
 
 
@@ -130,18 +137,41 @@ def process_candle(state: DayState, candle: Candle) -> Optional[str]:
     if state.in_trade:
         rec = state.trade_record
         assert rec is not None
+        risk = rec.risk_points
+
+        # --- Track peak R (how far price moved in our favor) ---
+        current_r = (state.entry_price - candle.low) / risk if risk > 0 else 0
+        if current_r > state.trail_peak_r:
+            state.trail_peak_r = current_r
+
+        # --- Strategy 6: Full trail from 3R (1.5R gap) ---
+        if state.use_full_trail and state.trail_peak_r >= 3.0:
+            if not state.trail_active:
+                state.trail_active = True
+            # Trail SL = entry - (peak_R - 1.5) * risk
+            # As peak grows, SL ratchets down (in favor of the short trade)
+            new_trail_sl = state.entry_price - (state.trail_peak_r - state.TRAIL_GAP_R) * risk
+            # Only tighten SL, never loosen it
+            if state.trail_sl == 0.0 or new_trail_sl < state.trail_sl:
+                state.trail_sl = new_trail_sl
+            state.stop_loss = state.trail_sl
 
         # --- Partial exit at 1.5R (lock half, move SL to breakeven) ---
         if state.use_partial_exit and not state.partial_hit and state.partial_target > 0:
             if candle.low <= state.partial_target:
                 state.partial_hit = True
-                state.stop_loss = state.entry_price  # move SL to breakeven
+                if not state.trail_active:
+                    state.stop_loss = state.entry_price  # move SL to breakeven
 
-        # Check SL (high of candle breaches SL; after partial, SL is at entry/BE)
+        # Check SL (high of candle breaches SL)
         if candle.high >= state.stop_loss:
             rec.exit_price = state.stop_loss
             rec.exit_time = str(candle.date)
-            if state.partial_hit:
+            if state.trail_active:
+                # Trailed out — exited at trail SL with guaranteed profit
+                rec.pnl_points = state.entry_price - rec.exit_price
+                rec.outcome = "WIN"
+            elif state.partial_hit:
                 # Half locked at 1.5R, half exits at BE → net positive 0.75R
                 rec.pnl_points = 0.5 * (1.5 * rec.risk_points) + 0.5 * 0.0
                 rec.outcome = "WIN"
@@ -153,20 +183,20 @@ def process_candle(state: DayState, candle: Candle) -> Optional[str]:
             state.trade_done = True
             return "SL_HIT"
 
-        # Check Target (low of candle reaches 3R target level)
-        if candle.low <= state.target:
-            rec.exit_price = state.target
-            rec.exit_time = str(candle.date)
-            rec.outcome = "WIN"
-            if state.partial_hit:
-                # Half at 1.5R, half at 3R → net 2.25R
-                rec.pnl_points = 0.5 * (1.5 * rec.risk_points) + 0.5 * (3.0 * rec.risk_points)
-            else:
-                rec.pnl_points = rec.entry_price - rec.exit_price  # 3R points
-            rec.rr_achieved = rec.pnl_points / rec.risk_points if rec.risk_points else 0
-            state.in_trade = False
-            state.trade_done = True
-            return "TARGET"
+        # Check Target — only exit at 3R if trailing is NOT enabled
+        if not state.use_full_trail:
+            if candle.low <= state.target:
+                rec.exit_price = state.target
+                rec.exit_time = str(candle.date)
+                rec.outcome = "WIN"
+                if state.partial_hit:
+                    rec.pnl_points = 0.5 * (1.5 * rec.risk_points) + 0.5 * (3.0 * rec.risk_points)
+                else:
+                    rec.pnl_points = rec.entry_price - rec.exit_price  # 3R points
+                rec.rr_achieved = rec.pnl_points / rec.risk_points if rec.risk_points else 0
+                state.in_trade = False
+                state.trade_done = True
+                return "TARGET"
 
     return None
 
@@ -180,7 +210,10 @@ def close_open_trade_eod(state: DayState, last_candle: Candle) -> None:
         rec.exit_price = eod_price
         rec.exit_time = str(last_candle.date)
         rec.outcome = "EOD_EXIT"
-        if state.partial_hit:
+        if state.trail_active:
+            # Trailing was active — use actual EOD PnL (guaranteed > 1.5R)
+            rec.pnl_points = raw_pnl
+        elif state.partial_hit:
             # Half locked at 1.5R, half exits at EOD price
             rec.pnl_points = 0.5 * (1.5 * rec.risk_points) + 0.5 * raw_pnl
         else:
@@ -197,12 +230,13 @@ def run_day(
     max_entry_hour: int = 23,
     max_sl_pts: float = 99999.0,
     use_partial_exit: bool = False,
+    use_full_trail: bool = True,
 ) -> "tuple[DaySummary, Optional[TradeRecord]]":
     """
     Run strategy on a single day's 5-min candles for one instrument.
     Returns DaySummary + attaches TradeRecord to state if traded.
     """
-    state = reset_day(instrument, trade_date, max_entry_hour, max_sl_pts, use_partial_exit)
+    state = reset_day(instrument, trade_date, max_entry_hour, max_sl_pts, use_partial_exit, use_full_trail)
 
     for candle in candles:
         signal = process_candle(state, candle)

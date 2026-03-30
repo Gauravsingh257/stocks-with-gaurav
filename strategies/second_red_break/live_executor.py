@@ -323,23 +323,28 @@ def _find_2nd_green_candle_low(candles: list[dict]) -> float | None:
 
 
 # ────────────────────────────────────────────────────────────────────
-# GTT MODIFICATION (2R TRAILING SL)
+# GTT MODIFICATION (STRATEGY 6: FULL TRAIL FROM 3R, 1.5R GAP)
 # ────────────────────────────────────────────────────────────────────
 
-SRB_TRAIL_BUFFER = 5.0  # Move SL to entry + ₹5 once 2R is crossed
+SRB_TRAIL_GAP_R = 1.5   # Trail gap: SL sits 1.5R behind current peak
+SRB_FAR_TARGET = 50000  # Absurdly high target to keep GTT OCO alive without auto-exit
 
 
 def modify_srb_gtt(
     kite,
     trade: dict,
+    new_trail_sl: float | None = None,
 ) -> dict:
     """
-    Modify GTT OCO when option hits 2R: cancel old GTT, place new one
-    with SL = opt_entry + 5 (locks in profit), same target.
+    Update GTT with a new trailing SL.  Called continuously as peak R grows.
+
+    Strategy 6: After 3R, trail full position.  SL = opt_entry + (peak_R - 1.5) * opt_risk.
+    Target is set very far so GTT never auto-exits on the target leg.
 
     Args:
-        kite:   Active KiteConnect instance
-        trade:  ACTIVE_TRADES dict for the SRB trade
+        kite:         Active KiteConnect instance
+        trade:        ACTIVE_TRADES dict for the SRB trade
+        new_trail_sl: Pre-computed trailing SL price on the option
 
     Returns:
         dict with keys: success, new_gtt_id, new_sl, error
@@ -348,9 +353,14 @@ def modify_srb_gtt(
     tsym = trade.get("option", "")
     qty = trade.get("srb_qty", 0)
     opt_entry = trade.get("srb_opt_entry", 0)
-    opt_target = trade.get("srb_opt_target", 0)
 
-    new_sl = round(round((opt_entry + SRB_TRAIL_BUFFER) / TICK_SIZE) * TICK_SIZE, 2)
+    if new_trail_sl is None:
+        # Fallback: lock minimum 1.5R profit (first trail activation at 3R)
+        opt_risk = trade.get("srb_opt_risk", 0)
+        new_trail_sl = opt_entry + SRB_TRAIL_GAP_R * opt_risk
+
+    new_sl = round(round(new_trail_sl / TICK_SIZE) * TICK_SIZE, 2)
+    far_target = round(round(SRB_FAR_TARGET / TICK_SIZE) * TICK_SIZE, 2)
 
     result = {"success": False, "new_sl": new_sl}
 
@@ -372,13 +382,13 @@ def modify_srb_gtt(
         logger.error("SRB trail LTP fetch failed: %s", e)
         return result
 
-    # ── 3. Place new GTT OCO with trailed SL ──────────────────────
+    # ── 3. Place new GTT OCO with trailed SL + far target ─────────
     try:
         new_gtt_id = kite.place_gtt(
             trigger_type=kite.GTT_TYPE_OCO,
             tradingsymbol=tsym,
             exchange=kite.EXCHANGE_NFO,
-            trigger_values=[new_sl, opt_target],
+            trigger_values=[new_sl, far_target],
             last_price=current_ltp,
             orders=[
                 {
@@ -391,7 +401,7 @@ def modify_srb_gtt(
                 {
                     "transaction_type": kite.TRANSACTION_TYPE_SELL,
                     "quantity": qty,
-                    "price": opt_target,
+                    "price": far_target,
                     "order_type": kite.ORDER_TYPE_LIMIT,
                     "product": PRODUCT,
                 },
@@ -400,8 +410,8 @@ def modify_srb_gtt(
         result["success"] = True
         result["new_gtt_id"] = new_gtt_id
         logger.info(
-            "SRB GTT trailed: old=%s → new=%s | SL %.2f → %.2f | TGT %.2f",
-            old_gtt_id, new_gtt_id, trade.get("srb_opt_sl", 0), new_sl, opt_target,
+            "SRB GTT trailed: old=%s → new=%s | SL %.2f → %.2f (far TGT %.0f)",
+            old_gtt_id, new_gtt_id, trade.get("srb_opt_sl", 0), new_sl, far_target,
         )
     except Exception as e:
         result["error"] = f"New GTT placement failed: {e}"

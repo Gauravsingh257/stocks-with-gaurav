@@ -5433,6 +5433,9 @@ def run_live_mode():
                             _srb_sig["srb_opt_target"] = _srb_result.get("opt_target", 0)
                             _srb_sig["srb_opt_risk"] = max(_srb_result.get("opt_ltp", 0) - _srb_result.get("opt_sl", 0), 0)
                             _srb_sig["srb_sl_trailed"] = False
+                            _srb_sig["srb_trailing_active"] = False
+                            _srb_sig["srb_peak_r"] = 0.0
+                            _srb_sig["srb_last_trail_sl"] = 0.0
 
                             with ACTIVE_TRADES_LOCK:
                                 ACTIVE_TRADES.append(_srb_sig)
@@ -5940,12 +5943,14 @@ def run_live_mode():
                                 monitor_active_trades(t_obj["symbol"], price)
                         except Exception: pass
 
-                    # ── SRB 2R Trail: monitor option price, trail SL to entry+5 ──
+                    # ── SRB Strategy 6: Full trail from 3R (1.5R gap) ──
                     if _SRB_AVAILABLE:
+                        _SRB_TRAIL_GAP_R = 1.5
+                        _SRB_TRAIL_STEP_R = 0.5  # Only update GTT when SL moves by 0.5R+
                         for t_obj in list(ACTIVE_TRADES):
                             if t_obj.get("setup") != "SECOND-RED-BREAK":
                                 continue
-                            if t_obj.get("srb_sl_trailed") or not t_obj.get("srb_executed"):
+                            if not t_obj.get("srb_executed"):
                                 continue
                             _opt_sym = t_obj.get("option", "")
                             _opt_entry = t_obj.get("srb_opt_entry", 0)
@@ -5956,25 +5961,58 @@ def run_live_mode():
                                 _opt_ltp_data = kite.ltp([f"NFO:{_opt_sym}"])
                                 _opt_ltp = _opt_ltp_data[f"NFO:{_opt_sym}"]["last_price"]
                                 _opt_profit_r = (_opt_ltp - _opt_entry) / _opt_risk
-                                if _opt_profit_r >= 2.0:
-                                    _trail_res = _modify_srb_gtt(kite, t_obj)
+
+                                # Update peak R tracking
+                                _prev_peak = t_obj.get("srb_peak_r", 0.0)
+                                if _opt_profit_r > _prev_peak:
+                                    t_obj["srb_peak_r"] = _opt_profit_r
+
+                                _peak_r = t_obj["srb_peak_r"]
+
+                                # Activate trailing once 3R is reached
+                                if _peak_r >= 3.0 and not t_obj.get("srb_trailing_active"):
+                                    t_obj["srb_trailing_active"] = True
+                                    _new_trail_sl = _opt_entry + (_peak_r - _SRB_TRAIL_GAP_R) * _opt_risk
+                                    _trail_res = _modify_srb_gtt(kite, t_obj, new_trail_sl=_new_trail_sl)
                                     if _trail_res.get("success"):
-                                        t_obj["srb_sl_trailed"] = True
                                         t_obj["srb_gtt_id"] = _trail_res["new_gtt_id"]
                                         t_obj["srb_opt_sl"] = _trail_res["new_sl"]
+                                        t_obj["srb_last_trail_sl"] = _trail_res["new_sl"]
                                         persist_active_trades()
                                         _trail_msg = (
-                                            f"📈 <b>SRB 2R TRAIL — SL MOVED</b>\n"
+                                            f"🚀 <b>SRB 3R TRAIL ACTIVATED</b>\n"
                                             f"<b>{t_obj['symbol']}</b> | {_opt_sym}\n\n"
                                             f"Option LTP: {_opt_ltp:.2f}\n"
-                                            f"Profit: {_opt_profit_r:.1f}R\n"
-                                            f"Old SL: {_opt_entry - _opt_risk:.2f}\n"
-                                            f"New SL: {_trail_res['new_sl']:.2f} (entry+5)\n"
-                                            f"Target: {t_obj.get('srb_opt_target', '?')}\n"
-                                            f"💰 Profit locked!"
+                                            f"Peak R: {_peak_r:.1f}R\n"
+                                            f"Trail SL: {_trail_res['new_sl']:.2f} (locks {_peak_r - _SRB_TRAIL_GAP_R:.1f}R)\n"
+                                            f"💰 Minimum profit locked: {_peak_r - _SRB_TRAIL_GAP_R:.1f}R"
                                         )
-                                        telegram_send_signal(_trail_msg, signal_id=f"srb_trail_{now_ist().strftime('%H%M%S')}")
-                                        print(f"  📈 SRB 2R Trail: {_opt_sym} SL → {_trail_res['new_sl']}")
+                                        telegram_send_signal(_trail_msg, signal_id=f"srb_trail3r_{now_ist().strftime('%H%M%S')}")
+                                        print(f"  🚀 SRB 3R Trail activated: {_opt_sym} SL → {_trail_res['new_sl']}")
+
+                                # Update trailing SL as peak grows (only if SL moves by 0.5R+)
+                                elif t_obj.get("srb_trailing_active") and _peak_r >= 3.0:
+                                    _new_trail_sl = _opt_entry + (_peak_r - _SRB_TRAIL_GAP_R) * _opt_risk
+                                    _last_sl = t_obj.get("srb_last_trail_sl", 0)
+                                    _sl_move_r = (_new_trail_sl - _last_sl) / _opt_risk if _opt_risk > 0 else 0
+                                    if _sl_move_r >= _SRB_TRAIL_STEP_R:
+                                        _trail_res = _modify_srb_gtt(kite, t_obj, new_trail_sl=_new_trail_sl)
+                                        if _trail_res.get("success"):
+                                            t_obj["srb_gtt_id"] = _trail_res["new_gtt_id"]
+                                            t_obj["srb_opt_sl"] = _trail_res["new_sl"]
+                                            t_obj["srb_last_trail_sl"] = _trail_res["new_sl"]
+                                            persist_active_trades()
+                                            _trail_msg = (
+                                                f"📈 <b>SRB TRAIL UPDATE</b>\n"
+                                                f"<b>{t_obj['symbol']}</b> | {_opt_sym}\n\n"
+                                                f"Option LTP: {_opt_ltp:.2f}\n"
+                                                f"Peak R: {_peak_r:.1f}R\n"
+                                                f"Trail SL: {_trail_res['new_sl']:.2f} (locks {_peak_r - _SRB_TRAIL_GAP_R:.1f}R)\n"
+                                                f"Old SL: {_last_sl:.2f}"
+                                            )
+                                            telegram_send_signal(_trail_msg, signal_id=f"srb_trail_upd_{now_ist().strftime('%H%M%S')}")
+                                            print(f"  📈 SRB Trail update: {_opt_sym} SL → {_trail_res['new_sl']} (peak {_peak_r:.1f}R)")
+
                             except Exception as _trail_err:
                                 logging.debug("SRB trail check error: %s", _trail_err)
                         
