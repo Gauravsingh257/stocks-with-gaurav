@@ -170,7 +170,7 @@ OPT_SESSION_SWING_MIN_PCT = 0.03   # 3% min swing from session high for session 
 OPT_MIN_HISTORY_DAYS = 2           # Need 2+ days before monthly low is meaningful
 OPT_BOUNCE_CONFIRM_PCT = 0.02     # 2% bounce from low = reversal confirmed
 OPT_BOUNCE_MAX_WAIT_MIN = 30      # Max 30 min to wait for bounce after break
-OPT_BREAK_INFO_ALERT = True       # Send informational alert on break (no trade plan)
+OPT_BREAK_INFO_ALERT = False      # Disabled — only alert on confirmed bounce (trade signal)
 OPT_OI_HISTORY_SIZE = 120
 OPT_OI_DELTA_WINDOW_SECS = 60
 OPT_CACHE_PKL = "instruments_nfo.pkl"
