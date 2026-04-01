@@ -7,6 +7,12 @@ Swing (long-only):
     conflicting "long" plan for the same name (that looked random vs the prior short plan).
   - Optional ATR fallback only when ``RESEARCH_SWING_ATR_FALLBACK=1`` and SMC returns None
     (failed quality gate), never as a substitute for an explicit SHORT signal.
+
+Long-term (long-only):
+  - Primary: ``score_longterm_candidate`` — weekly SMC analysis (weekly trend, structure,
+    OB/FVG, RS, volume accumulation, 52W context).
+  - Fallback to weekly demand-zone / ATR levels only when SMC returns None and
+    ``RESEARCH_LONGTERM_ATR_FALLBACK=1``.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from typing import Any
 import pandas as pd
 
 from engine.indicators import calculate_atr
-from engine.swing import detect_weekly_trend, score_swing_candidate
+from engine.swing import detect_weekly_trend, score_swing_candidate, score_longterm_candidate
 
 log = logging.getLogger("services.research_levels")
 
@@ -257,14 +263,24 @@ def _find_key_resistance(weekly: list[dict[str, Any]]) -> float | None:
     return round(candidates[0], 2) if candidates else None
 
 
-def build_longterm_trade_levels(
-    daily_df: pd.DataFrame,
-) -> tuple[float, float, list[float], float, list[float], str] | None:
+def _longterm_atr_fallback_enabled() -> bool:
     """
-    Long-horizon levels from weekly structure:
-    - Entry zone: nearest weekly demand zone (swing low cluster) or pullback level
-    - Stop: below zone with ATR buffer (respects weekly structure)
-    - Target: nearest weekly resistance or 15% min appreciation
+    Default OFF: ATR fallback creates generic long plans for stocks where weekly SMC found nothing.
+    Enable only for testing with RESEARCH_LONGTERM_ATR_FALLBACK=1.
+    """
+    return os.getenv("RESEARCH_LONGTERM_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
+
+
+def build_longterm_trade_levels(
+    symbol: str,
+    daily_df: pd.DataFrame,
+    nifty_daily: list[dict[str, Any]],
+) -> tuple[float, float, list[float], float, list[float], str, dict[str, Any] | None] | None:
+    """
+    Long-horizon levels from weekly SMC structure analysis.
+
+    Returns (entry, stop, [target], long_target, entry_zone, setup_label, longterm_meta) or None.
+    longterm_meta is set only for real SMC paths; ATR fallback sets it to None.
     """
     candles = df_to_candles(daily_df)
     if len(candles) < 60:
@@ -274,14 +290,45 @@ def build_longterm_trade_levels(
     if close <= 0 or atr <= 0:
         return None
     weekly = daily_candles_to_weekly(candles)
-    wt = detect_weekly_trend(weekly) if len(weekly) >= 12 else "NEUTRAL"
 
-    # 52W stats for context
+    # Primary: weekly SMC analysis via score_longterm_candidate
+    lt = score_longterm_candidate(symbol, candles, weekly, nifty_daily) if len(weekly) >= 20 else None
+
+    if lt:
+        entry = float(lt["entry"])
+        sl = float(lt["sl"])
+        target = float(lt["target"])
+        rr = lt["rr"]
+
+        # Entry zone from weekly OB/FVG or ±ATR around entry
+        w_ob = lt.get("weekly_ob")
+        w_fvg = lt.get("weekly_fvg")
+        if w_fvg:
+            entry_zone = [round(w_fvg[0], 2), round(w_fvg[1], 2)]
+        elif w_ob:
+            entry_zone = [round(w_ob[0], 2), round(w_ob[1], 2)]
+        else:
+            entry_zone = [round(entry - atr, 2), round(entry + atr * 0.5, 2)]
+
+        # Sanity: entry must relate to close
+        if close > 0 and abs(entry - close) / close > 0.30:
+            entry = round(close - 2 * atr, 2)
+
+        wt = lt.get("weekly_trend", "?")
+        ws = lt.get("weekly_structure", "?")
+        setup_note = f"SMC_LONGTERM_{wt}_{ws}"
+        return entry, sl, [target], target, entry_zone, setup_note, lt
+
+    # Fallback: ATR-based levels (only if explicitly enabled)
+    if not _longterm_atr_fallback_enabled():
+        log.info("[research] %s excluded from longterm: weekly SMC returned no signal", symbol)
+        return None
+
+    # Legacy ATR fallback (same as before)
+    wt = detect_weekly_trend(weekly) if len(weekly) >= 12 else "NEUTRAL"
     lookback = min(252, len(candles))
     hi52 = max(c["high"] for c in candles[-lookback:])
     lo52 = min(c["low"] for c in candles[-lookback:])
-
-    # Entry zone: demand zone from weekly swing lows, or ATR-based pullback from CMP
     demand_zone = _find_weekly_demand_zone(weekly, atr)
     if demand_zone:
         zone_low, zone_high = demand_zone
@@ -289,30 +336,21 @@ def build_longterm_trade_levels(
         entry_zone = [zone_low, zone_high]
         stop = round(zone_low - 1.5 * atr, 2)
     else:
-        # No weekly demand zone: use 2-ATR pullback entry below CMP
         entry = round(close - 2 * atr, 2)
         entry_zone = [round(entry - atr, 2), round(entry + atr * 0.5, 2)]
         stop = round(entry - 2.5 * atr, 2)
-
-    # Target: nearest key resistance above CMP, or 15% gain minimum
     resistance = _find_key_resistance(weekly)
     min_target = round(close * 1.15, 2)
     long_target = max(resistance or 0, min_target)
     long_target = round(long_target, 2)
-
-    # Ensure positive R/R ≥ 2
     risk = abs(entry - stop)
     reward = abs(long_target - entry)
     if risk <= 0 or reward / risk < 1.5:
-        # Recalculate with 15% target and ATR stop
         entry = round(close, 2)
         stop = round(close - 3 * atr, 2)
         long_target = round(close * 1.20, 2)
         entry_zone = [round(close - atr, 2), round(close, 2)]
-
-    # Sanity: entry must relate to close (long-term entry can be up to 25% below CMP)
     if close > 0 and abs(entry - close) / close > 0.30:
         entry = round(close - 2 * atr, 2)
-
     setup_note = f"LONGTERM_{wt}_52W({round((close-lo52)/lo52*100,0):.0f}%aboveLow)"
-    return entry, stop, [long_target], long_target, entry_zone, setup_note
+    return entry, stop, [long_target], long_target, entry_zone, setup_note, None

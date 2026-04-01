@@ -245,10 +245,14 @@ export interface SwingIdea {
 export interface LongTermIdea {
   id: number;
   symbol: string;
+  setup: string;
   long_term_thesis: string;
   fair_value_estimate: number | null;
+  entry_price: number;
   entry_zone: number[];
+  stop_loss: number;
   long_term_target: number | null;
+  risk_reward: number;
   risk_factors: string[];
   time_horizon: string;
   confidence_score: number;
@@ -258,7 +262,11 @@ export interface LongTermIdea {
   fundamental_factors: Record<string, unknown>;
   technical_factors: Record<string, unknown>;
   sentiment_factors: Record<string, unknown>;
+  reasoning_summary: string;
+  signal_first_detected_at: string | null;
+  signals_updated_at: string | null;
   created_at: string;
+  data_authenticity: string;
 }
 
 export interface RunningTradeMonitorItem {

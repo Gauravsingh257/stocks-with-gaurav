@@ -59,14 +59,24 @@ def _longterm_payload(limit: int) -> dict:
     items: list[dict] = []
     for row in rows:
         targets = row.get("targets", [])
+        entry = float(row["entry_price"])
+        stop = float(row["stop_loss"]) if row.get("stop_loss") is not None else entry * 0.90
+        risk = abs(entry - stop)
+        long_target = row.get("long_term_target") or (targets[0] if targets else entry)
+        reward = abs(float(long_target) - entry) if long_target else 0
+        rr = reward / max(risk, 0.01)
         items.append(
             {
                 "id": row["id"],
                 "symbol": row["symbol"],
+                "setup": row.get("setup") or "LONGTERM",
                 "long_term_thesis": row.get("reasoning", ""),
                 "fair_value_estimate": row.get("fair_value_estimate"),
+                "entry_price": entry,
                 "entry_zone": row.get("entry_zone") or [],
-                "long_term_target": row.get("long_term_target") or (targets[0] if targets else None),
+                "stop_loss": stop,
+                "long_term_target": float(long_target) if long_target else None,
+                "risk_reward": round(rr, 2),
                 "risk_factors": row.get("risk_factors") or [],
                 "time_horizon": row.get("expected_holding_period") or "6-24 months",
                 "confidence_score": float(row.get("confidence_score", 0)),
@@ -76,7 +86,11 @@ def _longterm_payload(limit: int) -> dict:
                 "fundamental_factors": row.get("fundamental_factors", {}),
                 "technical_factors": row.get("technical_factors", {}),
                 "sentiment_factors": row.get("sentiment_factors", {}),
+                "reasoning_summary": row.get("reasoning", ""),
+                "signal_first_detected_at": row.get("signal_first_detected_at") or row.get("created_at"),
+                "signals_updated_at": row.get("signals_updated_at") or row.get("created_at"),
                 "created_at": row.get("created_at"),
+                "data_authenticity": row.get("data_authenticity", "unknown"),
             }
         )
     return {"items": items, "count": len(items)}

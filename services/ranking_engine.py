@@ -168,6 +168,47 @@ def _real_swing_signals(smc: dict) -> tuple[dict[str, str], str]:
     return tech, full_reason
 
 
+def _real_longterm_signals(lt_meta: dict) -> tuple[dict[str, str], str]:
+    """Build live technical signal strings from score_longterm_candidate result dict."""
+    reasons = lt_meta.get("reasons", [])
+    research = lt_meta.get("research", [])
+    rs = lt_meta.get("rs", 0.0)
+    wt = lt_meta.get("weekly_trend", "")
+    ws = lt_meta.get("weekly_structure", "")
+    w_vol = lt_meta.get("weekly_volume", "NEUTRAL")
+    score = lt_meta.get("score", 0)
+    breakdown = lt_meta.get("breakdown", {})
+    w_ob = lt_meta.get("weekly_ob")
+    w_fvg = lt_meta.get("weekly_fvg")
+    hi52 = lt_meta.get("hi_52w", 0)
+    lo52 = lt_meta.get("lo_52w", 0)
+    pct_from_high = lt_meta.get("pct_from_high", 0)
+    chg_1m = lt_meta.get("chg_1m", 0)
+    chg_3m = lt_meta.get("chg_3m", 0)
+
+    tech = {
+        "weekly_trend": f"Weekly trend: {wt} — {'Strong institutional accumulation across multiple weeks' if 'STRONG' in wt else 'Consistent higher-highs formation' if 'BULL' in wt else 'Base formation in progress'}.",
+        "weekly_structure": f"Weekly {ws} — {'structural breakout on higher timeframe confirms long-term direction' if 'BOS' in ws or 'CHOCH' in ws else 'consolidation phase, awaiting breakout'}.",
+        "weekly_ob_fvg": (
+            (f"Weekly OB: ₹{w_ob[0]:.0f}-{w_ob[1]:.0f} (institutional demand zone). " if w_ob else "")
+            + (f"Weekly FVG: ₹{w_fvg[0]:.0f}-{w_fvg[1]:.0f} (unfilled gap, strong support)." if w_fvg else "")
+        ) or "No weekly OB/FVG zones identified in recent structure.",
+        "relative_strength": f"RS vs NIFTY (20D): {rs:+.1f}% — {'significantly outperforming the index' if rs > 8 else 'outperforming index' if rs > 3 else 'in line with index'}.",
+        "weekly_volume": f"Weekly volume profile: {w_vol} — {('sustained institutional buying visible' if w_vol in ('ACCUMULATION', 'STRONG_ACCUMULATION') else 'distribution pressure' if w_vol == 'DISTRIBUTION' else 'normal volume pattern')}.",
+        "52w_context": f"52W range: ₹{lo52:.0f}-₹{hi52:.0f} | {pct_from_high:.0f}% below 52W high.",
+        "momentum": f"1M change: {chg_1m:+.1f}% | 3M change: {chg_3m:+.1f}%.",
+        "smc_score": f"Weekly SMC quality score: {score}/11 (Trend: {breakdown.get('weekly_trend', 0)}/2, Structure: {breakdown.get('weekly_structure', 0)}/2, OB/FVG: {breakdown.get('weekly_ob_fvg', 0)}/2, RS: {breakdown.get('rs', 0)}/2).",
+    }
+
+    reason_lines = [r for r in reasons if r]
+    research_lines = [l for l in research if l] if research else []
+    full_reason = " | ".join(reason_lines[:5])
+    if research_lines:
+        full_reason += " | " + " | ".join(research_lines[:4])
+
+    return tech, full_reason
+
+
 async def _materialize_swing_idea(
     row: FactorRow,
     rank_score: float,
@@ -242,23 +283,31 @@ async def _materialize_longterm_idea(
     rank_score: float,
     evidence_map: dict[str, tuple[dict, dict, dict, str]],
     ingestion: DataIngestion,
+    nifty_daily: list[dict],
 ) -> RankedIdea | None:
     symbol = row.symbol
-    technical_signals, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
-    reasoning, _ = generate_evidence_reasoning(
-        symbol=symbol,
-        technical_signals=technical_signals,
-        fundamental_signals=fundamental_signals,
-        sentiment_signals=sentiment_signals,
-        min_factors=3,
-        max_factors=6,
-    )
+    _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
     daily_df = await _fetch_daily_df(ingestion, symbol)
-    lt = build_longterm_trade_levels(daily_df)
+    lt = build_longterm_trade_levels(symbol, daily_df, nifty_daily)
     if not lt:
         log.debug("No OHLC long-term levels for %s", symbol)
         return None
-    entry, stop, targets, long_target, entry_zone, setup = lt
+    entry, stop, targets, long_target, entry_zone, setup, lt_meta = lt
+
+    # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
+    if lt_meta:
+        technical_signals, reasoning = _real_longterm_signals(lt_meta)
+    else:
+        technical_signals = _hash_tech
+        reasoning, _ = generate_evidence_reasoning(
+            symbol=symbol,
+            technical_signals=_hash_tech,
+            fundamental_signals=fundamental_signals,
+            sentiment_signals=sentiment_signals,
+            min_factors=3,
+            max_factors=6,
+        )
+
     confidence = round(rank_score * 100, 2)
     return RankedIdea(
         symbol=symbol,
@@ -308,10 +357,9 @@ async def _collect_ideas_from_pool(
     ingestion = DataIngestion(source=_research_data_source())
     sem = asyncio.Semaphore(int(os.getenv("RESEARCH_FETCH_CONCURRENCY", "6")))
 
-    nifty_daily: list[dict] = []
-    if horizon == "SWING":
-        nifty_df = await _fetch_daily_df(ingestion, NIFTY_DAILY_SYMBOL)
-        nifty_daily = df_to_candles(nifty_df)
+    # Both swing and longterm need Nifty daily for relative strength
+    nifty_df = await _fetch_daily_df(ingestion, NIFTY_DAILY_SYMBOL)
+    nifty_daily: list[dict] = df_to_candles(nifty_df)
 
     ideas: list[RankedIdea] = []
     rank_counter = 1
@@ -325,7 +373,9 @@ async def _collect_ideas_from_pool(
                     row, rank_score, evidence_map, ingestion, nifty_daily
                 )
             else:
-                idea = await _materialize_longterm_idea(row, rank_score, evidence_map, ingestion)
+                idea = await _materialize_longterm_idea(
+                    row, rank_score, evidence_map, ingestion, nifty_daily
+                )
         if idea is None:
             continue
         ideas.append(replace(idea, rank=rank_counter))

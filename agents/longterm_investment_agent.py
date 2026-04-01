@@ -47,7 +47,7 @@ class LongTermInvestmentAgent(BaseAgent):
                 "risk_factors": risk_factors,
                 "expected_holding_period": idea.expected_holding_period,
                 "reasoning": thesis,
-                "data_authenticity": "real" if "LONGTERM_" in (idea.setup or "") else "partial",
+                "data_authenticity": "real" if "SMC_LONGTERM" in (idea.setup or "") else "partial",
             }
             create_stock_recommendation(row)
             saved += 1

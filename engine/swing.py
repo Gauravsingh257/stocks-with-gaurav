@@ -572,3 +572,280 @@ def run_swing_scan(fetch_ohlc_fn, get_universe_fn, telegram_fn):
         cfg.SWING_SCAN_SENT = True
     except Exception as e:
         logging.error(f"Swing Scanner Error: {e}")
+
+
+# =====================================================
+# LONG-TERM CANDIDATE SCORING (weekly SMC analysis)
+# =====================================================
+
+def _detect_weekly_structure(weekly_data):
+    """Weekly-timeframe structure detection (BOS / CHoCH) — same logic as daily but on weekly candles."""
+    if not weekly_data or len(weekly_data) < 20:
+        return "NEUTRAL", {}
+    swing_highs, swing_lows = [], []
+    for i in range(2, len(weekly_data) - 2):
+        if (weekly_data[i]["high"] > weekly_data[i - 1]["high"]
+                and weekly_data[i]["high"] > weekly_data[i + 1]["high"]
+                and weekly_data[i]["high"] > weekly_data[i - 2]["high"]):
+            swing_highs.append((i, weekly_data[i]["high"]))
+        if (weekly_data[i]["low"] < weekly_data[i - 1]["low"]
+                and weekly_data[i]["low"] < weekly_data[i + 1]["low"]
+                and weekly_data[i]["low"] < weekly_data[i - 2]["low"]):
+            swing_lows.append((i, weekly_data[i]["low"]))
+    if not swing_highs or not swing_lows:
+        return "NEUTRAL", {}
+    last_close = weekly_data[-1]["close"]
+    sh_i, sh_v = swing_highs[-1]
+    sl_i, sl_v = swing_lows[-1]
+    if last_close > sh_v and sh_i > sl_i:
+        return "BULLISH_BOS", {"level": sh_v, "swing_low": sl_v, "swing_high": sh_v}
+    if last_close < sl_v and sl_i > sh_i:
+        return "BEARISH_BOS", {"level": sl_v, "swing_high": sh_v, "swing_low": sl_v}
+    if len(swing_lows) >= 2 and len(swing_highs) >= 2:
+        if swing_lows[-1][1] < swing_lows[-2][1] and last_close > swing_highs[-1][1]:
+            return "BULLISH_CHOCH", {"level": swing_highs[-1][1], "reversal_from": swing_lows[-1][1]}
+        if swing_highs[-1][1] > swing_highs[-2][1] and last_close < swing_lows[-1][1]:
+            return "BEARISH_CHOCH", {"level": swing_lows[-1][1], "reversal_from": swing_highs[-1][1]}
+    return "NEUTRAL", {}
+
+
+def _detect_weekly_ob(weekly_data, direction):
+    """Order Block detection on weekly timeframe."""
+    if not weekly_data or len(weekly_data) < 10:
+        return None
+    for i in range(-10, -3):
+        ob = weekly_data[i]
+        impulse = weekly_data[i + 1:i + 4]
+        if not impulse:
+            continue
+        imp_r = max(c["high"] for c in impulse) - min(c["low"] for c in impulse)
+        ob_r = ob["high"] - ob["low"]
+        if ob_r == 0 or imp_r < ob_r * 1.5:
+            continue
+        if direction == "LONG" and ob["close"] < ob["open"]:
+            return (ob["low"], ob["high"])
+        if direction == "SHORT" and ob["close"] > ob["open"]:
+            return (ob["low"], ob["high"])
+    return None
+
+
+def _detect_weekly_fvg(weekly_data, direction):
+    """Fair Value Gap detection on weekly timeframe."""
+    if not weekly_data or len(weekly_data) < 5:
+        return None
+    for i in range(-6, -2):
+        if i + 2 >= len(weekly_data):
+            continue
+        c1, c3 = weekly_data[i], weekly_data[i + 2]
+        if direction == "LONG" and c3["low"] > c1["high"]:
+            return (c1["high"], c3["low"])
+        if direction == "SHORT" and c3["high"] < c1["low"]:
+            return (c3["high"], c1["low"])
+    return None
+
+
+def _weekly_volume_signal(weekly_data, period=8) -> str:
+    """Volume accumulation / distribution on weekly timeframe."""
+    if not weekly_data or len(weekly_data) < period + 4:
+        return "NEUTRAL"
+    recent = weekly_data[-period:]
+    older = weekly_data[-period * 2:-period] if len(weekly_data) >= period * 2 else weekly_data[:period]
+    r_avg = sum(c.get("volume", 0) for c in recent) / len(recent)
+    o_avg = sum(c.get("volume", 0) for c in older) / len(older) if older else r_avg
+    if o_avg <= 0 or r_avg <= 0:
+        return "NEUTRAL"
+    p_chg = (recent[-1]["close"] - recent[0]["close"]) / recent[0]["close"]
+    v_chg = (r_avg - o_avg) / o_avg
+    if v_chg > 0.15 and p_chg > 0:
+        return "STRONG_ACCUMULATION"
+    elif v_chg > 0.05 and p_chg >= 0:
+        return "ACCUMULATION"
+    elif v_chg > 0.15 and p_chg < -0.03:
+        return "DISTRIBUTION"
+    return "NEUTRAL"
+
+
+def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
+    """
+    Score a stock as a long-term investment candidate using weekly SMC analysis.
+    Returns dict with scoring breakdown or None if quality gate fails.
+
+    Mirrors score_swing_candidate logic but on WEEKLY timeframe:
+    - Weekly trend (higher timeframe structure)
+    - Weekly structure (BOS/CHoCH)
+    - Weekly OB + FVG
+    - Relative strength vs NIFTY (longer period)
+    - Volume accumulation on weekly
+    - 52W range context
+    """
+    if not daily_data or len(daily_data) < 60 or not weekly_data or len(weekly_data) < 20:
+        return None
+    price = daily_data[-1]["close"]
+    if price < 50:  # Longterm: ₹50 min (stricter via quality gate)
+        return None
+
+    # Avg daily volume check (relaxed vs swing — longterm doesn't need intraday liquidity)
+    avg_vol = sum(c.get("volume", 0) for c in daily_data[-20:]) / 20
+    if avg_vol < 200000:
+        return None
+
+    score = 0
+    reasons = []
+    breakdown = {}
+    direction = None
+
+    # 1. Weekly Trend (0-2)
+    wt = detect_weekly_trend(weekly_data)
+    if wt == "STRONG_BULL":
+        score += 2; breakdown["weekly_trend"] = 2; direction = "LONG"
+        reasons.append("Strong weekly BOS uptrend — institutional buying confirmed")
+    elif wt == "BULLISH":
+        score += 1; breakdown["weekly_trend"] = 1; direction = "LONG"
+        reasons.append("Weekly higher-highs pattern — steady accumulation")
+    elif wt == "STRONG_BEAR":
+        score += 2; breakdown["weekly_trend"] = 2; direction = "SHORT"
+        reasons.append("Strong weekly BOS downtrend — distribution phase")
+    elif wt == "BEARISH":
+        score += 1; breakdown["weekly_trend"] = 1; direction = "SHORT"
+        reasons.append("Weekly lower-lows — selling pressure persists")
+    else:
+        # NEUTRAL weekly trend is OK for longterm — look for accumulation at base
+        direction = "LONG"
+        breakdown["weekly_trend"] = 0
+        reasons.append("Weekly trend neutral — base formation possible")
+
+    # Longterm is LONG only — skip bearish structures
+    if direction == "SHORT":
+        return None
+
+    # 2. Weekly Structure (0-2)
+    ws, ws_info = _detect_weekly_structure(weekly_data)
+    if ws in ("BULLISH_BOS", "BULLISH_CHOCH"):
+        score += 2; breakdown["weekly_structure"] = 2
+        reasons.append(f"Weekly {ws} — long-term structural breakout confirmed")
+    elif ws == "NEUTRAL" and wt in ("STRONG_BULL", "BULLISH"):
+        score += 1; breakdown["weekly_structure"] = 1
+        reasons.append("Weekly uptrend without clear BOS — momentum intact")
+    else:
+        breakdown["weekly_structure"] = 0
+
+    # 3. Weekly OB + FVG (0-2)
+    w_ob = _detect_weekly_ob(weekly_data, "LONG")
+    w_fvg = _detect_weekly_fvg(weekly_data, "LONG")
+    zone_pts = 0
+    if w_ob:
+        zone_pts += 1; reasons.append(f"Weekly OB: ₹{w_ob[0]:.0f}-{w_ob[1]:.0f} (institutional demand zone)")
+    if w_fvg:
+        zone_pts += 1; reasons.append(f"Weekly FVG: ₹{w_fvg[0]:.0f}-{w_fvg[1]:.0f} (unfilled gap)")
+    score += zone_pts; breakdown["weekly_ob_fvg"] = zone_pts
+
+    # 4. Relative Strength vs NIFTY (0-2) — 20-day for longterm context
+    rs = calculate_relative_strength(daily_data, nifty_daily, period=20) if nifty_daily else 0.0
+    if rs > 8.0:
+        score += 2; breakdown["rs"] = 2; reasons.append(f"STRONG RS vs NIFTY: {rs:+.1f}% (20D)")
+    elif rs > 3.0:
+        score += 1; breakdown["rs"] = 1; reasons.append(f"RS vs NIFTY: {rs:+.1f}% (20D)")
+    else:
+        breakdown["rs"] = 0
+
+    # 5. Weekly Volume (0-1)
+    w_vol = _weekly_volume_signal(weekly_data)
+    if w_vol in ("ACCUMULATION", "STRONG_ACCUMULATION"):
+        score += 1; breakdown["weekly_vol"] = 1; reasons.append(f"Weekly volume: {w_vol}")
+    else:
+        breakdown["weekly_vol"] = 0
+
+    # 6. 52W Range Context (0-1)
+    lookback = min(252, len(daily_data))
+    hi52 = max(c["high"] for c in daily_data[-lookback:])
+    lo52 = min(c["low"] for c in daily_data[-lookback:])
+    pct_from_high = (hi52 - price) / hi52 * 100 if hi52 > 0 else 0
+    pct_from_low = (price - lo52) / lo52 * 100 if lo52 > 0 else 0
+    if pct_from_high < 15:
+        score += 1; breakdown["52w"] = 1; reasons.append(f"Near 52W high ({pct_from_high:.0f}% below) — strength zone")
+    elif pct_from_low < 20 and wt in ("STRONG_BULL", "BULLISH"):
+        score += 1; breakdown["52w"] = 1; reasons.append(f"Near 52W low with bullish reversal — value zone")
+    else:
+        breakdown["52w"] = 0
+
+    # 7. Daily structure confirmation (0-1)
+    ds, ds_info = detect_daily_structure(daily_data)
+    if ds in ("BULLISH_BOS", "BULLISH_CHOCH"):
+        score += 1; breakdown["daily_confirm"] = 1; reasons.append(f"Daily {ds} confirms weekly direction")
+    else:
+        breakdown["daily_confirm"] = 0
+
+    # Entry / SL / Target from weekly zones
+    atr = calculate_atr(daily_data, 14)
+    weekly_atr = calculate_atr(weekly_data, 10) if len(weekly_data) >= 10 else atr * 2.5
+
+    # Entry: weekly OB/FVG zone or demand zone pullback
+    if w_fvg and price > w_fvg[1]:
+        entry = round((w_fvg[0] + w_fvg[1]) / 2, 2)
+    elif w_ob and price > w_ob[1]:
+        entry = round(w_ob[1], 2)
+    elif ws_info.get("level"):
+        entry = round(ws_info["level"], 2) if price > ws_info["level"] * 1.01 else round(price, 2)
+    else:
+        entry = round(price, 2)
+
+    # SL below weekly demand zone or weekly swing low
+    if w_ob:
+        sl = round(w_ob[0] - weekly_atr * 0.3, 2)
+    elif ws_info.get("swing_low"):
+        sl = round(ws_info["swing_low"] - weekly_atr * 0.3, 2)
+    else:
+        sl = round(entry - weekly_atr * 2, 2)
+
+    if sl >= entry:
+        sl = round(entry - weekly_atr * 1.5, 2)
+
+    # Target: 3R from weekly structure
+    risk = abs(entry - sl)
+    target = round(entry + risk * 3, 2)
+
+    rr = round((target - entry) / max(risk, 0.01), 2)
+    potential_pct = round((target - entry) / entry * 100, 1) if entry > 0 else 0
+
+    if rr >= 3.0:
+        score += 1; breakdown["rr"] = 1; reasons.append(f"RR 1:{rr} — compelling risk/reward")
+    else:
+        breakdown["rr"] = 0
+
+    # QUALITY GATE: minimum score 5/11 for longterm
+    min_lt_quality = int(os.getenv("MIN_LONGTERM_QUALITY", "5"))
+    if score < min_lt_quality or rr < 2.0:
+        return None
+
+    # Build research context
+    chg_1m = round((price - daily_data[-20]["close"]) / daily_data[-20]["close"] * 100, 1) if len(daily_data) >= 20 else 0
+    chg_3m = round((price - daily_data[-60]["close"]) / daily_data[-60]["close"] * 100, 1) if len(daily_data) >= 60 else 0
+    avg_vol_20 = sum(c.get("volume", 0) for c in daily_data[-20:]) / 20
+    last_vol = daily_data[-1].get("volume", 0)
+    vol_ratio = round(last_vol / avg_vol_20, 2) if avg_vol_20 > 0 else 1.0
+
+    research = [
+        f"CMP: ₹{price:.2f}",
+        f"52W Range: ₹{lo52:.2f} - ₹{hi52:.2f}",
+        f"{pct_from_low:.0f}% above 52W Low | {pct_from_high:.0f}% below 52W High",
+        f"1M Chg: {chg_1m:+.1f}% | 3M Chg: {chg_3m:+.1f}%",
+        f"Weekly Trend: {wt} | Weekly Structure: {ws}",
+        f"Vol Ratio: {vol_ratio}x (vs 20D avg) | Weekly Vol: {w_vol}",
+        f"RS vs NIFTY (20D): {rs:+.1f}%",
+    ]
+
+    return {
+        "symbol": symbol, "direction": "LONG", "score": score,
+        "entry": round(entry, 2), "sl": round(sl, 2), "target": round(target, 2),
+        "rr": rr, "potential_pct": potential_pct,
+        "sector": get_sector(symbol), "weekly_trend": wt,
+        "weekly_structure": ws, "daily_structure": ds,
+        "rs": rs, "weekly_volume": w_vol,
+        "reasons": reasons, "breakdown": breakdown,
+        "research": research,
+        "weekly_ob": w_ob, "weekly_fvg": w_fvg,
+        "hi_52w": hi52, "lo_52w": lo52,
+        "pct_from_high": round(pct_from_high, 1),
+        "pct_from_low": round(pct_from_low, 1),
+        "chg_1m": chg_1m, "chg_3m": chg_3m,
+    }
