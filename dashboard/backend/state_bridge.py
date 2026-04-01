@@ -204,6 +204,27 @@ def get_engine_snapshot() -> Dict:
         except Exception:
             setup_d_state = {}
 
+        # Setup-E live state (enhanced OB — two-tier CHoCH, wick zones, reaction entry)
+        raw_ses = _safe_read("SETUP_E_STATE", {})
+        setup_e_state: Dict = {}
+        try:
+            for k, v in raw_ses.items():
+                entry = {}
+                for sk, sv in v.items():
+                    if hasattr(sv, "isoformat"):
+                        entry[sk] = sv.isoformat()
+                    elif isinstance(sv, bool):
+                        entry[sk] = sv
+                    elif isinstance(sv, (int, float, str)) or sv is None:
+                        entry[sk] = sv
+                    elif isinstance(sv, tuple):
+                        entry[sk] = list(sv)
+                    else:
+                        entry[sk] = copy.deepcopy(sv)
+                setup_e_state[k] = entry
+        except Exception:
+            setup_e_state = {}
+
         # Tier 3: adaptive intelligence snapshot
         adaptive_intel = {
             "setup_multipliers": {},
@@ -260,6 +281,7 @@ def get_engine_snapshot() -> Dict:
         index_only    = True
         paper_mode    = False
         setup_d_state = {}
+        setup_e_state = {}
         adaptive_intel = {
             "setup_multipliers": {},
             "recent_blocks": [],
@@ -367,6 +389,8 @@ def get_engine_snapshot() -> Dict:
 
         # ── Setup-D live state (stages + gap-day flag)
         "setup_d_state":       setup_d_state,
+        # ── Setup-E live state (enhanced OB — two-tier CHoCH, wick zones, reaction entry)
+        "setup_e_state":       setup_e_state,
         "adaptive_intel":      adaptive_intel,
 
         # ── Meta (engine_live: True when in-process; when standalone, from Redis heartbeat)

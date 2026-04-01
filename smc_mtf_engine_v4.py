@@ -351,8 +351,9 @@ if ENGINE_MODE == "CONSERVATIVE":
 elif ENGINE_MODE == "BALANCED":
     ACTIVE_STRATEGIES = {"SETUP_A": False, "SETUP_B": False, "SETUP_C": False, "SETUP_D": False, "HIERARCHICAL": True}
 elif ENGINE_MODE == "AGGRESSIVE":
-    ACTIVE_STRATEGIES = {"SETUP_A": True, "SETUP_B": False, "SETUP_C": False, "SETUP_D": True, "HIERARCHICAL": True}
+    ACTIVE_STRATEGIES = {"SETUP_A": True, "SETUP_B": False, "SETUP_C": False, "SETUP_D": True, "SETUP_E": True, "HIERARCHICAL": True}
     # F1.5: SETUP_D re-enabled for INDEX instruments only (Phase 8 upgrade — BOS+FVG pipeline)
+    # SETUP_E: Enhanced OB detection — two-tier CHoCH, wick zones, reaction entry, OB-only (FVG optional)
     # SETUP_D is gated inside scan_symbol to indices: NIFTY/BANKNIFTY. Negative expectancy on stocks still holds.
     # SWEEP-B: SETUP_B disabled — grid search showed -0.31R expectancy, worst setup by far
 
@@ -636,6 +637,8 @@ COOLDOWN_UNTIL = None  # F1.4: datetime when cooldown expires (None = no cooldow
 
 SETUP_D_STATE = {} # { "symbol": { "bias": "LONG", "ob": [], "fvg": [], "stage": "FORMED", "time": ... } }
 SETUP_D_STRUCTURE_TRACE = {}  # Phase 8: Decision audit log { symbol: [trace_entries, ...] } — last 50 per symbol
+
+SETUP_E_STATE = {} # { "symbol": { "bias": "LONG"/"SHORT", "ob": (lo,hi), "fvg": (lo,hi)|None, "stage": "BOS_WAIT"/"WAIT"/"TAPPED", "time": ... } }
 
 # Phase 6: Early Smart Money Activity state
 # { symbol: { type, direction, confidence, displacement, timestamp } }
@@ -1315,13 +1318,18 @@ def fetch_multitf(symbol: str):
     ltf_5m = fetch_ohlc(symbol, "5minute")
     ltf_15m = fetch_ohlc(symbol, "15minute")
 
+    # Strip the FORMING (incomplete) candle from HTF data to prevent
+    # MTF repainting. Kite historical_data returns the current candle
+    # which has unreliable OHLC until the bar closes. This is the
+    # equivalent of barstate.isconfirmed in TradingView.
+    # LTF 5m/15m keep the forming candle for real-time price tracking.
     return {
         "5m": ltf_5m,
         "15m": ltf_15m,
-        "30m": htf_30m,
-        "1h": htf_1h,
-        "4h": htf_4h,
-        "day": htf_day
+        "30m": htf_30m[:-1] if htf_30m else htf_30m,
+        "1h": htf_1h[:-1] if htf_1h else htf_1h,
+        "4h": htf_4h[:-1] if htf_4h else htf_4h,
+        "day": htf_day[:-1] if htf_day else htf_day,
     }
 
 
@@ -2540,6 +2548,343 @@ def detect_setup_d(symbol: str, tf_data: dict):
 
 
 # =====================================================
+# SETUP-E: ENHANCED OB REACTION (TWO-TIER CHoCH + WICK ZONES)
+# =====================================================
+
+def detect_setup_e(symbol: str, tf_data: dict):
+    """
+    Setup-E — Enhanced OB detection fixing the 6 gaps from Setup-D:
+    1. Two-tier CHoCH: macro HTF trend + micro LTF break (prevents wrong-direction signals)
+    2. OB with wick zones and 50-bar lookback (captures more valid OBs)
+    3. Reaction entry INSIDE the OB (not breakout above/below)
+    4. FVG is optional — OB-only setups valid (FVG adds score, not a gate)
+    5. BOS uses swing points (not 6-bar rolling high/low)
+    6. Direction flip after SL — can re-enter opposite direction on same symbol
+    """
+    ltf_data = tf_data.get("5m")
+    if not ltf_data:
+        return None
+
+    # INDEX ONLY gate (same as Setup-D)
+    if not is_index(symbol):
+        return None
+
+    htf = tf_data.get("1h", [])
+    atr = calculate_atr(ltf_data)
+    key = f"{symbol}_SETUP_E"
+    state = SETUP_E_STATE.get(key)
+
+    _expiry_secs = 14400 if is_index(symbol) else 7200  # 4h index, 2h stock
+
+    # -------- PHASE 1: DETECT CHoCH (Two-Tier) --------
+    if not state:
+        # Use the enhanced two-tier CHoCH: macro HTF context + micro LTF break
+        choch = smc.detect_choch_setup_e(ltf_data, htf)
+        if not choch:
+            return None
+
+        direction, idx = choch
+
+        if idx < 10:
+            return None
+
+        # Displacement check (same as Setup-D but slightly relaxed)
+        disp = ltf_data[idx]
+        avg_range = sum(c["high"] - c["low"] for c in ltf_data[max(0, idx - 10):idx]) / max(1, min(10, idx))
+        if avg_range > 0 and (disp["high"] - disp["low"]) < avg_range * 1.1:
+            return None
+
+        # Liquidity sweep check for scoring
+        recent_sweep = liquidity_sweep_detected(ltf_data[:idx + 1], lookback=15)
+
+        choch_break_level = ltf_data[idx]["close"]
+        SETUP_E_STATE[key] = {
+            "bias"           : direction,
+            "stage"          : "BOS_WAIT",
+            "choch_level"    : choch_break_level,
+            "choch_idx"      : idx,
+            "sweep_detected" : bool(recent_sweep),
+            "choch_time"     : now_ist(),
+            "time"           : now_ist(),
+            "ob"             : None,
+            "fvg"            : None,
+            "has_fvg"        : False,
+        }
+        logging.info(
+            f"[SETUP-E] {symbol} | CHoCH detected | dir={direction} | "
+            f"idx={idx} | sweep={recent_sweep}"
+        )
+        return None
+
+    # -------- EXPIRY CHECK --------
+    if (now_ist() - state["time"]).total_seconds() > _expiry_secs:
+        SETUP_E_STATE.pop(key, None)
+        return None
+
+    bias = state["bias"]
+    candle = ltf_data[-1]
+
+    # -------- PHASE 2: BOS CONFIRMATION (Swing-based) --------
+    if state["stage"] == "BOS_WAIT":
+        # BOS = close beyond a recent swing point (not just 6-bar rolling high)
+        swing_highs, swing_lows = smc.detect_swing_points(ltf_data[-20:], left=2, right=2)
+
+        bos_confirmed = False
+        if bias == "LONG" and swing_highs:
+            # Close above the last confirmed swing high
+            _, sh_price = swing_highs[-1]
+            if candle["close"] > sh_price:
+                bos_confirmed = True
+        elif bias == "SHORT" and swing_lows:
+            _, sl_price = swing_lows[-1]
+            if candle["close"] < sl_price:
+                bos_confirmed = True
+
+        # Fallback: CHoCH level break (gap days, strong displacement)
+        if not bos_confirmed:
+            cl = state.get("choch_level", 0)
+            if cl > 0:
+                if bias == "LONG" and candle["close"] > cl * 1.001:
+                    bos_confirmed = True
+                elif bias == "SHORT" and candle["close"] < cl * 0.999:
+                    bos_confirmed = True
+
+        if bos_confirmed:
+            # Enhanced OB: wick zones, 50-bar lookback
+            ob = smc.detect_order_block_v2(ltf_data, bias)
+            # FVG is OPTIONAL — OB alone is valid
+            fvg = detect_fvg(ltf_data, bias)
+
+            if ob:
+                state["ob"] = ob
+                state["fvg"] = fvg  # may be None
+                state["has_fvg"] = fvg is not None
+                state["stage"] = "WAIT"
+                state["bos_confirmed"] = True
+                logging.info(
+                    f"[SETUP-E] {symbol} | BOS confirmed | OB={ob} | "
+                    f"FVG={'yes' if fvg else 'no'} | dir={bias}"
+                )
+        return None
+
+    # -------- GUARD: OB must exist --------
+    if not state.get("ob"):
+        SETUP_E_STATE.pop(key, None)
+        return None
+
+    z_low, z_high = state["ob"]
+
+    # FVG zone (optional)
+    f_low, f_high = None, None
+    if state.get("fvg"):
+        f_low, f_high = state["fvg"]
+
+    # -------- PHASE 3: WAIT FOR PRICE TO REACH OB ZONE --------
+    if state["stage"] == "WAIT":
+        if bias == "LONG" and candle["low"] <= z_high:
+            state["stage"] = "TAPPED"
+            state["tap_count"] = 0
+            state["patience_bars"] = 0
+            state["sweep_low"] = None
+        elif bias == "SHORT" and candle["high"] >= z_low:
+            state["stage"] = "TAPPED"
+            state["tap_count"] = 0
+            state["patience_bars"] = 0
+            state["sweep_high"] = None
+        return None
+
+    # -------- PHASE 4: PRODUCTION ENTRY LOGIC --------
+    # Three entry modes (priority order):
+    #   A) SWEEP: candle wicks below OB, closes back inside (highest win-rate)
+    #   B) DEEP:  candle reaches lower 40% of zone + bullish wick rejection
+    #   C) DOUBLE TAP: 2nd+ test of zone reaches zone midpoint + confirmation
+    # NEVER enter on the first touch at zone top.
+    if state["stage"] == "TAPPED":
+        zone_mid = (z_low + z_high) / 2
+        zone_deep = z_low + (z_high - z_low) * 0.4   # lower 40% line for LONG
+        buffer = compute_dynamic_buffer(symbol, atr)
+        state["patience_bars"] = state.get("patience_bars", 0) + 1
+
+        # Max patience: 20 bars (100 min on 5m) after first tap
+        if state["patience_bars"] > 20:
+            SETUP_E_STATE.pop(key, None)
+            return None
+
+        entry = sl = target = None
+        entry_mode = None
+
+        if bias == "LONG":
+            body = abs(candle["close"] - candle["open"])
+            lower_wick = min(candle["open"], candle["close"]) - candle["low"]
+            bullish = candle["close"] > candle["open"]
+            wick_rej = body > 0 and lower_wick > body * 0.8
+
+            # ── A) SWEEP entry: wick below OB low, close back inside ──
+            sweep = candle["low"] < z_low and candle["close"] > z_low and bullish
+            if sweep:
+                entry = candle["close"]
+                sl = candle["low"] - atr * 0.1   # tight SL under sweep wick
+                state["sweep_low"] = candle["low"]
+                entry_mode = "SWEEP"
+                logging.info(f"[SETUP-E] {symbol} SWEEP entry | low={candle['low']:.1f} < OB {z_low:.1f}")
+
+            # ── B) DEEP entry: price in lower 40% of zone + wick rejection ──
+            elif candle["low"] <= zone_deep and bullish and wick_rej:
+                entry = candle["close"]
+                sl = z_low - buffer
+                entry_mode = "DEEP"
+                logging.info(f"[SETUP-E] {symbol} DEEP entry | low={candle['low']:.1f} <= deep_line {zone_deep:.1f}")
+
+            # ── C) DOUBLE TAP: 2nd+ test reaches zone mid + bullish ──
+            elif state.get("tap_count", 0) >= 1 and candle["low"] <= zone_mid and bullish:
+                entry = candle["close"]
+                sl = z_low - buffer
+                entry_mode = "DOUBLE_TAP"
+                logging.info(f"[SETUP-E] {symbol} DOUBLE_TAP entry | tap#{state['tap_count']+1}")
+
+            else:
+                # Track taps but don't enter
+                if candle["low"] <= z_high:
+                    state["tap_count"] = state.get("tap_count", 0) + 1
+
+                # Invalidation: strong close below OB with margin
+                if candle["close"] < z_low - atr * 0.3:
+                    SETUP_E_STATE.pop(key, None)
+                    _try_direction_flip(symbol, "SHORT", ltf_data, tf_data)
+                return None
+
+            if entry and sl:
+                target = entry + 2.0 * (entry - sl)
+
+        elif bias == "SHORT":
+            body = abs(candle["close"] - candle["open"])
+            upper_wick = candle["high"] - max(candle["open"], candle["close"])
+            bearish = candle["close"] < candle["open"]
+            wick_rej = body > 0 and upper_wick > body * 0.8
+            zone_deep_short = z_high - (z_high - z_low) * 0.4  # upper 40% line
+
+            # ── A) SWEEP entry: wick above OB high, close back inside ──
+            sweep = candle["high"] > z_high and candle["close"] < z_high and bearish
+            if sweep:
+                entry = candle["close"]
+                sl = candle["high"] + atr * 0.1
+                state["sweep_high"] = candle["high"]
+                entry_mode = "SWEEP"
+                logging.info(f"[SETUP-E] {symbol} SWEEP entry SHORT | high={candle['high']:.1f} > OB {z_high:.1f}")
+
+            # ── B) DEEP entry: price in upper 40% of zone + wick rejection ──
+            elif candle["high"] >= zone_deep_short and bearish and wick_rej:
+                entry = candle["close"]
+                sl = z_high + buffer
+                entry_mode = "DEEP"
+                logging.info(f"[SETUP-E] {symbol} DEEP entry SHORT | high={candle['high']:.1f} >= deep_line {zone_deep_short:.1f}")
+
+            # ── C) DOUBLE TAP: 2nd+ test reaches zone mid + bearish ──
+            elif state.get("tap_count", 0) >= 1 and candle["high"] >= zone_mid and bearish:
+                entry = candle["close"]
+                sl = z_high + buffer
+                entry_mode = "DOUBLE_TAP"
+                logging.info(f"[SETUP-E] {symbol} DOUBLE_TAP entry SHORT | tap#{state['tap_count']+1}")
+
+            else:
+                if candle["high"] >= z_low:
+                    state["tap_count"] = state.get("tap_count", 0) + 1
+
+                if candle["close"] > z_high + atr * 0.3:
+                    SETUP_E_STATE.pop(key, None)
+                    _try_direction_flip(symbol, "LONG", ltf_data, tf_data)
+                return None
+
+            if entry and sl:
+                target = entry - 2.0 * (sl - entry)
+        else:
+            return None
+
+        # ── Common: RR gate, dedup, emit signal ──
+        if not entry or not sl or not target:
+            return None
+
+        rr = abs(target - entry) / abs(entry - sl) if sl != entry else 0
+        if rr < 1.8:
+            SETUP_E_STATE.pop(key, None)
+            return None
+
+        dedup_key = f"{clean_symbol(symbol)}_SETUPE_{bias}"
+        if already_alerted_today(dedup_key):
+            SETUP_E_STATE.pop(key, None)
+            return None
+
+        SETUP_E_STATE.pop(key, None)
+
+        return {
+            "setup"          : "SETUP-E",
+            "symbol"         : symbol,
+            "direction"      : bias,
+            "entry"          : round(entry, 2),
+            "sl"             : round(sl, 2),
+            "target"         : round(target, 2),
+            "rr"             : round(rr, 2),
+            "option"         : option_strike(entry, bias),
+            "ob"             : (z_low, z_high),
+            "fvg"            : (f_low, f_high) if f_low is not None else None,
+            "ltf"            : ltf_data[-80:],
+            "analysis"       : f"CHoCH(2-tier)+BOS(swing)+OBv2+{entry_mode} (Setup-E)",
+            "entry_mode"     : entry_mode,
+            "bos_confirmed"  : state.get("bos_confirmed", False),
+            "sweep_detected" : state.get("sweep_detected", False),
+            "has_fvg"        : state.get("has_fvg", False),
+            "choch_time"     : state.get("choch_time"),
+        }
+
+    return None
+
+
+def _try_direction_flip(symbol: str, new_direction: str, ltf_data: list, tf_data: dict):
+    """
+    After SL/invalidation, check if structure supports the opposite direction.
+    If so, seed a fresh SETUP-E state for re-entry (direction flip).
+    """
+    key = f"{symbol}_SETUP_E"
+    if key in SETUP_E_STATE:
+        return  # Already has a state, don't overwrite
+
+    htf = tf_data.get("1h", [])
+    # Quick validation: does HTF support the new direction?
+    htf_bias = detect_htf_bias(htf) if htf else None
+    # Block flip if HTF strongly opposes
+    if htf_bias == "LONG" and new_direction == "SHORT":
+        return
+    if htf_bias == "SHORT" and new_direction == "LONG":
+        return
+
+    # Check if there's a valid OB in the new direction
+    ob = smc.detect_order_block_v2(ltf_data, new_direction)
+    if not ob:
+        return
+
+    fvg = detect_fvg(ltf_data, new_direction)
+
+    SETUP_E_STATE[key] = {
+        "bias"           : new_direction,
+        "stage"          : "WAIT",  # Skip BOS since structure just broke
+        "choch_level"    : ltf_data[-1]["close"],
+        "choch_idx"      : len(ltf_data) - 1,
+        "sweep_detected" : False,
+        "choch_time"     : now_ist(),
+        "time"           : now_ist(),
+        "ob"             : ob,
+        "fvg"            : fvg,
+        "has_fvg"        : fvg is not None,
+        "bos_confirmed"  : True,  # Structure break is the OB invalidation itself
+        "flipped"        : True,
+    }
+    logging.info(
+        f"[SETUP-E] {symbol} | Direction FLIP → {new_direction} | "
+        f"OB={ob} | FVG={'yes' if fvg else 'no'}"
+    )
+
+
+# =====================================================
 # MASTER SIGNAL SCANNER
 # =====================================================
 
@@ -2758,6 +3103,100 @@ def smc_confluence_score_setup_d(signal: dict, ltf_data: list, htf_data: list) -
     return score, breakdown
 
 
+def smc_confluence_score_setup_e(signal: dict, ltf_data: list, htf_data: list) -> tuple:
+    """
+    Confluence scoring for Setup-E (Enhanced OB Reaction).
+
+    Weights (max 10):
+      choch_2tier  +2  — two-tier CHoCH (macro HTF context validated)
+      bos_swing    +2  — BOS confirmed via swing point break
+      ob_v2        +2  — Order Block v2 (wick zones, 50-bar lookback)
+      fvg          +1  — Fair Value Gap present (BONUS, not required)
+      sweep        +1  — Liquidity sweep detected near CHoCH
+      reaction     +1  — Reaction entry quality (wick rejection, inside zone)
+      zone         +1  — Price in discount (LONG) or premium (SHORT)
+    Total max = 10.  Approval threshold: 5.
+    """
+    score = 0
+    breakdown = {}
+    direction = signal.get("direction", "")
+    entry = signal.get("entry", 0)
+
+    # 1. Two-tier CHoCH (+2) — always present for Setup-E
+    score += 2
+    breakdown["choch_2tier"] = 2
+
+    # 2. BOS confirmed (+2)
+    if signal.get("bos_confirmed"):
+        score += 2
+        breakdown["bos_swing"] = 2
+    else:
+        breakdown["bos_swing"] = 0
+
+    # 3. Order Block v2 (+2) — always present (entry gate)
+    if signal.get("ob"):
+        score += 2
+        breakdown["ob_v2"] = 2
+    else:
+        breakdown["ob_v2"] = 0
+
+    # 4. FVG (+1) — bonus, not a gate
+    if signal.get("has_fvg") or signal.get("fvg"):
+        score += 1
+        breakdown["fvg"] = 1
+    else:
+        breakdown["fvg"] = 0
+
+    # 5. Liquidity Sweep (+1) — also awards for SWEEP entry mode
+    entry_mode = signal.get("entry_mode", "")
+    if entry_mode == "SWEEP" or signal.get("sweep_detected"):
+        score += 1
+        breakdown["sweep"] = 1
+    elif liquidity_sweep_detected(ltf_data):
+        score += 1
+        breakdown["sweep"] = 1
+    else:
+        breakdown["sweep"] = 0
+
+    # 6. Entry quality (+1) — SWEEP/DEEP modes are higher quality than DOUBLE_TAP
+    if entry_mode in ("SWEEP", "DEEP"):
+        score += 1
+        breakdown["reaction"] = 1
+    elif ltf_data:
+        c = ltf_data[-1]
+        body = abs(c["close"] - c["open"])
+        lower_wick = min(c["open"], c["close"]) - c["low"]
+        upper_wick = c["high"] - max(c["open"], c["close"])
+        if direction == "LONG" and body > 0 and lower_wick > body * 0.6:
+            score += 1
+            breakdown["reaction"] = 1
+        elif direction == "SHORT" and body > 0 and upper_wick > body * 0.6:
+            score += 1
+            breakdown["reaction"] = 1
+        else:
+            breakdown["reaction"] = 0
+    else:
+        breakdown["reaction"] = 0
+
+    # 7. Zone location (+1) — discount for LONG, premium for SHORT
+    if direction == "LONG":
+        if is_discount_zone(htf_data, entry):
+            score += 1
+            breakdown["zone"] = 1
+        else:
+            breakdown["zone"] = 0
+    elif direction == "SHORT":
+        if is_premium_zone(htf_data, entry):
+            score += 1
+            breakdown["zone"] = 1
+        else:
+            breakdown["zone"] = 0
+    else:
+        breakdown["zone"] = 0
+
+    return score, breakdown
+
+
 # =====================================================
 # MANUAL TRADE INTEGRATION
 # =====================================================
@@ -2949,7 +3388,23 @@ def scan_symbol(symbol: str):
             logging.error(f"Setup D Error {symbol}: {e}")
             if DEBUG_MODE: print(f"Setup D Error {symbol}: {e}")
 
-    # 5. HIERARCHICAL (V3 Strict)
+    # 5. SETUP E  (Enhanced OB — two-tier CHoCH, wick zones, reaction entry)
+    if ACTIVE_STRATEGIES.get("SETUP_E"):
+        try:
+            if not is_index(symbol):
+                if DEBUG_MODE: logging.debug(f"{symbol} Setup E → Skipped (not an index)")
+            else:
+                se = detect_setup_e(symbol, tf_data)
+                if se:
+                    signals.append(se)
+                    logging.info(f"✅ {symbol} FOUND SETUP E")
+                else:
+                    if DEBUG_MODE: logging.debug(f"{symbol} Setup E -> No Signal")
+        except Exception as e:
+            logging.error(f"Setup E Error {symbol}: {e}")
+            if DEBUG_MODE: print(f"Setup E Error {symbol}: {e}")
+
+    # 6. HIERARCHICAL (V3 Strict)
     if ACTIVE_STRATEGIES.get("HIERARCHICAL"):
         try:
             sh = detect_hierarchical(symbol)
@@ -2989,6 +3444,8 @@ def scan_symbol(symbol: str):
             setup_name = sig.get("setup", "")
             if setup_name == "SETUP-D":
                 score, breakdown = smc_confluence_score_setup_d(sig, ltf_data, htf_data)
+            elif setup_name == "SETUP-E":
+                score, breakdown = smc_confluence_score_setup_e(sig, ltf_data, htf_data)
             else:
                 score, breakdown = smc_confluence_score(sig, ltf_data, htf_data)
             sig["smc_score"] = score
@@ -3038,6 +3495,11 @@ def scan_symbol(symbol: str):
             # sweep(2)+choch(1)+bos(2)+ob(2) = 7 when all present; require 6 to allow partial
             if setup_name == "SETUP-D":
                 min_score_for_signal = 6
+
+            # SETUP-E QUALITY FILTER: reaction entry has better win rate, threshold = 5
+            # choch_2tier(2)+bos(2)+ob(2)+reaction(1) = 7 max; allow 5 to pass OB-only setups
+            if setup_name == "SETUP-E":
+                min_score_for_signal = 5
 
             # SETUP-A QUALITY FILTER: Backtest shows Score 5-6 has negative expectancy
             # Score 5: WR=14.3%, E=-0.450R  |  Score 6: WR=38.1%, E=-0.143R
@@ -4818,7 +5280,8 @@ def save_engine_states():
             pickle.dump({
                 "STRUCTURE_STATE": STRUCTURE_STATE,
                 "ZONE_STATE": ZONE_STATE,
-                "SETUP_D_STATE": SETUP_D_STATE
+                "SETUP_D_STATE": SETUP_D_STATE,
+                "SETUP_E_STATE": SETUP_E_STATE
             }, f)
     except Exception as e:
         if DEBUG_MODE: print(f"Failed to save engine states: {e}")
@@ -4836,7 +5299,7 @@ def save_engine_states():
         logging.error(f"Failed to persist circuit breaker state: {e}")
 
 def load_engine_states():
-    global STRUCTURE_STATE, ZONE_STATE, SETUP_D_STATE
+    global STRUCTURE_STATE, ZONE_STATE, SETUP_D_STATE, SETUP_E_STATE
     global DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE, DAILY_SIGNAL_COUNT
     try:
         import os
@@ -4846,6 +5309,7 @@ def load_engine_states():
                 STRUCTURE_STATE.update(data.get("STRUCTURE_STATE", {}))
                 ZONE_STATE.update(data.get("ZONE_STATE", {}))
                 SETUP_D_STATE.update(data.get("SETUP_D_STATE", {}))
+                SETUP_E_STATE.update(data.get("SETUP_E_STATE", {}))
             print("[INFO] Reloaded internal engine state from disk.")
     except Exception as e:
         if DEBUG_MODE: print(f"Failed to load engine states: {e}")
@@ -5081,6 +5545,7 @@ def run_live_mode():
                      ZONE_STATE.clear()
                      STRUCTURE_STATE.clear()
                      SETUP_D_STATE.clear()
+                     SETUP_E_STATE.clear()
                      EARLY_WARNING_STATE.clear()
                      EMA_LAST_PROCESSED.clear()
                      DAILY_LOG.clear()

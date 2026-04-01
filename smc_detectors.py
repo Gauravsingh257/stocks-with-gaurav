@@ -994,3 +994,225 @@ def get_ltf_structure_bias(ltf_data: list) -> str:
     elif trend == "BEARISH":
         return "BEARISH"
     return "NEUTRAL"
+
+
+# =====================================================
+# SETUP-E: ENHANCED ORDER BLOCK DETECTION (WICK ZONES)
+# =====================================================
+
+def detect_order_block_v2(candles: list, direction: str, lookback: int = 50,
+                          min_displacement_mult: float = 1.5,
+                          min_body_atr_ratio: float = 0.2,
+                          wick_extension_pct: float = 0.3) -> Optional[Tuple[float, float]]:
+    """
+    Enhanced OB detection for Setup-E:
+    - 50-bar lookback (vs 30 in v1) — covers full morning session on 5m
+    - Zone includes body + partial wick (captures institutional footprint)
+    - Relaxed displacement (1.5x vs 2x) — allows moderate OBs
+    - Lower body threshold (0.2 ATR vs 0.3) — doesn't discard small-body OBs
+    - Mitigation check allows minor wick sweeps (close must break, not wick)
+    """
+    if len(candles) < 10:
+        return None
+
+    atr = calculate_atr(candles)
+    if atr <= 0:
+        return None
+
+    current_price = candles[-1]["close"]
+    scan_start = max(0, len(candles) - lookback)
+
+    best_ob = None
+    best_distance = float("inf")
+
+    for i in range(scan_start, len(candles) - 3):
+        ob = candles[i]
+        ob_body = abs(ob["close"] - ob["open"])
+        ob_range = ob["high"] - ob["low"]
+
+        if ob_range <= 0:
+            continue
+
+        if ob_body < atr * min_body_atr_ratio:
+            continue
+
+        end_idx = min(i + 4, len(candles))
+        impulse = candles[i + 1:end_idx]
+        if not impulse:
+            continue
+
+        impulse_high = max(c["high"] for c in impulse)
+        impulse_low = min(c["low"] for c in impulse)
+        impulse_range = impulse_high - impulse_low
+
+        if impulse_range < ob_range * min_displacement_mult:
+            continue
+
+        if direction == "LONG":
+            if ob["close"] >= ob["open"]:
+                continue
+            displacement = impulse_high - ob["high"]
+            if displacement <= 0:
+                continue
+            if impulse[0]["close"] <= impulse[0]["open"]:
+                continue
+
+            # Body + partial wick for zone
+            body_low = ob["close"]
+            body_high = ob["open"]
+            wick_below = body_low - ob["low"]
+            ob_low = body_low - wick_below * wick_extension_pct
+            ob_high = body_high
+
+            # Minimum zone size: at least 0.3 ATR (prevents micro-zones)
+            zone_size = ob_high - ob_low
+            min_zone = atr * 0.3
+            if zone_size < min_zone:
+                # Expand zone symmetrically using the full candle range
+                expansion = (min_zone - zone_size) / 2
+                ob_low = max(ob["low"], ob_low - expansion)
+                ob_high = min(ob["high"], ob_high + expansion)
+
+            # Mitigation: only invalidated by a CLOSE below ob_low (not wick)
+            mitigated = False
+            for j in range(i + len(impulse), len(candles)):
+                if candles[j]["close"] < ob_low:
+                    mitigated = True
+                    break
+            if mitigated:
+                continue
+
+            dist = abs(current_price - (ob_low + ob_high) / 2)
+            if dist < best_distance and current_price >= ob_low:
+                best_distance = dist
+                best_ob = (round(ob_low, 2), round(ob_high, 2))
+
+        elif direction == "SHORT":
+            if ob["close"] <= ob["open"]:
+                continue
+            displacement = ob["low"] - impulse_low
+            if displacement <= 0:
+                continue
+            if impulse[0]["close"] >= impulse[0]["open"]:
+                continue
+
+            body_low = ob["open"]
+            body_high = ob["close"]
+            wick_above = ob["high"] - body_high
+            ob_low = body_low
+            ob_high = body_high + wick_above * wick_extension_pct
+
+            # Minimum zone size: at least 0.3 ATR
+            zone_size = ob_high - ob_low
+            min_zone = atr * 0.3
+            if zone_size < min_zone:
+                expansion = (min_zone - zone_size) / 2
+                ob_low = max(ob["low"], ob_low - expansion)
+                ob_high = min(ob["high"], ob_high + expansion)
+
+            mitigated = False
+            for j in range(i + len(impulse), len(candles)):
+                if candles[j]["close"] > ob_high:
+                    mitigated = True
+                    break
+            if mitigated:
+                continue
+
+            dist = abs(current_price - (ob_low + ob_high) / 2)
+            if dist < best_distance and current_price <= ob_high:
+                best_distance = dist
+                best_ob = (round(ob_low, 2), round(ob_high, 2))
+
+    return best_ob
+
+
+# =====================================================
+# SETUP-E: TWO-TIER CHoCH (MACRO HTF + MICRO LTF)
+# =====================================================
+
+def detect_choch_setup_e(candles_ltf: list, candles_htf: list,
+                         lookback: int = 30,
+                         swing_left: int = 3, swing_right: int = 2) -> Optional[Tuple[str, int]]:
+    """
+    Two-tier CHoCH for Setup-E:
+    1. MACRO trend from HTF (1H) — stable, doesn't flip on intraday rally
+    2. MICRO structure from LTF (5m) — detects the actual break
+
+    Key difference from Setup-D: CHoCH fires AGAINST the macro trend, not the
+    micro trend. This prevents the "trend reclassification" bug where a rally
+    within a downtrend causes the algo to fire SHORT instead of LONG.
+
+    Uses swing_right=2 (vs 3 in Setup-D) for faster LTF confirmation.
+
+    Returns:
+        (direction, break_index_in_ltf) or None
+    """
+    if len(candles_ltf) < lookback:
+        return None
+
+    # Step 1: Determine MACRO trend from HTF
+    macro_bias = detect_htf_bias(candles_htf) if candles_htf and len(candles_htf) >= 25 else None
+    # Also get HTF swing trend for additional context
+    if candles_htf and len(candles_htf) >= 25:
+        htf_sh, htf_sl = detect_swing_points(candles_htf, left=3, right=3)
+        htf_classified = classify_swings(htf_sh, htf_sl)
+        htf_trend = determine_trend(htf_classified, min_points=4)
+    else:
+        htf_trend = "UNKNOWN"
+
+    # Step 2: Detect LTF swing structure
+    recent = candles_ltf[-lookback:]
+    swing_highs, swing_lows = detect_swing_points(recent, left=swing_left, right=swing_right)
+
+    if not swing_highs or not swing_lows:
+        return None
+
+    last_idx = len(recent) - 1
+    recency_limit = lookback // 2
+
+    # Determine effective macro direction.
+    # When both macro_bias and htf_trend are undetermined, use price position
+    # relative to the HTF range as a tiebreaker — prevents firing both directions.
+    effective_macro = None
+    if macro_bias in ("LONG", "SHORT"):
+        effective_macro = macro_bias
+    elif htf_trend in ("BULLISH",):
+        effective_macro = "LONG"
+    elif htf_trend in ("BEARISH",):
+        effective_macro = "SHORT"
+    else:
+        # Fallback: if recent HTF price is in bottom 40% of range → SHORT bias,
+        # top 40% → LONG bias, middle → truly unknown (allow both but with caution)
+        if candles_htf and len(candles_htf) >= 10:
+            htf_recent = candles_htf[-10:]
+            range_high = max(c["high"] for c in htf_recent)
+            range_low = min(c["low"] for c in htf_recent)
+            range_span = range_high - range_low
+            if range_span > 0:
+                position = (htf_recent[-1]["close"] - range_low) / range_span
+                if position < 0.4:
+                    effective_macro = "SHORT"  # price in lower range → bearish context
+                elif position > 0.6:
+                    effective_macro = "LONG"   # price in upper range → bullish context
+                # else: middle → None (both directions allowed)
+
+    # Step 3: Bullish CHoCH — macro must NOT be clearly LONG/BULLISH
+    # (CHoCH = change of character = AGAINST the trend)
+    if effective_macro != "LONG":
+        sh_idx, sh_price = swing_highs[-1]
+        if last_idx - sh_idx <= recency_limit:
+            for j in range(sh_idx + swing_right, len(recent)):
+                if recent[j]["close"] > sh_price:
+                    original_idx = len(candles_ltf) - lookback + j
+                    return "LONG", original_idx
+
+    # Step 4: Bearish CHoCH — macro must NOT be clearly SHORT/BEARISH
+    if effective_macro != "SHORT":
+        sl_idx, sl_price = swing_lows[-1]
+        if last_idx - sl_idx <= recency_limit:
+            for j in range(sl_idx + swing_right, len(recent)):
+                if recent[j]["close"] < sl_price:
+                    original_idx = len(candles_ltf) - lookback + j
+                    return "SHORT", original_idx
+
+    return None

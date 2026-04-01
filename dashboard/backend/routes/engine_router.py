@@ -160,6 +160,19 @@ def get_setup_d_state():
     }
 
 
+@router.get("/setup-e-state")
+def get_setup_e_state():
+    """
+    Returns the current live SETUP_E_STATE dict — shows what symbols are
+    in BOS_WAIT / WAIT / TAPPED stages for Setup-E (enhanced OB reaction).
+    """
+    state = _safe_engine_read("SETUP_E_STATE", {})
+    return {
+        "active_count": len(state),
+        "states": _serialise_state(state),
+    }
+
+
 @router.get("/setup-d-config")
 def get_setup_d_config():
     """
@@ -170,6 +183,7 @@ def get_setup_d_config():
 
     return {
         "setup_d_enabled": active_strategies.get("SETUP_D", False),
+        "setup_e_enabled": active_strategies.get("SETUP_E", False),
         "index_only": True,  # Phase 1: always index-only
         "disabled_setups": list(disabled_setups),
         "phases_active": {
