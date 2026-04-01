@@ -29,10 +29,10 @@ RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
 
 def _swing_atr_fallback_enabled() -> bool:
     """
-    Default ON: when SMC returns None (no signal), still materialize ATR-based long levels.
-    SHORT signals are never replaced by ATR (see build_swing_trade_levels). Set to 0 to require SMC LONG only.
+    Default OFF: ATR fallback creates synthetic long plans for stocks where SMC found nothing.
+    This produces misleading recommendations. Enable only for testing with RESEARCH_SWING_ATR_FALLBACK=1.
     """
-    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "1").strip().lower() not in ("0", "false", "no")
+    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 
 
 def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:

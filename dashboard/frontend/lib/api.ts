@@ -236,8 +236,10 @@ export interface SwingIdea {
   technical_factors: Record<string, unknown>;
   fundamental_factors: Record<string, unknown>;
   sentiment_factors: Record<string, unknown>;
+  signal_first_detected_at: string | null;
   signals_updated_at: string | null;
   created_at: string;
+  data_authenticity: string;
 }
 
 export interface LongTermIdea {

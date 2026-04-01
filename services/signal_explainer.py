@@ -160,22 +160,27 @@ def extract_swing_signals(
     volume_multiple = round(1.0 + (technical.volume_expansion * 2.0), 1)
     momentum_spread = round((technical.macd_momentum - 0.5) * 2.0, 2)
 
+    # Label source: hash-based scores get "estimated" prefix
+    _t_src = "" if getattr(technical, "data_source", "hash") != "hash" else " (estimated)"
+
     technical_signals = {
-        "trend": f"Daily structure score {_pct(technical.trend_structure)} indicates {_descriptor(technical.trend_structure, 'a confirmed uptrend', 'a constructive uptrend', 'a weak uptrend')}.",
-        "breakout": f"Breakout pressure score {_pct(technical.fvg_quality)} with a {resistance_days}-day resistance test in focus.",
-        "volume": f"Volume expansion at {volume_multiple}x baseline ({_pct(technical.volume_expansion)} score).",
-        "rsi": f"RSI {rsi} derived from momentum score {_pct(technical.rsi_momentum)}.",
-        "macd": f"MACD momentum spread {momentum_spread:+.2f} from score {_pct(technical.macd_momentum)}.",
-        "relative_strength": f"Multi-timeframe alignment {_pct(technical.mtf_alignment)} implies relative strength {relative_strength:+.1f}% vs NIFTY proxy.",
+        "trend": f"Daily structure score {_pct(technical.trend_structure)} indicates {_descriptor(technical.trend_structure, 'a confirmed uptrend', 'a constructive uptrend', 'a weak uptrend')}{_t_src}.",
+        "breakout": f"Breakout pressure score {_pct(technical.fvg_quality)} with a {resistance_days}-day resistance test in focus{_t_src}.",
+        "volume": f"Volume expansion at {volume_multiple}x baseline ({_pct(technical.volume_expansion)} score){_t_src}.",
+        "rsi": f"RSI {rsi} derived from momentum score {_pct(technical.rsi_momentum)}{_t_src}.",
+        "macd": f"MACD momentum spread {momentum_spread:+.2f} from score {_pct(technical.macd_momentum)}{_t_src}.",
+        "relative_strength": f"Multi-timeframe alignment {_pct(technical.mtf_alignment)} implies relative strength {relative_strength:+.1f}% vs NIFTY proxy{_t_src}.",
     }
 
     fundamental_signals = _build_fundamental_signals_swing(fundamental)
 
+    # Sentiment signals are synthetic — label clearly
+    _s_note = " (baseline estimate — no live news data)" if getattr(sentiment, "data_source", "synthetic") == "synthetic" else ""
     sentiment_signals = {
-        "news_sentiment": f"Financial-news sentiment score {_pct(sentiment.financial_news)} with {_descriptor(sentiment.financial_news, 'positive earnings/news bias', 'balanced tone', 'cautious tone')}.",
-        "earnings_event": f"Earnings-event bias score {_pct(sentiment.earnings_event_bias)}.",
-        "sector_rotation": f"Sector rotation score {_pct(sentiment.sector_rotation)} indicates {'inflow' if sentiment.sector_rotation >= 0.58 else 'neutral flow'}.",
-        "macro_sentiment": f"Macro sentiment score {_pct(sentiment.macro_sentiment)}.",
+        "news_sentiment": f"Financial-news sentiment score {_pct(sentiment.financial_news)}{_s_note}.",
+        "earnings_event": f"Earnings-event bias score {_pct(sentiment.earnings_event_bias)}{_s_note}.",
+        "sector_rotation": f"Sector rotation score {_pct(sentiment.sector_rotation)}{_s_note}.",
+        "macro_sentiment": f"Macro sentiment score {_pct(sentiment.macro_sentiment)}{_s_note}.",
     }
 
     return SignalEvidence(
@@ -194,17 +199,19 @@ def extract_longterm_signals(
 ) -> SignalEvidence:
     long_term_acc = round((technical.order_block_quality * 100), 1)
     rs = round((technical.mtf_alignment - 0.5) * 16, 1)
+    _t_src = "" if getattr(technical, "data_source", "hash") != "hash" else " (estimated)"
     technical_signals = {
-        "accumulation": f"Long-term accumulation score {long_term_acc} based on order-block quality {_pct(technical.order_block_quality)}.",
-        "breakout_structure": f"Breakout structure score {_pct(technical.trend_structure)} over higher timeframe.",
-        "relative_strength": f"Relative strength estimate {rs:+.1f}% vs index from alignment {_pct(technical.mtf_alignment)}.",
+        "accumulation": f"Long-term accumulation score {long_term_acc} based on order-block quality {_pct(technical.order_block_quality)}{_t_src}.",
+        "breakout_structure": f"Breakout structure score {_pct(technical.trend_structure)} over higher timeframe{_t_src}.",
+        "relative_strength": f"Relative strength estimate {rs:+.1f}% vs index from alignment {_pct(technical.mtf_alignment)}{_t_src}.",
     }
     fundamental_signals = _build_fundamental_signals_longterm(fundamental)
+    _s_note = " (baseline estimate)" if getattr(sentiment, "data_source", "synthetic") == "synthetic" else ""
     sentiment_signals = {
-        "industry_tailwinds": f"Industry tailwind score {_pct((fundamental.sector_strength + sentiment.sector_rotation) / 2)}.",
-        "policy_impact": f"Policy sensitivity score {_pct(sentiment.macro_sentiment)}.",
-        "macro_sentiment": f"Macro context {_pct(sentiment.macro_sentiment)}.",
-        "news_sentiment": f"News sentiment {_pct(sentiment.financial_news)}.",
+        "industry_tailwinds": f"Industry tailwind score {_pct((fundamental.sector_strength + sentiment.sector_rotation) / 2)}{_s_note}.",
+        "policy_impact": f"Policy sensitivity score {_pct(sentiment.macro_sentiment)}{_s_note}.",
+        "macro_sentiment": f"Macro context {_pct(sentiment.macro_sentiment)}{_s_note}.",
+        "news_sentiment": f"News sentiment {_pct(sentiment.financial_news)}{_s_note}.",
     }
     return SignalEvidence(
         symbol=symbol,

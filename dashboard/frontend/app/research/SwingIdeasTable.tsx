@@ -140,8 +140,26 @@ function LevelsTooltip({ item }: LevelsTooltipProps) {
   );
 }
 
+function DataBadge({ auth }: { auth?: string }) {
+  if (!auth || auth === "unknown") return null;
+  const colors: Record<string, { bg: string; fg: string; label: string }> = {
+    real: { bg: "rgba(0,209,140,0.15)", fg: "#00d18c", label: "Verified Data" },
+    partial: { bg: "rgba(240,192,96,0.15)", fg: "#f0c060", label: "Partial Data" },
+    synthetic: { bg: "rgba(255,78,106,0.15)", fg: "#ff4e6a", label: "Estimated" },
+  };
+  const c = colors[auth] || colors.partial!;
+  return (
+    <span style={{
+      fontSize: "0.65rem", padding: "2px 6px", borderRadius: 4,
+      background: c.bg, color: c.fg, fontWeight: 600, whiteSpace: "nowrap",
+    }}>
+      {c.label}
+    </span>
+  );
+}
+
 export function SwingIdeasTable({ items }: Props) {
-  const headers = ["#", "Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Chart", "Recommended", "Analysis Updated", "Reasoning"];
+  const headers = ["#", "Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
@@ -149,7 +167,14 @@ export function SwingIdeasTable({ items }: Props) {
         Swing Trade Opportunities
       </div>
       {items.length === 0 ? (
-        <div style={{ padding: "24px", color: "var(--text-secondary)" }}>No swing ideas yet. Run the swing agent or wait for the weekly scan.</div>
+        <div style={{ padding: "24px", textAlign: "center" }}>
+          <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem", fontWeight: 500 }}>
+            No high-quality swing opportunities found
+          </div>
+          <div style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginTop: 6 }}>
+            The system only recommends stocks when genuine SMC setups are detected. Run a scan or check back later.
+          </div>
+        </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
@@ -171,10 +196,13 @@ export function SwingIdeasTable({ items }: Props) {
                   <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_2)}</td>
                   <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
                   <td style={{ padding: "10px 12px" }}>
+                    <DataBadge auth={item.data_authenticity} />
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
                     <LevelsTooltip item={item} />
                   </td>
                   <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>
-                    {fmtDate(item.created_at)}
+                    {fmtDate(item.signal_first_detected_at || item.created_at)}
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
                     <span

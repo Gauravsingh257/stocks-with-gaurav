@@ -29,6 +29,7 @@ class TechnicalSnapshot:
     mtf_alignment: float
     liquidity_score: float
     technical_score: float
+    data_source: str = "hash"  # "hash" or "ohlc"
 
     def as_factors(self) -> dict[str, Any]:
         return {
@@ -158,6 +159,7 @@ def _snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | No
         mtf_alignment=mtf,
         liquidity_score=liq,
         technical_score=score,
+        data_source="ohlc",
     )
 
 

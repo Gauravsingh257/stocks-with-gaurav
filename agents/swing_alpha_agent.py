@@ -28,6 +28,9 @@ class SwingTradeAlphaAgent(BaseAgent):
             reward = abs((target_2 or target_1 or entry_price) - entry_price)
             rr = reward / max(risk, 0.01)
 
+            # Determine data authenticity: "real" if setup is SMC-based, else partial/synthetic
+            data_auth = "real" if "SMC_SWING" in (idea.setup or "") else "partial"
+
             row = {
                 "symbol": symbol,
                 "agent_type": "SWING",
@@ -44,6 +47,7 @@ class SwingTradeAlphaAgent(BaseAgent):
                 "fundamental_factors": idea.fundamental_factors,
                 "sentiment_factors": idea.sentiment_factors,
                 "reasoning": idea.reasoning,
+                "data_authenticity": data_auth,
             }
             create_stock_recommendation(row)
             saved += 1

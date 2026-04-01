@@ -45,8 +45,10 @@ def _swing_payload(limit: int) -> dict:
                 "fundamental_factors": row.get("fundamental_factors", {}),
                 "sentiment_factors": row.get("sentiment_factors", {}),
                 "reasoning_summary": row.get("reasoning", ""),
+                "signal_first_detected_at": row.get("signal_first_detected_at") or row.get("created_at"),
                 "signals_updated_at": row.get("signals_updated_at") or row.get("created_at"),
                 "created_at": row.get("created_at"),
+                "data_authenticity": row.get("data_authenticity", "unknown"),
             }
         )
     return {"items": items, "count": len(items)}

@@ -427,7 +427,11 @@ def migrate_stock_recommendations() -> None:
     try:
         cursor = conn.execute("PRAGMA table_info(stock_recommendations)")
         cols = {row[1] for row in cursor.fetchall()}
-        for col_name in ("technical_signals", "fundamental_signals", "sentiment_signals", "signals_updated_at"):
+        for col_name in (
+            "technical_signals", "fundamental_signals", "sentiment_signals",
+            "signals_updated_at", "signal_first_detected_at", "data_authenticity",
+            "scan_run_id",
+        ):
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} TEXT")
         conn.commit()
@@ -550,17 +554,73 @@ def log_regime_change(regime: str, bull_score: int = 0, bear_score: int = 0, oi_
 
 
 def create_stock_recommendation(payload: dict) -> int:
-    """Insert a recommendation row and return id."""
+    """Insert a recommendation row and return id.
+
+    Dedup: if an active recommendation for the same symbol+agent_type exists
+    within the last 7 days, update it instead of inserting a duplicate.
+    """
     conn = get_connection()
     try:
+        # Check for existing recent recommendation (dedup)
+        existing = conn.execute(
+            """
+            SELECT id, created_at FROM stock_recommendations
+            WHERE symbol = ? AND agent_type = ?
+              AND datetime(created_at) >= datetime('now', '-7 days')
+            ORDER BY datetime(created_at) DESC LIMIT 1
+            """,
+            (payload["symbol"], payload["agent_type"]),
+        ).fetchone()
+
+        if existing:
+            # Update the existing recommendation instead of creating a duplicate
+            conn.execute(
+                """
+                UPDATE stock_recommendations SET
+                    entry_price = ?, stop_loss = ?, targets = ?, confidence_score = ?,
+                    setup = ?, expected_holding_period = ?,
+                    technical_signals = ?, fundamental_signals = ?, sentiment_signals = ?,
+                    technical_factors = ?, fundamental_factors = ?, sentiment_factors = ?,
+                    fair_value_estimate = ?, entry_zone = ?, long_term_target = ?,
+                    risk_factors = ?, reasoning = ?, signals_updated_at = datetime('now'),
+                    data_authenticity = ?
+                WHERE id = ?
+                """,
+                (
+                    float(payload["entry_price"]),
+                    float(payload["stop_loss"]) if payload.get("stop_loss") is not None else None,
+                    json.dumps(payload.get("targets", [])),
+                    float(payload.get("confidence_score", 0)),
+                    payload.get("setup"),
+                    payload.get("expected_holding_period"),
+                    json.dumps(payload.get("technical_signals", {})),
+                    json.dumps(payload.get("fundamental_signals", {})),
+                    json.dumps(payload.get("sentiment_signals", {})),
+                    json.dumps(payload.get("technical_factors", {})),
+                    json.dumps(payload.get("fundamental_factors", {})),
+                    json.dumps(payload.get("sentiment_factors", {})),
+                    float(payload["fair_value_estimate"]) if payload.get("fair_value_estimate") is not None else None,
+                    json.dumps(payload.get("entry_zone")) if payload.get("entry_zone") is not None else None,
+                    float(payload["long_term_target"]) if payload.get("long_term_target") is not None else None,
+                    json.dumps(payload.get("risk_factors", [])),
+                    payload.get("reasoning", ""),
+                    payload.get("data_authenticity", "unknown"),
+                    existing["id"],
+                ),
+            )
+            conn.commit()
+            return int(existing["id"])
+
+        # New recommendation
         cur = conn.execute(
             """
             INSERT INTO stock_recommendations (
                 symbol, agent_type, entry_price, stop_loss, targets, confidence_score,
                 setup, expected_holding_period, technical_signals, fundamental_signals,
                 sentiment_signals, technical_factors, fundamental_factors, sentiment_factors,
-                fair_value_estimate, entry_zone, long_term_target, risk_factors, reasoning
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fair_value_estimate, entry_zone, long_term_target, risk_factors, reasoning,
+                signal_first_detected_at, data_authenticity
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
             """,
             (
                 payload["symbol"],
@@ -582,6 +642,7 @@ def create_stock_recommendation(payload: dict) -> int:
                 float(payload["long_term_target"]) if payload.get("long_term_target") is not None else None,
                 json.dumps(payload.get("risk_factors", [])),
                 payload.get("reasoning", ""),
+                payload.get("data_authenticity", "unknown"),
             ),
         )
         conn.commit()

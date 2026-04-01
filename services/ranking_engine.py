@@ -347,6 +347,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     candidate_rows: list[FactorRow] = []
     evidence_map: dict[str, tuple[dict[str, str], dict[str, str], dict[str, str], str]] = {}
     quality_passed = 0
+    authenticity_map: dict[str, str] = {}
 
     for symbol in symbols:
         q = evaluate_symbol_quality(symbol, tech[symbol], fund[symbol], sent[symbol])
@@ -356,6 +357,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
 
         row = build_factor_row(symbol, tech[symbol], fund[symbol], sent[symbol])
         candidate_rows.append(row)
+        authenticity_map[symbol] = q.data_authenticity
 
         if horizon == "SWING":
             evidence = extract_swing_signals(symbol, tech[symbol], fund[symbol], sent[symbol])
@@ -384,7 +386,19 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     scored = _score_candidates([r for r in candidate_rows if r.symbol in evidence_map], horizon)
     scored.sort(key=lambda x: x[1], reverse=True)
 
+    log.info(
+        "[%s] Ranking pipeline: %d universe → %d quality pass → %d scored → materializing top %d",
+        horizon, len(symbols), quality_passed, len(scored), top_k,
+    )
+
     ideas = await _collect_ideas_from_pool(horizon, top_k, scored, evidence_map)
+
+    if not ideas:
+        log.warning(
+            "[%s] No high-quality opportunities found. %d symbols scanned, %d passed quality, "
+            "%d scored, but none materialized into valid trade levels.",
+            horizon, len(symbols), quality_passed, len(scored),
+        )
 
     return RankingResult(
         horizon=horizon,

@@ -162,6 +162,12 @@ def _update_all_running_trades() -> int:
         else:
             status = "RUNNING"
 
+        # Track high/low since entry properly (don't overwrite with current)
+        prev_high = float(row.get("high_since_entry") or cmp)
+        prev_low = float(row.get("low_since_entry") or cmp)
+        high_since = max(prev_high, cmp)
+        low_since = min(prev_low, cmp)
+
         update_running_trade(
             row["id"],
             current_price=cmp,
@@ -169,8 +175,8 @@ def _update_all_running_trades() -> int:
             profit_loss_pct=pl_pct,
             drawdown=dd,
             drawdown_pct=dd_pct,
-            high_since_entry=cmp,
-            low_since_entry=cmp,
+            high_since_entry=high_since,
+            low_since_entry=low_since,
             days_held=days_held,
             distance_to_target=dist_target,
             distance_to_stop_loss=dist_sl,
