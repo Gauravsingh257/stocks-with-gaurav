@@ -120,8 +120,32 @@ class SRBScanner:
                 volume=raw.get("volume", 0),
             )
 
+            # Track state before processing for milestone detection
+            _prev_second_red = state.second_red
+            _prev_trade_done = state.trade_done
+
             signal = process_candle(state, candle)
             self._last_candle_time[instrument] = c_dt
+
+            # Log milestone: 2nd red candle identified
+            if state.second_red is not None and _prev_second_red is None:
+                logger.info(
+                    "SRB 2ND RED found %s | time=%s low=%.1f high=%.1f | SL_range=%.1f (max=%s)",
+                    instrument, state.second_red.date,
+                    state.second_red.low, state.second_red.high,
+                    state.second_red.high - state.second_red.low,
+                    SRB_MAX_SL_PTS_NIFTY if instrument == "NIFTY" else "N/A",
+                )
+
+            # Log milestone: trade_done set without entry (rejected)
+            if state.trade_done and not _prev_trade_done and signal != "ENTRY":
+                _reject_reason = "time_cutoff" if candle.date.hour >= state.max_entry_hour else "sl_too_wide"
+                logger.info(
+                    "SRB REJECTED %s | reason=%s | candle=%s close=%.1f | 2nd_red_low=%.1f 2nd_red_high=%.1f",
+                    instrument, _reject_reason, candle.date, candle.close,
+                    state.second_red.low if state.second_red else 0,
+                    state.second_red.high if state.second_red else 0,
+                )
 
             if signal == "ENTRY":
                 self._signal_emitted[instrument] = True

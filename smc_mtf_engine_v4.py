@@ -5402,9 +5402,28 @@ def run_live_mode():
             # ========================================
             # 🔴 SECOND RED BREAK SCAN (EVERY 5 MIN)
             # ========================================
-            if _SRB_AVAILABLE and now_ist().minute % 5 == 0:
+            _srb_current_5m = now_ist().minute // 5
+            if not hasattr(scan_second_red_break, '_last_5m_slot'):
+                scan_second_red_break._last_5m_slot = -1
+            if _SRB_AVAILABLE and _srb_current_5m != scan_second_red_break._last_5m_slot:
                 try:
-                    _srb_candles = fetch_ohlc("NSE:NIFTY 50", "5minute", 80)
+                    # Bypass OHLC cache (15-min TTL) — SRB needs fresh 5m candles every scan
+                    _srb_token = get_token("NSE:NIFTY 50")
+                    _srb_candles = []
+                    if _srb_token:
+                        try:
+                            _respect_api_throttle()
+                            _srb_candles = _kite_call(
+                                kite.historical_data,
+                                _srb_token,
+                                now_ist() - timedelta(days=1),
+                                now_ist(),
+                                "5minute",
+                                timeout=_KITE_TIMEOUT_SEC,
+                            )
+                        except Exception as _srb_fetch_err:
+                            logging.warning("SRB fresh fetch failed, falling back to cache: %s", _srb_fetch_err)
+                            _srb_candles = fetch_ohlc("NSE:NIFTY 50", "5minute", 80)
                     if _srb_candles:
                         _srb_sig = scan_second_red_break(_srb_candles, "NIFTY")
                         if _srb_sig:
@@ -5494,9 +5513,27 @@ def run_live_mode():
                             )
                             print(f"  🔴 SRB: NIFTY ENTRY @ {_srb_sig['entry']} | SL={_srb_sig['sl']} "
                                   f"TGT={_srb_sig['target']} | {_srb_status}")
+                    else:
+                        # No signal — log diagnostic state
+                        try:
+                            from strategies.second_red_break.live_scanner import get_scanner as _get_srb_scanner
+                            _srb_diag = _get_srb_scanner().get_state_summary()
+                            _srb_nifty = _srb_diag.get("NIFTY", {})
+                            logging.info(
+                                "SRB scan (no signal): red_count=%s 2nd_red=%s trade_done=%s emitted=%s candles=%d",
+                                _srb_nifty.get("red_count", "?"),
+                                _srb_nifty.get("second_red_found", "?"),
+                                _srb_nifty.get("trade_done", "?"),
+                                _srb_nifty.get("signal_emitted", "?"),
+                                len(_srb_candles),
+                            )
+                        except Exception:
+                            pass
+                    scan_second_red_break._last_5m_slot = _srb_current_5m
                 except Exception as _srb_err:
                     logging.error("SRB scan/execute error: %s", _srb_err)
                     print(f"  ⚠️ SRB error: {_srb_err}")
+                    scan_second_red_break._last_5m_slot = _srb_current_5m
 
             try:
                 import engine_runtime

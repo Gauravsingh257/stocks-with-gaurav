@@ -1208,6 +1208,11 @@ def scan_short_covering(kite_obj, telegram_fn=None, fetch_ohlc_fn=None):
     _check_daily_reset()
     _cleanup_expired_locks()
 
+    logger.info(
+        "OI-SC scan started: time=%s | active_biases=%d | history_strikes=%d | locks=%d",
+        now.strftime("%H:%M:%S"), len(_active_biases), len(_strike_history), len(_signal_locks),
+    )
+
     # === PHASE 1: Detect new biases ===
     new_biases = []
     structure_alerts = []
@@ -1855,6 +1860,16 @@ def _scan_underlying_v43(kite_obj, index_symbol, index_name, step, fetch_ohlc_fn
             elif result.get("status") == "WAITING_ENTRY":
                 biases.append(result)
 
+    # Diagnostic: log scan summary for this underlying
+    _readings_counts = {sym: len(h) for sym, h in _strike_history.items()
+                        if sym.startswith(index_name) or index_name in sym}
+    logger.info(
+        "OI-SC v43 %s: spot=%.1f | symbols_queried=%d | history_sizes=%s | biases=%d alerts=%d",
+        index_name, spot, len(symbols_to_query),
+        {k: v for k, v in sorted(_readings_counts.items(), key=lambda x: -x[1])[:4]},
+        len(biases), len(structure_alerts),
+    )
+
     return biases, structure_alerts
 
 
@@ -1968,6 +1983,10 @@ def _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn):
     if not has_oi_signal:
         return None
     if not price_rise:
+        logger.debug(
+            "OI SC %s: OI signal detected but no price rise — skipped",
+            tradingsymbol,
+        )
         return None
 
     # -------------------------------------------------
@@ -2012,6 +2031,10 @@ def _detect_strike_short_covering(tradingsymbol, info, spot, fetch_ohlc_fn):
     # Score gate
     # -------------------------------------------------
     if score < OI_SC_MIN_SCORE:
+        logger.info(
+            "OI SC %s: score %d/10 < min %d — BLOCKED | breakdown=%s",
+            tradingsymbol, score, OI_SC_MIN_SCORE, breakdown,
+        )
         return None
 
     # -------------------------------------------------
