@@ -47,6 +47,7 @@ from smc_trading_engine.strategy.entry_model import evaluate_entry
 import risk_management as risk_mgr
 from manual_trade_handler_v2 import ManualTradeHandlerV2
 from option_monitor_module import OptionMonitor
+from services.trade_graph_hooks import build_trade_graph, update_trade_graph_trail, close_trade_graph
 # Phase 5: Modular imports
 import engine.config as eng_cfg
 from engine.indicators import (
@@ -4818,6 +4819,10 @@ def monitor_active_trades(symbol, current_price):
             if new_sl > current_sl:
                 trade["sl"] = round(new_sl, 2)
                 stage = trade.get("trail_stage", 0)
+                try:
+                    update_trade_graph_trail(trade, stage, trade["sl"])
+                except Exception:
+                    pass
                 logging.info(f"📈 TRAIL [{stage}]: {trade['symbol']} SL moved to {trade['sl']} (was {current_sl})")
                 telegram_send(f"📈 <b>TRAILING STOP UPDATE</b>\n"
                               f"{trade['symbol']} LONG\n"
@@ -4841,6 +4846,10 @@ def monitor_active_trades(symbol, current_price):
             if new_sl < current_sl:
                 trade["sl"] = round(new_sl, 2)
                 stage = trade.get("trail_stage", 0)
+                try:
+                    update_trade_graph_trail(trade, stage, trade["sl"])
+                except Exception:
+                    pass
                 logging.info(f"📈 TRAIL [{stage}]: {trade['symbol']} SL moved to {trade['sl']} (was {current_sl})")
                 telegram_send(f"📈 <b>TRAILING STOP UPDATE</b>\n"
                               f"{trade['symbol']} SHORT\n"
@@ -4882,6 +4891,10 @@ def monitor_active_trades(symbol, current_price):
             log_paper_outcome(trade, current_price, "WIN", final_r)  # Phase 6
             DAILY_LOG.append(trade)
             log_trade_to_csv(trade)
+            try:
+                close_trade_graph(trade)
+            except Exception:
+                pass  # TradeGraph is non-critical
             # P0-R1: Single lock acquisition for remove + snapshot
             with ACTIVE_TRADES_LOCK:
                 ACTIVE_TRADES.remove(trade)
@@ -4940,6 +4953,10 @@ def monitor_active_trades(symbol, current_price):
             log_paper_outcome(trade, trade["sl"], trade["result"], exit_r)  # Phase 6
             DAILY_LOG.append(trade)
             log_trade_to_csv(trade)
+            try:
+                close_trade_graph(trade)
+            except Exception:
+                pass  # TradeGraph is non-critical
             # P0-R1: Single lock acquisition for remove + snapshot
             with ACTIVE_TRADES_LOCK:
                 ACTIVE_TRADES.remove(trade)
@@ -6339,6 +6356,10 @@ def run_live_mode():
                     with ACTIVE_TRADES_LOCK:
                         ACTIVE_TRADES.append(sig)
                     DAILY_SIGNAL_COUNT += 1
+                    try:
+                        build_trade_graph(sig, MARKET_REGIME, get_oi_sentiment())
+                    except Exception:
+                        pass  # TradeGraph is non-critical
                     log_paper_trade(sig)  # Phase 6: paper trade log
                     persist_active_trades()  # F1.2: crash recovery
         
@@ -6363,22 +6384,37 @@ def run_live_mode():
     
                 oi_sent = get_oi_sentiment()
                 oi_line = f"📊 OI: {oi_sent.get('sentiment', 'N/A')} (PCR: {oi_sent.get('pcr_bias', '-')}, Pattern: {oi_sent.get('price_oi_pattern', '-')})"
-                
+
+                # --- Build causal chain summary for Telegram ---
+                _chain_parts = []
+                if sig.get("sweep_detected"):
+                    _chain_parts.append("Liquidity sweep")
+                if sig.get("displacement_event"):
+                    _chain_parts.append("Displacement")
+                if sig.get("choch_time") or sig.get("smc_breakdown", {}).get("choch", 0) > 0:
+                    _chain_parts.append("CHoCH")
+                if sig.get("bos_confirmed") or sig.get("smc_breakdown", {}).get("bos", 0) > 0:
+                    _chain_parts.append("BOS")
+                if sig.get("ob"):
+                    _chain_parts.append("OB")
+                if sig.get("fvg"):
+                    _chain_parts.append("FVG")
+                _chain_str = " → ".join(_chain_parts) if _chain_parts else sig.get("setup", "SMC")
+                _reason = "Retail trapped → Smart money entry" if sig.get("sweep_detected") else "Structure shift → Institutional zone"
+
                 text = (
-                    f"🔥 <b>{sig['grade']} PRIORITY SETUP</b>\n"
+                    f"🔥 <b>{sig['grade']} SETUP</b>\n\n"
+                    f"<b>{sig['symbol']}</b> — {sig['direction']}\n"
+                    f"🔮 <b>{sig['setup']}</b>\n\n"
+                    f"📍 {_chain_str}\n"
+                    f"🎯 Entry: {sig['entry']}\n"
+                    f"🛑 SL: {sig['sl']}\n"
+                    f"🚀 Target: {sig['target']}\n"
+                    f"📊 RR: {sig['rr']} | Score: {sig.get('smc_score', 'N/A')}/10\n"
+                    f"🤖 AI: {sig.get('ai_score', 'N/A')}/100 | Risk: {sig.get('risk_mult', 1.0):.2f}x\n\n"
                     f"🏛️ Regime: {MARKET_REGIME}\n"
                     f"{oi_line}\n\n"
-                    f"<b>{sig['symbol']}</b>\n"
-                    f"🔮 <b>{sig['setup']}</b>\n"
-                    f"Direction: {sig['direction']}\n\n"
-                    f"Option: {sig.get('option','')}\n"
-                    f"Entry: {sig['entry']}\n"
-                    f"SL: {sig['sl']}\n"
-                    f"Target: {sig['target']}\n"
-                    f"RR: {sig['rr']}\n"
-                    f"SMC Score: {sig.get('smc_score', 'N/A')}/10\n"
-                    f"AI Score: {sig.get('ai_score', 'N/A')}/100\n"
-                    f"Risk Mult: {sig.get('risk_mult', 1.0):.2f}x\n"
+                    f"🧠 <b>Reason:</b>\n{_reason}\n\n"
                     f"<i>{sig.get('analysis','')}</i>"
                 )
     
