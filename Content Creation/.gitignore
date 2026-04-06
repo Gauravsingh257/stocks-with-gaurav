@@ -1,0 +1,13 @@
+# Generated output — regenerated daily
+output/
+logs/
+
+# Test files
+assets/_brand_test.png
+
+# Source logos (large PNGs)
+LOGOS banner image/
+
+# Environment
+.env
+__pycache__/
