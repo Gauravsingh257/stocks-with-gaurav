@@ -267,6 +267,7 @@ def _store_token(access_token: str) -> None:
         resp = requests.post(
             f"{BACKEND_URL}/api/kite/store-token",
             json={"access_token": access_token},
+            headers={"X-Sync-Key": os.getenv("TRADES_SYNC_KEY", "")},
             timeout=15,
         )
         if resp.status_code == 200:

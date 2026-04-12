@@ -6,6 +6,7 @@
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Bot, User, Sparkles, RefreshCw, Settings } from "lucide-react";
+import DOMPurify from "dompurify";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
@@ -31,15 +32,6 @@ const STARTERS = [
 let _id = 0;
 const uid = () => ++_id;
 
-// -- HTML sanitizer (strips dangerous tags/attributes) -------------------------
-function sanitizeHtml(html: string): string {
-  let clean = html.replace(/<(script|iframe|object|embed|form|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
-  clean = clean.replace(/<(script|iframe|object|embed|form|style)\b[^>]*\/?>/gi, "");
-  clean = clean.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-  clean = clean.replace(/href\s*=\s*["']?\s*javascript:/gi, 'href="');
-  return clean;
-}
-
 // -- Simple markdown renderer --------------------------------------------------
 function renderMd(text: string): string {
   const html = text
@@ -53,7 +45,10 @@ function renderMd(text: string): string {
     .replace(/(<li>.*<\/li>)/g, "<ul>$1</ul>")
     .replace(/\n{2,}/g, "<br/><br/>")
     .replace(/\n/g, "<br/>");
-  return sanitizeHtml(html);
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ["strong", "em", "code", "h2", "h3", "h4", "ul", "li", "br", "p", "a", "span"],
+    ALLOWED_ATTR: ["href", "target", "rel", "class", "style"],
+  });
 }
 
 export default function ChatPage() {
@@ -79,6 +74,8 @@ export default function ChatPage() {
   const endRef     = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLInputElement>(null);
   const abortRef   = useRef<AbortController | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -117,9 +114,9 @@ export default function ChatPage() {
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setLoading(true);
 
-    // Build history - truncate to last 20 messages to stay within context window
+    // Build history from ref (avoids stale closure) - truncate to last 20 messages
     const MAX_HISTORY = 20;
-    const fullHistory = [...messages, userMsg].map(m => ({
+    const fullHistory = [...messagesRef.current, userMsg].map(m => ({
       role:    m.role,
       content: m.content,
     }));
@@ -192,7 +189,7 @@ export default function ChatPage() {
       ));
       setLoading(false);
     }
-  }, [input, loading, messages]);
+  }, [input, loading]);
 
   const stopStream = () => {
     abortRef.current?.abort();

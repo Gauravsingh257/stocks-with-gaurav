@@ -11,13 +11,22 @@ POST /api/agents/run/{agent_name}    — trigger agent manually now
 """
 
 import json
+import os
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from dashboard.backend.db import get_connection
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+
+def _check_sync_key(x_sync_key: Optional[str]) -> None:
+    """Validate X-Sync-Key header if TRADES_SYNC_KEY env var is set."""
+    sync_key = os.getenv("TRADES_SYNC_KEY", "").strip()
+    if sync_key and x_sync_key != sync_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Sync-Key")
 
 
 # ── Status ───────────────────────────────────────────────────────────────────
@@ -41,25 +50,27 @@ def agent_logs(
     offset: int       = Query(0, ge=0),
 ):
     conn  = get_connection()
-    query = "SELECT * FROM agent_logs"
-    params: list = []
+    try:
+        query = "SELECT * FROM agent_logs"
+        params: list = []
 
-    if agent:
-        query  += " WHERE agent_name = ?"
-        params.append(agent)
+        if agent:
+            query  += " WHERE agent_name = ?"
+            params.append(agent)
 
-    query += " ORDER BY run_time DESC LIMIT ? OFFSET ?"
-    params += [limit, offset]
+        query += " ORDER BY run_time DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
 
-    rows = conn.execute(query, params).fetchall()
+        rows = conn.execute(query, params).fetchall()
 
-    count_query = "SELECT COUNT(*) as c FROM agent_logs"
-    count_params: list = []
-    if agent:
-        count_query  += " WHERE agent_name = ?"
-        count_params.append(agent)
-    total = conn.execute(count_query, count_params).fetchone()["c"]
-    conn.close()
+        count_query = "SELECT COUNT(*) as c FROM agent_logs"
+        count_params: list = []
+        if agent:
+            count_query  += " WHERE agent_name = ?"
+            count_params.append(agent)
+        total = conn.execute(count_query, count_params).fetchone()["c"]
+    finally:
+        conn.close()
 
     def _parse(row):
         d = dict(row)
@@ -90,83 +101,97 @@ def action_queue(
     limit:  int        = Query(50, ge=1, le=200),
 ):
     conn   = get_connection()
-    query  = "SELECT * FROM agent_action_queue"
-    params: list = []
+    try:
+        query  = "SELECT * FROM agent_action_queue"
+        params: list = []
 
-    if status:
-        query  += " WHERE status = ?"
-        params.append(status.upper())
+        if status:
+            query  += " WHERE status = ?"
+            params.append(status.upper())
 
-    query += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
 
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
 
     def _parse(row):
         d = dict(row)
-        raw = d.get("payload_json")
+        raw = d.get("payload")
         if raw:
             try:
                 d["payload"] = json.loads(raw)
             except json.JSONDecodeError:
-                d["payload"] = {}
+                pass
         return d
 
     return [_parse(r) for r in rows]
 
 
 @router.post("/queue/{action_id}/approve")
-def approve_action(action_id: int):
+def approve_action(
+    action_id: int,
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
     """Mark a queued action as APPROVED."""
+    _check_sync_key(x_sync_key)
     conn = get_connection()
-    row  = conn.execute(
-        "SELECT * FROM agent_action_queue WHERE id = ?", (action_id,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
-    if row["status"] != "PENDING":
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"Action is already {row['status']}")
+    try:
+        row  = conn.execute(
+            "SELECT * FROM agent_action_queue WHERE id = ?", (action_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
+        if row["status"] != "PENDING":
+            raise HTTPException(status_code=400, detail=f"Action is already {row['status']}")
 
-    conn.execute(
-        "UPDATE agent_action_queue SET status='APPROVED', processed_at=? WHERE id=?",
-        (datetime.utcnow().isoformat(), action_id),
-    )
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "UPDATE agent_action_queue SET status='APPROVED', processed_at=? WHERE id=?",
+            (datetime.utcnow().isoformat(), action_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return {"ok": True, "action_id": action_id, "new_status": "APPROVED"}
 
 
 @router.post("/queue/{action_id}/reject")
-def reject_action(action_id: int):
+def reject_action(
+    action_id: int,
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
     """Mark a queued action as REJECTED."""
+    _check_sync_key(x_sync_key)
     conn = get_connection()
-    row  = conn.execute(
-        "SELECT * FROM agent_action_queue WHERE id = ?", (action_id,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
-    if row["status"] != "PENDING":
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"Action is already {row['status']}")
+    try:
+        row  = conn.execute(
+            "SELECT * FROM agent_action_queue WHERE id = ?", (action_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Action {action_id} not found")
+        if row["status"] != "PENDING":
+            raise HTTPException(status_code=400, detail=f"Action is already {row['status']}")
 
-    conn.execute(
-        "UPDATE agent_action_queue SET status='REJECTED', processed_at=? WHERE id=?",
-        (datetime.utcnow().isoformat(), action_id),
-    )
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "UPDATE agent_action_queue SET status='REJECTED', processed_at=? WHERE id=?",
+            (datetime.utcnow().isoformat(), action_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return {"ok": True, "action_id": action_id, "new_status": "REJECTED"}
 
 
 # ── Manual trigger ────────────────────────────────────────────────────────────
 
 @router.post("/run/{agent_name}")
-def run_agent_now(agent_name: str):
+def run_agent_now(
+    agent_name: str,
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
     """Trigger an agent to run immediately. Returns the AgentResult."""
+    _check_sync_key(x_sync_key)
     try:
         from agents.runner import run_agent_now as _run
         result = _run(agent_name)

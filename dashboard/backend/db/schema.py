@@ -204,7 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_perf_snap_date ON performance_snapshots(snapshot_
 
 def get_connection() -> sqlite3.Connection:
     """Return a thread-safe WAL-mode connection to dashboard.db."""
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=15)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
@@ -281,6 +281,7 @@ def full_sync_from_csv(force: bool = False) -> int:
                 logger.warning("[DB Sync] CSV parsed 0 rows — aborting sync to protect existing data")
                 return 0
 
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("DELETE FROM trades")
             conn.executemany(
                 "INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r) "

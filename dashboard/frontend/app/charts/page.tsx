@@ -107,7 +107,11 @@ export default function ChartsPage() {
         const { createChart, ColorType, CandlestickSeries } = await import("lightweight-charts");
         if (destroyed || !containerRef.current) return;
 
-        if (chartRef.current) (chartRef.current as { remove(): void }).remove();
+        // Always destroy previous chart before creating new one
+        if (chartRef.current) {
+          try { (chartRef.current as { remove(): void }).remove(); } catch { /* already removed */ }
+          chartRef.current = null;
+        }
 
         const el = containerRef.current;
         const chart = createChart(el, {
@@ -170,6 +174,11 @@ export default function ChartsPage() {
     return () => {
       destroyed = true;
       cleanup?.();
+      // Destroy chart on unmount/re-render to prevent memory leak
+      if (chartRef.current) {
+        try { (chartRef.current as { remove(): void }).remove(); } catch { /* already removed */ }
+        chartRef.current = null;
+      }
     };
   }, [candles, zonesData]);
 

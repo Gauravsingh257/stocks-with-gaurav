@@ -7,12 +7,21 @@ GET  /api/kite/callback — exchange request_token, store access_token in Redis
 POST /api/kite/token   — accept request_token or full URL, exchange and store (for manual paste)
 """
 
+import os
 import re
-from fastapi import APIRouter, Query
+from typing import Optional
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
 from dashboard.backend import kite_auth
+
+
+def _check_sync_key(x_sync_key: Optional[str]) -> None:
+    """Validate X-Sync-Key header if TRADES_SYNC_KEY env var is set."""
+    sync_key = os.getenv("TRADES_SYNC_KEY", "").strip()
+    if sync_key and x_sync_key != sync_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Sync-Key")
 
 router = APIRouter(prefix="/api/kite", tags=["kite"])
 
@@ -71,7 +80,7 @@ def kite_callback(request_token: str | None = Query(None, alias="request_token")
             request_reconnect()
         except Exception:
             pass
-        return {"status": "connected", "message": "Kite session established", "access_token": access_token}
+        return {"status": "connected", "message": "Kite session established"}
     except ValueError:
         return JSONResponse(
             status_code=400,
@@ -126,7 +135,6 @@ def kite_token_from_paste(body: TokenInput):
         return {
             "status": "connected",
             "message": "Kite session established via paste.",
-            "access_token": access_token,
         }
     except ValueError:
         return JSONResponse(
@@ -143,11 +151,14 @@ def kite_token_from_paste(body: TokenInput):
 
 
 @router.get("/current-token")
-def kite_current_token():
+def kite_current_token(
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
     """
     Return the current access_token from Redis so local scripts can sync.
-    Used by morning_login.ps1 to save token locally after Railway login.
+    Protected by X-Sync-Key when TRADES_SYNC_KEY env var is set.
     """
+    _check_sync_key(x_sync_key)
     try:
         token = kite_auth.get_access_token()
         if token:
@@ -169,11 +180,16 @@ class AccessTokenInput(BaseModel):
 
 
 @router.post("/store-token")
-def kite_store_token(body: AccessTokenInput):
+def kite_store_token(
+    body: AccessTokenInput,
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
     """
     Accept a pre-exchanged access_token and store it in Redis.
+    Protected by X-Sync-Key when TRADES_SYNC_KEY env var is set.
     Used by auto_login.py to push the token from local machine to Railway.
     """
+    _check_sync_key(x_sync_key)
     token = (body.access_token or "").strip()
     if not token or len(token) < 10:
         return JSONResponse(
