@@ -14,7 +14,7 @@ class LongTermInvestmentAgent(BaseAgent):
     priority = "high"
 
     def run(self, result: AgentResult) -> None:
-        ranking = asyncio.run(generate_rankings("LONGTERM", top_k=10, target_universe=1800))
+        ranking = asyncio.run(generate_rankings("LONGTERM", top_k=8, target_universe=1800))
 
         # Log ranking run upfront to get scan_run_id for all recommendations
         run_id = log_ranking_run(

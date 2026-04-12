@@ -28,6 +28,7 @@ from agents.risk_sentinel import RiskSentinel
 from agents.oi_intelligence_agent import generate_snapshot as _oi_generate_snapshot
 from agents.swing_alpha_agent import SwingTradeAlphaAgent
 from agents.longterm_investment_agent import LongTermInvestmentAgent
+from agents.reasoning_validator import ReasoningValidatorAgent
 
 logger = logging.getLogger("agents.runner")
 
@@ -39,6 +40,7 @@ AGENTS = {
     "RiskSentinel":      RiskSentinel(),
     "SwingTradeAlphaAgent": SwingTradeAlphaAgent(),
     "LongTermInvestmentAgent": LongTermInvestmentAgent(),
+    "ReasoningValidatorAgent": ReasoningValidatorAgent(),
 }
 
 _scheduler: BackgroundScheduler | None = None
@@ -180,6 +182,16 @@ def start_scheduler() -> None:
         name="Daily Long-Term Ranking Scan",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+
+    # Reasoning validator: every hour during market hours (Mon–Fri 09:00–16:00)
+    _scheduler.add_job(
+        lambda: _run_market_hours("ReasoningValidatorAgent"),
+        CronTrigger(minute=0, day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="hourly_reasoning_validator",
+        name="Hourly Reasoning Validator",
+        replace_existing=True,
+        misfire_grace_time=300,
     )
 
     _scheduler.start()

@@ -36,8 +36,8 @@ export default function ResearchPage() {
   const refresh = useCallback(async () => {
     setError(null);
     const results = await Promise.allSettled([
-      api.swingResearch(12),
-      api.longtermResearch(12),
+      api.swingResearch(8),
+      api.longtermResearch(8),
       api.runningTradesResearch(40),
       api.researchCoverage(1800),
       api.researchPerformance(),
