@@ -45,6 +45,7 @@ function renderMd(text: string): string {
     .replace(/(<li>.*<\/li>)/g, "<ul>$1</ul>")
     .replace(/\n{2,}/g, "<br/><br/>")
     .replace(/\n/g, "<br/>");
+  if (typeof window === "undefined") return html;
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ["strong", "em", "code", "h2", "h3", "h4", "ul", "li", "br", "p", "a", "span"],
     ALLOWED_ATTR: ["href", "target", "rel", "class", "style"],

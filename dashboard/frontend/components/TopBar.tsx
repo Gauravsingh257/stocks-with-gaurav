@@ -173,7 +173,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
               <Database size={11} color={health.db_connected ? "var(--success)" : "var(--danger)"} />
             </span>
             <span title={`${health.ws_clients} WebSocket client(s)`}>
-              <Activity size={11} color={health.ws_clients > 0 ? "var(--success)" : "var(--warning)"} />
+              <Activity size={11} color={(health.ws_clients ?? 0) > 0 ? "var(--success)" : "var(--warning)"} />
             </span>
             {typeof health.token_expires_in_hours === "number" && (
               <span title="Kite token TTL (hours)">
