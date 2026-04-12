@@ -13,6 +13,7 @@ import {
   AnalyticsSummary, EquityPoint, SetupStat, RollingWRPoint,
   ResearchPerformanceResponse, ResearchPickRow,
 } from "@/lib/api";
+import { pnlColor, StatusBadge } from "@/components/StatusBadge";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -32,26 +33,6 @@ const fmt = {
   r:    (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}R`,
   date: (s: string) => s ? s.slice(0, 10) : "—",
 };
-
-function pnlColor(v: number) {
-  return v >= 0 ? "var(--success)" : "var(--danger)";
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; text: string; label: string }> = {
-    RUNNING:    { bg: "rgba(91,156,246,0.15)", text: "#5b9cf6", label: "Live" },
-    TARGET_HIT: { bg: "rgba(0,209,140,0.15)",  text: "#00d18c", label: "Target ✓" },
-    STOP_HIT:   { bg: "rgba(255,77,77,0.15)",   text: "#ff4d4d", label: "SL Hit" },
-    PENDING:    { bg: "rgba(255,200,0,0.12)",   text: "#ffc800", label: "Pending" },
-  };
-  const c = map[status] ?? map["PENDING"];
-  return (
-    <span style={{
-      padding: "2px 9px", borderRadius: 20, fontSize: "0.7rem", fontWeight: 700,
-      background: c.bg, color: c.text,
-    }}>{c.label}</span>
-  );
-}
 
 // ── Hero Stats Bar ─────────────────────────────────────────────────────────────
 
@@ -317,7 +298,7 @@ export default function AnalyticsPage() {
   }, []);
 
   useEffect(() => {
-    api.forceSync().catch(() => {}).finally(() => load());
+    load();
     const t = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "hidden") load();
     }, 30_000);

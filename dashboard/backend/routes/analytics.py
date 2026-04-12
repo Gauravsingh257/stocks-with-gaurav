@@ -324,6 +324,7 @@ def get_drawdown_velocity():
 
     cumulative = 0.0
     peak = 0.0
+    trough = 0.0
     in_dd = False
     dd_start_date = None
     dd_start_val = 0.0
@@ -338,15 +339,19 @@ def get_drawdown_velocity():
                 dd_events.append({
                     "start": dd_start_date,
                     "end": date,
-                    "depth_r": round(dd_start_val - cumulative + (cumulative - cumulative), 4),
+                    "depth_r": round(dd_start_val - trough, 4),
                 })
             peak = cumulative
+            trough = cumulative
             in_dd = False
         else:
+            if cumulative < trough:
+                trough = cumulative
             if not in_dd:
                 in_dd = True
                 dd_start_date = date
                 dd_start_val = peak
+                trough = cumulative
 
     return {"drawdown_velocity": dd_events, "total_dd_events": len(dd_events)}
 

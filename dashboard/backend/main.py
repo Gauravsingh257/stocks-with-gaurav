@@ -144,7 +144,7 @@ app.add_middleware(
         "https://*.railway.app",             # Railway-to-Railway internal calls
         *_extra_origins,
     ],
-    allow_origin_regex=r"https://.*\.(vercel\.app|trycloudflare\.com|railway\.app)$",
+    allow_origin_regex=r"https://(stockswithgaurav[\w-]*\.vercel\.app|.*\.trycloudflare\.com|.*\.railway\.app)$",
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],

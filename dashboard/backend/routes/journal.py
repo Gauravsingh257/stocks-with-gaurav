@@ -208,7 +208,7 @@ def get_trade_detail(trade_id: int):
         conn.close()
 
     if not row:
-        return {"error": f"Trade {trade_id} not found"}
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
 
     return dict(row)
 
@@ -242,6 +242,7 @@ def get_setups():
 @router.get("/recent/{n}")
 def get_recent_trades(n: int = 20):
     """Last N completed trades — used by AI chatbot context builder."""
+    n = max(1, min(n, 500))
     conn = get_connection()
     try:
         rows = _rows_to_dicts(

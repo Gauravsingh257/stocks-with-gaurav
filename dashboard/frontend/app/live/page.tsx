@@ -29,7 +29,7 @@ export default function LivePage() {
           </span>
           <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>
             {status === "disconnected" ? "WebSocket reconnecting — switching to REST polling soon" : 
-             status === "polling" ? "Using REST fallback — data refreshes every 2s" : ""}
+             status === "polling" ? "Using REST fallback — data refreshes every 5s" : ""}
           </span>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
