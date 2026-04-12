@@ -38,7 +38,7 @@ export default function ResearchPage() {
     const results = await Promise.allSettled([
       api.swingResearch(12),
       api.longtermResearch(12),
-      api.runningTradesHistory(100),
+      api.runningTradesResearch(40),
       api.researchCoverage(1800),
       api.researchPerformance(),
     ]);

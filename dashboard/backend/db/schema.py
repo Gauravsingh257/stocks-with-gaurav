@@ -806,13 +806,14 @@ def create_running_trade(payload: dict) -> int:
 
 
 def get_active_running_trade_by_symbol(symbol: str) -> dict | None:
-    """Return active running trade for symbol."""
+    """Return running trade for symbol (any status within last 30 days) to prevent duplicates."""
     conn = get_connection()
     try:
         row = conn.execute(
             """
             SELECT * FROM running_trades
-            WHERE symbol = ? AND status = 'RUNNING'
+            WHERE symbol = ?
+              AND datetime(created_at) >= datetime('now', '-30 days')
             ORDER BY datetime(created_at) DESC
             LIMIT 1
             """,
