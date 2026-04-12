@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("DB init/sync failed (non-fatal): %s", exc)
     try:
+        from dashboard.backend.db import cleanup_duplicate_running_trades
+        removed = cleanup_duplicate_running_trades()
+        if removed:
+            log.info("[DB] Cleaned up %d duplicate running_trade rows", removed)
+    except Exception as exc:
+        log.warning("Running trade cleanup failed (non-fatal): %s", exc)
+    try:
         start_csv_watcher(interval_seconds=30)
         log.info("[DB] CSV watcher started — auto-syncing every 30s on file change")
     except Exception as exc:

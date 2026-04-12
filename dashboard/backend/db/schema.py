@@ -887,16 +887,40 @@ def update_running_trade(
         conn.close()
 
 
+def cleanup_duplicate_running_trades() -> int:
+    """Remove duplicate running_trade rows, keeping only the newest per symbol+status."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """
+            DELETE FROM running_trades
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM running_trades
+                GROUP BY symbol
+            )
+            """
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def list_running_trades(limit: int = 50, active_only: bool = True) -> list[dict]:
-    """Return running trades for monitor."""
+    """Return running trades for monitor (one per symbol, newest wins)."""
     conn = get_connection()
     try:
         if active_only:
             rows = conn.execute(
                 """
-                SELECT * FROM running_trades
-                WHERE status = 'RUNNING'
-                ORDER BY datetime(updated_at) DESC
+                SELECT rt.* FROM running_trades rt
+                INNER JOIN (
+                    SELECT symbol, MAX(id) as max_id
+                    FROM running_trades
+                    WHERE status = 'RUNNING'
+                    GROUP BY symbol
+                ) latest ON rt.id = latest.max_id
+                ORDER BY datetime(rt.updated_at) DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -904,8 +928,13 @@ def list_running_trades(limit: int = 50, active_only: bool = True) -> list[dict]
         else:
             rows = conn.execute(
                 """
-                SELECT * FROM running_trades
-                ORDER BY datetime(updated_at) DESC
+                SELECT rt.* FROM running_trades rt
+                INNER JOIN (
+                    SELECT symbol, MAX(id) as max_id
+                    FROM running_trades
+                    GROUP BY symbol
+                ) latest ON rt.id = latest.max_id
+                ORDER BY datetime(rt.updated_at) DESC
                 LIMIT ?
                 """,
                 (limit,),
