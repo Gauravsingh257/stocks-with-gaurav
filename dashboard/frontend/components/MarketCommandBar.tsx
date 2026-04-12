@@ -2,21 +2,14 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
+import { useHealth } from "@/lib/useHealth";
+import type { HealthData } from "@/lib/useHealth";
 import Sparkline from "@/components/Sparkline";
 import { API_BASE } from "@/lib/api";
 
 const MAX_HISTORY = 40;
 const LABELS = ["NIFTY 50", "NIFTY BANK"] as const;
 const SHORT_KEYS = { "NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY" } as const;
-
-interface HealthData {
-  engine_status?: string;
-  engine_live?: boolean;
-  kite_connected?: boolean;
-  token_present?: boolean;
-  ws_clients?: number;
-  backend_version?: string;
-}
 
 type DataSource = "live" | "delayed" | "disconnected";
 
@@ -61,7 +54,7 @@ function pushTick(arr: number[], value: number, max: number): number[] {
 
 export default function MarketCommandBar() {
   const { snapshot, status, snapshotReceivedAt } = useEngineSocket();
-  const [health, setHealth] = useState<HealthData | null>(null);
+  const health = useHealth();
   const [history, setHistory] = useState<{ NIFTY: number[]; BANKNIFTY: number[] }>({
     NIFTY: [],
     BANKNIFTY: [],
@@ -77,21 +70,6 @@ export default function MarketCommandBar() {
   // Increments every second to drive "X sec ago" recomputation
   const [tick, setTick] = useState(0);
   const prevPriceRef = useRef<Record<string, number>>({});
-
-  // Health fetch for engine, kite, version only (no market status)
-  useEffect(() => {
-    const fetchHealth = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      const base = API_BASE || "";
-      fetch(`${base}/api/system/health`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => d && setHealth(d))
-        .catch(() => {});
-    };
-    fetchHealth();
-    const t = setInterval(fetchHealth, 30_000);
-    return () => clearInterval(t);
-  }, []);
 
   // Poll web backend for signal count (snapshot is primary for engine status)
   useEffect(() => {

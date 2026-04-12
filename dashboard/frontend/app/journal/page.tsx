@@ -196,12 +196,14 @@ function TelegramSignalLog() {
             <div style={{ display: "flex", gap: 6 }}>
               <button className="btn-accent" type="button" disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - SIGNAL_LIMIT))}
-                style={{ padding: "4px 10px", opacity: offset === 0 ? 0.4 : 1 }}>
+                style={{ padding: "4px 10px", opacity: offset === 0 ? 0.4 : 1 }}
+                aria-label="Previous page">
                 <ChevronLeft size={14} />
               </button>
               <button className="btn-accent" type="button" disabled={offset + SIGNAL_LIMIT >= total}
                 onClick={() => setOffset(offset + SIGNAL_LIMIT)}
-                style={{ padding: "4px 10px", opacity: offset + SIGNAL_LIMIT >= total ? 0.4 : 1 }}>
+                style={{ padding: "4px 10px", opacity: offset + SIGNAL_LIMIT >= total ? 0.4 : 1 }}
+                aria-label="Next page">
                 <ChevronRight size={14} />
               </button>
             </div>
@@ -350,12 +352,14 @@ function IdeasTab({ agentType, color }: { agentType: "SWING" | "LONGTERM"; color
           <div style={{ display: "flex", gap: 6 }}>
             <button className="btn-accent" disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - 50))}
-              style={{ padding: "5px 10px", opacity: offset === 0 ? 0.4 : 1 }}>
+              style={{ padding: "5px 10px", opacity: offset === 0 ? 0.4 : 1 }}
+              aria-label="Previous page">
               <ChevronLeft size={14} />
             </button>
             <button className="btn-accent" disabled={offset + 50 >= total}
               onClick={() => setOffset(offset + 50)}
-              style={{ padding: "5px 10px", opacity: offset + 50 >= total ? 0.4 : 1 }}>
+              style={{ padding: "5px 10px", opacity: offset + 50 >= total ? 0.4 : 1 }}
+              aria-label="Next page">
               <ChevronRight size={14} />
             </button>
           </div>
@@ -562,12 +566,14 @@ export default function JournalPage() {
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn-accent" disabled={offset === 0}
                   onClick={() => setOffset(Math.max(0, offset - LIMIT))}
-                  style={{ padding: "5px 10px", opacity: offset === 0 ? 0.4 : 1 }}>
+                  style={{ padding: "5px 10px", opacity: offset === 0 ? 0.4 : 1 }}
+                  aria-label="Previous page">
                   <ChevronLeft size={14} />
                 </button>
                 <button className="btn-accent" disabled={offset + LIMIT >= total}
                   onClick={() => setOffset(offset + LIMIT)}
-                  style={{ padding: "5px 10px", opacity: offset + LIMIT >= total ? 0.4 : 1 }}>
+                  style={{ padding: "5px 10px", opacity: offset + LIMIT >= total ? 0.4 : 1 }}
+                  aria-label="Next page">
                   <ChevronRight size={14} />
                 </button>
               </div>

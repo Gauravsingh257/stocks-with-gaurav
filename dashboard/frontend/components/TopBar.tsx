@@ -1,26 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
+import { useHealth } from "@/lib/useHealth";
+import type { HealthData } from "@/lib/useHealth";
 import { Wifi, WifiOff, RefreshCw, Database, Activity } from "lucide-react";
-
-const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
 function regimeBadge(r: string) {
   if (r === "BULLISH") return { cls: "badge badge-win", dot: "var(--success)", label: "BULLISH" };
   if (r === "BEARISH") return { cls: "badge badge-loss", dot: "var(--danger)", label: "BEARISH" };
   return { cls: "badge badge-neutral", dot: "var(--muted)", label: "NEUTRAL" };
-}
-
-interface HealthData {
-  db_connected: boolean;
-  ws_clients: number;
-  engine_live: boolean;
-  backend_version: string;
-  engine_version: string;
-  uptime_human: string;
-  kite_connected?: boolean;
-  token_present?: boolean;
-  token_expires_in_hours?: number | null;
 }
 
 interface TopBarProps {
@@ -31,20 +19,7 @@ interface TopBarProps {
 
 export default function TopBar({ onMenuClick, terminalLayout = false, onTerminalLayoutToggle }: TopBarProps) {
   const { snapshot, status } = useEngineSocket();
-  const [health, setHealth] = useState<HealthData | null>(null);
-
-  useEffect(() => {
-    const fetchHealth = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      fetch(`${BASE}/api/system/health`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => d && setHealth(d))
-        .catch(() => {});
-    };
-    fetchHealth();
-    const t = setInterval(fetchHealth, 30_000); // was 15s
-    return () => clearInterval(t);
-  }, []);
+  const health = useHealth();
 
   const regime = snapshot?.market_regime ?? "NEUTRAL";
   const rb = regimeBadge(regime);

@@ -19,11 +19,11 @@ export function CyberGridOverlay() {
 /* ── Floating Orbs (ambient light blobs) ───────────────────────────────────── */
 export function FloatingOrbs() {
   return (
-    <>
+    <div className="hidden md:block">
       <div className="orb" style={{ width: 300, height: 300, top: "10%", right: "-5%", background: "var(--accent)" }} />
       <div className="orb" style={{ width: 200, height: 200, bottom: "20%", left: "5%", background: "var(--success)", animationDelay: "-4s" }} />
       <div className="orb" style={{ width: 150, height: 150, top: "50%", right: "30%", background: "#7c3aed", animationDelay: "-8s" }} />
-    </>
+    </div>
   );
 }
 

@@ -50,8 +50,13 @@ function HeroBar({ intraday, swing, longterm }: HeroProps) {
   const ltHR    = longterm?.summary.hit_rate_pct ?? 0;
   const ltAvg   = longterm?.summary.avg_pnl_pct ?? 0;
 
-  // Composite algo score: weighted avg of WR + hit rates (all out of 100)
-  const score = Math.round((wr * 0.4 + swingHR * 0.35 + ltHR * 0.25));
+  // Composite algo score: weighted avg of WR + hit rates (only components with data)
+  const weights: [number, number][] = [];
+  if ((intraday?.total_trades ?? 0) > 0) weights.push([wr, 0.4]);
+  if ((swing?.summary.total ?? 0) > 0) weights.push([swingHR, 0.35]);
+  if ((longterm?.summary.total ?? 0) > 0) weights.push([ltHR, 0.25]);
+  const wSum = weights.reduce((s, [, w]) => s + w, 0) || 1;
+  const score = Math.round(weights.reduce((s, [v, w]) => s + v * (w / wSum), 0));
 
   const cards = [
     {

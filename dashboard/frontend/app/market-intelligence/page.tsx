@@ -130,9 +130,19 @@ export default function MarketIntelligencePage() {
 
   useEffect(() => {
     fetchData();
-    // Refresh every 5 minutes
-    const interval = setInterval(fetchData, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+    // Refresh every 5 minutes (skip if tab hidden)
+    const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") fetchData();
+    }, 5 * 60 * 1000);
+    // Refresh on tab re-focus
+    const onVis = () => {
+      if (document.visibilityState === "visible") fetchData();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [fetchData]);
 
   if (loading && !data) {

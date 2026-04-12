@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@types/recharts": "^1.8.29",
     "dompurify": "^3.3.3",
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.575.0",

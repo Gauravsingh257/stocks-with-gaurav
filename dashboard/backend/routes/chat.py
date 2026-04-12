@@ -23,6 +23,20 @@ logger = logging.getLogger("dashboard.chat")
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
+# ── Singleton OpenAI client (reuses HTTP connection pool) ─────────────────────
+_openai_client = None
+_openai_client_key = None
+
+
+def _get_openai_client(api_key: str):
+    global _openai_client, _openai_client_key
+    if _openai_client is None or _openai_client_key != api_key:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key)
+        _openai_client_key = api_key
+    return _openai_client
+
+
 # ── Request / response schemas ────────────────────────────────────────────────
 class ChatMessage(BaseModel):
     role: str     # "user" | "assistant"
@@ -373,8 +387,7 @@ def _stream_chat(messages: list[ChatMessage], system_prompt: str) -> Generator[s
         return
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = _get_openai_client(api_key)
 
         # Truncate to last 20 messages to stay within GPT-4o context budget
         MAX_HISTORY = 20
