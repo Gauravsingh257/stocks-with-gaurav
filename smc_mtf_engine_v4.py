@@ -1716,7 +1716,7 @@ def detect_setup_b(symbol: str, tf_data: dict):
             if not confirmation_candle(ltf, "LONG"):
                 pass
             else:
-                sl, target = compute_sl_target("LONG", price, ob_long, atr, "B")
+                sl, target = compute_sl_target_dynamic(symbol, "LONG", price, ob_long, atr, "B")
 
                 last_swing_price = ltf[-3]["close"]
                 if is_fresh_entry(entry=price, target=target, current_price=last_swing_price):
@@ -2427,6 +2427,13 @@ def detect_setup_d(symbol: str, tf_data: dict):
         })
         return None
 
+    # -------- DAY BOUNDARY CHECK --------
+    # States from previous day are invalid — zones don't carry overnight
+    state_date = state.get("choch_time", state["time"]).date()
+    if state_date < now_ist().date():
+        SETUP_D_STATE.pop(key, None)
+        return None
+
     # -------- COMMON EXPIRY CHECK --------
     if (now_ist() - state["time"]).total_seconds() > _expiry_secs:
         SETUP_D_STATE.pop(key, None)
@@ -2721,6 +2728,12 @@ def detect_setup_e(symbol: str, tf_data: dict):
             f"[SETUP-E] {symbol} | CHoCH detected | dir={direction} | "
             f"idx={idx} | sweep={recent_sweep}"
         )
+        return None
+
+    # -------- DAY BOUNDARY CHECK --------
+    state_date = state.get("choch_time", state["time"]).date()
+    if state_date < now_ist().date():
+        SETUP_E_STATE.pop(key, None)
         return None
 
     # -------- EXPIRY CHECK --------
@@ -4983,10 +4996,14 @@ def monitor_active_trades(symbol, current_price):
         else:
             current_r = (entry - current_price) / risk
         
-        # ── TRAILING STOP LOGIC (3 stages) ──
+        # ── TRAILING STOP LOGIC (4 stages) ──
         if direction == "LONG":
             new_sl = current_sl
-            if current_r >= 2.5:  # Stage 3: Trail by 0.5 ATR equivalent
+            if current_r >= 3.0:  # Stage 4: Dynamic trail — lock 75% of open profit
+                new_sl = max(current_sl, entry + (current_price - entry) * 0.75)
+                if new_sl != current_sl:
+                    trade["trail_stage"] = 4
+            elif current_r >= 2.5:  # Stage 3: SL to +2R
                 new_sl = max(current_sl, entry + risk * 2.0)
                 if new_sl != current_sl:
                     trade["trail_stage"] = 3
@@ -5013,7 +5030,11 @@ def monitor_active_trades(symbol, current_price):
                               f"Stage {stage} | Current R: +{current_r:.1f}R")
         else:  # SHORT
             new_sl = current_sl
-            if current_r >= 2.5:
+            if current_r >= 3.0:  # Stage 4: Dynamic trail — lock 75% of open profit
+                new_sl = min(current_sl, entry - (entry - current_price) * 0.75)
+                if new_sl != current_sl:
+                    trade["trail_stage"] = 4
+            elif current_r >= 2.5:
                 new_sl = min(current_sl, entry - risk * 2.0)
                 if new_sl != current_sl:
                     trade["trail_stage"] = 3
