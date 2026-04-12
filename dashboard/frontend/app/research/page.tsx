@@ -4,6 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, RefreshCw } from "lucide-react";
 
 import { api, type LongTermIdea, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
+
+function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
+  if (!isoTime) return { label: "Never", stale: true };
+  const diff = Date.now() - new Date(isoTime + "Z").getTime();
+  const hours = Math.floor(diff / 3_600_000);
+  if (hours < 1) return { label: "< 1h ago", stale: false };
+  if (hours < 24) return { label: `${hours}h ago`, stale: hours > 12 };
+  const days = Math.floor(hours / 24);
+  return { label: `${days}d ago`, stale: true };
+}
 import { LongTermIdeasCard } from "./LongTermIdeasCard";
 import { PerformanceOverview } from "./PerformanceOverview";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
@@ -20,6 +30,8 @@ export default function ResearchPage() {
   const [runningScan, setRunningScan] = useState<"swing" | "longterm" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
+  const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -33,9 +45,11 @@ export default function ResearchPage() {
     const [swingRes, longtermRes, runningRes, coverageRes, perfRes] = results;
     if (swingRes.status === "fulfilled") {
       setSwing(swingRes.value?.items ?? []);
+      setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
     }
     if (longtermRes.status === "fulfilled") {
       setLongterm(longtermRes.value?.items ?? []);
+      setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
     }
     if (runningRes.status === "fulfilled") {
       setRunning(runningRes.value?.items ?? []);
@@ -98,6 +112,16 @@ export default function ResearchPage() {
             <p style={{ margin: "2px 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
               Swing ideas, long-term theses, and running trade intelligence
             </p>
+            {(() => {
+              const swingAge = formatScanAge(lastSwingScan);
+              const ltAge = formatScanAge(lastLongtermScan);
+              return (
+                <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: swingAge.stale || ltAge.stale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
+                  Last scan — Swing: {swingAge.label} · Long-term: {ltAge.label}
+                  {(swingAge.stale || ltAge.stale) && " (auto-refresh in progress)"}
+                </p>
+              );
+            })()}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>

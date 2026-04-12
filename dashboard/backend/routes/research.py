@@ -5,6 +5,7 @@ Research Center APIs for swing ideas, long-term ideas, and running trades.
 
 import logging
 import threading
+from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
@@ -13,9 +14,66 @@ from services.universe_manager import load_nse_universe
 router = APIRouter(tags=["research"])
 log = logging.getLogger("dashboard.research")
 
+# Track in-flight auto-scans to avoid duplicate triggers
+_auto_scan_lock = threading.Lock()
+_auto_scan_running: set[str] = set()
+
+STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
+
+
+def _is_data_stale(horizon: str) -> bool:
+    """Return True if the latest ranking run for *horizon* is older than STALE_THRESHOLD_HOURS."""
+    runs = get_ranking_runs(horizon=horizon, limit=1)
+    if not runs:
+        return True
+    last_run_time = runs[0].get("run_time")
+    if not last_run_time:
+        return True
+    try:
+        # run_time is stored as ISO string from SQLite datetime('now')
+        last_dt = datetime.fromisoformat(last_run_time.replace("Z", "+00:00"))
+        # Compare in UTC (SQLite datetime('now') is UTC)
+        return datetime.utcnow() - last_dt.replace(tzinfo=None) > timedelta(hours=STALE_THRESHOLD_HOURS)
+    except (ValueError, TypeError):
+        return True
+
+
+def _maybe_auto_scan(horizon: str) -> None:
+    """If data for *horizon* is stale and no scan is already running, trigger one in the background."""
+    agent_map = {"SWING": "SwingTradeAlphaAgent", "LONGTERM": "LongTermInvestmentAgent"}
+    agent_name = agent_map.get(horizon)
+    if not agent_name:
+        return
+
+    with _auto_scan_lock:
+        if horizon in _auto_scan_running:
+            return  # already in-flight
+        if not _is_data_stale(horizon):
+            return
+        _auto_scan_running.add(horizon)
+
+    def _job() -> None:
+        try:
+            from agents.runner import run_agent_now
+            out = run_agent_now(agent_name)
+            if isinstance(out, dict) and out.get("error"):
+                log.error("[auto-scan %s] error: %s", horizon, out["error"])
+            else:
+                log.info("[auto-scan %s] finished: %s", horizon, out.get("summary", out))
+        except Exception:
+            log.exception("[auto-scan %s] failed", horizon)
+        finally:
+            with _auto_scan_lock:
+                _auto_scan_running.discard(horizon)
+
+    threading.Thread(target=_job, daemon=True, name=f"auto_scan_{horizon}").start()
+    log.info("[auto-scan %s] triggered — data is stale (>%dh)", horizon, STALE_THRESHOLD_HOURS)
+
 
 def _swing_payload(limit: int) -> dict:
     rows = get_stock_recommendations("SWING", limit=limit)
+    runs = get_ranking_runs(horizon="SWING", limit=1)
+    last_scan = runs[0]["run_time"] if runs else None
     items: list[dict] = []
     for row in rows:
         targets = row.get("targets", [])
@@ -51,11 +109,13 @@ def _swing_payload(limit: int) -> dict:
                 "data_authenticity": row.get("data_authenticity", "unknown"),
             }
         )
-    return {"items": items, "count": len(items)}
+    return {"items": items, "count": len(items), "last_scan_time": last_scan}
 
 
 def _longterm_payload(limit: int) -> dict:
     rows = get_stock_recommendations("LONGTERM", limit=limit)
+    runs = get_ranking_runs(horizon="LONGTERM", limit=1)
+    last_scan = runs[0]["run_time"] if runs else None
     items: list[dict] = []
     for row in rows:
         targets = row.get("targets", [])
@@ -93,7 +153,7 @@ def _longterm_payload(limit: int) -> dict:
                 "data_authenticity": row.get("data_authenticity", "unknown"),
             }
         )
-    return {"items": items, "count": len(items)}
+    return {"items": items, "count": len(items), "last_scan_time": last_scan}
 
 
 def _running_trades_payload(limit: int) -> dict:
@@ -143,12 +203,14 @@ def _running_trades_payload(limit: int) -> dict:
 @router.get("/api/research/swing")
 @router.get("/research/swing")
 def get_swing_research(limit: int = Query(12, ge=1, le=100)):
+    _maybe_auto_scan("SWING")
     return _swing_payload(limit)
 
 
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(12, ge=1, le=100)):
+    _maybe_auto_scan("LONGTERM")
     return _longterm_payload(limit)
 
 

@@ -454,12 +454,26 @@ export default function AnalyticsPage() {
       </div>
 
       {/* ── SECTION 2: SWING SCAN ─────────────────────────────────────────── */}
-      <SectionDivider label="Swing Scan Performance" />
-      <ResearchSection data={swingPerf} label="Swing Scan Recommendations" color="#5b9cf6" />
+      {swingPerf && (
+        <>
+          <SectionDivider label="Swing Scan Performance" />
+          <ResearchSection data={swingPerf} label="Swing Scan Recommendations" color="#5b9cf6" />
+        </>
+      )}
 
       {/* ── SECTION 3: LONG-TERM ──────────────────────────────────────────── */}
-      <SectionDivider label="Long-Term Investment Performance" />
-      <ResearchSection data={ltPerf} label="Long-Term Investment Recommendations" color="#a78bfa" />
+      {ltPerf && (
+        <>
+          <SectionDivider label="Long-Term Investment Performance" />
+          <ResearchSection data={ltPerf} label="Long-Term Investment Recommendations" color="#a78bfa" />
+        </>
+      )}
+
+      {!swingPerf && !ltPerf && (
+        <div className="glass" style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>
+          No research performance data yet — run a scan on the Research page to get started.
+        </div>
+      )}
     </div>
   );
 }

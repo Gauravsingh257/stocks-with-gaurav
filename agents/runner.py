@@ -162,22 +162,22 @@ def start_scheduler() -> None:
         misfire_grace_time=30,
     )
 
-    # Swing alpha scan: weekly before market open
+    # Swing alpha scan: daily before market open (Mon–Fri)
     _scheduler.add_job(
         weekly_swing_scan,
-        CronTrigger(day_of_week="mon", hour=8, minute=30, timezone="Asia/Kolkata"),
-        id="weekly_swing_scan",
-        name="Weekly Swing Alpha Scan",
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone="Asia/Kolkata"),
+        id="daily_swing_scan",
+        name="Daily Swing Alpha Scan",
         replace_existing=True,
         misfire_grace_time=600,
     )
 
-    # Long-term ranking scan: weekly before market open
+    # Long-term ranking scan: daily before market open (Mon–Fri)
     _scheduler.add_job(
         weekly_longterm_scan,
-        CronTrigger(day_of_week="mon", hour=8, minute=40, timezone="Asia/Kolkata"),
-        id="weekly_longterm_scan",
-        name="Weekly Long-Term Ranking Scan",
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=40, timezone="Asia/Kolkata"),
+        id="daily_longterm_scan",
+        name="Daily Long-Term Ranking Scan",
         replace_existing=True,
         misfire_grace_time=600,
     )

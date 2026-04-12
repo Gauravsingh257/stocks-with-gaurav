@@ -611,7 +611,7 @@ def create_stock_recommendation(payload: dict) -> int:
     """Insert a recommendation row and return id.
 
     Dedup: if an active recommendation for the same symbol+agent_type exists
-    within the last 7 days, update it instead of inserting a duplicate.
+    within the last 30 days, update it instead of inserting a duplicate.
     """
     conn = get_connection()
     try:
@@ -620,7 +620,7 @@ def create_stock_recommendation(payload: dict) -> int:
             """
             SELECT id, created_at FROM stock_recommendations
             WHERE symbol = ? AND agent_type = ?
-              AND datetime(created_at) >= datetime('now', '-7 days')
+              AND datetime(created_at) >= datetime('now', '-30 days')
             ORDER BY datetime(created_at) DESC LIMIT 1
             """,
             (payload["symbol"], payload["agent_type"]),
