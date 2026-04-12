@@ -240,6 +240,7 @@ export interface SwingIdea {
   signals_updated_at: string | null;
   created_at: string;
   data_authenticity: string;
+  status?: string;
 }
 
 export interface LongTermIdea {
@@ -267,6 +268,7 @@ export interface LongTermIdea {
   signals_updated_at: string | null;
   created_at: string;
   data_authenticity: string;
+  status?: string;
 }
 
 export interface RunningTradeMonitorItem {

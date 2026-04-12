@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, archive_stale_recommendations
 from services import generate_rankings
 
 
@@ -16,8 +16,20 @@ class SwingTradeAlphaAgent(BaseAgent):
     def run(self, result: AgentResult) -> None:
         ranking = asyncio.run(generate_rankings("SWING", top_k=10, target_universe=1800))
 
+        # Log ranking run upfront to get scan_run_id for all recommendations
+        run_id = log_ranking_run(
+            horizon="SWING",
+            universe_requested=ranking.universe.requested_size,
+            universe_scanned=ranking.scanned,
+            quality_passed=ranking.quality_passed,
+            ranked_candidates=ranking.ranked_candidates,
+            selected_count=len(ranking.ideas),
+            notes=f"sources={ranking.universe.sources}|ideas={len(ranking.ideas)}",
+        )
+
         saved = 0
         findings: list[dict] = []
+        active_symbols: list[str] = []
         for idea in ranking.ideas:
             symbol = idea.symbol
             entry_price = idea.entry_price
@@ -48,9 +60,11 @@ class SwingTradeAlphaAgent(BaseAgent):
                 "sentiment_factors": idea.sentiment_factors,
                 "reasoning": idea.reasoning,
                 "data_authenticity": data_auth,
+                "scan_run_id": run_id,
             }
             create_stock_recommendation(row)
             saved += 1
+            active_symbols.append(symbol)
             findings.append(
                 {
                     "symbol": symbol,
@@ -80,16 +94,15 @@ class SwingTradeAlphaAgent(BaseAgent):
             "requested_universe_size": ranking.universe.requested_size,
             "actual_universe_size": ranking.universe.actual_size,
         }
-        # Always log so Research UI shows last run (coverage card) even when 0 ideas saved.
-        log_ranking_run(
-            horizon="SWING",
-            universe_requested=ranking.universe.requested_size,
-            universe_scanned=ranking.scanned,
-            quality_passed=ranking.quality_passed,
-            ranked_candidates=ranking.ranked_candidates,
-            selected_count=saved,
-            notes=f"sources={ranking.universe.sources}|saved={saved}",
-        )
+        # Archive recommendations no longer in top picks
+        if active_symbols:
+            try:
+                archived = archive_stale_recommendations("SWING", active_symbols)
+                if archived:
+                    import logging as _log
+                    _log.getLogger("SwingTradeAlphaAgent").info("Archived %d stale SWING recommendations", archived)
+            except Exception:
+                pass
         result.findings = findings
         if saved == 0:
             result.status = "WARNING"

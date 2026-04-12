@@ -127,11 +127,14 @@ CREATE TABLE IF NOT EXISTS stock_recommendations (
     long_term_target      REAL,
     risk_factors          TEXT,
     reasoning             TEXT NOT NULL DEFAULT '',
+    status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED','EXPIRED')),
+    scan_run_id           INTEGER,
     signals_updated_at    TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_stock_reco_type_created ON stock_recommendations(agent_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_reco_symbol ON stock_recommendations(symbol);
+CREATE INDEX IF NOT EXISTS idx_stock_reco_status ON stock_recommendations(status);
 
 -- ─────────────────────────────────────────
 -- TABLE 7: running_trades (live monitored recommendations)
@@ -199,6 +202,44 @@ CREATE TABLE IF NOT EXISTS performance_snapshots (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_perf_snap_date_horizon ON performance_snapshots(snapshot_date, horizon);
 CREATE INDEX IF NOT EXISTS idx_perf_snap_date ON performance_snapshots(snapshot_date DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 10: recommendation_history (audit trail for recommendation changes)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS recommendation_history (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id     INTEGER NOT NULL,
+    scan_run_id           INTEGER,
+    event_type            TEXT NOT NULL CHECK(event_type IN ('CREATED','UPDATED','ARCHIVED','REACTIVATED')),
+    entry_price           REAL,
+    stop_loss             REAL,
+    targets               TEXT,
+    confidence_score      REAL,
+    reasoning             TEXT,
+    technical_signals     TEXT,
+    fundamental_signals   TEXT,
+    sentiment_signals     TEXT,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(recommendation_id) REFERENCES stock_recommendations(id),
+    FOREIGN KEY(scan_run_id) REFERENCES ranking_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_reco_hist_reco_id ON recommendation_history(recommendation_id, created_at DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 11: signal_events (lifecycle event log — append-only)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS signal_events (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol                TEXT NOT NULL,
+    event_type            TEXT NOT NULL,
+    source                TEXT NOT NULL DEFAULT 'system',
+    recommendation_id     INTEGER,
+    running_trade_id      INTEGER,
+    details               TEXT,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_signal_events_symbol ON signal_events(symbol, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_events_type ON signal_events(event_type, created_at DESC);
 """
 
 
@@ -429,13 +470,18 @@ def migrate_stock_recommendations() -> None:
     try:
         cursor = conn.execute("PRAGMA table_info(stock_recommendations)")
         cols = {row[1] for row in cursor.fetchall()}
-        for col_name in (
-            "technical_signals", "fundamental_signals", "sentiment_signals",
-            "signals_updated_at", "signal_first_detected_at", "data_authenticity",
-            "scan_run_id",
+        for col_name, col_def in (
+            ("technical_signals", "TEXT"),
+            ("fundamental_signals", "TEXT"),
+            ("sentiment_signals", "TEXT"),
+            ("signals_updated_at", "TEXT"),
+            ("signal_first_detected_at", "TEXT"),
+            ("data_authenticity", "TEXT"),
+            ("scan_run_id", "INTEGER"),
+            ("status", "TEXT NOT NULL DEFAULT 'ACTIVE'"),
         ):
             if col_name not in cols:
-                conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} TEXT")
+                conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} {col_def}")
         conn.commit()
     finally:
         conn.close()
@@ -612,13 +658,20 @@ def create_stock_recommendation(payload: dict) -> int:
 
     Dedup: if an active recommendation for the same symbol+agent_type exists
     within the last 30 days, update it instead of inserting a duplicate.
+    On UPDATE: preserves signal_first_detected_at and logs history snapshot.
+    On INSERT: sets signal_first_detected_at = now, status = ACTIVE.
     """
     conn = get_connection()
     try:
+        scan_run_id = payload.get("scan_run_id")
+
         # Check for existing recent recommendation (dedup)
         existing = conn.execute(
             """
-            SELECT id, created_at FROM stock_recommendations
+            SELECT id, created_at, entry_price, stop_loss, targets,
+                   confidence_score, reasoning, technical_signals,
+                   fundamental_signals, sentiment_signals
+            FROM stock_recommendations
             WHERE symbol = ? AND agent_type = ?
               AND datetime(created_at) >= datetime('now', '-30 days')
             ORDER BY datetime(created_at) DESC LIMIT 1
@@ -627,7 +680,27 @@ def create_stock_recommendation(payload: dict) -> int:
         ).fetchone()
 
         if existing:
-            # Update the existing recommendation instead of creating a duplicate
+            rec_id = int(existing["id"])
+
+            # ── Snapshot the CURRENT state into recommendation_history before overwriting ──
+            conn.execute(
+                """
+                INSERT INTO recommendation_history (
+                    recommendation_id, scan_run_id, event_type,
+                    entry_price, stop_loss, targets, confidence_score,
+                    reasoning, technical_signals, fundamental_signals, sentiment_signals
+                ) VALUES (?, ?, 'UPDATED', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rec_id, scan_run_id,
+                    existing["entry_price"], existing["stop_loss"],
+                    existing["targets"], existing["confidence_score"],
+                    existing["reasoning"], existing["technical_signals"],
+                    existing["fundamental_signals"], existing["sentiment_signals"],
+                ),
+            )
+
+            # ── Update the recommendation with latest scan data ──
             conn.execute(
                 """
                 UPDATE stock_recommendations SET
@@ -637,7 +710,7 @@ def create_stock_recommendation(payload: dict) -> int:
                     technical_factors = ?, fundamental_factors = ?, sentiment_factors = ?,
                     fair_value_estimate = ?, entry_zone = ?, long_term_target = ?,
                     risk_factors = ?, reasoning = ?, signals_updated_at = datetime('now'),
-                    data_authenticity = ?
+                    data_authenticity = ?, scan_run_id = ?, status = 'ACTIVE'
                 WHERE id = ?
                 """,
                 (
@@ -659,13 +732,21 @@ def create_stock_recommendation(payload: dict) -> int:
                     json.dumps(payload.get("risk_factors", [])),
                     payload.get("reasoning", ""),
                     payload.get("data_authenticity", "unknown"),
-                    existing["id"],
+                    scan_run_id,
+                    rec_id,
                 ),
             )
-            conn.commit()
-            return int(existing["id"])
 
-        # New recommendation
+            # ── Log signal event ──
+            conn.execute(
+                "INSERT INTO signal_events (symbol, event_type, source, recommendation_id, details) VALUES (?, 'SCAN_UPDATE', 'scanner', ?, ?)",
+                (payload["symbol"], rec_id, json.dumps({"new_entry": payload["entry_price"], "new_confidence": payload.get("confidence_score", 0)})),
+            )
+
+            conn.commit()
+            return rec_id
+
+        # ── New recommendation ──
         cur = conn.execute(
             """
             INSERT INTO stock_recommendations (
@@ -673,8 +754,8 @@ def create_stock_recommendation(payload: dict) -> int:
                 setup, expected_holding_period, technical_signals, fundamental_signals,
                 sentiment_signals, technical_factors, fundamental_factors, sentiment_factors,
                 fair_value_estimate, entry_zone, long_term_target, risk_factors, reasoning,
-                signal_first_detected_at, data_authenticity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+                signal_first_detected_at, data_authenticity, scan_run_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, 'ACTIVE')
             """,
             (
                 payload["symbol"],
@@ -697,23 +778,147 @@ def create_stock_recommendation(payload: dict) -> int:
                 json.dumps(payload.get("risk_factors", [])),
                 payload.get("reasoning", ""),
                 payload.get("data_authenticity", "unknown"),
+                scan_run_id,
             ),
         )
+        rec_id = int(cur.lastrowid)
+
+        # ── Log creation history + signal event ──
+        conn.execute(
+            """
+            INSERT INTO recommendation_history (
+                recommendation_id, scan_run_id, event_type,
+                entry_price, stop_loss, targets, confidence_score, reasoning
+            ) VALUES (?, ?, 'CREATED', ?, ?, ?, ?, ?)
+            """,
+            (
+                rec_id, scan_run_id,
+                float(payload["entry_price"]),
+                float(payload["stop_loss"]) if payload.get("stop_loss") is not None else None,
+                json.dumps(payload.get("targets", [])),
+                float(payload.get("confidence_score", 0)),
+                payload.get("reasoning", ""),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO signal_events (symbol, event_type, source, recommendation_id, details) VALUES (?, 'NEW_PICK', 'scanner', ?, ?)",
+            (payload["symbol"], rec_id, json.dumps({"entry": payload["entry_price"], "confidence": payload.get("confidence_score", 0)})),
+        )
+
         conn.commit()
-        return int(cur.lastrowid)
+        return rec_id
     finally:
         conn.close()
 
 
-def get_stock_recommendations(agent_type: str, limit: int = 20) -> list[dict]:
-    """Return latest recommendations by type."""
+def log_signal_event(
+    symbol: str,
+    event_type: str,
+    source: str,
+    recommendation_id: int | None = None,
+    running_trade_id: int | None = None,
+    details: dict | None = None,
+) -> None:
+    """Append an immutable event to the signal_events audit log."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO signal_events (symbol, event_type, source, recommendation_id, running_trade_id, details) VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, event_type, source, recommendation_id, running_trade_id, json.dumps(details or {})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def archive_stale_recommendations(agent_type: str, active_symbols: list[str]) -> int:
+    """Archive recommendations not in the latest active set.
+
+    Returns the number of rows archived.
+    """
+    if not active_symbols:
+        return 0
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" for _ in active_symbols)
+        cur = conn.execute(
+            f"""
+            UPDATE stock_recommendations
+            SET status = 'ARCHIVED'
+            WHERE agent_type = ? AND status = 'ACTIVE'
+              AND symbol NOT IN ({placeholders})
+            """,
+            [agent_type, *active_symbols],
+        )
+        archived_count = cur.rowcount
+        conn.commit()
+
+        # Log events for archived symbols
+        if archived_count > 0:
+            archived_rows = conn.execute(
+                f"""
+                SELECT id, symbol FROM stock_recommendations
+                WHERE agent_type = ? AND status = 'ARCHIVED'
+                  AND symbol NOT IN ({placeholders})
+                  AND datetime(signals_updated_at) >= datetime('now', '-1 day')
+                """,
+                [agent_type, *active_symbols],
+            ).fetchall()
+            for row in archived_rows:
+                conn.execute(
+                    "INSERT INTO signal_events (symbol, event_type, source, recommendation_id, details) VALUES (?, 'ARCHIVED', 'scanner', ?, '{}')",
+                    (row["symbol"], row["id"]),
+                )
+            conn.commit()
+
+        return archived_count
+    finally:
+        conn.close()
+
+
+def get_recommendation_history(recommendation_id: int) -> list[dict]:
+    """Return audit trail for a recommendation, newest first."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """
+            "SELECT * FROM recommendation_history WHERE recommendation_id = ? ORDER BY created_at DESC",
+            (recommendation_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_signal_events(symbol: str | None = None, limit: int = 50) -> list[dict]:
+    """Return recent signal lifecycle events. Optionally filter by symbol."""
+    conn = get_connection()
+    try:
+        if symbol:
+            rows = conn.execute(
+                "SELECT * FROM signal_events WHERE symbol = ? ORDER BY created_at DESC LIMIT ?",
+                (symbol, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM signal_events ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_stock_recommendations(agent_type: str, limit: int = 20, include_archived: bool = False) -> list[dict]:
+    """Return latest recommendations by type. Only ACTIVE by default."""
+    conn = get_connection()
+    try:
+        status_clause = "" if include_archived else "AND status = 'ACTIVE'"
+        rows = conn.execute(
+            f"""
             SELECT * FROM stock_recommendations
             WHERE agent_type = ?
               AND COALESCE(technical_signals, '') != ''
+              {status_clause}
             ORDER BY datetime(created_at) DESC
             LIMIT ?
             """,

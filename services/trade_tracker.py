@@ -117,7 +117,7 @@ def seed_running_trades() -> int:
 
 def _update_all_running_trades() -> int:
     """Fetch live prices and update all RUNNING trades. Returns count updated."""
-    from dashboard.backend.db import list_running_trades, update_running_trade  # noqa: PLC0415
+    from dashboard.backend.db import list_running_trades, update_running_trade, log_signal_event  # noqa: PLC0415
 
     rows = list_running_trades(limit=200, active_only=True)
     if not rows:
@@ -155,6 +155,7 @@ def _update_all_running_trades() -> int:
         dist_sl = round(cmp - stop, 2)
 
         # Auto-resolve status
+        old_status = row.get("status", "RUNNING")
         if targets and cmp >= float(targets[-1]):
             status = "TARGET_HIT"
         elif cmp <= stop:
@@ -182,6 +183,22 @@ def _update_all_running_trades() -> int:
             distance_to_stop_loss=dist_sl,
             status=status,
         )
+
+        # ── Log lifecycle event on status transition ──
+        if status != old_status and status in ("TARGET_HIT", "STOP_HIT"):
+            try:
+                log_signal_event(
+                    symbol=sym,
+                    event_type=status,
+                    source="trade_tracker",
+                    recommendation_id=row.get("recommendation_id"),
+                    running_trade_id=row["id"],
+                    details={"cmp": cmp, "entry": entry, "stop": stop, "pl_pct": pl_pct},
+                )
+                log.info("Trade %s %s at %.2f (PL: %.2f%%)", sym, status, cmp, pl_pct)
+            except Exception:
+                log.exception("Failed to log signal event for %s", sym)
+
         updated += 1
 
     log.info("Tracker: updated %d running trades", updated)

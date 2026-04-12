@@ -158,6 +158,23 @@ function DataBadge({ auth }: { auth?: string }) {
   );
 }
 
+function StatusBadge({ status }: { status?: string }) {
+  if (!status || status === "ACTIVE") return null;
+  const colors: Record<string, { bg: string; fg: string }> = {
+    ARCHIVED: { bg: "rgba(148,163,184,0.15)", fg: "#94a3b8" },
+    EXPIRED: { bg: "rgba(255,78,106,0.15)", fg: "#ff4e6a" },
+  };
+  const c = colors[status] || colors.ARCHIVED!;
+  return (
+    <span style={{
+      fontSize: "0.6rem", padding: "1px 5px", borderRadius: 3,
+      background: c.bg, color: c.fg, fontWeight: 600, whiteSpace: "nowrap", marginLeft: 4,
+    }}>
+      {status}
+    </span>
+  );
+}
+
 export function SwingIdeasTable({ items }: Props) {
   const headers = ["#", "Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
 
@@ -197,6 +214,7 @@ export function SwingIdeasTable({ items }: Props) {
                   <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
                   <td style={{ padding: "10px 12px" }}>
                     <DataBadge auth={item.data_authenticity} />
+                    <StatusBadge status={item.status} />
                   </td>
                   <td style={{ padding: "10px 12px" }}>
                     <LevelsTooltip item={item} />

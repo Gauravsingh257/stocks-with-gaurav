@@ -107,6 +107,7 @@ def _swing_payload(limit: int) -> dict:
                 "signals_updated_at": row.get("signals_updated_at") or row.get("created_at"),
                 "created_at": row.get("created_at"),
                 "data_authenticity": row.get("data_authenticity", "unknown"),
+                "status": row.get("status", "ACTIVE"),
             }
         )
     return {"items": items, "count": len(items), "last_scan_time": last_scan}
@@ -151,6 +152,7 @@ def _longterm_payload(limit: int) -> dict:
                 "signals_updated_at": row.get("signals_updated_at") or row.get("created_at"),
                 "created_at": row.get("created_at"),
                 "data_authenticity": row.get("data_authenticity", "unknown"),
+                "status": row.get("status", "ACTIVE"),
             }
         )
     return {"items": items, "count": len(items), "last_scan_time": last_scan}
