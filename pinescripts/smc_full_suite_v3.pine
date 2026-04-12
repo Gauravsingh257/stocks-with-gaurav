@@ -1,0 +1,514 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// © StocksWithGaurav - SMC/ICT Full Suite Indicator v3
+
+//@version=6
+indicator("SMC Full Suite v3 [SWG]", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Swing Detection ─────────────────────────────────────────────────────────
+grp_swing   = "① Swing Detection"
+swing_len   = input.int(5, "Swing Length (Fractal Lookback)", minval=2, maxval=50, group=grp_swing)
+show_swing  = input.bool(true, "Show Swing Labels (HH/HL/LH/LL)", group=grp_swing)
+atr_filter  = input.float(0.3, "Min Swing Size (× ATR)", minval=0.0, maxval=5.0, step=0.1, group=grp_swing)
+
+// ─── Structure ───────────────────────────────────────────────────────────────
+grp_struct   = "② Structure (BOS / CHOCH / IDM)"
+show_bos     = input.bool(true, "Show BOS", group=grp_struct)
+show_choch   = input.bool(true, "Show CHOCH", group=grp_struct)
+show_idm     = input.bool(true, "Show IDM (Inducement)", group=grp_struct)
+extend_lines = input.bool(true, "Extend Lines Right", group=grp_struct)
+extend_bars  = input.int(20, "Extension Length (bars)", minval=5, maxval=100, group=grp_struct)
+anti_chop    = input.int(3, "Anti-Chop (min bars between CHOCH)", minval=0, maxval=20, group=grp_struct)
+
+// ─── Order Blocks ────────────────────────────────────────────────────────────
+grp_ob       = "③ Order Blocks"
+show_ob      = input.bool(true, "Show Order Blocks", group=grp_ob)
+ob_max_zones = input.int(5, "Max Active OB Zones", minval=1, maxval=20, group=grp_ob)
+ob_mitigation = input.string("Wick", "OB Mitigated By", options=["Wick", "Close"], group=grp_ob, tooltip="When price touches OB by wick or closes through it")
+ob_show_label = input.bool(true, "Show OB Labels", group=grp_ob)
+ob_max_age   = input.int(100, "OB Max Age (bars)", minval=20, maxval=500, group=grp_ob, tooltip="Auto-remove OBs older than this many bars")
+
+// ─── Fair Value Gaps ─────────────────────────────────────────────────────────
+grp_fvg       = "④ Fair Value Gaps (FVG)"
+show_fvg      = input.bool(true, "Show FVGs", group=grp_fvg)
+fvg_max_zones = input.int(5, "Max Active FVG Zones", minval=1, maxval=20, group=grp_fvg)
+fvg_min_atr   = input.float(0.3, "Min FVG Size (× ATR)", minval=0.0, maxval=2.0, step=0.05, group=grp_fvg, tooltip="Higher = only show significant gaps. 0.3 works well for Nifty 5m.")
+fvg_mitigation = input.string("Wick", "FVG Mitigated By", options=["Wick", "Close", "Half"], group=grp_fvg, tooltip="Half = price reaches 50% of the gap")
+fvg_show_label = input.bool(true, "Show FVG Labels", group=grp_fvg)
+fvg_trend_aligned = input.bool(true, "Only Trend-Aligned FVGs", group=grp_fvg, tooltip="Only show bullish FVGs in bullish trend, bearish FVGs in bearish trend")
+fvg_max_age   = input.int(80, "FVG Max Age (bars)", minval=10, maxval=500, group=grp_fvg, tooltip="Auto-remove FVGs older than this many bars")
+
+// ─── Premium / Discount ─────────────────────────────────────────────────────
+grp_pd       = "⑤ Premium / Discount"
+show_pd      = input.bool(true, "Show Premium/Discount Zones", group=grp_pd)
+pd_eq_line   = input.bool(true, "Show Equilibrium (50%) Line", group=grp_pd)
+pd_only_latest = input.bool(true, "Only Latest Swing Range", group=grp_pd, tooltip="Show P/D only for the most recent swing, not spanning entire history")
+
+// ─── Liquidity Levels (EQH / EQL) ──────────────────────────────────────────
+grp_liq       = "⑥ Liquidity (Equal Highs / Lows)"
+show_liq      = input.bool(true, "Show EQH / EQL", group=grp_liq)
+liq_threshold = input.float(0.15, "Equal Level Tolerance (× ATR)", minval=0.01, maxval=1.0, step=0.01, group=grp_liq, tooltip="How close two swing highs/lows must be to count as 'equal'. 0.15 works well for Nifty.")
+liq_show_label = input.bool(true, "Show Liquidity Labels", group=grp_liq)
+
+// ─── Style ───────────────────────────────────────────────────────────────────
+grp_style    = "⑦ Style"
+col_bullish  = input.color(color.new(#089981, 0), "Bullish Color", group=grp_style)
+col_bearish  = input.color(color.new(#F23645, 0), "Bearish Color", group=grp_style)
+col_idm      = input.color(color.new(#FF9800, 0), "IDM Color", group=grp_style)
+col_choch    = input.color(color.new(#E040FB, 0), "CHOCH Color", group=grp_style)
+col_fvg_bull = input.color(color.new(#2962FF, 85), "Bullish FVG Fill", group=grp_style)
+col_fvg_bear = input.color(color.new(#FF6D00, 85), "Bearish FVG Fill", group=grp_style)
+col_ob_bull  = input.color(color.new(#089981, 80), "Bullish OB Fill", group=grp_style)
+col_ob_bear  = input.color(color.new(#F23645, 80), "Bearish OB Fill", group=grp_style)
+col_premium  = input.color(color.new(#F23645, 88), "Premium Zone", group=grp_style)
+col_discount = input.color(color.new(#089981, 88), "Discount Zone", group=grp_style)
+col_eq       = input.color(color.new(#FFEB3B, 60), "Equilibrium Line", group=grp_style)
+col_eqh      = input.color(color.new(#2196F3, 0), "EQH Color", group=grp_style)
+col_eql      = input.color(color.new(#FF5722, 0), "EQL Color", group=grp_style)
+line_style_in = input.string("Dashed", "BOS/CHOCH Line Style", options=["Solid", "Dashed", "Dotted"], group=grp_style)
+label_size_in = input.string("small", "Label Size", options=["tiny", "small", "normal"], group=grp_style)
+
+// ─── Extras ──────────────────────────────────────────────────────────────────
+grp_extra    = "⑧ Extras"
+show_bg      = input.bool(false, "Show Trend Background", group=grp_extra)
+color_candles = input.bool(false, "Color Candles by Trend", group=grp_extra)
+show_table   = input.bool(true, "Show Info Table", group=grp_extra)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+get_line_style(s) =>
+    s == "Solid" ? line.style_solid : s == "Dashed" ? line.style_dashed : line.style_dotted
+
+get_label_size(s) =>
+    s == "tiny" ? size.tiny : s == "small" ? size.small : size.normal
+
+ls  = get_line_style(line_style_in)
+lsz = get_label_size(label_size_in)
+
+atr14 = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1. FRACTAL SWING DETECTION + MARKET STRUCTURE (BOS / CHOCH / IDM)
+// ═══════════════════════════════════════════════════════════════════════════════
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+var float last_sh = na, var int last_sh_bar = na
+var float last_sl = na, var int last_sl_bar = na
+var float prev_sh = na, var int prev_sh_bar = na
+var float prev_sl = na, var int prev_sl_bar = na
+
+var int trend          = 0
+var int last_trend_bar = 0
+
+// Flags for OB detection — set when a structure break happens
+var bool bos_up   = false
+var bool bos_down = false
+var int  bos_bar  = na
+
+// IDM internals
+var float idm_level = na, var int idm_bar = na, var bool idm_active = false
+var float int_high = na, var int int_high_bar = na
+var float int_low = na, var int int_low_bar = na
+
+f_draw_struct_line(int x1, float y, int x2, color col, int w) =>
+    end_x = extend_lines ? x2 + extend_bars : x2
+    line.new(x1, y, end_x, y, color=col, style=ls, width=w)
+
+// ─── Process Swing High ─────────────────────────────────────────────────────
+if not na(ph)
+    sh_price = ph
+    sh_bar   = bar_index - swing_len
+    skip = atr_filter > 0 and not na(last_sh) and math.abs(sh_price - last_sh) < atr_filter * atr14
+
+    if not skip
+        is_hh = not na(last_sh) and sh_price > last_sh
+        is_lh = not na(last_sh) and sh_price < last_sh
+
+        // IDM
+        if show_idm and trend == 1 and is_lh
+            idm_level := sh_price, idm_bar := sh_bar, idm_active := true
+            label.new(sh_bar, sh_price, "IDM", style=label.style_label_down, color=color.new(col_idm, 80), textcolor=col_idm, size=lsz)
+            line.new(sh_bar, sh_price, sh_bar + 10, sh_price, color=color.new(col_idm, 50), style=line.style_dotted, width=1)
+
+        // Structure
+        can_choch = anti_chop == 0 or (bar_index - last_trend_bar) >= anti_chop
+
+        if trend == -1 and is_hh and can_choch
+            if show_choch and not na(last_sh)
+                f_draw_struct_line(last_sh_bar, last_sh, sh_bar, col_choch, 2)
+                label.new(math.round((last_sh_bar + sh_bar) / 2), last_sh, "CHOCH", style=label.style_label_down, color=color.new(col_choch, 85), textcolor=col_choch, size=lsz)
+            trend := 1, last_trend_bar := bar_index
+            bos_up := true, bos_bar := sh_bar
+
+        else if trend == 1 and is_hh
+            if show_bos and not na(last_sh)
+                f_draw_struct_line(last_sh_bar, last_sh, sh_bar, col_bullish, 1)
+                label.new(math.round((last_sh_bar + sh_bar) / 2), last_sh, "BOS", style=label.style_label_down, color=color.new(col_bullish, 85), textcolor=col_bullish, size=lsz)
+            bos_up := true, bos_bar := sh_bar
+
+        else if trend == 0 and not na(last_sh)
+            trend := is_hh ? 1 : is_lh ? -1 : 0
+            last_trend_bar := bar_index
+
+        if show_swing
+            lbl_text = is_hh ? "HH" : is_lh ? "LH" : "SH"
+            lbl_col  = is_hh ? col_bullish : is_lh ? col_bearish : color.gray
+            label.new(sh_bar, sh_price, lbl_text, style=label.style_label_down, color=color.new(lbl_col, 85), textcolor=lbl_col, size=lsz)
+
+        prev_sh := last_sh, prev_sh_bar := last_sh_bar
+        last_sh := sh_price, last_sh_bar := sh_bar
+        int_low := na, int_low_bar := na
+
+// ─── Process Swing Low ──────────────────────────────────────────────────────
+if not na(pl)
+    sl_price = pl
+    sl_bar   = bar_index - swing_len
+    skip = atr_filter > 0 and not na(last_sl) and math.abs(sl_price - last_sl) < atr_filter * atr14
+
+    if not skip
+        is_ll = not na(last_sl) and sl_price < last_sl
+        is_hl = not na(last_sl) and sl_price > last_sl
+
+        // IDM
+        if show_idm and trend == -1 and is_hl
+            idm_level := sl_price, idm_bar := sl_bar, idm_active := true
+            label.new(sl_bar, sl_price, "IDM", style=label.style_label_up, color=color.new(col_idm, 80), textcolor=col_idm, size=lsz)
+            line.new(sl_bar, sl_price, sl_bar + 10, sl_price, color=color.new(col_idm, 50), style=line.style_dotted, width=1)
+
+        // Structure
+        can_choch = anti_chop == 0 or (bar_index - last_trend_bar) >= anti_chop
+
+        if trend == 1 and is_ll and can_choch
+            if show_choch and not na(last_sl)
+                f_draw_struct_line(last_sl_bar, last_sl, sl_bar, col_choch, 2)
+                label.new(math.round((last_sl_bar + sl_bar) / 2), last_sl, "CHOCH", style=label.style_label_up, color=color.new(col_choch, 85), textcolor=col_choch, size=lsz)
+            trend := -1, last_trend_bar := bar_index
+            bos_down := true, bos_bar := sl_bar
+
+        else if trend == -1 and is_ll
+            if show_bos and not na(last_sl)
+                f_draw_struct_line(last_sl_bar, last_sl, sl_bar, col_bearish, 1)
+                label.new(math.round((last_sl_bar + sl_bar) / 2), last_sl, "BOS", style=label.style_label_up, color=color.new(col_bearish, 85), textcolor=col_bearish, size=lsz)
+            bos_down := true, bos_bar := sl_bar
+
+        else if trend == 0 and not na(last_sl)
+            trend := is_ll ? -1 : is_hl ? 1 : 0
+            last_trend_bar := bar_index
+
+        if show_swing
+            lbl_text = is_hl ? "HL" : is_ll ? "LL" : "SL"
+            lbl_col  = is_hl ? col_bullish : is_ll ? col_bearish : color.gray
+            label.new(sl_bar, sl_price, lbl_text, style=label.style_label_up, color=color.new(lbl_col, 85), textcolor=lbl_col, size=lsz)
+
+        prev_sl := last_sl, prev_sl_bar := last_sl_bar
+        last_sl := sl_price, last_sl_bar := sl_bar
+        int_high := na, int_high_bar := na
+
+// IDM internal pivot tracking
+int_len = math.max(2, math.round(swing_len / 2))
+int_ph2 = ta.pivothigh(high, int_len, int_len)
+int_pl2 = ta.pivotlow(low, int_len, int_len)
+if not na(int_ph2)
+    int_high := int_ph2, int_high_bar := bar_index - int_len
+if not na(int_pl2)
+    int_low := int_pl2, int_low_bar := bar_index - int_len
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  2. ORDER BLOCKS (OB)
+// ═══════════════════════════════════════════════════════════════════════════════
+// OB = last opposite candle before a BOS/CHOCH impulse move
+// Bullish OB: last bearish candle before an up BOS → demand zone
+// Bearish OB: last bullish candle before a down BOS → supply zone
+
+type OBZone
+    box   draw_box
+    float top
+    float bottom
+    int   bar_start
+    int   bar_created
+    bool  is_bull
+    bool  mitigated
+
+var array<OBZone> ob_zones = array.new<OBZone>()
+
+if show_ob
+    // Bullish OB — find last bearish candle before the bullish BOS
+    if bos_up and not na(bos_bar)
+        ob_found = false
+        for i = 1 to math.min(swing_len * 2, 20)
+            idx = bos_bar - i
+            if idx >= 0 and bar_index - idx < 5000
+                if close[bar_index - idx] < open[bar_index - idx]  // bearish candle
+                    ob_top    = open[bar_index - idx]
+                    ob_bottom = low[bar_index - idx]
+                    ob_bx     = box.new(idx, ob_top, idx + ob_max_age, ob_bottom, border_color=col_bullish, bgcolor=col_ob_bull, border_width=1, border_style=line.style_solid)
+                    zone      = OBZone.new(ob_bx, ob_top, ob_bottom, idx, bar_index, true, false)
+                    array.push(ob_zones, zone)
+                    if ob_show_label
+                        label.new(idx, ob_bottom, "OB", style=label.style_label_up, color=color.new(col_bullish, 80), textcolor=col_bullish, size=lsz)
+                    ob_found := true
+                    break
+        bos_up := false
+
+    // Bearish OB — find last bullish candle before the bearish BOS
+    if bos_down and not na(bos_bar)
+        ob_found = false
+        for i = 1 to math.min(swing_len * 2, 20)
+            idx = bos_bar - i
+            if idx >= 0 and bar_index - idx < 5000
+                if close[bar_index - idx] > open[bar_index - idx]  // bullish candle
+                    ob_top    = high[bar_index - idx]
+                    ob_bottom = open[bar_index - idx]
+                    ob_bx     = box.new(idx, ob_top, idx + ob_max_age, ob_bottom, border_color=col_bearish, bgcolor=col_ob_bear, border_width=1, border_style=line.style_solid)
+                    zone      = OBZone.new(ob_bx, ob_top, ob_bottom, idx, bar_index, false, false)
+                    array.push(ob_zones, zone)
+                    if ob_show_label
+                        label.new(idx, ob_top, "OB", style=label.style_label_down, color=color.new(col_bearish, 80), textcolor=col_bearish, size=lsz)
+                    ob_found := true
+                    break
+        bos_down := false
+
+    // OB Mitigation — check if price has returned to and mitigated the OB
+    if array.size(ob_zones) > 0
+        for i = array.size(ob_zones) - 1 to 0
+            if i < array.size(ob_zones)
+                zone = array.get(ob_zones, i)
+                if not zone.mitigated
+                    mitigated = false
+                    if zone.is_bull
+                        mitigated := ob_mitigation == "Wick" ? low <= zone.top : close <= zone.top
+                        // Bull OB mitigated when price drops back into it
+                        // Actually: Bull OB is mitigated when price REVISITS it (enters the zone)
+                        // The zone acts as support, so we keep it until price closes below
+                        mitigated := ob_mitigation == "Wick" ? low <= zone.bottom : close <= zone.bottom
+                    else
+                        mitigated := ob_mitigation == "Wick" ? high >= zone.top : close >= zone.top
+
+                    if mitigated
+                        zone.mitigated := true
+                        box.set_bgcolor(zone.draw_box, color.new(color.gray, 95))
+                        box.set_border_color(zone.draw_box, color.new(color.gray, 80))
+
+    // Auto-remove old OBs (expired by age)
+    if array.size(ob_zones) > 0
+        for i = array.size(ob_zones) - 1 to 0
+            if i < array.size(ob_zones)
+                zone = array.get(ob_zones, i)
+                if (bar_index - zone.bar_created) > ob_max_age
+                    box.delete(zone.draw_box)
+                    array.remove(ob_zones, i)
+
+    // Cap max OB zones
+    while array.size(ob_zones) > ob_max_zones
+        old_zone = array.shift(ob_zones)
+        box.delete(old_zone.draw_box)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  3. FAIR VALUE GAPS (FVG)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Bullish FVG: candle[2].high < candle[0].low  → gap between bar 2 high and bar 0 low
+// Bearish FVG: candle[2].low  > candle[0].high → gap between bar 0 high and bar 2 low
+
+type FVGZone
+    box   draw_box
+    float top
+    float bottom
+    bool  is_bull
+    bool  mitigated
+    int   bar_created
+
+var array<FVGZone> fvg_zones = array.new<FVGZone>()
+
+if show_fvg
+    // Bullish FVG: high[2] < low[0] — gap up
+    bull_fvg = high[2] < low[0]
+    show_bull_fvg = not fvg_trend_aligned or trend >= 0  // show in bullish or neutral trend
+    if bull_fvg and show_bull_fvg
+        fvg_top    = low[0]
+        fvg_bottom = high[2]
+        fvg_size   = fvg_top - fvg_bottom
+        if fvg_size >= fvg_min_atr * atr14
+            fvg_bx = box.new(bar_index - 2, fvg_top, bar_index - 2 + fvg_max_age, fvg_bottom, border_color=color.new(#2962FF, 60), bgcolor=col_fvg_bull, border_width=1, border_style=line.style_dotted)
+            zone   = FVGZone.new(fvg_bx, fvg_top, fvg_bottom, true, false, bar_index)
+            array.push(fvg_zones, zone)
+            if fvg_show_label
+                label.new(bar_index - 1, fvg_bottom, "FVG", style=label.style_label_up, color=color.new(#2962FF, 80), textcolor=#2962FF, size=size.tiny)
+
+    // Bearish FVG: low[2] > high[0] — gap down
+    bear_fvg = low[2] > high[0]
+    show_bear_fvg = not fvg_trend_aligned or trend <= 0  // show in bearish or neutral trend
+    if bear_fvg and show_bear_fvg
+        fvg_top    = low[2]
+        fvg_bottom = high[0]
+        fvg_size   = fvg_top - fvg_bottom
+        if fvg_size >= fvg_min_atr * atr14
+            fvg_bx = box.new(bar_index - 2, fvg_top, bar_index - 2 + fvg_max_age, fvg_bottom, border_color=color.new(#FF6D00, 60), bgcolor=col_fvg_bear, border_width=1, border_style=line.style_dotted)
+            zone   = FVGZone.new(fvg_bx, fvg_top, fvg_bottom, false, false, bar_index)
+            array.push(fvg_zones, zone)
+            if fvg_show_label
+                label.new(bar_index - 1, fvg_top, "FVG", style=label.style_label_down, color=color.new(#FF6D00, 80), textcolor=#FF6D00, size=size.tiny)
+
+    // FVG Mitigation
+    if array.size(fvg_zones) > 0
+        for i = array.size(fvg_zones) - 1 to 0
+            if i < array.size(fvg_zones)
+                zone = array.get(fvg_zones, i)
+                if not zone.mitigated
+                    mid_point = (zone.top + zone.bottom) / 2
+                    mitigated = false
+                    if zone.is_bull
+                        if fvg_mitigation == "Wick"
+                            mitigated := low <= zone.bottom
+                        else if fvg_mitigation == "Close"
+                            mitigated := close <= zone.bottom
+                        else // Half
+                            mitigated := low <= mid_point
+                    else
+                        if fvg_mitigation == "Wick"
+                            mitigated := high >= zone.top
+                        else if fvg_mitigation == "Close"
+                            mitigated := close >= zone.top
+                        else // Half
+                            mitigated := high >= mid_point
+
+                    if mitigated
+                        zone.mitigated := true
+                        box.delete(zone.draw_box)  // Remove filled FVGs completely
+                        array.remove(fvg_zones, i)
+                        continue
+
+    // Auto-remove old FVGs (expired by age)
+    if array.size(fvg_zones) > 0
+        for i = array.size(fvg_zones) - 1 to 0
+            if i < array.size(fvg_zones)
+                zone = array.get(fvg_zones, i)
+                if (bar_index - zone.bar_created) > fvg_max_age
+                    box.delete(zone.draw_box)
+                    array.remove(fvg_zones, i)
+
+    // Cap max FVG zones
+    while array.size(fvg_zones) > fvg_max_zones
+        old_zone = array.shift(fvg_zones)
+        box.delete(old_zone.draw_box)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  4. PREMIUM / DISCOUNT ZONES
+// ═══════════════════════════════════════════════════════════════════════════════
+// Uses the current swing range (last_sh → last_sl) to define:
+//   Premium  = above 50% (expensive — look to sell)
+//   Discount = below 50% (cheap — look to buy)
+//   Equilibrium = the 50% level
+
+var box pd_premium_box  = na
+var box pd_discount_box = na
+var line pd_eq_ln       = na
+
+if show_pd and not na(last_sh) and not na(last_sl) and not na(last_sh_bar) and not na(last_sl_bar)
+    swing_high = last_sh
+    swing_low  = last_sl
+    eq_level   = (swing_high + swing_low) / 2
+
+    left_bar  = pd_only_latest ? math.max(last_sh_bar, last_sl_bar) - 5 : math.min(last_sh_bar, last_sl_bar)
+    right_bar = bar_index + 10
+
+    // Clean up old drawings
+    if not na(pd_premium_box)
+        box.delete(pd_premium_box)
+    if not na(pd_discount_box)
+        box.delete(pd_discount_box)
+    if not na(pd_eq_ln)
+        line.delete(pd_eq_ln)
+
+    // Premium zone (above EQ)
+    pd_premium_box := box.new(left_bar, swing_high, right_bar, eq_level, border_color=color.new(col_premium, 85), bgcolor=col_premium, border_width=0)
+
+    // Discount zone (below EQ)
+    pd_discount_box := box.new(left_bar, eq_level, right_bar, swing_low, border_color=color.new(col_discount, 85), bgcolor=col_discount, border_width=0)
+
+    // Equilibrium line
+    if pd_eq_line
+        pd_eq_ln := line.new(left_bar, eq_level, right_bar, eq_level, color=col_eq, style=line.style_dashed, width=1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  5. LIQUIDITY LEVELS — EQUAL HIGHS / EQUAL LOWS (EQH / EQL)
+// ═══════════════════════════════════════════════════════════════════════════════
+// When two swing highs (or lows) are at nearly the same price, it signals
+// resting liquidity (buy stops above EQH, sell stops below EQL)
+
+if show_liq and not na(atr14)
+    tolerance = liq_threshold * atr14
+
+    // EQH — current swing high ≈ previous swing high
+    if not na(ph)
+        sh_price_liq = ph
+        sh_bar_liq   = bar_index - swing_len
+        if not na(prev_sh) and math.abs(sh_price_liq - prev_sh) <= tolerance
+            eqh_level = math.max(sh_price_liq, prev_sh)
+            line.new(prev_sh_bar, eqh_level, sh_bar_liq + extend_bars, eqh_level, color=col_eqh, style=line.style_dotted, width=2)
+            if liq_show_label
+                label.new(sh_bar_liq, eqh_level, "EQH 🔵", style=label.style_label_down, color=color.new(col_eqh, 80), textcolor=col_eqh, size=lsz)
+
+    // EQL — current swing low ≈ previous swing low
+    if not na(pl)
+        sl_price_liq = pl
+        sl_bar_liq   = bar_index - swing_len
+        if not na(prev_sl) and math.abs(sl_price_liq - prev_sl) <= tolerance
+            eql_level = math.min(sl_price_liq, prev_sl)
+            line.new(prev_sl_bar, eql_level, sl_bar_liq + extend_bars, eql_level, color=col_eql, style=line.style_dotted, width=2)
+            if liq_show_label
+                label.new(sl_bar_liq, eql_level, "EQL 🔻", style=label.style_label_up, color=color.new(col_eql, 80), textcolor=col_eql, size=lsz)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VISUALS — Background, Candle Coloring
+// ═══════════════════════════════════════════════════════════════════════════════
+bgcolor(show_bg ? (trend == 1 ? color.new(col_bullish, 95) : trend == -1 ? color.new(col_bearish, 95) : na) : na)
+barcolor(color_candles ? (trend == 1 ? col_bullish : trend == -1 ? col_bearish : na) : na)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  INFO TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+if show_table and barstate.islast
+    eq_price = not na(last_sh) and not na(last_sl) ? (last_sh + last_sl) / 2 : na
+    in_premium = not na(eq_price) and close > eq_price
+    in_discount = not na(eq_price) and close < eq_price
+
+    active_obs = 0
+    if array.size(ob_zones) > 0
+        for i = 0 to array.size(ob_zones) - 1
+            if not array.get(ob_zones, i).mitigated
+                active_obs += 1
+
+    active_fvgs = 0
+    if array.size(fvg_zones) > 0
+        for i = 0 to array.size(fvg_zones) - 1
+            if not array.get(fvg_zones, i).mitigated
+                active_fvgs += 1
+
+    var table info = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80), border_color=color.new(color.white, 80), border_width=1)
+
+    table.cell(info, 0, 0, "Structure", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, trend == 1 ? "BULLISH ▲" : trend == -1 ? "BEARISH ▼" : "—", text_color=trend == 1 ? col_bullish : trend == -1 ? col_bearish : color.gray, text_size=size.small)
+
+    table.cell(info, 0, 1, "Last SH", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 1, not na(last_sh) ? str.tostring(last_sh, format.mintick) : "—", text_color=color.white, text_size=size.small)
+
+    table.cell(info, 0, 2, "Last SL", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 2, not na(last_sl) ? str.tostring(last_sl, format.mintick) : "—", text_color=color.white, text_size=size.small)
+
+    table.cell(info, 0, 3, "Zone", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 3, in_premium ? "PREMIUM" : in_discount ? "DISCOUNT" : "—", text_color=in_premium ? col_bearish : in_discount ? col_bullish : color.gray, text_size=size.small)
+
+    table.cell(info, 0, 4, "Active OBs", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(active_obs), text_color=color.yellow, text_size=size.small)
+
+    table.cell(info, 0, 5, "Active FVGs", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 5, str.tostring(active_fvgs), text_color=color.yellow, text_size=size.small)
+
+    table.cell(info, 0, 6, "ATR(14)", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 6, str.tostring(atr14, format.mintick), text_color=color.yellow, text_size=size.small)

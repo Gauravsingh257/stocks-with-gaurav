@@ -1,0 +1,218 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// © StocksWithGaurav - SMC/ICT Market Structure Indicator
+
+//@version=6
+indicator("SMC Market Structure [SWG]", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+grp_swing   = "Swing Detection"
+swing_len   = input.int(5, "Swing Length (Fractal Lookback)", minval=2, maxval=50, group=grp_swing, tooltip="Number of bars on each side to confirm a swing high/low. Higher = fewer, more significant swings.")
+show_swing  = input.bool(true, "Show Swing Labels (HH/HL/LH/LL)", group=grp_swing)
+
+grp_struct  = "Structure"
+show_bos    = input.bool(true, "Show BOS Lines", group=grp_struct)
+show_choch  = input.bool(true, "Show CHOCH Lines", group=grp_struct)
+show_idm    = input.bool(true, "Show IDM (Inducement)", group=grp_struct)
+
+grp_style   = "Style"
+col_bullish = input.color(color.new(#089981, 0), "Bullish Color", group=grp_style)
+col_bearish = input.color(color.new(#F23645, 0), "Bearish Color", group=grp_style)
+col_idm     = input.color(color.new(#FF9800, 0), "IDM Color", group=grp_style)
+col_choch   = input.color(color.new(#E040FB, 0), "CHOCH Color", group=grp_style)
+line_style  = input.string("Dashed", "BOS/CHOCH Line Style", options=["Solid", "Dashed", "Dotted"], group=grp_style)
+label_size  = input.string("small", "Label Size", options=["tiny", "small", "normal"], group=grp_style)
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+get_line_style(s) =>
+    s == "Solid" ? line.style_solid : s == "Dashed" ? line.style_dashed : line.style_dotted
+
+get_label_size(s) =>
+    s == "tiny" ? size.tiny : s == "small" ? size.small : size.normal
+
+ls = get_line_style(line_style)
+lsz = get_label_size(label_size)
+
+// ─── FRACTAL SWING DETECTION ────────────────────────────────────────────────
+// A swing high is confirmed when the high at [swing_len] is the highest in
+// the window of [2*swing_len + 1] bars. Same logic inverted for swing low.
+
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+// Track confirmed swing values and bar indices
+var float last_sh      = na   // last swing high price
+var int   last_sh_bar  = na   // last swing high bar index
+var float last_sl      = na   // last swing low price
+var int   last_sl_bar  = na   // last swing low bar index
+
+// Previous swings (for structure comparison)
+var float prev_sh      = na
+var int   prev_sh_bar  = na
+var float prev_sl      = na
+var int   prev_sl_bar  = na
+
+// ─── MARKET STRUCTURE STATE ─────────────────────────────────────────────────
+// 1 = bullish, -1 = bearish, 0 = undefined
+var int   trend        = 0
+
+// Internal swing tracking for IDM
+var float idm_level    = na
+var int   idm_bar      = na
+var bool  idm_active   = false
+
+// Track internal (minor) pivots between major swings for IDM detection
+var float int_high     = na
+var int   int_high_bar = na
+var float int_low      = na
+var int   int_low_bar  = na
+
+// ─── PROCESS NEW SWING HIGH ────────────────────────────────────────────────
+if not na(ph)
+    sh_price = ph
+    sh_bar   = bar_index - swing_len
+
+    // Determine swing type relative to previous swing high
+    is_hh = not na(last_sh) and sh_price > last_sh
+    is_lh = not na(last_sh) and sh_price < last_sh
+
+    // ── IDM Detection ──
+    // In a bullish trend, an internal lower high before BOS = inducement
+    // In a bearish trend, an internal higher high before continuation = inducement
+    if show_idm
+        if trend == 1 and is_lh
+            // Bullish trend but swing high is lower → potential IDM (liquidity grab)
+            idm_level   := sh_price
+            idm_bar     := sh_bar
+            idm_active  := true
+            label.new(sh_bar, sh_price, "IDM", style=label.style_label_down, color=color.new(col_idm, 80), textcolor=col_idm, size=lsz)
+
+        if trend == -1 and not na(int_low) and not na(last_sl)
+            // Check for internal higher low in bearish trend = IDM
+            if int_low > last_sl
+                idm_level   := int_low
+                idm_bar     := int_low_bar
+                idm_active  := true
+
+    // ── Structure Break Detection ──
+    if trend == -1 and is_hh
+        // Was bearish, new HH → CHOCH (Change of Character to bullish)
+        if show_choch and not na(last_sh)
+            line.new(last_sh_bar, last_sh, sh_bar, last_sh, color=col_choch, style=ls, width=2)
+            mid_bar = math.round((last_sh_bar + sh_bar) / 2)
+            label.new(mid_bar, last_sh, "CHOCH", style=label.style_label_down, color=color.new(col_choch, 85), textcolor=col_choch, size=lsz)
+        trend := 1
+
+    else if trend == 1 and is_hh
+        // Bullish continuation → BOS
+        if show_bos and not na(last_sh)
+            line.new(last_sh_bar, last_sh, sh_bar, last_sh, color=col_bullish, style=ls, width=1)
+            mid_bar = math.round((last_sh_bar + sh_bar) / 2)
+            label.new(mid_bar, last_sh, "BOS", style=label.style_label_down, color=color.new(col_bullish, 85), textcolor=col_bullish, size=lsz)
+
+    else if trend == 0 and not na(last_sh)
+        // Initial structure — assume direction from first two swing highs
+        trend := is_hh ? 1 : is_lh ? -1 : 0
+
+    // Swing label
+    if show_swing
+        lbl_text = is_hh ? "HH" : is_lh ? "LH" : "SH"
+        lbl_col  = is_hh ? col_bullish : is_lh ? col_bearish : color.gray
+        label.new(sh_bar, sh_price, lbl_text, style=label.style_label_down, color=color.new(lbl_col, 85), textcolor=lbl_col, size=lsz)
+
+    // Update state
+    prev_sh     := last_sh
+    prev_sh_bar := last_sh_bar
+    last_sh     := sh_price
+    last_sh_bar := sh_bar
+
+    // Reset internal tracking
+    int_low     := na
+    int_low_bar := na
+
+// ─── PROCESS NEW SWING LOW ─────────────────────────────────────────────────
+if not na(pl)
+    sl_price = pl
+    sl_bar   = bar_index - swing_len
+
+    // Determine swing type relative to previous swing low
+    is_ll = not na(last_sl) and sl_price < last_sl
+    is_hl = not na(last_sl) and sl_price > last_sl
+
+    // ── IDM Detection ──
+    if show_idm
+        if trend == -1 and is_hl
+            // Bearish trend but swing low is higher → potential IDM
+            idm_level   := sl_price
+            idm_bar     := sl_bar
+            idm_active  := true
+            label.new(sl_bar, sl_price, "IDM", style=label.style_label_up, color=color.new(col_idm, 80), textcolor=col_idm, size=lsz)
+
+        if trend == 1 and not na(int_high) and not na(last_sh)
+            if int_high < last_sh
+                idm_level   := int_high
+                idm_bar     := int_high_bar
+                idm_active  := true
+
+    // ── Structure Break Detection ──
+    if trend == 1 and is_ll
+        // Was bullish, new LL → CHOCH (Change of Character to bearish)
+        if show_choch and not na(last_sl)
+            line.new(last_sl_bar, last_sl, sl_bar, last_sl, color=col_choch, style=ls, width=2)
+            mid_bar = math.round((last_sl_bar + sl_bar) / 2)
+            label.new(mid_bar, last_sl, "CHOCH", style=label.style_label_up, color=color.new(col_choch, 85), textcolor=col_choch, size=lsz)
+        trend := -1
+
+    else if trend == -1 and is_ll
+        // Bearish continuation → BOS
+        if show_bos and not na(last_sl)
+            line.new(last_sl_bar, last_sl, sl_bar, last_sl, color=col_bearish, style=ls, width=1)
+            mid_bar = math.round((last_sl_bar + sl_bar) / 2)
+            label.new(mid_bar, last_sl, "BOS", style=label.style_label_up, color=color.new(col_bearish, 85), textcolor=col_bearish, size=lsz)
+
+    else if trend == 0 and not na(last_sl)
+        trend := is_ll ? -1 : is_hl ? 1 : 0
+
+    // Swing label
+    if show_swing
+        lbl_text = is_hl ? "HL" : is_ll ? "LL" : "SL"
+        lbl_col  = is_hl ? col_bullish : is_ll ? col_bearish : color.gray
+        label.new(sl_bar, sl_price, lbl_text, style=label.style_label_up, color=color.new(lbl_col, 85), textcolor=lbl_col, size=lsz)
+
+    // Update state
+    prev_sl     := last_sl
+    prev_sl_bar := last_sl_bar
+    last_sl     := sl_price
+    last_sl_bar := sl_bar
+
+    // Reset internal tracking
+    int_high     := na
+    int_high_bar := na
+
+// ─── INTERNAL PIVOT TRACKING (for IDM) ──────────────────────────────────────
+// Track minor pivots using a shorter lookback for inducement detection
+int_ph = ta.pivothigh(high, math.max(2, math.round(swing_len / 2)), math.max(2, math.round(swing_len / 2)))
+int_pl = ta.pivotlow(low, math.max(2, math.round(swing_len / 2)), math.max(2, math.round(swing_len / 2)))
+
+if not na(int_ph)
+    int_high     := int_ph
+    int_high_bar := bar_index - math.max(2, math.round(swing_len / 2))
+
+if not na(int_pl)
+    int_low     := int_pl
+    int_low_bar := bar_index - math.max(2, math.round(swing_len / 2))
+
+// ─── TREND BACKGROUND ──────────────────────────────────────────────────────
+show_bg = input.bool(false, "Show Trend Background", group=grp_style)
+bgcolor(show_bg ? (trend == 1 ? color.new(col_bullish, 95) : trend == -1 ? color.new(col_bearish, 95) : na) : na)
+
+// ─── INFO TABLE ─────────────────────────────────────────────────────────────
+show_table = input.bool(true, "Show Info Table", group=grp_style)
+if show_table and barstate.islast
+    var table info = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80), border_color=color.new(color.white, 80), border_width=1)
+    table.cell(info, 0, 0, "Structure", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, trend == 1 ? "BULLISH ▲" : trend == -1 ? "BEARISH ▼" : "—", text_color=trend == 1 ? col_bullish : trend == -1 ? col_bearish : color.gray, text_size=size.small)
+    table.cell(info, 0, 1, "Last SH", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 1, not na(last_sh) ? str.tostring(last_sh, format.mintick) : "—", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 2, "Last SL", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 2, not na(last_sl) ? str.tostring(last_sl, format.mintick) : "—", text_color=color.white, text_size=size.small)

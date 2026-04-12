@@ -32,6 +32,9 @@ class TradeRow(BaseModel):
     exit_price: Optional[float] = None
     result: str
     pnl_r: Optional[float] = None
+    screenshot_path: Optional[str] = None
+    smc_breakdown: Optional[str] = None
+    pine_xval: Optional[str] = None
 
 
 def _rows_to_dicts(rows) -> list:
@@ -436,13 +439,16 @@ def upsert_single_trade(
 
         if existing:
             conn.execute(
-                "UPDATE trades SET direction=?, entry=?, exit_price=?, result=?, pnl_r=? WHERE id=?",
+                "UPDATE trades SET direction=?, entry=?, exit_price=?, result=?, pnl_r=?, screenshot_path=?, smc_breakdown=?, pine_xval=? WHERE id=?",
                 (
                     (trade.direction or "LONG")[:5].upper(),
                     trade.entry,
                     trade.exit_price,
                     (trade.result or "RUNNING")[:10].upper(),
                     trade.pnl_r,
+                    trade.screenshot_path,
+                    trade.smc_breakdown,
+                    trade.pine_xval,
                     existing[0],
                 ),
             )
@@ -450,7 +456,7 @@ def upsert_single_trade(
             trade_id = existing[0]
         else:
             cur = conn.execute(
-                "INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO trades (date, symbol, direction, setup, entry, exit_price, result, pnl_r, screenshot_path, smc_breakdown, pine_xval) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     trade.date.strip(),
                     trade.symbol.strip().upper(),
@@ -460,6 +466,9 @@ def upsert_single_trade(
                     trade.exit_price,
                     (trade.result or "RUNNING")[:10].upper(),
                     trade.pnl_r,
+                    trade.screenshot_path,
+                    trade.smc_breakdown,
+                    trade.pine_xval,
                 ),
             )
             action = "inserted"
@@ -469,6 +478,119 @@ def upsert_single_trade(
         conn.close()
 
     return {"status": "ok", "action": action, "trade_id": trade_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal Rejections — WHY trades were NOT taken
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/rejections")
+def get_rejections(
+    symbol: Optional[str] = Query(default=None),
+    reason: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """Get signal rejection log — shows why potential signals were NOT taken."""
+    clauses = []
+    params = []
+
+    if symbol:
+        clauses.append("symbol LIKE ?")
+        params.append(f"%{symbol.upper()}%")
+    if reason:
+        clauses.append("reason = ?")
+        params.append(reason.upper())
+    if date_from:
+        clauses.append("timestamp >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("timestamp <= ?")
+        params.append(date_to + "T23:59:59")
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    conn = get_connection()
+    try:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM signal_rejections {where}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"""SELECT * FROM signal_rejections {where}
+                ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+        return {
+            "rejections": [dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    except sqlite3.OperationalError:
+        # Table may not exist yet
+        return {"rejections": [], "total": 0, "limit": limit, "offset": offset}
+    finally:
+        conn.close()
+
+
+@router.post("/rejections/sync")
+def sync_rejections(
+    x_sync_key: Optional[str] = Header(default=None, alias="X-Sync-Key"),
+):
+    """Bulk-sync signal rejections from engine's signal_rejections_today.json."""
+    sync_key = os.getenv("TRADES_SYNC_KEY", "").strip()
+    if sync_key and x_sync_key != sync_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Sync-Key")
+
+    # Read the rejection file from engine
+    rejection_file = Path(__file__).resolve().parents[3] / "signal_rejections_today.json"
+    if not rejection_file.exists():
+        return {"status": "ok", "synced": 0, "message": "no rejection file found"}
+
+    try:
+        records = json.loads(rejection_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "error", "message": "failed to parse rejection file"}
+
+    conn = get_connection()
+    synced = 0
+    try:
+        for r in records:
+            conn.execute(
+                """INSERT OR IGNORE INTO signal_rejections
+                   (timestamp, symbol, setup, direction, reason, detail,
+                    score, breakdown, entry, sl, target, rr,
+                    has_ob, has_fvg, has_choch, has_bos, has_sweep, regime)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    r.get("timestamp", ""),
+                    r.get("symbol", ""),
+                    r.get("setup"),
+                    r.get("direction"),
+                    r.get("reason", "UNKNOWN"),
+                    r.get("detail"),
+                    r.get("score"),
+                    json.dumps(r.get("breakdown")) if r.get("breakdown") else None,
+                    r.get("entry"),
+                    r.get("sl"),
+                    r.get("target"),
+                    r.get("rr"),
+                    1 if r.get("ob") else 0,
+                    1 if r.get("fvg") else 0,
+                    1 if r.get("choch") else 0,
+                    1 if r.get("bos") else 0,
+                    1 if r.get("sweep") else 0,
+                    r.get("regime"),
+                ),
+            )
+            synced += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "synced": synced}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

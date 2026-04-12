@@ -1,0 +1,419 @@
+// This Pine Script™ is subject to the terms of the Mozilla Public License 2.0
+// © StocksWithGaurav — SETUP-E OB + FVG + BOS/CHoCH Marker
+// Matches the Python detect_order_block_v2 + detect_fvg + detect_choch_setup_e logic
+
+//@version=6
+indicator("SMC Setup-E — OB + FVG + BOS/CHOCH", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+
+grp_ob = "Order Block Settings"
+ob_lookback       = input.int(50, "OB Lookback Bars", minval=10, maxval=200, group=grp_ob)
+ob_disp_mult      = input.float(1.5, "Min Displacement Multiplier", minval=1.0, step=0.1, group=grp_ob)
+ob_min_body_atr   = input.float(0.2, "Min Body / ATR Ratio", minval=0.05, step=0.05, group=grp_ob)
+ob_wick_ext       = input.float(0.3, "Wick Extension %", minval=0.0, maxval=1.0, step=0.1, group=grp_ob, tooltip="How much of the wick to include in the OB zone (0.3 = 30%)")
+ob_min_zone_atr   = input.float(0.3, "Min Zone Size (ATR)", minval=0.1, step=0.1, group=grp_ob, tooltip="Zones smaller than this expand symmetrically")
+ob_max_zones      = input.int(5, "Max Active Zones Per Side", minval=1, maxval=20, group=grp_ob)
+ob_extend_bars    = input.int(50, "Zone Extend (bars)", minval=10, maxval=200, group=grp_ob)
+
+grp_fvg = "FVG Settings"
+fvg_lookback      = input.int(30, "FVG Lookback Bars", minval=5, maxval=100, group=grp_fvg)
+fvg_min_gap_atr   = input.float(0.1, "Min Gap / ATR Ratio", minval=0.01, step=0.05, group=grp_fvg)
+fvg_min_c2_atr    = input.float(0.5, "Min C2 Body / ATR (Displacement)", minval=0.1, step=0.1, group=grp_fvg)
+fvg_max_zones     = input.int(5, "Max Active FVG Zones Per Side", minval=1, maxval=20, group=grp_fvg)
+
+grp_struct = "Structure (BOS / CHoCH)"
+swing_left        = input.int(3, "Swing Left Bars", minval=1, maxval=10, group=grp_struct)
+swing_right       = input.int(2, "Swing Right Bars", minval=1, maxval=10, group=grp_struct)
+show_bos          = input.bool(true, "Show BOS Labels", group=grp_struct)
+show_choch        = input.bool(true, "Show CHoCH Labels", group=grp_struct)
+use_htf_filter    = input.bool(true, "Use HTF Macro Filter (Two-Tier)", group=grp_struct)
+htf_tf            = input.timeframe("60", "HTF Timeframe", group=grp_struct)
+
+grp_colors = "Colors"
+bull_ob_color     = input.color(color.new(#00BCD4, 75), "Bullish OB", group=grp_colors)
+bear_ob_color     = input.color(color.new(#FF5252, 75), "Bearish OB", group=grp_colors)
+bull_fvg_color    = input.color(color.new(#4CAF50, 82), "Bullish FVG", group=grp_colors)
+bear_fvg_color    = input.color(color.new(#FF9800, 82), "Bearish FVG", group=grp_colors)
+bos_color         = input.color(color.new(#2196F3, 0), "BOS Line", group=grp_colors)
+choch_color       = input.color(color.new(#FF1744, 0), "CHoCH Line", group=grp_colors)
+
+// ═══════════════════════════════════════════════════════════════
+// ATR CALCULATION (matches Python calculate_atr — 14-period)
+// ═══════════════════════════════════════════════════════════════
+
+atr14 = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════════
+// SWING POINT DETECTION (matches Python detect_swing_points)
+// ═══════════════════════════════════════════════════════════════
+
+// Swing High: high[swing_right] is the highest in window [swing_left + swing_right + 1]
+is_swing_high = ta.pivothigh(high, swing_left, swing_right) != 0 ? true : false
+is_swing_low  = ta.pivotlow(low, swing_left, swing_right) != 0 ? true : false
+
+swing_high_price = ta.pivothigh(high, swing_left, swing_right)
+swing_low_price  = ta.pivotlow(low, swing_left, swing_right)
+
+// Track last swing high / low for structure breaks
+var float last_swing_high = na
+var int   last_swing_high_bar = na
+var float last_swing_low = na
+var int   last_swing_low_bar = na
+var float prev_swing_high = na
+var float prev_swing_low = na
+
+if not na(swing_high_price)
+    prev_swing_high := last_swing_high
+    last_swing_high := swing_high_price
+    last_swing_high_bar := bar_index - swing_right
+
+if not na(swing_low_price)
+    prev_swing_low := last_swing_low
+    last_swing_low := swing_low_price
+    last_swing_low_bar := bar_index - swing_right
+
+// ═══════════════════════════════════════════════════════════════
+// HTF MACRO BIAS (matches Python detect_htf_bias — uses confirmed bars)
+// ═══════════════════════════════════════════════════════════════
+
+// request.security with barmerge.lookahead_off + barstate.isconfirmed = no repaint
+[htf_close, htf_high10, htf_low10] = request.security(syminfo.tickerid, htf_tf, [close[1], ta.highest(high, 10)[1], ta.lowest(low, 10)[1]], barmerge.gaps_off, barmerge.lookahead_on)
+
+htf_range = htf_high10 - htf_low10
+htf_position = htf_range > 0 ? (htf_close - htf_low10) / htf_range : 0.5
+
+// HTF EMA trend (simple macro direction)
+htf_ema = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 21)[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+// Effective macro: matches Python's effective_macro logic
+htf_macro_long  = htf_close > htf_ema and htf_position > 0.6
+htf_macro_short = htf_close < htf_ema and htf_position < 0.4
+htf_macro_neutral = not htf_macro_long and not htf_macro_short
+
+// ═══════════════════════════════════════════════════════════════
+// TREND CLASSIFICATION (HH/HL = BULLISH, LH/LL = BEARISH)
+// ═══════════════════════════════════════════════════════════════
+
+var string micro_trend = "NEUTRAL"
+
+hh = not na(last_swing_high) and not na(prev_swing_high) and last_swing_high > prev_swing_high
+hl = not na(last_swing_low) and not na(prev_swing_low) and last_swing_low > prev_swing_low
+lh = not na(last_swing_high) and not na(prev_swing_high) and last_swing_high < prev_swing_high
+ll = not na(last_swing_low) and not na(prev_swing_low) and last_swing_low < prev_swing_low
+
+if hh and hl
+    micro_trend := "BULLISH"
+if lh and ll
+    micro_trend := "BEARISH"
+
+// ═══════════════════════════════════════════════════════════════
+// BOS / CHoCH DETECTION (matches Python detect_choch_setup_e)
+// ═══════════════════════════════════════════════════════════════
+
+// BOS = break in SAME direction as trend
+// CHoCH = break AGAINST the trend (change of character)
+
+var bool bos_bull_fired = false
+var bool bos_bear_fired = false
+var bool choch_bull_fired = false
+var bool choch_bear_fired = false
+
+// Bullish break: close above last swing high
+bull_break = not na(last_swing_high) and close > last_swing_high and close[1] <= last_swing_high
+// Bearish break: close below last swing low
+bear_break = not na(last_swing_low) and close < last_swing_low and close[1] >= last_swing_low
+
+// Classify as BOS or CHoCH based on micro trend + macro filter
+is_bullish_bos   = bull_break and micro_trend == "BULLISH"
+is_bullish_choch = bull_break and micro_trend != "BULLISH"
+is_bearish_bos   = bear_break and micro_trend == "BEARISH"
+is_bearish_choch = bear_break and micro_trend != "BEARISH"
+
+// Apply HTF macro filter (two-tier logic):
+// CHoCH must fire AGAINST macro trend — if macro is LONG, no bullish CHoCH
+bullish_choch_allowed = use_htf_filter ? not htf_macro_long : true
+bearish_choch_allowed = use_htf_filter ? not htf_macro_short : true
+
+is_bullish_choch := is_bullish_choch and bullish_choch_allowed
+is_bearish_choch := is_bearish_choch and bearish_choch_allowed
+
+// ═══════════════════════════════════════════════════════════════
+// DRAW BOS / CHoCH
+// ═══════════════════════════════════════════════════════════════
+
+if show_bos and is_bullish_bos
+    line.new(last_swing_high_bar, last_swing_high, bar_index, last_swing_high, color=bos_color, style=line.style_dashed, width=1)
+    label.new(math.round(math.avg(last_swing_high_bar, bar_index)), last_swing_high, "BOS", style=label.style_label_down, color=color.new(bos_color, 50), textcolor=color.white, size=size.tiny)
+
+if show_bos and is_bearish_bos
+    line.new(last_swing_low_bar, last_swing_low, bar_index, last_swing_low, color=bos_color, style=line.style_dashed, width=1)
+    label.new(math.round(math.avg(last_swing_low_bar, bar_index)), last_swing_low, "BOS", style=label.style_label_up, color=color.new(bos_color, 50), textcolor=color.white, size=size.tiny)
+
+if show_choch and is_bullish_choch
+    line.new(last_swing_high_bar, last_swing_high, bar_index, last_swing_high, color=choch_color, style=line.style_solid, width=2)
+    label.new(math.round(math.avg(last_swing_high_bar, bar_index)), last_swing_high, "BOS/CHoCH", style=label.style_label_down, color=color.new(choch_color, 30), textcolor=color.white, size=size.small)
+
+if show_choch and is_bearish_choch
+    line.new(last_swing_low_bar, last_swing_low, bar_index, last_swing_low, color=choch_color, style=line.style_solid, width=2)
+    label.new(math.round(math.avg(last_swing_low_bar, bar_index)), last_swing_low, "BOS/CHoCH", style=label.style_label_up, color=color.new(choch_color, 30), textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ORDER BLOCK DETECTION (matches Python detect_order_block_v2)
+// ═══════════════════════════════════════════════════════════════
+// OB = last opposing candle before displacement move
+// Bullish OB: bearish candle followed by bullish displacement
+// Bearish OB: bullish candle followed by bearish displacement
+//
+// Zone = body + partial wick (wick_extension_pct)
+// Minimum zone size = ob_min_zone_atr * ATR
+// Mitigation = close (not wick) through the zone
+
+// Type to track OB zones
+type OBZone
+    float zone_low
+    float zone_high
+    int   start_bar
+    string direction   // "BULL" or "BEAR"
+    bool  mitigated
+    box   draw_box
+
+var array<OBZone> ob_zones = array.new<OBZone>()
+
+// Scan for new OBs on confirmed bars
+if barstate.isconfirmed and not na(atr14) and atr14 > 0
+    // Check bar ob_lookback bars ago as potential OB origin
+    // We check at offset 3 to allow impulse measurement (i+1 to i+3)
+    int check_idx = 3
+    float ob_open  = open[check_idx]
+    float ob_close = close[check_idx]
+    float ob_high_val  = high[check_idx]
+    float ob_low_val   = low[check_idx]
+    float ob_body  = math.abs(ob_close - ob_open)
+    float ob_range_val = ob_high_val - ob_low_val
+
+    if ob_range_val > 0 and ob_body >= atr14 * ob_min_body_atr
+        // Impulse = next 3 candles after the OB candle
+        float imp_high = math.max(high[2], high[1], high)
+        float imp_low  = math.min(low[2], low[1], low)
+        float imp_range = imp_high - imp_low
+
+        if imp_range >= ob_range_val * ob_disp_mult
+            // ── BULLISH OB: bearish candle + bullish displacement ──
+            bool is_bearish_candle = ob_close < ob_open
+            bool bull_displacement = imp_high > ob_high_val and close[2] > open[2]
+
+            if is_bearish_candle and bull_displacement
+                float body_lo = ob_close
+                float body_hi = ob_open
+                float wick_below = body_lo - ob_low_val
+                float z_low = body_lo - wick_below * ob_wick_ext
+                float z_high = body_hi
+                float zone_sz = z_high - z_low
+                float min_z = atr14 * ob_min_zone_atr
+                if zone_sz < min_z
+                    float exp = (min_z - zone_sz) / 2
+                    z_low := math.max(ob_low_val, z_low - exp)
+                    z_high := math.min(ob_high_val, z_high + exp)
+
+                // Check not already mitigated before current bar
+                bool already_mit = false
+                for k = 2 to 0
+                    if close[k] < z_low
+                        already_mit := true
+                        break
+
+                if not already_mit
+                    OBZone newOB = OBZone.new(z_low, z_high, bar_index - check_idx, "BULL", false, na)
+                    newOB.draw_box := box.new(bar_index - check_idx, z_high, bar_index + ob_extend_bars, z_low, border_color=color.new(bull_ob_color, 50), bgcolor=bull_ob_color, border_width=1, border_style=line.style_solid)
+                    label.new(bar_index - check_idx, z_high, "OB", style=label.style_label_down, color=color.new(bull_ob_color, 30), textcolor=color.white, size=size.tiny)
+                    array.push(ob_zones, newOB)
+
+            // ── BEARISH OB: bullish candle + bearish displacement ──
+            bool is_bullish_candle = ob_close > ob_open
+            bool bear_displacement = imp_low < ob_low_val and close[2] < open[2]
+
+            if is_bullish_candle and bear_displacement
+                float body_lo = ob_open
+                float body_hi = ob_close
+                float wick_above = ob_high_val - body_hi
+                float z_low = body_lo
+                float z_high = body_hi + wick_above * ob_wick_ext
+                float zone_sz = z_high - z_low
+                float min_z = atr14 * ob_min_zone_atr
+                if zone_sz < min_z
+                    float exp = (min_z - zone_sz) / 2
+                    z_low := math.max(ob_low_val, z_low - exp)
+                    z_high := math.min(ob_high_val, z_high + exp)
+
+                bool already_mit = false
+                for k = 2 to 0
+                    if close[k] > z_high
+                        already_mit := true
+                        break
+
+                if not already_mit
+                    OBZone newOB = OBZone.new(z_low, z_high, bar_index - check_idx, "BEAR", false, na)
+                    newOB.draw_box := box.new(bar_index - check_idx, z_high, bar_index + ob_extend_bars, z_low, border_color=color.new(bear_ob_color, 50), bgcolor=bear_ob_color, border_width=1, border_style=line.style_solid)
+                    label.new(bar_index - check_idx, z_high, "OB", style=label.style_label_down, color=color.new(bear_ob_color, 30), textcolor=color.white, size=size.tiny)
+                    array.push(ob_zones, newOB)
+
+// ═══════════════════════════════════════════════════════════════
+// OB MITIGATION CHECK — close-based (matches Python)
+// ═══════════════════════════════════════════════════════════════
+
+if array.size(ob_zones) > 0
+    for i = array.size(ob_zones) - 1 to 0
+        OBZone z = array.get(ob_zones, i)
+        if not z.mitigated
+            bool mit = false
+            if z.direction == "BULL" and close < z.zone_low
+                mit := true
+            if z.direction == "BEAR" and close > z.zone_high
+                mit := true
+            if mit
+                z.mitigated := true
+                if not na(z.draw_box)
+                    box.set_right(z.draw_box, bar_index)
+                    box.set_border_style(z.draw_box, line.style_dotted)
+                    box.set_bgcolor(z.draw_box, color.new(color.gray, 90))
+
+    // Prune old mitigated zones (keep array clean)
+    if array.size(ob_zones) > ob_max_zones * 4
+        for i = array.size(ob_zones) - 1 to 0
+            OBZone z = array.get(ob_zones, i)
+            if z.mitigated and bar_index - z.start_bar > ob_extend_bars * 2
+                if not na(z.draw_box)
+                    box.delete(z.draw_box)
+                array.remove(ob_zones, i)
+
+// ═══════════════════════════════════════════════════════════════
+// FVG DETECTION (matches Python detect_fvg)
+// ═══════════════════════════════════════════════════════════════
+// Bullish FVG: C3.low > C1.high (gap up — C2 is displacement)
+// Bearish FVG: C1.low > C3.high (gap down — C2 is displacement)
+// C2 body must be >= min_c2_atr * ATR
+// Not filled = price hasn't returned to close the gap
+
+type FVGZone
+    float zone_low
+    float zone_high
+    int   start_bar
+    string direction
+    bool  filled
+    box   draw_box
+
+var array<FVGZone> fvg_zones = array.new<FVGZone>()
+
+if barstate.isconfirmed and not na(atr14) and atr14 > 0
+    // Check 3-candle pattern ending at current bar
+    float c1_high = high[2]
+    float c1_low  = low[2]
+    float c2_open = open[1]
+    float c2_close = close[1]
+    float c2_body = math.abs(c2_close - c2_open)
+    float c3_high = high
+    float c3_low  = low
+
+    if c2_body >= atr14 * fvg_min_c2_atr
+        float min_gap = atr14 * fvg_min_gap_atr
+
+        // ── BULLISH FVG ──
+        float bull_gap = c3_low - c1_high
+        if bull_gap > 0 and bull_gap >= min_gap and c2_close > c2_open
+            FVGZone newFVG = FVGZone.new(c1_high, c3_low, bar_index - 2, "BULL", false, na)
+            newFVG.draw_box := box.new(bar_index - 2, c3_low, bar_index + ob_extend_bars, c1_high, border_color=color.new(bull_fvg_color, 60), bgcolor=bull_fvg_color, border_width=1, border_style=line.style_dashed)
+            label.new(bar_index - 1, c3_low, "FVG", style=label.style_label_down, color=color.new(bull_fvg_color, 30), textcolor=color.white, size=size.tiny)
+            array.push(fvg_zones, newFVG)
+
+        // ── BEARISH FVG ──
+        float bear_gap = c1_low - c3_high
+        if bear_gap > 0 and bear_gap >= min_gap and c2_close < c2_open
+            FVGZone newFVG = FVGZone.new(c3_high, c1_low, bar_index - 2, "BEAR", false, na)
+            newFVG.draw_box := box.new(bar_index - 2, c1_low, bar_index + ob_extend_bars, c3_high, border_color=color.new(bear_fvg_color, 60), bgcolor=bear_fvg_color, border_width=1, border_style=line.style_dashed)
+            label.new(bar_index - 1, c1_low, "FVG", style=label.style_label_up, color=color.new(bear_fvg_color, 30), textcolor=color.white, size=size.tiny)
+            array.push(fvg_zones, newFVG)
+
+// ═══════════════════════════════════════════════════════════════
+// FVG FILL CHECK
+// ═══════════════════════════════════════════════════════════════
+
+if array.size(fvg_zones) > 0
+    for i = array.size(fvg_zones) - 1 to 0
+        FVGZone z = array.get(fvg_zones, i)
+        if not z.filled
+            bool fil = false
+            if z.direction == "BULL" and low <= z.zone_low
+                fil := true
+            if z.direction == "BEAR" and high >= z.zone_high
+                fil := true
+            if fil
+                z.filled := true
+                if not na(z.draw_box)
+                    box.set_right(z.draw_box, bar_index)
+                    box.set_border_style(z.draw_box, line.style_dotted)
+                    box.set_bgcolor(z.draw_box, color.new(color.gray, 92))
+
+    // Prune
+    if array.size(fvg_zones) > fvg_max_zones * 4
+        for i = array.size(fvg_zones) - 1 to 0
+            FVGZone z = array.get(fvg_zones, i)
+            if z.filled and bar_index - z.start_bar > ob_extend_bars * 2
+                if not na(z.draw_box)
+                    box.delete(z.draw_box)
+                array.remove(fvg_zones, i)
+
+// ═══════════════════════════════════════════════════════════════
+// INFO TABLE (top-right corner)
+// ═══════════════════════════════════════════════════════════════
+
+var table infoTbl = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    string macro_str = htf_macro_long ? "BULLISH" : htf_macro_short ? "BEARISH" : "NEUTRAL"
+    color macro_clr = htf_macro_long ? color.green : htf_macro_short ? color.red : color.gray
+
+    // Count active zones
+    int bull_ob_count = 0
+    int bear_ob_count = 0
+    if array.size(ob_zones) > 0
+        for i = 0 to array.size(ob_zones) - 1
+            OBZone z = array.get(ob_zones, i)
+            if not z.mitigated
+                if z.direction == "BULL"
+                    bull_ob_count += 1
+                else
+                    bear_ob_count += 1
+
+    int bull_fvg_count = 0
+    int bear_fvg_count = 0
+    if array.size(fvg_zones) > 0
+        for i = 0 to array.size(fvg_zones) - 1
+            FVGZone z = array.get(fvg_zones, i)
+            if not z.filled
+                if z.direction == "BULL"
+                    bull_fvg_count += 1
+                else
+                    bear_fvg_count += 1
+
+    table.cell(infoTbl, 0, 0, "HTF Macro", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 0, macro_str, text_color=macro_clr, text_size=size.small)
+    table.cell(infoTbl, 0, 1, "Micro Trend", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 1, micro_trend, text_color=micro_trend == "BULLISH" ? color.green : micro_trend == "BEARISH" ? color.red : color.gray, text_size=size.small)
+    table.cell(infoTbl, 0, 2, "Bull OB / FVG", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 2, str.tostring(bull_ob_count) + " / " + str.tostring(bull_fvg_count), text_color=color.teal, text_size=size.small)
+    table.cell(infoTbl, 0, 3, "Bear OB / FVG", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 3, str.tostring(bear_ob_count) + " / " + str.tostring(bear_fvg_count), text_color=color.red, text_size=size.small)
+    table.cell(infoTbl, 0, 4, "ATR(14)", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 4, str.tostring(math.round(atr14, 2)), text_color=color.yellow, text_size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+
+alertcondition(is_bullish_choch, "Bullish CHoCH", "Bullish CHoCH detected — potential LONG setup")
+alertcondition(is_bearish_choch, "Bearish CHoCH", "Bearish CHoCH detected — potential SHORT setup")
+alertcondition(is_bullish_bos, "Bullish BOS", "Bullish Break of Structure")
+alertcondition(is_bearish_bos, "Bearish BOS", "Bearish Break of Structure")

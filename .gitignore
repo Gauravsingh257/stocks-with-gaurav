@@ -116,7 +116,15 @@ backtest_*_trades.csv
 oi_unwinding_backtest_results.csv
 backtest_setupd_*.csv
 
-# Separate project — not part of this repo
+# --- TV Bridge & Content Generated Files ---
+trade_screenshots/
+content_output/
+replay_debug/
+premarket_scans/
+signal_rejections_today.json
+trade_graphs/
+
+# Separate project ï¿½ not part of this repo
 content_engine/
 demo_viral_posts.py
 package.json

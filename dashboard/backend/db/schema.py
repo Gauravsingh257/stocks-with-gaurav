@@ -225,6 +225,7 @@ def init_db() -> None:
     migrate_agent_logs()
     migrate_stock_recommendations()
     migrate_running_trades()
+    migrate_trade_screenshots()
     # performance_snapshots is created by DDL above (IF NOT EXISTS — always safe)
 
 
@@ -456,6 +457,58 @@ def migrate_running_trades() -> None:
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE running_trades ADD COLUMN {col_name} {col_def}")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_trade_screenshots() -> None:
+    """Add screenshot_path, smc_breakdown, pine_xval columns to trades table.
+    Also create signal_rejections table for debugging missed trades."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("PRAGMA table_info(trades)")
+        cols = {row[1] for row in cursor.fetchall()}
+        new_cols = [
+            ("screenshot_path", "TEXT"),
+            ("smc_breakdown", "TEXT"),     # JSON: {"htf": 2, "ob": 1, ...}
+            ("pine_xval", "TEXT"),          # JSON: {match_ob, match_fvg, ...}
+        ]
+        for col_name, col_def in new_cols:
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_def}")
+
+        # Signal rejections table — stores WHY signals were NOT taken
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS signal_rejections (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                symbol          TEXT NOT NULL,
+                setup           TEXT,
+                direction       TEXT,
+                reason          TEXT NOT NULL,
+                detail          TEXT,
+                score           REAL,
+                breakdown       TEXT,
+                entry           REAL,
+                sl              REAL,
+                target          REAL,
+                rr              REAL,
+                has_ob          INTEGER DEFAULT 0,
+                has_fvg         INTEGER DEFAULT 0,
+                has_choch       INTEGER DEFAULT 0,
+                has_bos         INTEGER DEFAULT 0,
+                has_sweep       INTEGER DEFAULT 0,
+                regime          TEXT,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_rejections_ts ON signal_rejections(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_rejections_symbol ON signal_rejections(symbol);
+            CREATE INDEX IF NOT EXISTS idx_rejections_reason ON signal_rejections(reason);
+        """)
+        conn.commit()
+        logger.info("[DB] Trade screenshots + signal_rejections migration done")
+    except Exception as e:
+        logger.warning(f"[DB] Screenshot migration error (non-fatal): {e}")
     finally:
         conn.close()
 

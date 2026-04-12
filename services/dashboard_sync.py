@@ -39,11 +39,22 @@ def _get_config():
 def sync_trade_to_dashboard(trade_data: dict) -> None:
     """POST a single closed trade to dashboard. Non-blocking (daemon thread).
     trade_data keys: date, symbol, direction, setup, entry, exit_price, result, pnl_r
+    Also syncs: screenshot_path, smc_breakdown, pine_xval (if present).
     """
     url, _ = _get_config()
     if not url:
         return
-    t = threading.Thread(target=_post_trade, args=(trade_data,), daemon=True)
+    # Enrich with screenshot/validation data if available
+    enriched = dict(trade_data)
+    for key in ("screenshot_path", "_close_screenshot", "_tv_screenshot"):
+        if trade_data.get(key):
+            enriched["screenshot_path"] = trade_data[key]
+            break
+    if trade_data.get("smc_breakdown"):
+        enriched["smc_breakdown"] = json.dumps(trade_data["smc_breakdown"])
+    if trade_data.get("_pine_xval"):
+        enriched["pine_xval"] = json.dumps(trade_data["_pine_xval"])
+    t = threading.Thread(target=_post_trade, args=(enriched,), daemon=True)
     t.start()
 
 

@@ -1,0 +1,725 @@
+// This Pine Script™ is subject to the terms of the Mozilla Public License 2.0
+// © StocksWithGaurav — SETUP-E: OB + FVG + BOS/CHoCH
+// v4 — Clean rewrite. All loop bounds safe. Retroactive OB/FVG on structure.
+
+//@version=6
+indicator("SMC Setup-E — OB + FVG + BOS/CHOCH", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+
+grp_ob = "ORDER BLOCK"
+ob_lookback       = input.int(50,   "OB Scan Lookback",       minval=10,  maxval=200, group=grp_ob)
+ob_disp_mult      = input.float(1.5, "Min Displacement (x OB)", minval=1.0, step=0.1,  group=grp_ob)
+ob_min_body_atr   = input.float(0.15,"Min Body / ATR",         minval=0.05,step=0.05,  group=grp_ob)
+ob_wick_ext       = input.float(0.3, "Wick Extension %",       minval=0.0, maxval=1.0, step=0.1, group=grp_ob)
+ob_min_zone_atr   = input.float(0.25,"Min Zone Size (ATR)",    minval=0.05,step=0.05,  group=grp_ob)
+ob_max_zones      = input.int(5,     "Max Zones Per Side",     minval=1,   maxval=15,  group=grp_ob)
+ob_zone_life      = input.int(80,    "Zone Lifespan (bars)",   minval=10,  maxval=500, group=grp_ob)
+
+grp_fvg = "FVG (Fair Value Gap)"
+fvg_min_gap_atr   = input.float(0.15,"Min Gap / ATR",          minval=0.01,step=0.05,  group=grp_fvg)
+fvg_min_c2_atr    = input.float(0.3, "Min C2 Body / ATR",      minval=0.1, step=0.1,   group=grp_fvg)
+fvg_max_zones     = input.int(5,     "Max FVG Zones Per Side",  minval=1,   maxval=15,  group=grp_fvg)
+fvg_zone_life     = input.int(60,    "FVG Lifespan (bars)",     minval=10,  maxval=500, group=grp_fvg)
+
+grp_struct = "STRUCTURE (BOS / CHoCH)"
+swing_left        = input.int(3,     "Swing Left Bars",  minval=2,  maxval=15, group=grp_struct)
+swing_right       = input.int(2,     "Swing Right Bars", minval=1,  maxval=10, group=grp_struct)
+show_bos          = input.bool(true, "Show BOS",         group=grp_struct)
+show_choch        = input.bool(true, "Show CHoCH",       group=grp_struct)
+struct_cooldown_n = input.int(3,     "Cooldown (bars)",  minval=0,  maxval=20, group=grp_struct)
+show_swing_pts    = input.bool(false,"Show Swing Points", group=grp_struct)
+
+grp_htf = "HTF FILTER"
+use_htf_filter    = input.bool(false,"HTF Macro Filter (stricter)", group=grp_htf)
+htf_tf            = input.timeframe("60", "HTF Timeframe",          group=grp_htf)
+
+grp_display = "DISPLAY"
+hide_mitigated    = input.bool(true, "Hide Mitigated Zones",  group=grp_display)
+show_ob_labels    = input.bool(true, "Show OB Labels",        group=grp_display)
+show_fvg_labels   = input.bool(true, "Show FVG Labels",       group=grp_display)
+show_info_table   = input.bool(true, "Show Info Table",        group=grp_display)
+
+grp_colors = "COLORS"
+bull_ob_color     = input.color(color.new(#00BCD4, 70), "Bullish OB",  group=grp_colors)
+bear_ob_color     = input.color(color.new(#FF5252, 70), "Bearish OB",  group=grp_colors)
+bull_fvg_color    = input.color(color.new(#4CAF50, 82), "Bullish FVG", group=grp_colors)
+bear_fvg_color    = input.color(color.new(#FF9800, 82), "Bearish FVG", group=grp_colors)
+bos_color         = input.color(color.new(#2196F3, 0),  "BOS Line",    group=grp_colors)
+choch_color       = input.color(color.new(#FF1744, 0),  "CHoCH Line",  group=grp_colors)
+
+// ═══════════════════════════════════════════════════════════════
+// ATR
+// ═══════════════════════════════════════════════════════════════
+
+atr14 = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════════
+// SWING POINTS
+// ═══════════════════════════════════════════════════════════════
+
+pivot_hi = ta.pivothigh(high, swing_left, swing_right)
+pivot_lo = ta.pivotlow(low,   swing_left, swing_right)
+
+var float sh1 = na
+var int   sh1_bar = na
+var float sh2 = na
+var float sl1 = na
+var int   sl1_bar = na
+var float sl2 = na
+
+if not na(pivot_hi)
+    sh2     := sh1
+    sh1     := pivot_hi
+    sh1_bar := bar_index - swing_right
+    if show_swing_pts
+        label.new(sh1_bar, sh1, "SH", style=label.style_diamond,
+             color=color.new(color.blue, 50), textcolor=color.blue, size=size.tiny)
+
+if not na(pivot_lo)
+    sl2     := sl1
+    sl1     := pivot_lo
+    sl1_bar := bar_index - swing_right
+    if show_swing_pts
+        label.new(sl1_bar, sl1, "SL", style=label.style_diamond,
+             color=color.new(color.orange, 50), textcolor=color.orange, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════
+// MICRO TREND — adaptive
+// ═══════════════════════════════════════════════════════════════
+
+var string micro = "NEUTRAL"
+
+if not na(sh1) and not na(sh2)
+    if sh1 > sh2
+        if micro == "BEARISH"
+            micro := "NEUTRAL"
+        else
+            micro := "BULLISH"
+    if sh1 < sh2
+        if micro == "BULLISH"
+            micro := "NEUTRAL"
+        else
+            micro := "BEARISH"
+
+if not na(sl1) and not na(sl2)
+    if sl1 > sl2
+        if micro == "BEARISH"
+            micro := "NEUTRAL"
+        else
+            micro := "BULLISH"
+    if sl1 < sl2
+        if micro == "BULLISH"
+            micro := "NEUTRAL"
+        else
+            micro := "BEARISH"
+
+// ═══════════════════════════════════════════════════════════════
+// HTF MACRO BIAS (optional)
+// ═══════════════════════════════════════════════════════════════
+
+htf_close_val = request.security(syminfo.tickerid, htf_tf,
+     close[1], barmerge.gaps_off, barmerge.lookahead_on)
+htf_ema21 = request.security(syminfo.tickerid, htf_tf,
+     ta.ema(close, 21)[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+string htf_macro = na(htf_close_val) or na(htf_ema21) ? "NEUTRAL" :
+     htf_close_val > htf_ema21 ? "BULLISH" :
+     htf_close_val < htf_ema21 ? "BEARISH" : "NEUTRAL"
+
+// ═══════════════════════════════════════════════════════════════
+// BOS / CHoCH DETECTION
+// ═══════════════════════════════════════════════════════════════
+
+var int last_struct_bar = 0
+
+bool bar_ok = barstate.isconfirmed
+
+// Bullish break: close crosses above most recent swing high
+bool bull_break = bar_ok and not na(sh1) and close > sh1 and close[1] <= sh1
+// Also catch gap opens
+if not bull_break and bar_ok and not na(sh1)
+    if open > sh1 and close > sh1 and close[1] < sh1
+        bull_break := true
+
+// Bearish break
+bool bear_break = bar_ok and not na(sl1) and close < sl1 and close[1] >= sl1
+if not bear_break and bar_ok and not na(sl1)
+    if open < sl1 and close < sl1 and close[1] > sl1
+        bear_break := true
+
+bool cd_ok = bar_index - last_struct_bar >= struct_cooldown_n
+
+// CHoCH = break AGAINST micro trend (or from NEUTRAL = first directional break)
+// BOS = break WITH micro trend
+bool is_bos_bull   = bull_break and cd_ok and micro == "BULLISH"
+bool is_choch_bull = bull_break and cd_ok and micro != "BULLISH"
+bool is_bos_bear   = bear_break and cd_ok and micro == "BEARISH"
+bool is_choch_bear = bear_break and cd_ok and micro != "BEARISH"
+
+// HTF filter (optional)
+if use_htf_filter
+    if is_choch_bull and htf_macro == "BEARISH"
+        is_choch_bull := false
+    if is_choch_bear and htf_macro == "BULLISH"
+        is_choch_bear := false
+
+if is_bos_bull or is_choch_bull or is_bos_bear or is_choch_bear
+    last_struct_bar := bar_index
+
+bool bull_struct = is_bos_bull or is_choch_bull
+bool bear_struct = is_bos_bear or is_choch_bear
+
+// ── Draw Structure ────────────────────────────────────────────
+
+if show_bos and is_bos_bull and not na(sh1_bar)
+    line.new(sh1_bar, sh1, bar_index, sh1,
+         color=bos_color, style=line.style_dashed, width=1)
+    label.new(bar_index, sh1, "BOS",
+         style=label.style_label_down, color=color.new(bos_color, 40),
+         textcolor=color.white, size=size.tiny)
+
+if show_bos and is_bos_bear and not na(sl1_bar)
+    line.new(sl1_bar, sl1, bar_index, sl1,
+         color=bos_color, style=line.style_dashed, width=1)
+    label.new(bar_index, sl1, "BOS",
+         style=label.style_label_up, color=color.new(bos_color, 40),
+         textcolor=color.white, size=size.tiny)
+
+if show_choch and is_choch_bull and not na(sh1_bar)
+    line.new(sh1_bar, sh1, bar_index, sh1,
+         color=choch_color, style=line.style_solid, width=2)
+    label.new(bar_index, sh1, "BOS/CHoCH",
+         style=label.style_label_down, color=color.new(choch_color, 20),
+         textcolor=color.white, size=size.small)
+
+if show_choch and is_choch_bear and not na(sl1_bar)
+    line.new(sl1_bar, sl1, bar_index, sl1,
+         color=choch_color, style=line.style_solid, width=2)
+    label.new(bar_index, sl1, "BOS/CHoCH",
+         style=label.style_label_up, color=color.new(choch_color, 20),
+         textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ZONE TYPES
+// ═══════════════════════════════════════════════════════════════
+
+type OBZone
+    float lo
+    float hi
+    int   bar0
+    string dir
+    bool  dead
+    box   bx
+    label lb
+
+type FVGZone
+    float lo
+    float hi
+    int   bar0
+    string dir
+    bool  dead
+    box   bx
+    label lb
+
+var array<OBZone>  ob_arr  = array.new<OBZone>()
+var array<FVGZone> fvg_arr = array.new<FVGZone>()
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+f_ob_dup(z_lo, z_hi, dir) =>
+    bool dup = false
+    if array.size(ob_arr) > 0
+        for i = 0 to array.size(ob_arr) - 1
+            OBZone ex = array.get(ob_arr, i)
+            if ex.dir == dir and not ex.dead
+                if math.max(ex.lo, z_lo) < math.min(ex.hi, z_hi)
+                    dup := true
+                    break
+    dup
+
+f_fvg_dup(z_lo, z_hi, dir) =>
+    bool dup = false
+    if array.size(fvg_arr) > 0
+        for i = 0 to array.size(fvg_arr) - 1
+            FVGZone ex = array.get(fvg_arr, i)
+            if ex.dir == dir and not ex.dead
+                if math.max(ex.lo, z_lo) < math.min(ex.hi, z_hi)
+                    dup := true
+                    break
+    dup
+
+// ═══════════════════════════════════════════════════════════════
+// RETROACTIVE OB SCAN
+// ═══════════════════════════════════════════════════════════════
+
+// ── BULLISH OB (bearish candle before bullish move) ───────────
+
+if bull_struct and not na(atr14) and atr14 > 0
+    int depth = math.min(ob_lookback, bar_index - 1)
+    bool ob_found = false
+
+    if depth >= 2
+        for lb = 2 to depth
+            if ob_found
+                break
+
+            float co = open[lb]
+            float cc = close[lb]
+            float ch = high[lb]
+            float cl = low[lb]
+            float cbody = math.abs(cc - co)
+
+            // Must be bearish candle
+            if cc >= co
+                continue
+            if cbody < atr14 * ob_min_body_atr
+                continue
+
+            // Displacement: highest high from OB to current
+            float imp_hi = ch
+            if lb >= 2
+                for j = lb - 1 to 1
+                    imp_hi := math.max(imp_hi, high[j])
+
+            float ob_rng = ch - cl
+            if ob_rng <= 0
+                continue
+            if (imp_hi - cl) < ob_rng * ob_disp_mult
+                continue
+            if imp_hi <= ch
+                continue
+
+            // Zone: body + wick
+            float blo = cc
+            float bhi = co
+            float wk_lo = blo - cl
+            float zlo = blo - wk_lo * ob_wick_ext
+            float zhi = bhi
+
+            float zsize = zhi - zlo
+            float minz = atr14 * ob_min_zone_atr
+            if zsize < minz
+                float exp = (minz - zsize) / 2.0
+                zlo := math.max(cl, zlo - exp)
+                zhi := math.min(ch, zhi + exp)
+
+            // Check mitigation: any close below zone since OB?
+            bool mit = false
+            if lb >= 3
+                for k = lb - 1 to 1
+                    if close[k] < zlo
+                        mit := true
+                        break
+
+            if mit
+                continue
+            if f_ob_dup(zlo, zhi, "BULL")
+                continue
+
+            int ob_bar = bar_index - lb
+            OBZone nz = OBZone.new(zlo, zhi, ob_bar, "BULL", false, na, na)
+            nz.bx := box.new(ob_bar, zhi, bar_index + ob_zone_life, zlo,
+                 border_color=color.new(bull_ob_color, 20), bgcolor=bull_ob_color,
+                 border_width=2, border_style=line.style_solid)
+            if show_ob_labels
+                nz.lb := label.new(ob_bar + 2, zhi, "OB",
+                     style=label.style_label_down, color=color.new(bull_ob_color, 0),
+                     textcolor=color.white, size=size.small)
+            array.push(ob_arr, nz)
+            ob_found := true
+
+// ── BEARISH OB (bullish candle before bearish move) ───────────
+
+if bear_struct and not na(atr14) and atr14 > 0
+    int depth = math.min(ob_lookback, bar_index - 1)
+    bool ob_found = false
+
+    if depth >= 2
+        for lb = 2 to depth
+            if ob_found
+                break
+
+            float co = open[lb]
+            float cc = close[lb]
+            float ch = high[lb]
+            float cl = low[lb]
+            float cbody = math.abs(cc - co)
+
+            if cc <= co
+                continue
+            if cbody < atr14 * ob_min_body_atr
+                continue
+
+            float imp_lo = cl
+            if lb >= 2
+                for j = lb - 1 to 1
+                    imp_lo := math.min(imp_lo, low[j])
+
+            float ob_rng = ch - cl
+            if ob_rng <= 0
+                continue
+            if (ch - imp_lo) < ob_rng * ob_disp_mult
+                continue
+            if imp_lo >= cl
+                continue
+
+            float blo = co
+            float bhi = cc
+            float wk_hi = ch - bhi
+            float zlo = blo
+            float zhi = bhi + wk_hi * ob_wick_ext
+
+            float zsize = zhi - zlo
+            float minz = atr14 * ob_min_zone_atr
+            if zsize < minz
+                float exp = (minz - zsize) / 2.0
+                zlo := math.max(cl, zlo - exp)
+                zhi := math.min(ch, zhi + exp)
+
+            bool mit = false
+            if lb >= 3
+                for k = lb - 1 to 1
+                    if close[k] > zhi
+                        mit := true
+                        break
+
+            if mit
+                continue
+            if f_ob_dup(zlo, zhi, "BEAR")
+                continue
+
+            int ob_bar = bar_index - lb
+            OBZone nz = OBZone.new(zlo, zhi, ob_bar, "BEAR", false, na, na)
+            nz.bx := box.new(ob_bar, zhi, bar_index + ob_zone_life, zlo,
+                 border_color=color.new(bear_ob_color, 20), bgcolor=bear_ob_color,
+                 border_width=2, border_style=line.style_solid)
+            if show_ob_labels
+                nz.lb := label.new(ob_bar + 2, zhi, "OB",
+                     style=label.style_label_down, color=color.new(bear_ob_color, 0),
+                     textcolor=color.white, size=size.small)
+            array.push(ob_arr, nz)
+            ob_found := true
+
+// ═══════════════════════════════════════════════════════════════
+// RETROACTIVE FVG SCAN
+// ═══════════════════════════════════════════════════════════════
+
+// ── BULLISH FVG (C3.low > C1.high) ───────────────────────────
+
+if bull_struct and not na(atr14) and atr14 > 0
+    int depth = math.min(ob_lookback, bar_index - 3)
+    int fcount = 0
+
+    if depth >= 2
+        for lb = 2 to depth
+            if fcount >= 2
+                break
+
+            int c1 = lb + 1
+            int c3 = lb - 1
+
+            // SAFE: c3 must be >= 1 (never reference bar[-1] or bar[0] forming)
+            if c3 < 1
+                continue
+            if c1 > bar_index
+                continue
+
+            float c1_hi = high[c1]
+            float c2_op = open[lb]
+            float c2_cl = close[lb]
+            float c2_bd = math.abs(c2_cl - c2_op)
+            float c3_lo = low[c3]
+
+            float gap = c3_lo - c1_hi
+            if gap < atr14 * fvg_min_gap_atr
+                continue
+            if c2_bd < atr14 * fvg_min_c2_atr
+                continue
+            if c2_cl <= c2_op
+                continue
+
+            float flo = c1_hi
+            float fhi = c3_lo
+
+            // Check if already filled (bars AFTER c3, before current)
+            bool filled = false
+            if c3 >= 2
+                for k = c3 - 1 to 1
+                    if low[k] <= flo
+                        filled := true
+                        break
+
+            if filled
+                continue
+            if f_fvg_dup(flo, fhi, "BULL")
+                continue
+
+            int fbar = bar_index - c1
+            FVGZone nz = FVGZone.new(flo, fhi, fbar, "BULL", false, na, na)
+            nz.bx := box.new(fbar, fhi, bar_index + fvg_zone_life, flo,
+                 border_color=color.new(bull_fvg_color, 30), bgcolor=bull_fvg_color,
+                 border_width=1, border_style=line.style_dashed)
+            if show_fvg_labels
+                nz.lb := label.new(fbar + 1, fhi, "FVG",
+                     style=label.style_label_down, color=color.new(bull_fvg_color, 10),
+                     textcolor=color.white, size=size.tiny)
+            array.push(fvg_arr, nz)
+            fcount += 1
+
+// ── BEARISH FVG (C1.low > C3.high) ───────────────────────────
+
+if bear_struct and not na(atr14) and atr14 > 0
+    int depth = math.min(ob_lookback, bar_index - 3)
+    int fcount = 0
+
+    if depth >= 2
+        for lb = 2 to depth
+            if fcount >= 2
+                break
+
+            int c1 = lb + 1
+            int c3 = lb - 1
+
+            if c3 < 1
+                continue
+            if c1 > bar_index
+                continue
+
+            float c1_lo = low[c1]
+            float c2_op = open[lb]
+            float c2_cl = close[lb]
+            float c2_bd = math.abs(c2_cl - c2_op)
+            float c3_hi = high[c3]
+
+            float gap = c1_lo - c3_hi
+            if gap < atr14 * fvg_min_gap_atr
+                continue
+            if c2_bd < atr14 * fvg_min_c2_atr
+                continue
+            if c2_cl >= c2_op
+                continue
+
+            float flo = c3_hi
+            float fhi = c1_lo
+
+            bool filled = false
+            if c3 >= 2
+                for k = c3 - 1 to 1
+                    if high[k] >= fhi
+                        filled := true
+                        break
+
+            if filled
+                continue
+            if f_fvg_dup(flo, fhi, "BEAR")
+                continue
+
+            int fbar = bar_index - c1
+            FVGZone nz = FVGZone.new(flo, fhi, fbar, "BEAR", false, na, na)
+            nz.bx := box.new(fbar, fhi, bar_index + fvg_zone_life, flo,
+                 border_color=color.new(bear_fvg_color, 30), bgcolor=bear_fvg_color,
+                 border_width=1, border_style=line.style_dashed)
+            if show_fvg_labels
+                nz.lb := label.new(fbar + 1, flo, "FVG",
+                     style=label.style_label_up, color=color.new(bear_fvg_color, 10),
+                     textcolor=color.white, size=size.tiny)
+            array.push(fvg_arr, nz)
+            fcount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// OB MITIGATION + CLEANUP
+// ═══════════════════════════════════════════════════════════════
+
+if array.size(ob_arr) > 0
+    for i = array.size(ob_arr) - 1 to 0
+        OBZone z = array.get(ob_arr, i)
+        if z.dead
+            continue
+
+        bool expired = bar_index - z.bar0 > ob_zone_life
+        bool mit = false
+        if z.dir == "BULL" and bar_ok and close < z.lo
+            mit := true
+        if z.dir == "BEAR" and bar_ok and close > z.hi
+            mit := true
+
+        if mit or expired
+            z.dead := true
+            if hide_mitigated
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+            else
+                if not na(z.bx)
+                    box.set_right(z.bx, bar_index)
+                    box.set_bgcolor(z.bx, color.new(color.gray, 92))
+                    box.set_border_style(z.bx, line.style_dotted)
+                    box.set_border_color(z.bx, color.new(color.gray, 70))
+
+    // Prune dead when array large
+    if array.size(ob_arr) > ob_max_zones * 6
+        for i = array.size(ob_arr) - 1 to 0
+            if array.size(ob_arr) <= ob_max_zones * 2
+                break
+            OBZone z = array.get(ob_arr, i)
+            if z.dead
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+                array.remove(ob_arr, i)
+
+    // Cap per side
+    int bcnt = 0
+    int scnt = 0
+    for i = array.size(ob_arr) - 1 to 0
+        OBZone z = array.get(ob_arr, i)
+        if z.dead
+            continue
+        if z.dir == "BULL"
+            bcnt += 1
+            if bcnt > ob_max_zones
+                z.dead := true
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+        else
+            scnt += 1
+            if scnt > ob_max_zones
+                z.dead := true
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+
+// ═══════════════════════════════════════════════════════════════
+// FVG FILL + CLEANUP
+// ═══════════════════════════════════════════════════════════════
+
+if array.size(fvg_arr) > 0
+    for i = array.size(fvg_arr) - 1 to 0
+        FVGZone z = array.get(fvg_arr, i)
+        if z.dead
+            continue
+
+        bool expired = bar_index - z.bar0 > fvg_zone_life
+        bool fil = false
+        if z.dir == "BULL" and low <= z.lo
+            fil := true
+        if z.dir == "BEAR" and high >= z.hi
+            fil := true
+
+        if fil or expired
+            z.dead := true
+            if hide_mitigated
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+            else
+                if not na(z.bx)
+                    box.set_right(z.bx, bar_index)
+                    box.set_bgcolor(z.bx, color.new(color.gray, 94))
+
+    if array.size(fvg_arr) > fvg_max_zones * 6
+        for i = array.size(fvg_arr) - 1 to 0
+            if array.size(fvg_arr) <= fvg_max_zones * 2
+                break
+            FVGZone z = array.get(fvg_arr, i)
+            if z.dead
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+                array.remove(fvg_arr, i)
+
+    int fbcnt = 0
+    int fscnt = 0
+    for i = array.size(fvg_arr) - 1 to 0
+        FVGZone z = array.get(fvg_arr, i)
+        if z.dead
+            continue
+        if z.dir == "BULL"
+            fbcnt += 1
+            if fbcnt > fvg_max_zones
+                z.dead := true
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+        else
+            fscnt += 1
+            if fscnt > fvg_max_zones
+                z.dead := true
+                if not na(z.bx)
+                    box.delete(z.bx)
+                if not na(z.lb)
+                    label.delete(z.lb)
+
+// ═══════════════════════════════════════════════════════════════
+// INFO TABLE
+// ═══════════════════════════════════════════════════════════════
+
+var table infoTbl = table.new(position.top_right, 2, 6,
+     bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast and show_info_table
+    color mc = htf_macro == "BULLISH" ? color.green : htf_macro == "BEARISH" ? color.red : color.gray
+    color uc = micro == "BULLISH" ? color.green : micro == "BEARISH" ? color.red : color.gray
+
+    int abulls = 0
+    int abears = 0
+    if array.size(ob_arr) > 0
+        for i = 0 to array.size(ob_arr) - 1
+            OBZone z = array.get(ob_arr, i)
+            if not z.dead
+                if z.dir == "BULL"
+                    abulls += 1
+                else
+                    abears += 1
+
+    int afb = 0
+    int afs = 0
+    if array.size(fvg_arr) > 0
+        for i = 0 to array.size(fvg_arr) - 1
+            FVGZone z = array.get(fvg_arr, i)
+            if not z.dead
+                if z.dir == "BULL"
+                    afb += 1
+                else
+                    afs += 1
+
+    table.cell(infoTbl, 0, 0, "HTF",       text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 0, htf_macro,    text_color=mc,          text_size=size.small)
+    table.cell(infoTbl, 0, 1, "Micro",      text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 1, micro,         text_color=uc,          text_size=size.small)
+    table.cell(infoTbl, 0, 2, "OB (B/S)",   text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 2, str.tostring(abulls) + " / " + str.tostring(abears),
+         text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 3, "FVG (B/S)",  text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 3, str.tostring(afb) + " / " + str.tostring(afs),
+         text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 4, "ATR",        text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 4, str.tostring(math.round(atr14, 1)),
+         text_color=color.yellow, text_size=size.small)
+    table.cell(infoTbl, 0, 5, "Struct",     text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 5,
+         (bull_struct ? "BULL" : bear_struct ? "BEAR" : "-"),
+         text_color=(bull_struct ? color.green : bear_struct ? color.red : color.gray),
+         text_size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+
+alertcondition(is_choch_bull, "Bullish CHoCH",  "Bullish CHoCH — look for demand OB")
+alertcondition(is_choch_bear, "Bearish CHoCH",  "Bearish CHoCH — look for supply OB")
+alertcondition(is_bos_bull,   "Bullish BOS",    "Bullish BOS")
+alertcondition(is_bos_bear,   "Bearish BOS",    "Bearish BOS")

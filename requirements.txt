@@ -36,3 +36,4 @@ playwright>=1.40.0
 orjson>=3.9.0
 pandas>=2.1.0
 numpy>=1.24.0
+websocket-client>=1.7.0

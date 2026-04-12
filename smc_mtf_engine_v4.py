@@ -48,6 +48,17 @@ import risk_management as risk_mgr
 from manual_trade_handler_v2 import ManualTradeHandlerV2
 from option_monitor_module import OptionMonitor
 from services.trade_graph_hooks import build_trade_graph, update_trade_graph_trail, close_trade_graph
+
+# Feature 1 & 2: TradingView MCP bridge for visual validation + Pine cross-check
+try:
+    from services.tv_mcp_bridge import (
+        capture_signal_chart,
+        capture_trade_close_chart,
+        get_pine_cross_validation,
+    )
+    _TV_BRIDGE_AVAILABLE = True
+except ImportError:
+    _TV_BRIDGE_AVAILABLE = False
 # Phase 5: Modular imports
 import engine.config as eng_cfg
 from engine.indicators import (
@@ -1075,7 +1086,8 @@ def update_cache(symbol, interval, lookback):
                 with OHLC_CACHE_LOCK:
                     OHLC_CACHE[(symbol, interval)] = {
                         "data": data[-lookback:],
-                        "updated_at": t.time()
+                        "updated_at": t.time(),
+                        "trading_date": now_ist().strftime("%Y-%m-%d"),
                     }
                 return True
         except concurrent.futures.TimeoutError:
@@ -1149,7 +1161,11 @@ def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
         cached = OHLC_CACHE.get((symbol, interval))
         
     if cached and (t.time() - cached["updated_at"]) < 900:
-        return cached["data"][-lookback:]
+        # Reject cache from a different trading day
+        if cached.get("trading_date") != now_ist().strftime("%Y-%m-%d"):
+            pass  # stale day — fall through to fresh fetch
+        else:
+            return cached["data"][-lookback:]
 
     token = get_token(symbol)
     if not token:
@@ -1169,7 +1185,8 @@ def fetch_ohlc(symbol: str, interval: str, lookback: int = 200):
             with OHLC_CACHE_LOCK:
                 OHLC_CACHE[(symbol, interval)] = {
                     "data": data[-lookback:],
-                    "updated_at": t.time()
+                    "updated_at": t.time(),
+                    "trading_date": now_ist().strftime("%Y-%m-%d"),
                 }
             return data[-lookback:]
 
@@ -2446,56 +2463,143 @@ def detect_setup_d(symbol: str, tf_data: dict):
             # Now scan fresh OB + FVG from current candles
             ob = detect_order_block(ltf_data, bias)
             fvg = detect_fvg(ltf_data, bias)
-            if ob and fvg:
+            # FIX-1: OB-only setups valid — FVG adds confluency, not a gate
+            if ob:
                 state["ob"] = ob
-                state["fvg"] = fvg
+                state["fvg"] = fvg  # may be None
+                state["has_fvg"] = fvg is not None
                 state["stage"] = "WAIT"
                 state["bos_confirmed"] = True
         return None
 
     # -------- PHASE 3: WAIT FOR FVG TAP --------
-    # Guard: ob/fvg must exist before reaching WAIT/TAPPED
-    if not state.get("ob") or not state.get("fvg"):
+    # Guard: OB must exist (FVG is optional after FIX-1)
+    if not state.get("ob"):
         SETUP_D_STATE.pop(key, None)
         return None
 
     z_low, z_high = state["ob"]
-    f_low, f_high = state["fvg"]
+    # FIX-1: Use FVG if available, else use OB zone as tap zone
+    tap_zone = state["fvg"] if state.get("fvg") else state["ob"]
+    f_low, f_high = tap_zone
 
     if state["stage"] == "WAIT":
+        # FIX-2: Re-scan for fresher, closer FVG on each candle
+        fresh_fvg = detect_fvg(ltf_data, bias)
+        if fresh_fvg:
+            ff_low, ff_high = fresh_fvg
+            curr_price = candle["close"]
+            old_dist = abs(curr_price - (f_low + f_high) / 2)
+            new_dist = abs(curr_price - (ff_low + ff_high) / 2)
+            if new_dist < old_dist:
+                state["fvg"] = fresh_fvg
+                state["has_fvg"] = True
+                f_low, f_high = fresh_fvg
+                tap_zone = fresh_fvg
+                logging.info(
+                    f"[SETUP-D] {symbol} | FVG RESCAN | upgraded to closer FVG "
+                    f"({ff_low:.1f}, {ff_high:.1f}) dist={new_dist:.1f}"
+                )
+
         if (bias == "LONG" and candle["low"] <= f_high) or \
            (bias == "SHORT" and candle["high"] >= f_low):
             state["stage"] = "TAPPED"
+            state["tap_count"] = 0
+            state["patience_bars"] = 0
         return None
 
-    # -------- PHASE 4: REACTION / ENTRY --------
+    # -------- PHASE 4: REACTION / ENTRY (3-mode, like Setup-E) --------
+    # Three entry modes (priority order):
+    #   A) SWEEP: candle wicks beyond OB, closes back inside (highest win-rate)
+    #   B) DEEP:  candle reaches deeper 40% of zone + wick rejection
+    #   C) DOUBLE TAP: 2nd+ test of zone reaches midpoint + confirmation
     if state["stage"] == "TAPPED":
-        entry = (f_low + f_high) / 2
+        zone_mid = (z_low + z_high) / 2
+        zone_deep = z_low + (z_high - z_low) * 0.4   # lower 40% line for LONG
+        buffer = compute_dynamic_buffer(symbol, atr)
+        state["patience_bars"] = state.get("patience_bars", 0) + 1
 
-        # Candle must close OUTSIDE Order Block to confirm breakout/reversal
+        if state["patience_bars"] > 20:
+            SETUP_D_STATE.pop(key, None)
+            return None
+
+        entry = sl = target = None
+        entry_mode = None
+
         if bias == "LONG":
-            if candle["close"] > z_high:
-                buffer = compute_dynamic_buffer(symbol, atr)
+            body = abs(candle["close"] - candle["open"])
+            lower_wick = min(candle["open"], candle["close"]) - candle["low"]
+            bullish = candle["close"] > candle["open"]
+            wick_rej = body > 0 and lower_wick > body * 0.8
+
+            sweep = candle["low"] < z_low and candle["close"] > z_low and bullish
+            if sweep:
+                entry = candle["close"]
+                sl = candle["low"] - atr * 0.1
+                entry_mode = "SWEEP"
+                logging.info(f"[SETUP-D] {symbol} SWEEP entry | low={candle['low']:.1f} < OB {z_low:.1f}")
+            elif candle["low"] <= zone_deep and bullish and wick_rej:
+                entry = candle["close"]
                 sl = z_low - buffer
-                target = entry + 2 * (entry - sl)
+                entry_mode = "DEEP"
+                logging.info(f"[SETUP-D] {symbol} DEEP entry | low={candle['low']:.1f} <= deep_line {zone_deep:.1f}")
+            elif state.get("tap_count", 0) >= 1 and candle["low"] <= zone_mid and bullish:
+                entry = candle["close"]
+                sl = z_low - buffer
+                entry_mode = "DOUBLE_TAP"
+                logging.info(f"[SETUP-D] {symbol} DOUBLE_TAP entry | tap#{state['tap_count']+1}")
             else:
+                if candle["low"] <= z_high:
+                    state["tap_count"] = state.get("tap_count", 0) + 1
+                if candle["close"] < z_low - atr * 0.3:
+                    SETUP_D_STATE.pop(key, None)
                 return None
+
+            if entry and sl:
+                target = entry + 2.0 * (entry - sl)
+
         elif bias == "SHORT":
-            if candle["close"] < z_low:
-                buffer = compute_dynamic_buffer(symbol, atr)
+            body = abs(candle["close"] - candle["open"])
+            upper_wick = candle["high"] - max(candle["open"], candle["close"])
+            bearish = candle["close"] < candle["open"]
+            wick_rej = body > 0 and upper_wick > body * 0.8
+            zone_deep_short = z_high - (z_high - z_low) * 0.4
+
+            sweep = candle["high"] > z_high and candle["close"] < z_high and bearish
+            if sweep:
+                entry = candle["close"]
+                sl = candle["high"] + atr * 0.1
+                entry_mode = "SWEEP"
+                logging.info(f"[SETUP-D] {symbol} SWEEP entry SHORT | high={candle['high']:.1f} > OB {z_high:.1f}")
+            elif candle["high"] >= zone_deep_short and bearish and wick_rej:
+                entry = candle["close"]
                 sl = z_high + buffer
-                target = entry - 2 * (sl - entry)
+                entry_mode = "DEEP"
+                logging.info(f"[SETUP-D] {symbol} DEEP entry SHORT | high={candle['high']:.1f} >= deep_line {zone_deep_short:.1f}")
+            elif state.get("tap_count", 0) >= 1 and candle["high"] >= zone_mid and bearish:
+                entry = candle["close"]
+                sl = z_high + buffer
+                entry_mode = "DOUBLE_TAP"
+                logging.info(f"[SETUP-D] {symbol} DOUBLE_TAP entry SHORT | tap#{state['tap_count']+1}")
             else:
+                if candle["high"] >= z_low:
+                    state["tap_count"] = state.get("tap_count", 0) + 1
+                if candle["close"] > z_high + atr * 0.3:
+                    SETUP_D_STATE.pop(key, None)
                 return None
+
+            if entry and sl:
+                target = entry - 2.0 * (sl - entry)
         else:
             return None
 
-        rr = 0
-        if sl != entry:
-            rr = abs(target - entry) / abs(entry - sl)
-            if rr < 2:
-                SETUP_D_STATE.pop(key, None)
-                return None
+        if not entry or not sl or not target:
+            return None
+
+        rr = abs(target - entry) / abs(entry - sl) if sl != entry else 0
+        if rr < 2:
+            SETUP_D_STATE.pop(key, None)
+            return None
 
         # Dedup
         dedup_key = f"{clean_symbol(symbol)}_SETUPD_{bias}"
@@ -2536,9 +2640,11 @@ def detect_setup_d(symbol: str, tf_data: dict):
             "ob"                   : (z_low, z_high),
             "fvg"                  : (f_low, f_high),
             "ltf"                  : ltf_data[-80:],
-            "analysis"             : "CHOCH + BOS + OB + FVG (Setup-D)",
+            "analysis"             : f"CHOCH+BOS+OB+{entry_mode} (Setup-D)",
+            "entry_mode"           : entry_mode,
             "bos_confirmed"        : state.get("bos_confirmed", False),
             "sweep_detected"       : state.get("sweep_detected", False),
+            "has_fvg"              : state.get("has_fvg", False),
             "choch_time"           : state.get("choch_time"),
             # Phase 2: Displacement fields
             "displacement_detected": state.get("displacement_detected", False),
@@ -2936,6 +3042,74 @@ def strong_structure_shift(ltf_data, mul=1.2):
     body = abs(c["close"] - c["open"])
     atr = calculate_atr(ltf_data)
     return body > (atr * mul)
+
+# =====================================================
+# STEP 1: SIGNAL FAILURE REASON LOGGER
+# =====================================================
+# Appends structured rejection records to a daily JSON file.
+# Records WHY a signal was NOT taken — critical for debugging missed trades.
+
+_REJECTION_LOG_PATH = Path("signal_rejections_today.json")
+_REJECTION_LOG: list = []
+
+def _log_signal_rejection(sig: dict, reason: str, detail: str = "",
+                          breakdown: dict = None):
+    """Log a structured rejection record for a signal that was NOT taken.
+    
+    Args:
+        sig: The signal dict (from detect_setup_*)
+        reason: Short code — LOW_SCORE, RISK_MANAGER, AFTERNOON_CUTOFF, DEDUP, etc.
+        detail: Human-readable explanation
+        breakdown: The smc_breakdown dict showing which components passed/failed
+    """
+    try:
+        record = {
+            "timestamp": now_ist().isoformat(),
+            "symbol": sig.get("symbol", "?"),
+            "setup": sig.get("setup", "?"),
+            "direction": sig.get("direction", "?"),
+            "reason": reason,
+            "detail": detail,
+            "score": sig.get("smc_score"),
+            "breakdown": breakdown or sig.get("smc_breakdown"),
+            "entry": sig.get("entry"),
+            "sl": sig.get("sl"),
+            "target": sig.get("target"),
+            "rr": sig.get("rr"),
+            "ob": str(sig.get("ob")) if sig.get("ob") else None,
+            "fvg": str(sig.get("fvg")) if sig.get("fvg") else None,
+            "choch": bool(sig.get("choch_time") or sig.get("choch_detected")),
+            "bos": bool(sig.get("bos_confirmed")),
+            "sweep": bool(sig.get("sweep_detected")),
+            "volume_ok": bool(sig.get("volume_expansion")),
+            "htf_bias": sig.get("htf_bias"),
+            "regime": MARKET_REGIME,
+        }
+        _REJECTION_LOG.append(record)
+        
+        # Pretty-print for immediate debugging
+        _bd = breakdown or sig.get("smc_breakdown", {})
+        _components = " | ".join(
+            f"{k}: {'✅' if v and v > 0 else '❌'}{v if v else 0}"
+            for k, v in _bd.items()
+        ) if _bd else "no breakdown"
+        logging.info(
+            f"📋 REJECTION [{reason}] {sig.get('symbol','?')} {sig.get('setup','?')} "
+            f"{sig.get('direction','?')} — {detail} | {_components}"
+        )
+        
+        # Persist to daily file (append-safe)
+        try:
+            import json as _json
+            _REJECTION_LOG_PATH.write_text(
+                _json.dumps(_REJECTION_LOG[-200:], indent=2, default=str),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logging.debug(f"Rejection logging failed: {e}")
+
 
 def smc_confluence_score(signal, ltf_data, htf_data):
     score = 0
@@ -3551,9 +3725,18 @@ def scan_symbol(symbol: str):
                 logging.info(f"🚫 BLOCKED LOW SCORE ({score}) [min={min_score_for_signal}]: {sig['symbol']} {sig['setup']}")
                 if setup_name == "SETUP-D" and SETUP_D_STRUCTURE_TRACE.get(sig.get('symbol', '')):
                     SETUP_D_STRUCTURE_TRACE[sig['symbol']][-1]["block_reason"] = f"Score {score} < min {min_score_for_signal}"
+                # ── STEP 1: Structured failure reason logging ──
+                _log_signal_rejection(
+                    sig, reason="LOW_SCORE",
+                    detail=f"score={score} < min={min_score_for_signal}",
+                    breakdown=breakdown,
+                )
         except Exception as e:
             # W3 FIX: On scoring error, SKIP signal (don't pass unscored trades)
             logging.error(f"Scoring Error — SKIPPING {sig.get('symbol','?')}: {e}")
+            _log_signal_rejection(
+                sig, reason="SCORING_ERROR", detail=str(e),
+            )
             continue  # W3: Do NOT pass unscored signals through
 
     return valid_signals
@@ -4895,6 +5078,15 @@ def monitor_active_trades(symbol, current_price):
                 close_trade_graph(trade)
             except Exception:
                 pass  # TradeGraph is non-critical
+            # ── Feature 4: Auto Trade Close Screenshot ──
+            if _TV_BRIDGE_AVAILABLE and not BACKTEST_MODE:
+                try:
+                    _close_ss = capture_trade_close_chart(trade)
+                    if _close_ss:
+                        trade["_close_screenshot"] = _close_ss
+                        logging.info(f"📸 Trade close chart captured: {_close_ss}")
+                except Exception as _css_e:
+                    logging.debug(f"TV close screenshot failed (non-blocking): {_css_e}")
             # P0-R1: Single lock acquisition for remove + snapshot
             with ACTIVE_TRADES_LOCK:
                 ACTIVE_TRADES.remove(trade)
@@ -4957,6 +5149,15 @@ def monitor_active_trades(symbol, current_price):
                 close_trade_graph(trade)
             except Exception:
                 pass  # TradeGraph is non-critical
+            # ── Feature 4: Auto Trade Close Screenshot ──
+            if _TV_BRIDGE_AVAILABLE and not BACKTEST_MODE:
+                try:
+                    _close_ss = capture_trade_close_chart(trade)
+                    if _close_ss:
+                        trade["_close_screenshot"] = _close_ss
+                        logging.info(f"📸 Trade close chart captured: {_close_ss}")
+                except Exception as _css_e:
+                    logging.debug(f"TV close screenshot failed (non-blocking): {_css_e}")
             # P0-R1: Single lock acquisition for remove + snapshot
             with ACTIVE_TRADES_LOCK:
                 ACTIVE_TRADES.remove(trade)
@@ -5567,6 +5768,8 @@ def run_live_mode():
                      EMA_LAST_PROCESSED.clear()
                      DAILY_LOG.clear()
                      MANUAL_ORDER_CACHE.clear()
+                     with OHLC_CACHE_LOCK:
+                         OHLC_CACHE.clear()  # Flush stale candle data from previous day
                      reset_market_state()
                      reset_oi_state()
                      reset_oi_sc_state()
@@ -6282,6 +6485,10 @@ def run_live_mode():
                 now_t = now_ist().time()
                 if now_t >= time(cutoff_h, cutoff_m) and not is_index(sig.get("symbol", "")):
                     logging.info(f"🕐 AFTERNOON CUTOFF: {sig['symbol']} blocked — no new stock entries after {cutoff_h}:{cutoff_m:02d}")
+                    _log_signal_rejection(
+                        sig, reason="AFTERNOON_CUTOFF",
+                        detail=f"after {cutoff_h}:{cutoff_m:02d}",
+                    )
                     continue
 
                 # F1.6: Global daily trade cap
@@ -6321,6 +6528,11 @@ def run_live_mode():
                         sig['quality_score'] = quality
                         if not approved:
                             logging.info(f"🛡️ RISK REJECTED: {sig['symbol']} {sig['setup']} — {reason}")
+                            _log_signal_rejection(
+                                sig, reason="RISK_MANAGER",
+                                detail=reason,
+                                breakdown=sig.get("smc_breakdown"),
+                            )
                             continue
                     except Exception as risk_e:
                         logging.error(f"Risk check failed (allowing through): {risk_e}")
@@ -6360,6 +6572,46 @@ def run_live_mode():
                         build_trade_graph(sig, MARKET_REGIME, get_oi_sentiment())
                     except Exception:
                         pass  # TradeGraph is non-critical
+                    
+                    # ── Feature 1: Visual Signal Validation (TradingView screenshot) ──
+                    # ── Feature 2: Pine Cross-Validation (compare engine vs Pine levels) ──
+                    _tv_screenshot = None
+                    _pine_xval = None
+                    if _TV_BRIDGE_AVAILABLE and not BACKTEST_MODE:
+                        try:
+                            _tv_screenshot = capture_signal_chart(sig)
+                            if _tv_screenshot:
+                                sig["_tv_screenshot"] = _tv_screenshot
+                                logging.info(f"📸 Signal chart captured: {_tv_screenshot}")
+                        except Exception as _tv_e:
+                            logging.debug(f"TV screenshot failed (non-blocking): {_tv_e}")
+                        try:
+                            _pine_xval = get_pine_cross_validation(sig)
+                            if _pine_xval:
+                                sig["_pine_xval"] = _pine_xval
+                                _adj = _pine_xval.get("confidence_adjustment", 0)
+                                
+                                # STEP 6: Apply Pine confidence to smc_score
+                                if _adj != 0 and "smc_score" in sig:
+                                    _old_score = sig["smc_score"]
+                                    sig["smc_score"] = max(0, min(10, _old_score + _adj))
+                                    logging.info(
+                                        f"📊 Pine confidence: score {_old_score} → {sig['smc_score']} "
+                                        f"(adj={_adj:+d}, confirms={_pine_xval.get('confirms',0)}, "
+                                        f"contradicts={_pine_xval.get('contradicts',0)})"
+                                    )
+                                
+                                # Log per-component results
+                                _ob_s = "✅" if _pine_xval.get("match_ob") else ("❌" if _pine_xval.get("match_ob") is False else "—")
+                                _fvg_s = "✅" if _pine_xval.get("match_fvg") else ("❌" if _pine_xval.get("match_fvg") is False else "—")
+                                _bos_s = "✅" if _pine_xval.get("match_bos") else ("❌" if _pine_xval.get("match_bos") is False else "—")
+                                logging.info(
+                                    f"🔍 Pine XVal: OB={_ob_s} FVG={_fvg_s} BOS={_bos_s} "
+                                    f"delta={_pine_xval.get('delta')}pts"
+                                )
+                        except Exception as _xv_e:
+                            logging.debug(f"Pine cross-validation failed (non-blocking): {_xv_e}")
+
                     log_paper_trade(sig)  # Phase 6: paper trade log
                     persist_active_trades()  # F1.2: crash recovery
         
