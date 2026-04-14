@@ -210,6 +210,19 @@ def build_swing_trade_levels(
     entry = float(sw["entry"])
     sl = float(sw["sl"])
     target = float(sw["target"])
+    entry_type = sw.get("entry_type", "MARKET")
+
+    # Freshness gate: reject if CMP already moved >30% toward target (stale entry)
+    total_move = abs(target - entry)
+    if total_move > 0:
+        progress = abs(close - entry) / total_move
+        if progress > 0.30:
+            log.info(
+                "[research] %s entry stale: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f) — skip",
+                symbol, close, progress * 100, entry, target,
+            )
+            return None
+
     if not entry_vs_close_sane(entry, close):
         log.debug("Swing levels failed CMP sanity for %s", symbol)
         return None

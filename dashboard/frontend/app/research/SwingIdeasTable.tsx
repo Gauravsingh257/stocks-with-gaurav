@@ -175,8 +175,40 @@ function StatusBadge({ status }: { status?: string }) {
   );
 }
 
+function EntryGapBadge({ gap }: { gap?: number | null }) {
+  if (gap === null || gap === undefined) return <span style={{ color: "var(--text-dim)", fontSize: "0.7rem" }}>-</span>;
+  const absGap = Math.abs(gap);
+  let color = "#00d18c"; // green < 2%
+  if (absGap > 5) color = "#ff4e6a"; // red > 5%
+  else if (absGap > 2) color = "#f0c060"; // yellow 2-5%
+  return (
+    <span style={{ fontSize: "0.72rem", fontWeight: 600, color }}>
+      {gap >= 0 ? "+" : ""}{gap.toFixed(1)}%
+    </span>
+  );
+}
+
+function ActionTag({ tag }: { tag?: string }) {
+  if (!tag) return null;
+  const configs: Record<string, { bg: string; fg: string; label: string; icon: string }> = {
+    EXECUTE_NOW: { bg: "rgba(0,209,140,0.18)", fg: "#00d18c", label: "Execute Now", icon: "\u{1F7E2}" },
+    WAIT_FOR_RETEST: { bg: "rgba(240,192,96,0.18)", fg: "#f0c060", label: "Wait for Retest", icon: "\u{1F7E1}" },
+    MISSED: { bg: "rgba(255,78,106,0.18)", fg: "#ff4e6a", label: "Missed Trade", icon: "\u{1F534}" },
+  };
+  const c = configs[tag] || configs.WAIT_FOR_RETEST!;
+  return (
+    <span style={{
+      fontSize: "0.65rem", padding: "2px 7px", borderRadius: 4, fontWeight: 600,
+      background: c.bg, color: c.fg, whiteSpace: "nowrap",
+      display: "inline-flex", alignItems: "center", gap: 3,
+    }}>
+      <span style={{ fontSize: "0.6rem" }}>{c.icon}</span> {c.label}
+    </span>
+  );
+}
+
 export function SwingIdeasTable({ items }: Props) {
-  const headers = ["#", "Symbol", "Entry", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
+  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
@@ -208,6 +240,19 @@ export function SwingIdeasTable({ items }: Props) {
                   <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>{item.symbol}</td>
                   <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
+                  <td style={{ padding: "10px 12px", fontWeight: 500 }}>{item.scan_cmp ? fmt(item.scan_cmp) : "-"}</td>
+                  <td style={{ padding: "10px 12px" }}><EntryGapBadge gap={item.entry_gap_pct} /></td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={{
+                      fontSize: "0.65rem", padding: "2px 6px", borderRadius: 4, fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      background: item.entry_type === "LIMIT" ? "rgba(41, 98, 255, 0.15)" : "rgba(0, 209, 140, 0.15)",
+                      color: item.entry_type === "LIMIT" ? "#5b9cf6" : "#00d18c",
+                    }}>
+                      {item.entry_type === "LIMIT" ? "LIMIT (Zone)" : "MARKET"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "10px 12px" }}><ActionTag tag={item.action_tag} /></td>
                   <td style={{ padding: "10px 12px", color: "#ff4e6a" }}>{fmt(item.stop_loss)}</td>
                   <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_1)}</td>
                   <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_2)}</td>

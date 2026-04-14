@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, archive_stale_recommendations
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, archive_stale_recommendations, expire_old_recommendations
 from services import generate_rankings
 
 
@@ -43,13 +43,22 @@ class SwingTradeAlphaAgent(BaseAgent):
             # Determine data authenticity: "real" if setup is SMC-based, else partial/synthetic
             data_auth = "real" if "SMC_SWING" in (idea.setup or "") else "partial"
 
+            # Downgrade confidence for LIMIT entries where CMP is far from entry
+            confidence = idea.confidence_score
+            if idea.entry_type == "LIMIT" and idea.scan_cmp and entry_price > 0:
+                gap_pct = abs(idea.scan_cmp - entry_price) / entry_price * 100
+                if gap_pct > 5.0:
+                    confidence = round(confidence * 0.7, 2)  # 30% penalty — deep pullback unlikely
+                elif gap_pct > 3.0:
+                    confidence = round(confidence * 0.85, 2)  # 15% penalty — moderate distance
+
             row = {
                 "symbol": symbol,
                 "agent_type": "SWING",
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
                 "targets": idea.targets,
-                "confidence_score": idea.confidence_score,
+                "confidence_score": confidence,
                 "setup": idea.setup,
                 "expected_holding_period": idea.expected_holding_period,
                 "technical_signals": idea.technical_signals,
@@ -61,6 +70,8 @@ class SwingTradeAlphaAgent(BaseAgent):
                 "reasoning": idea.reasoning,
                 "data_authenticity": data_auth,
                 "scan_run_id": run_id,
+                "entry_type": idea.entry_type,
+                "scan_cmp": idea.scan_cmp,
             }
             create_stock_recommendation(row)
             saved += 1
@@ -98,9 +109,12 @@ class SwingTradeAlphaAgent(BaseAgent):
         if active_symbols:
             try:
                 archived = archive_stale_recommendations("SWING", active_symbols)
-                if archived:
+                expired = expire_old_recommendations(max_age_days=7)
+                if archived or expired:
                     import logging as _log
-                    _log.getLogger("SwingTradeAlphaAgent").info("Archived %d stale SWING recommendations", archived)
+                    _log.getLogger("SwingTradeAlphaAgent").info(
+                        "Archived %d stale, expired %d old SWING recommendations", archived, expired
+                    )
             except Exception:
                 pass
         result.findings = findings

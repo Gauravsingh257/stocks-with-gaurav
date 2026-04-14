@@ -241,6 +241,10 @@ export interface SwingIdea {
   created_at: string;
   data_authenticity: string;
   status?: string;
+  entry_type?: string;
+  scan_cmp?: number | null;
+  entry_gap_pct?: number | null;
+  action_tag?: string;
 }
 
 export interface LongTermIdea {

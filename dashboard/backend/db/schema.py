@@ -12,9 +12,11 @@ import threading
 import time
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 # Use DATA_DIR for persistent storage (Railway volume); else project root
 _root = Path(__file__).resolve().parents[3]
@@ -130,6 +132,8 @@ CREATE TABLE IF NOT EXISTS stock_recommendations (
     status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED','EXPIRED')),
     scan_run_id           INTEGER,
     signals_updated_at    TEXT,
+    entry_type            TEXT NOT NULL DEFAULT 'MARKET',
+    scan_cmp              REAL,
     created_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_stock_reco_type_created ON stock_recommendations(agent_type, created_at DESC);
@@ -479,6 +483,8 @@ def migrate_stock_recommendations() -> None:
             ("data_authenticity", "TEXT"),
             ("scan_run_id", "INTEGER"),
             ("status", "TEXT NOT NULL DEFAULT 'ACTIVE'"),
+            ("entry_type", "TEXT NOT NULL DEFAULT 'MARKET'"),
+            ("scan_cmp", "REAL"),
         ):
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} {col_def}")
@@ -660,7 +666,25 @@ def create_stock_recommendation(payload: dict) -> int:
     within the last 30 days, update it instead of inserting a duplicate.
     On UPDATE: preserves signal_first_detected_at and logs history snapshot.
     On INSERT: sets signal_first_detected_at = now, status = ACTIVE.
+
+    Hard block: rejects signals where CMP has moved >30% toward target (stale entry).
     """
+    # ── Global freshness gate (hard block) ──
+    entry = float(payload["entry_price"])
+    targets = payload.get("targets", [])
+    scan_cmp = float(payload["scan_cmp"]) if payload.get("scan_cmp") else None
+    if scan_cmp and targets:
+        final_target = float(targets[-1]) if isinstance(targets[-1], (int, float)) else entry
+        total_move = abs(final_target - entry)
+        if total_move > 0:
+            progress = abs(scan_cmp - entry) / total_move
+            if progress > 0.30:
+                logger.warning(
+                    "[hard-block] %s rejected: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f)",
+                    payload.get("symbol"), scan_cmp, progress * 100, entry, final_target,
+                )
+                return -1  # signal rejected
+
     conn = get_connection()
     try:
         scan_run_id = payload.get("scan_run_id")
@@ -709,8 +733,8 @@ def create_stock_recommendation(payload: dict) -> int:
                     technical_signals = ?, fundamental_signals = ?, sentiment_signals = ?,
                     technical_factors = ?, fundamental_factors = ?, sentiment_factors = ?,
                     fair_value_estimate = ?, entry_zone = ?, long_term_target = ?,
-                    risk_factors = ?, reasoning = ?, signals_updated_at = datetime('now'),
-                    data_authenticity = ?, scan_run_id = ?, status = 'ACTIVE'
+                    risk_factors = ?, reasoning = ?, signals_updated_at = ?,
+                    data_authenticity = ?, scan_run_id = ?, entry_type = ?, scan_cmp = ?, status = 'ACTIVE'
                 WHERE id = ?
                 """,
                 (
@@ -731,8 +755,11 @@ def create_stock_recommendation(payload: dict) -> int:
                     float(payload["long_term_target"]) if payload.get("long_term_target") is not None else None,
                     json.dumps(payload.get("risk_factors", [])),
                     payload.get("reasoning", ""),
+                    datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S"),
                     payload.get("data_authenticity", "unknown"),
                     scan_run_id,
+                    payload.get("entry_type", "MARKET"),
+                    float(payload["scan_cmp"]) if payload.get("scan_cmp") is not None else None,
                     rec_id,
                 ),
             )
@@ -754,8 +781,8 @@ def create_stock_recommendation(payload: dict) -> int:
                 setup, expected_holding_period, technical_signals, fundamental_signals,
                 sentiment_signals, technical_factors, fundamental_factors, sentiment_factors,
                 fair_value_estimate, entry_zone, long_term_target, risk_factors, reasoning,
-                signal_first_detected_at, data_authenticity, scan_run_id, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, 'ACTIVE')
+                signal_first_detected_at, data_authenticity, scan_run_id, entry_type, scan_cmp, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
             """,
             (
                 payload["symbol"],
@@ -777,8 +804,11 @@ def create_stock_recommendation(payload: dict) -> int:
                 float(payload["long_term_target"]) if payload.get("long_term_target") is not None else None,
                 json.dumps(payload.get("risk_factors", [])),
                 payload.get("reasoning", ""),
+                datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S"),
                 payload.get("data_authenticity", "unknown"),
                 scan_run_id,
+                payload.get("entry_type", "MARKET"),
+                float(payload["scan_cmp"]) if payload.get("scan_cmp") is not None else None,
             ),
         )
         rec_id = int(cur.lastrowid)
@@ -872,6 +902,29 @@ def archive_stale_recommendations(agent_type: str, active_symbols: list[str]) ->
             conn.commit()
 
         return archived_count
+    finally:
+        conn.close()
+
+
+def expire_old_recommendations(max_age_days: int = 7) -> int:
+    """Expire ACTIVE recommendations older than max_age_days since last update.
+
+    Returns the number of rows expired.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE stock_recommendations
+            SET status = 'EXPIRED'
+            WHERE status = 'ACTIVE'
+              AND datetime(COALESCE(signals_updated_at, created_at)) < datetime('now', ? || ' days')
+            """,
+            (f"-{max_age_days}",),
+        )
+        expired = cur.rowcount
+        conn.commit()
+        return expired
     finally:
         conn.close()
 

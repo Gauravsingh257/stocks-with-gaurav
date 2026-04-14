@@ -51,6 +51,8 @@ class RankedIdea:
     entry_zone: list[float] | None = None
     long_term_target: float | None = None
     risk_factors: list[str] | None = None
+    entry_type: str = "MARKET"
+    scan_cmp: float | None = None
 
 
 @dataclass(slots=True)
@@ -226,6 +228,8 @@ async def _materialize_swing_idea(
     entry, stop, targets, setup, smc_meta = levels
     entry_price = float(entry)
     stop_loss = float(stop)
+    entry_type = smc_meta.get("entry_type", "MARKET") if smc_meta else "MARKET"
+    scan_cmp = float(smc_meta.get("cmp", 0)) if smc_meta and smc_meta.get("cmp") else None
 
     # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
     if smc_meta:
@@ -275,6 +279,8 @@ async def _materialize_swing_idea(
         entry_zone=None,
         long_term_target=None,
         risk_factors=None,
+        entry_type=entry_type,
+        scan_cmp=scan_cmp,
     )
 
 
