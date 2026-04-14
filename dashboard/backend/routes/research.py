@@ -154,6 +154,30 @@ def _longterm_payload(limit: int) -> dict:
         long_target = row.get("long_term_target") or (targets[0] if targets else entry)
         reward = abs(float(long_target) - entry) if long_target else 0
         rr = reward / max(risk, 0.01)
+        entry_type = row.get("entry_type", "MARKET")
+        scan_cmp = float(row["scan_cmp"]) if row.get("scan_cmp") else None
+
+        # ── Entry gap: how far CMP is from entry ──
+        entry_gap_pct = None
+        if scan_cmp and entry > 0:
+            entry_gap_pct = round((scan_cmp - entry) / entry * 100, 1)
+
+        # ── Action tag logic ──
+        action_tag = "EXECUTE_NOW"
+        if entry_type == "LIMIT":
+            if scan_cmp and entry > 0:
+                gap = abs(entry_gap_pct or 0)
+                total_move = reward
+                progress = abs(scan_cmp - entry) / total_move if total_move > 0 else 0
+                if progress > 0.30:
+                    action_tag = "MISSED"
+                elif gap <= 2.0:
+                    action_tag = "EXECUTE_NOW"
+                else:
+                    action_tag = "WAIT_FOR_RETEST"
+            else:
+                action_tag = "WAIT_FOR_RETEST"
+
         items.append(
             {
                 "id": row["id"],
@@ -181,6 +205,10 @@ def _longterm_payload(limit: int) -> dict:
                 "created_at": row.get("created_at"),
                 "data_authenticity": row.get("data_authenticity", "unknown"),
                 "status": row.get("status", "ACTIVE"),
+                "entry_type": entry_type,
+                "scan_cmp": scan_cmp,
+                "entry_gap_pct": entry_gap_pct,
+                "action_tag": action_tag,
             }
         )
     return {"items": items, "count": len(items), "last_scan_time": last_scan}

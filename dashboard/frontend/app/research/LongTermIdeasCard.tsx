@@ -17,6 +17,21 @@ function dataBadge(auth: string) {
   return { label: "Estimated", color: "#ff5252" };
 }
 
+function gapColor(gap: number | null | undefined): string {
+  if (gap === null || gap === undefined) return "var(--text-secondary)";
+  const abs = Math.abs(gap);
+  if (abs <= 2) return "#00c853";
+  if (abs <= 5) return "#ff9800";
+  return "#ff5252";
+}
+
+function actionBadge(tag: string | undefined) {
+  if (tag === "EXECUTE_NOW") return { label: "Execute Now", bg: "#00c85322", color: "#00c853", border: "#00c85344" };
+  if (tag === "WAIT_FOR_RETEST") return { label: "Wait for Retest", bg: "#ff980022", color: "#ff9800", border: "#ff980044" };
+  if (tag === "MISSED") return { label: "Missed", bg: "#ff525222", color: "#ff5252", border: "#ff525244" };
+  return null;
+}
+
 function fmtDate(d: string | null | undefined) {
   if (!d) return "-";
   return String(d).slice(0, 10);
@@ -43,6 +58,10 @@ export function LongTermIdeasCard({ items }: Props) {
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <strong>{item.symbol}</strong>
                     <span style={{ fontSize: "0.65rem", padding: "1px 6px", borderRadius: 4, background: badge.color + "22", color: badge.color, border: `1px solid ${badge.color}44` }}>{badge.label}</span>
+                    {item.entry_type && (
+                      <span style={{ fontSize: "0.65rem", padding: "1px 6px", borderRadius: 4, background: item.entry_type === "LIMIT" ? "#ff980022" : "#00c85322", color: item.entry_type === "LIMIT" ? "#ff9800" : "#00c853", border: `1px solid ${item.entry_type === "LIMIT" ? "#ff980044" : "#00c85344"}` }}>{item.entry_type}</span>
+                    )}
+                    {(() => { const ab = actionBadge(item.action_tag); return ab ? <span style={{ fontSize: "0.65rem", padding: "1px 6px", borderRadius: 4, background: ab.bg, color: ab.color, border: `1px solid ${ab.border}` }}>{ab.label}</span> : null; })()}
                   </div>
                   <span style={{ color: "#00d4ff", fontSize: "0.78rem" }}>{item.confidence_score.toFixed(1)}%</span>
                 </div>
@@ -51,6 +70,15 @@ export function LongTermIdeasCard({ items }: Props) {
                 )}
                 <div style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginBottom: 8 }}>{item.reasoning_summary || item.long_term_thesis}</div>
                 <div style={{ fontSize: "0.78rem", display: "grid", gap: 4 }}>
+                  {item.scan_cmp != null && (
+                    <div><span style={{ color: "var(--text-secondary)" }}>CMP:</span> {fmt(item.scan_cmp)}
+                      {item.entry_gap_pct != null && (
+                        <span style={{ marginLeft: 8, color: gapColor(item.entry_gap_pct), fontWeight: 600 }}>
+                          ({item.entry_gap_pct > 0 ? "+" : ""}{item.entry_gap_pct.toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div><span style={{ color: "var(--text-secondary)" }}>Entry:</span> {fmt(item.entry_price)} | <span style={{ color: "var(--text-secondary)" }}>SL:</span> {fmt(item.stop_loss)}</div>
                   <div><span style={{ color: "var(--text-secondary)" }}>Entry Zone:</span> {Array.isArray(item.entry_zone) && item.entry_zone.length === 2 ? `${fmt(item.entry_zone[0])} - ${fmt(item.entry_zone[1])}` : "-"}</div>
                   <div><span style={{ color: "var(--text-secondary)" }}>Target:</span> {fmt(item.long_term_target)} | <span style={{ color: "var(--text-secondary)" }}>R:R:</span> {item.risk_reward ? item.risk_reward.toFixed(1) : "-"}</div>

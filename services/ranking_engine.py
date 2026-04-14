@@ -303,6 +303,8 @@ async def _materialize_longterm_idea(
     # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
     if lt_meta:
         technical_signals, reasoning = _real_longterm_signals(lt_meta)
+        entry_type = lt_meta.get("entry_type", "MARKET")
+        scan_cmp = lt_meta.get("cmp")
     else:
         technical_signals = _hash_tech
         reasoning, _ = generate_evidence_reasoning(
@@ -313,6 +315,8 @@ async def _materialize_longterm_idea(
             min_factors=3,
             max_factors=6,
         )
+        entry_type = "MARKET"
+        scan_cmp = None
 
     confidence = round(rank_score * 100, 2)
     return RankedIdea(
@@ -348,6 +352,8 @@ async def _materialize_longterm_idea(
         entry_zone=entry_zone,
         long_term_target=long_target,
         risk_factors=["Earnings miss risk", "Macro sentiment reversal", "Liquidity contraction"],
+        entry_type=entry_type,
+        scan_cmp=scan_cmp,
     )
 
 

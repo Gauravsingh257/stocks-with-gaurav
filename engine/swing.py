@@ -801,13 +801,19 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
     atr = calculate_atr(daily_data, 14)
     weekly_atr = calculate_atr(weekly_data, 10) if len(weekly_data) >= 10 else atr * 2.5
 
+    entry_type = "MARKET"  # default; overwritten if zone-based
+
     # Entry: weekly OB/FVG zone or demand zone pullback
     if w_fvg and price > w_fvg[1]:
         entry = round((w_fvg[0] + w_fvg[1]) / 2, 2)
+        entry_type = "LIMIT"
     elif w_ob and price > w_ob[1]:
         entry = round(w_ob[1], 2)
+        entry_type = "LIMIT"
     elif ws_info.get("level"):
         entry = round(ws_info["level"], 2) if price > ws_info["level"] * 1.01 else round(price, 2)
+        if price > ws_info["level"] * 1.01:
+            entry_type = "LIMIT"
     else:
         entry = round(price, 2)
 
@@ -870,4 +876,5 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
         "pct_from_high": round(pct_from_high, 1),
         "pct_from_low": round(pct_from_low, 1),
         "chg_1m": chg_1m, "chg_3m": chg_3m,
+        "entry_type": entry_type, "cmp": round(price, 2),
     }

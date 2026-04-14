@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run, archive_stale_recommendations
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, archive_stale_recommendations, expire_old_recommendations
 from services import generate_rankings
 
 
@@ -40,13 +40,26 @@ class LongTermInvestmentAgent(BaseAgent):
             thesis = idea.reasoning
             risk_factors = idea.risk_factors or ["Earnings miss risk", "Sector rotation reversal", "Macro policy volatility"]
 
+            # Entry type + CMP from scoring
+            entry_type = getattr(idea, "entry_type", "MARKET") or "MARKET"
+            scan_cmp = getattr(idea, "scan_cmp", None)
+
+            # Confidence downgrade for LIMIT entries far from CMP
+            confidence = idea.confidence_score
+            if entry_type == "LIMIT" and scan_cmp and entry_low > 0:
+                gap_pct = abs((scan_cmp - entry_low) / entry_low * 100)
+                if gap_pct > 5:
+                    confidence = round(confidence * 0.70, 2)
+                elif gap_pct > 3:
+                    confidence = round(confidence * 0.85, 2)
+
             row = {
                 "symbol": symbol,
                 "agent_type": "LONGTERM",
                 "entry_price": entry_low,
                 "stop_loss": stop_loss,
                 "targets": idea.targets,
-                "confidence_score": idea.confidence_score,
+                "confidence_score": confidence,
                 "technical_signals": idea.technical_signals,
                 "fundamental_signals": idea.fundamental_signals,
                 "sentiment_signals": idea.sentiment_signals,
@@ -61,6 +74,8 @@ class LongTermInvestmentAgent(BaseAgent):
                 "reasoning": thesis,
                 "data_authenticity": "real" if "SMC_LONGTERM" in (idea.setup or "") else "partial",
                 "scan_run_id": run_id,
+                "entry_type": entry_type,
+                "scan_cmp": scan_cmp,
             }
             create_stock_recommendation(row)
             saved += 1
@@ -99,6 +114,15 @@ class LongTermInvestmentAgent(BaseAgent):
                     _log.getLogger("LongTermInvestmentAgent").info("Archived %d stale LONGTERM recommendations", archived)
             except Exception:
                 pass
+
+        # Expire old longterm recommendations (30 days max age)
+        try:
+            expired = expire_old_recommendations(max_age_days=30)
+            if expired:
+                import logging as _log
+                _log.getLogger("LongTermInvestmentAgent").info("Expired %d old recommendations", expired)
+        except Exception:
+            pass
 
         result.findings = findings
         if saved == 0:

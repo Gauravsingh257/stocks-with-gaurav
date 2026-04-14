@@ -313,6 +313,17 @@ def build_longterm_trade_levels(
         target = float(lt["target"])
         rr = lt["rr"]
 
+        # Freshness gate: reject if CMP already moved >30% toward target (stale entry)
+        total_move = abs(target - entry)
+        if total_move > 0:
+            progress = abs(close - entry) / total_move
+            if progress > 0.30:
+                log.info(
+                    "[research] %s longterm entry stale: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f) — skip",
+                    symbol, close, progress * 100, entry, target,
+                )
+                return None
+
         # Entry zone from weekly OB/FVG or ±ATR around entry
         w_ob = lt.get("weekly_ob")
         w_fvg = lt.get("weekly_fvg")
