@@ -149,7 +149,7 @@ def push_signal_to_redis(signal_record: dict[str, Any]) -> None:
         }
         r = redis_lib.from_url(url, decode_responses=True)
         r.rpush(key, json.dumps(payload, default=str))
-        r.expire(key, 86400)
+        r.expire(key, 2592000)  # 30 days — allows historical queries up to a month back
     except Exception as exc:
         logger.debug("push_signal_to_redis failed: %s", exc)
 

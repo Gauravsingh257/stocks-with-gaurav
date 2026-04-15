@@ -330,35 +330,48 @@ def _query_signals_from_redis(date_str: str) -> list:
 
 
 @router.get("/signals-today")
-def get_signals_today():
+def get_signals_today(
+    query_date: Optional[str] = Query(default=None, alias="date", description="Date in YYYY-MM-DD format. Defaults to today."),
+):
     """
-    Return all signals generated today.
+    Return all signals generated on a given date (default: today).
+    Accepts optional ?date=YYYY-MM-DD to query any past date within the 30-day Redis window.
     Tries Redis first (works cross-container on Railway),
     falls back to local ai_learning signal_log SQLite.
     """
-    today_str = date.today().isoformat()
+    if query_date:
+        try:
+            # Validate format
+            from datetime import datetime
+            datetime.strptime(query_date, "%Y-%m-%d")
+            date_str = query_date
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    else:
+        date_str = date.today().isoformat()
 
-    # Redis first (engine pushes signals here on Railway)
-    redis_signals = _query_signals_from_redis(today_str)
+    # Redis first (engine pushes signals here on Railway; 30-day TTL)
+    redis_signals = _query_signals_from_redis(date_str)
     if redis_signals:
         return {
             "signals": redis_signals,
             "count": len(redis_signals),
             "total": len(redis_signals),
-            "date": today_str,
+            "date": date_str,
             "source": "redis",
         }
 
     # Fallback: local SQLite (works in local dev)
-    signals, total = _query_signal_log(today_str, today_str, None, None, 500, 0)
+    signals, total = _query_signal_log(date_str, date_str, None, None, 500, 0)
     if not _AI_LEARNING_DB.exists():
-        return {"signals": [], "count": 0, "total": 0, "date": today_str, "source": "none"}
+        return {"signals": [], "count": 0, "total": 0, "date": date_str, "source": "none"}
 
     return {
         "signals": signals,
         "count": len(signals),
         "total": total,
-        "date": today_str,
+        "date": date_str,
         "source": "signal_log",
     }
 
