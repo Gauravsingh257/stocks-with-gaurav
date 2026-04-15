@@ -5641,7 +5641,7 @@ def run_live_mode():
     _last_token_refresh = t.time()
     _TOKEN_REFRESH_INTERVAL_SEC = 120
     _consecutive_loop_errors = 0
-    _HEARTBEAT_INTERVAL_MIN = 30
+    _HEARTBEAT_INTERVAL_MIN = 60
     _MAX_CONSECUTIVE_ERRORS = 5
 
     # Token-triggered signal activation:
