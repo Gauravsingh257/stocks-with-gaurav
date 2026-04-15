@@ -168,7 +168,7 @@ class BankNiftySignalEngine:
         self._load_active_trades()
 
     # --- Telegram ---
-    def send_alert(self, message):
+    def send_alert(self, message, signal_meta=None, signal_id=None):
         # Enforce signal window — no alerts outside 09:00-16:10 IST
         try:
             from smc_mtf_engine_v4 import is_signal_window
@@ -177,26 +177,36 @@ class BankNiftySignalEngine:
                 return
         except ImportError:
             pass
+        sent = False
         if self.telegram_fn:
-            self.telegram_fn(message)
-            return
-        if not BOT_TOKEN or not CHAT_ID:
-            self.logger.error("[Telegram] BOT_TOKEN or CHAT_ID not set — cannot send alert")
-            return
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-        for attempt in range(2):
+            result = self.telegram_fn(message)
+            sent = result is not False  # telegram_send returns True on success
+        else:
+            if not BOT_TOKEN or not CHAT_ID:
+                self.logger.error("[Telegram] BOT_TOKEN or CHAT_ID not set — cannot send alert")
+                return
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+            for attempt in range(2):
+                try:
+                    resp = requests.post(url, data=payload, timeout=8)
+                    if resp.ok:
+                        self.logger.info("[Telegram] Alert sent (attempt %d)", attempt + 1)
+                        sent = True
+                        break
+                    self.logger.warning("[Telegram] API %s: %s (attempt %d)", resp.status_code, resp.text[:200], attempt + 1)
+                except requests.exceptions.Timeout:
+                    self.logger.warning("[Telegram] Timeout on attempt %d", attempt + 1)
+                except Exception as e:
+                    self.logger.error("[Telegram] Error on attempt %d: %s", attempt + 1, e)
+            if not sent:
+                self.logger.error("[Telegram] Failed to send alert after 2 attempts")
+        if sent and signal_meta:
             try:
-                resp = requests.post(url, data=payload, timeout=8)
-                if resp.ok:
-                    self.logger.info("[Telegram] Alert sent (attempt %d)", attempt + 1)
-                    return
-                self.logger.warning("[Telegram] API %s: %s (attempt %d)", resp.status_code, resp.text[:200], attempt + 1)
-            except requests.exceptions.Timeout:
-                self.logger.warning("[Telegram] Timeout on attempt %d", attempt + 1)
-            except Exception as e:
-                self.logger.error("[Telegram] Error on attempt %d: %s", attempt + 1, e)
-        self.logger.error("[Telegram] Failed to send alert after 2 attempts")
+                from utils.telegram_signal_log import persist_telegram_signal
+                persist_telegram_signal(message, signal_id, signal_meta)
+            except Exception as exc:
+                self.logger.warning("[Options] signal_log persist failed: %s", exc)
 
     # --- Contract Management ---
     def get_weekly_expiry(self, instruments, instr_name):
@@ -1263,7 +1273,21 @@ class BankNiftySignalEngine:
             f"\nTime: {now.strftime('%H:%M:%S')}"
         )
 
-        self.send_alert(msg)
+        _direction = "SHORT" if break_data["opt_type"] == "PE" else "LONG"
+        _sig_id = f"opt_{ul_name}_{break_data['strike']}_{break_data['opt_type']}_{now.strftime('%Y%m%d%H%M%S')}"
+        _signal_meta = {
+            "symbol": symbol,
+            "direction": _direction,
+            "strategy_name": "OPTIONS-MONTHLY-LOW",
+            "entry": entry_price,
+            "stop_loss": sl_price,
+            "target1": target_price,
+            "score": float(score),
+            "confidence": 80.0 if confidence == "HIGH" else 60.0,
+            "signal_kind": "ENTRY",
+            "delivery_channel": "telegram",
+        }
+        self.send_alert(msg, signal_meta=_signal_meta, signal_id=_sig_id)
         self._register_option_trade(symbol, break_data, entry_price, sl_price, target_price, now)
         self.logger.info(
             f"BN SIGNAL: {ul_name} {break_data['strike']} {break_data['opt_type']} "
@@ -1298,7 +1322,15 @@ class BankNiftySignalEngine:
                         f"Momentum: {momentum_map.get(ul_name, 'Flat')}\n"
                         f"Time: {now.strftime('%H:%M:%S')}"
                     )
-                    self.send_alert(msg)
+                    _cu_meta = {
+                        "symbol": symbol,
+                        "direction": "SHORT",
+                        "strategy_name": "OPTIONS-CALL-UNWIND",
+                        "score": float(score),
+                        "signal_kind": "ENTRY",
+                        "delivery_channel": "telegram",
+                    }
+                    self.send_alert(msg, signal_meta=_cu_meta, signal_id=f"opt_call_unwind_{cu['strike']}_CE_{now.strftime('%Y%m%d%H%M%S')}")
                     self.alerted[alert_key] = now
 
         # --- Standalone PUT SURGE (NEW — fills early-cycle gap) ---
@@ -1327,7 +1359,15 @@ class BankNiftySignalEngine:
                         f"Momentum: {momentum_map.get(ul_name, 'Flat')}\n"
                         f"Time: {now.strftime('%H:%M:%S')}"
                     )
-                    self.send_alert(msg)
+                    _ps_meta = {
+                        "symbol": symbol,
+                        "direction": "SHORT",
+                        "strategy_name": "OPTIONS-PUT-SURGE",
+                        "score": float(score),
+                        "signal_kind": "ENTRY",
+                        "delivery_channel": "telegram",
+                    }
+                    self.send_alert(msg, signal_meta=_ps_meta, signal_id=f"opt_put_surge_{ps['strike']}_PE_{now.strftime('%Y%m%d%H%M%S')}")
                     self.alerted[alert_key] = now
 
     # --- State Management ---
@@ -1575,7 +1615,19 @@ class BankNiftySignalEngine:
                 f"\nTime: {now.strftime('%H:%M:%S')}"
             )
 
-            self.send_alert(msg)
+            _exit_meta = {
+                "symbol": trade.get("symbol", ""),
+                "direction": "SHORT" if trade.get("opt_type") == "PE" else "LONG",
+                "strategy_name": "OPTIONS-MONTHLY-LOW",
+                "entry": entry,
+                "stop_loss": sl,
+                "target1": target,
+                "result": "WIN" if hit == "TARGET" else "LOSS",
+                "pnl_r": round(pnl_r, 2),
+                "signal_kind": "EXIT_TARGET" if hit == "TARGET" else "EXIT_STOP",
+                "delivery_channel": "telegram",
+            }
+            self.send_alert(msg, signal_meta=_exit_meta, signal_id=f"exit_{signal_id}")
             self.logger.info(
                 f"[EXIT] {signal_id}: {hit} @ {ltp:.2f} | P&L {pnl_r:.2f}R"
             )
