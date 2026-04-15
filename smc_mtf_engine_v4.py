@@ -5841,6 +5841,17 @@ def run_live_mode():
                         "Website & health endpoint remain live."
                     )
                     logging.info("Signal window closed at %s IST — engine alive, signals paused.", now_ist().strftime("%H:%M"))
+                    # EOD: refresh TTL on today's signals so they survive 30 days in Redis
+                    try:
+                        from dashboard.backend.cache import _get_redis
+                        from datetime import date as _date
+                        _r = _get_redis()
+                        if _r:
+                            _sig_key = f"signals:today:{_date.today().isoformat()}"
+                            _r.expire(_sig_key, 2592000)
+                            logging.info("[EOD] Refreshed Redis TTL for %s to 30 days.", _sig_key)
+                    except Exception as _eod_exc:
+                        logging.debug("[EOD] Redis TTL refresh failed: %s", _eod_exc)
                 _publish_redis_snapshot()
                 try:
                     import engine_runtime
