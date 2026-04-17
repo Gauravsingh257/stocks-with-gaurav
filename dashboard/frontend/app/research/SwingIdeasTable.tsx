@@ -5,6 +5,7 @@ import type { SwingIdea } from "@/lib/api";
 
 interface Props {
   items: SwingIdea[];
+  slotInfo?: string;
 }
 
 function fmt(v: number | null | undefined) {
@@ -207,13 +208,14 @@ function ActionTag({ tag }: { tag?: string }) {
   );
 }
 
-export function SwingIdeasTable({ items }: Props) {
+export function SwingIdeasTable({ items, slotInfo }: Props) {
   const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
-      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", fontWeight: 600 }}>
-        Swing Trade Opportunities
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Swing Trade Opportunities</span>
+        {slotInfo && <span style={{ fontSize: "0.75rem", color: "var(--accent)", fontWeight: 500 }}>{slotInfo}</span>}
       </div>
       {items.length === 0 ? (
         <div style={{ padding: "24px", textAlign: "center" }}>

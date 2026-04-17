@@ -36,8 +36,8 @@ export default function ResearchPage() {
   const refresh = useCallback(async () => {
     setError(null);
     const results = await Promise.allSettled([
-      api.swingResearch(8),
-      api.longtermResearch(8),
+      api.swingResearch(10),
+      api.longtermResearch(10),
       api.runningTradesResearch(40),
       api.researchCoverage(1800),
       api.researchPerformance(),
@@ -158,8 +158,8 @@ export default function ResearchPage() {
 
       <ResearchCoverageCard coverage={coverage} />
       <PerformanceOverview data={perf} />
-      <SwingIdeasTable items={swing} />
-      <LongTermIdeasCard items={longterm} />
+      <SwingIdeasTable items={swing} slotInfo={`${swing.length}/10 Active Slots`} />
+      <LongTermIdeasCard items={longterm} slotInfo={`${longterm.length}/10 Active Slots`} />
       <RunningTradesMonitor items={running} />
     </div>
   );

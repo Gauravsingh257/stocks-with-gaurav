@@ -260,14 +260,14 @@ def _running_trades_payload(limit: int) -> dict:
 
 @router.get("/api/research/swing")
 @router.get("/research/swing")
-def get_swing_research(limit: int = Query(8, ge=1, le=100)):
+def get_swing_research(limit: int = Query(10, ge=1, le=100)):
     _maybe_auto_scan("SWING")
     return _swing_payload(limit)
 
 
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
-def get_longterm_research(limit: int = Query(8, ge=1, le=100)):
+def get_longterm_research(limit: int = Query(10, ge=1, le=100)):
     _maybe_auto_scan("LONGTERM")
     return _longterm_payload(limit)
 

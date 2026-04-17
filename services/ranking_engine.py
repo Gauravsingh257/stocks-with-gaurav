@@ -396,9 +396,13 @@ async def _collect_ideas_from_pool(
     return ideas
 
 
-async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 1800) -> RankingResult:
+async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 1800, exclude_symbols: list[str] | None = None) -> RankingResult:
     universe = load_nse_universe(target_universe)
     symbols = universe.symbols
+    # Exclude symbols already in active slots
+    if exclude_symbols:
+        excluded_set = set(exclude_symbols)
+        symbols = [s for s in symbols if s not in excluded_set]
     if not symbols:
         return RankingResult(horizon, universe, 0, 0, 0, [])
 

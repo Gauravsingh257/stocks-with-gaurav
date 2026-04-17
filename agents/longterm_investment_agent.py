@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run, archive_stale_recommendations, expire_old_recommendations
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, get_stock_recommendations
 from services import generate_rankings
+
+MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "10"))
 
 
 class LongTermInvestmentAgent(BaseAgent):
@@ -14,7 +16,22 @@ class LongTermInvestmentAgent(BaseAgent):
     priority = "high"
 
     def run(self, result: AgentResult) -> None:
-        ranking = asyncio.run(generate_rankings("LONGTERM", top_k=8, target_universe=1800))
+        # Slot-aware scanning: only fill empty slots
+        active_recs = get_stock_recommendations("LONGTERM", limit=MAX_LONGTERM_SLOTS)
+        active_count = len(active_recs)
+        empty_slots = MAX_LONGTERM_SLOTS - active_count
+        active_symbols = [r["symbol"] for r in active_recs]
+
+        if empty_slots <= 0:
+            result.status = "OK"
+            result.summary = f"All {MAX_LONGTERM_SLOTS} longterm slots occupied — scan skipped."
+            result.metrics = {"active_slots": active_count, "empty_slots": 0}
+            return
+
+        ranking = asyncio.run(generate_rankings(
+            "LONGTERM", top_k=empty_slots, target_universe=1800,
+            exclude_symbols=active_symbols,
+        ))
 
         # Log ranking run upfront to get scan_run_id for all recommendations
         run_id = log_ranking_run(
@@ -104,25 +121,9 @@ class LongTermInvestmentAgent(BaseAgent):
             "recommendations_saved": saved,
             "requested_universe_size": ranking.universe.requested_size,
             "actual_universe_size": ranking.universe.actual_size,
+            "active_slots": active_count + saved,
+            "empty_slots": empty_slots - saved,
         }
-        # Archive recommendations no longer in top picks
-        if active_symbols:
-            try:
-                archived = archive_stale_recommendations("LONGTERM", active_symbols)
-                if archived:
-                    import logging as _log
-                    _log.getLogger("LongTermInvestmentAgent").info("Archived %d stale LONGTERM recommendations", archived)
-            except Exception:
-                pass
-
-        # Expire old longterm recommendations (30 days max age)
-        try:
-            expired = expire_old_recommendations(max_age_days=30)
-            if expired:
-                import logging as _log
-                _log.getLogger("LongTermInvestmentAgent").info("Expired %d old recommendations", expired)
-        except Exception:
-            pass
 
         result.findings = findings
         if saved == 0:

@@ -4,6 +4,7 @@ import type { LongTermIdea } from "@/lib/api";
 
 interface Props {
   items: LongTermIdea[];
+  slotInfo?: string;
 }
 
 function fmt(v: number | null | undefined) {
@@ -37,10 +38,13 @@ function fmtDate(d: string | null | undefined) {
   return String(d).slice(0, 10);
 }
 
-export function LongTermIdeasCard({ items }: Props) {
+export function LongTermIdeasCard({ items, slotInfo }: Props) {
   return (
     <div className="glass" style={{ padding: 16 }}>
-      <div style={{ fontWeight: 600, marginBottom: 12 }}>Long-Term Investment Ideas</div>
+      <div style={{ fontWeight: 600, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Long-Term Investment Ideas</span>
+        {slotInfo && <span style={{ fontSize: "0.75rem", color: "var(--accent)", fontWeight: 500 }}>{slotInfo}</span>}
+      </div>
       {items.length === 0 ? (
         <div style={{ color: "var(--text-secondary)", padding: "24px 0", textAlign: "center" }}>
           <div style={{ fontSize: "1.1rem", marginBottom: 8 }}>No high-quality long-term opportunities found</div>

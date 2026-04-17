@@ -911,6 +911,8 @@ def archive_stale_recommendations(agent_type: str, active_symbols: list[str]) ->
 def expire_old_recommendations(max_age_days: int = 7) -> int:
     """Expire ACTIVE recommendations older than max_age_days since last update.
 
+    Skips recommendations that have an active running_trade (status=RUNNING) —
+    those are tracked until SL/Target hit.
     Returns the number of rows expired.
     """
     conn = get_connection()
@@ -921,6 +923,10 @@ def expire_old_recommendations(max_age_days: int = 7) -> int:
             SET status = 'EXPIRED'
             WHERE status = 'ACTIVE'
               AND datetime(COALESCE(signals_updated_at, created_at)) < datetime('now', ? || ' days')
+              AND id NOT IN (
+                  SELECT DISTINCT recommendation_id FROM running_trades
+                  WHERE status = 'RUNNING' AND recommendation_id IS NOT NULL
+              )
             """,
             (f"-{max_age_days}",),
         )

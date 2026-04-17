@@ -31,6 +31,9 @@ log = logging.getLogger("services.research_levels")
 NIFTY_DAILY_SYMBOL = os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50")
 RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_PCT", "0.30"))
 RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
+# Minimum upside thresholds (soft floors) — picks below these are rejected
+MIN_SWING_UPSIDE_PCT = float(os.getenv("MIN_SWING_UPSIDE_PCT", "8.0"))       # 8% minimum for swing
+MIN_LONGTERM_UPSIDE_PCT = float(os.getenv("MIN_LONGTERM_UPSIDE_PCT", "30.0"))  # 30% minimum for longterm
 
 
 def _swing_atr_fallback_enabled() -> bool:
@@ -246,6 +249,17 @@ def build_swing_trade_levels(
     wt = sw.get("weekly_trend", "?")
     ds = sw.get("daily_structure", "?")
     setup = f"SMC_SWING_{wt}_{ds}"
+
+    # Minimum upside threshold — reject picks with insufficient reward
+    max_target = max(t1, t2)
+    upside_pct = (max_target - entry) / entry * 100 if entry > 0 else 0
+    if upside_pct < MIN_SWING_UPSIDE_PCT:
+        log.info(
+            "[research] %s swing upside %.1f%% below minimum %.1f%% — skip",
+            symbol, upside_pct, MIN_SWING_UPSIDE_PCT,
+        )
+        return None
+
     return entry, sl, [t1, t2], setup, sw
 
 
@@ -349,6 +363,16 @@ def build_longterm_trade_levels(
         wt = lt.get("weekly_trend", "?")
         ws = lt.get("weekly_structure", "?")
         setup_note = f"SMC_LONGTERM_{wt}_{ws}"
+
+        # Minimum upside threshold — reject picks with insufficient reward
+        upside_pct = (target - entry) / entry * 100 if entry > 0 else 0
+        if upside_pct < MIN_LONGTERM_UPSIDE_PCT:
+            log.info(
+                "[research] %s longterm upside %.1f%% below minimum %.1f%% — skip",
+                symbol, upside_pct, MIN_LONGTERM_UPSIDE_PCT,
+            )
+            return None
+
         return entry, sl, [target], target, entry_zone, setup_note, lt
 
     # Fallback: ATR-based levels (only if explicitly enabled)
