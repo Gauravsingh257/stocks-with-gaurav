@@ -35,10 +35,10 @@ RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
 
 def _swing_atr_fallback_enabled() -> bool:
     """
-    Default OFF: ATR fallback creates synthetic long plans for stocks where SMC found nothing.
-    This produces misleading recommendations. Enable only for testing with RESEARCH_SWING_ATR_FALLBACK=1.
+    Default ON: ATR fallback creates conservative long plans for stocks where SMC found nothing
+    or returned SHORT. Disable with RESEARCH_SWING_ATR_FALLBACK=0.
     """
-    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
+    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "1").strip().lower() not in ("0", "false", "no")
 
 
 def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:
@@ -200,9 +200,17 @@ def build_swing_trade_levels(
 
     direction = str(sw.get("direction") or "LONG")
     if direction != "LONG":
+        if _swing_atr_fallback_enabled():
+            log.info(
+                "[research] %s SMC direction SHORT — using ATR fallback for long plan",
+                symbol,
+            )
+            fb = atr_fallback_levels(symbol, candles, force_long=True)
+            if fb:
+                entry, sl, targets, setup = fb
+                return entry, sl, targets, setup, None
         log.info(
-            "[research] %s excluded from swing-long: SMC direction SHORT (bearish structure). "
-            "Not emitting a substitute long plan.",
+            "[research] %s excluded from swing-long: SMC direction SHORT, no fallback",
             symbol,
         )
         return None
