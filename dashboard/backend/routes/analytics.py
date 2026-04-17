@@ -109,7 +109,7 @@ def get_summary():
 
     gross_profit = sum(r["pnl_r"] for r in wins   if r["pnl_r"] is not None)
     gross_loss   = abs(sum(r["pnl_r"] for r in losses if r["pnl_r"] is not None))
-    pf           = round(gross_profit / gross_loss, 4) if gross_loss else float("inf")
+    pf           = round(gross_profit / gross_loss, 4) if gross_loss else 999.0  # cap at 999 — float("inf") breaks JSON
     expectancy   = round(total_r / total, 4) if total else 0
 
     # Max drawdown

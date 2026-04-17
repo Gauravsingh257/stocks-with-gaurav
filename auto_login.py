@@ -249,33 +249,62 @@ def _store_token(access_token: str) -> None:
     except Exception as e:
         log.warning("Could not update .env: %s", e)
 
-    # 3. Redis (for Railway engine + dashboard)
+    # 3. Redis (for Railway engine + dashboard) — with retry
+    redis_ok = False
     if REDIS_URL:
-        try:
-            import redis as _redis
-            r = _redis.from_url(REDIS_URL, decode_responses=True)
-            r.set("kite:access_token", access_token, ex=86400)
-            from datetime import datetime
-            r.set("kite:token_ts", datetime.now().isoformat(), ex=86400)
-            log.info("Stored in Redis (kite:access_token, TTL 24h)")
-        except Exception as e:
-            log.warning("Redis storage failed: %s", e)
+        for _try in range(1, 4):
+            try:
+                import redis as _redis
+                r = _redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=10)
+                r.set("kite:access_token", access_token, ex=86400)
+                from datetime import datetime
+                r.set("kite:token_ts", datetime.now().isoformat(), ex=86400)
+                log.info("Stored in Redis (kite:access_token, TTL 24h)")
+                redis_ok = True
+                break
+            except Exception as e:
+                log.warning("Redis storage attempt %d/3 failed: %s", _try, e)
+                if _try < 3:
+                    time.sleep(5)
 
-    # 4. Push to Railway backend (public endpoint → stores in Railway Redis)
-    try:
-        import requests
-        resp = requests.post(
-            f"{BACKEND_URL}/api/kite/store-token",
-            json={"access_token": access_token},
-            headers={"X-Sync-Key": os.getenv("TRADES_SYNC_KEY", "")},
-            timeout=15,
+    # 4. Push to Railway backend (public endpoint → stores in Railway Redis) — with retry
+    railway_ok = False
+    for _try in range(1, 4):
+        try:
+            import requests
+            resp = requests.post(
+                f"{BACKEND_URL}/api/kite/store-token",
+                json={"access_token": access_token},
+                headers={"X-Sync-Key": os.getenv("TRADES_SYNC_KEY", "")},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                log.info("Pushed token to Railway backend (%s)", BACKEND_URL)
+                railway_ok = True
+                break
+            else:
+                log.warning("Railway push attempt %d/3 returned %d: %s", _try, resp.status_code, resp.text[:100])
+        except Exception as e:
+            log.warning("Railway push attempt %d/3 failed: %s", _try, e)
+        if _try < 3:
+            time.sleep(5)
+
+    # 5. Alert if remote sync failed
+    sync_failures = []
+    if REDIS_URL and not redis_ok:
+        sync_failures.append("Redis")
+    if not railway_ok:
+        sync_failures.append("Railway backend")
+    if sync_failures:
+        fail_msg = ", ".join(sync_failures)
+        log.error("⚠️ Token saved locally but REMOTE SYNC FAILED: %s", fail_msg)
+        _send_telegram(
+            f"⚠️ <b>Token Sync FAILED</b>\n"
+            f"Login OK but token NOT pushed to: <b>{fail_msg}</b>\n"
+            f"Engine on Railway will NOT have a valid token!\n"
+            f"<b>Action needed:</b> Check internet & re-run login, "
+            f"or manually push via /api/kite/store-token"
         )
-        if resp.status_code == 200:
-            log.info("Pushed token to Railway backend (%s)", BACKEND_URL)
-        else:
-            log.warning("Railway push returned %d: %s", resp.status_code, resp.text[:100])
-    except Exception as e:
-        log.warning("Railway push failed: %s", e)
 
 
 def _verify_token(access_token: str) -> bool:

@@ -285,20 +285,23 @@ export default function AnalyticsPage() {
   const chartHeight = useChartHeight();
 
   const load = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       api.summary(), api.equityCurve(), api.bySetup(), api.rollingWR(20),
       api.syncStatus(), api.swingPerformance(), api.longtermPerformance(),
     ])
       .then(([s, e, b, r, sync, sp, lp]) => {
-        setSummary(s);
-        setEquity(e.equity_curve ?? []);
-        setSetups(b.setups ?? []);
-        setRolling(r.data ?? []);
-        setSyncInfo(sync as Record<string, unknown>);
-        setSwingPerf(sp as ResearchPerformanceResponse);
-        setLtPerf(lp as ResearchPerformanceResponse);
+        if (s.status === "fulfilled") setSummary(s.value);
+        else console.error("analytics/summary failed:", s.reason);
+        if (e.status === "fulfilled") setEquity(e.value.equity_curve ?? []);
+        else console.error("analytics/equity-curve failed:", e.reason);
+        if (b.status === "fulfilled") setSetups(b.value.setups ?? []);
+        else console.error("analytics/by-setup failed:", b.reason);
+        if (r.status === "fulfilled") setRolling(r.value.data ?? []);
+        else console.error("analytics/rolling-winrate failed:", r.reason);
+        if (sync.status === "fulfilled") setSyncInfo(sync.value as Record<string, unknown>);
+        if (sp.status === "fulfilled") setSwingPerf(sp.value as ResearchPerformanceResponse);
+        if (lp.status === "fulfilled") setLtPerf(lp.value as ResearchPerformanceResponse);
       })
-      .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
 
