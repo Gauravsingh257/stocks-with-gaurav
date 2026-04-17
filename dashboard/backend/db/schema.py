@@ -670,10 +670,12 @@ def create_stock_recommendation(payload: dict) -> int:
     Hard block: rejects signals where CMP has moved >30% toward target (stale entry).
     """
     # ── Global freshness gate (hard block) ──
+    # Skip for LIMIT entries: CMP is intentionally above entry (awaiting pullback)
     entry = float(payload["entry_price"])
     targets = payload.get("targets", [])
     scan_cmp = float(payload["scan_cmp"]) if payload.get("scan_cmp") else None
-    if scan_cmp and targets:
+    entry_type = payload.get("entry_type", "MARKET")
+    if scan_cmp and targets and entry_type == "MARKET":
         final_target = float(targets[-1]) if isinstance(targets[-1], (int, float)) else entry
         total_move = abs(final_target - entry)
         if total_move > 0:
