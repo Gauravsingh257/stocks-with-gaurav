@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, TrendingUp, Eye, Globe
+  BookOpen, BarChart2, Bot, TrendingUp, Eye, Globe, Zap
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 
