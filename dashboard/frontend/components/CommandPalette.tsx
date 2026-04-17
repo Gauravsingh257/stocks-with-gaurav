@@ -3,24 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Activity,
   BarChart2,
   BookOpen,
   Bot,
   Eye,
-  MessageSquare,
   Search,
   TrendingUp,
 } from "lucide-react";
 
 const PAGES = [
-  { href: "/live", label: "Live Trading", icon: Activity },
   { href: "/charts", label: "SMC Charts", icon: TrendingUp },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye },
   { href: "/research", label: "AI Research", icon: Bot },
   { href: "/journal", label: "Journal", icon: BookOpen },
-  { href: "/chat", label: "AI Chatbot", icon: MessageSquare },
 ];
 
 export default function CommandPalette() {

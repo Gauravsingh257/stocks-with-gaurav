@@ -2,13 +2,12 @@
 
 import { memo } from "react";
 import Link from "next/link";
-import { TrendingUp, Eye, Bot, Activity } from "lucide-react";
+import { TrendingUp, Eye, Bot } from "lucide-react";
 
 const PANELS = [
   { href: "/charts", label: "SMC Charts", icon: TrendingUp, desc: "OHLC, zones, trade lines" },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye, desc: "PCR, heatmaps, bias" },
   { href: "/agents", label: "AI Signals", icon: Bot, desc: "Tactical plan, agents" },
-  { href: "/live", label: "Live Trading", icon: Activity, desc: "Displacement, live state" },
 ];
 
 function MultiPanelLayoutInner() {
