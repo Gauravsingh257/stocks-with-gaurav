@@ -14,6 +14,7 @@ import {
   MISnapshot,
   MIHoliday,
 } from "@/lib/api";
+import { motion } from "framer-motion";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -41,12 +42,18 @@ function Card({ title, icon: Icon, children, span = 1 }: {
   span?: number;
 }) {
   return (
-    <div
+    <motion.div
       className={`rounded-xl border p-5 ${span === 2 ? "md:col-span-2" : ""}`}
       style={{
         background: "var(--card-bg, rgba(15,23,42,0.6))",
         borderColor: "var(--border, rgba(0,212,255,0.08))",
         backdropFilter: "blur(12px)",
+      }}
+      whileHover={{
+        y: -4,
+        boxShadow: "0 12px 40px rgba(0,212,255,0.1), 0 4px 16px rgba(0,0,0,0.3)",
+        borderColor: "rgba(34,211,238,0.3)",
+        transition: { duration: 0.25 },
       }}
     >
       <div className="flex items-center gap-2 mb-4">
@@ -64,11 +71,9 @@ function Card({ title, icon: Icon, children, span = 1 }: {
         </h3>
       </div>
       {children}
-    </div>
+    </motion.div>
   );
 }
-
-// ── Stat pill ──────────────────────────────────────────────────────────────
 
 function Stat({ label, value, sub, color }: {
   label: string; value: string; sub?: string; color?: string;
