@@ -57,7 +57,7 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
 
   const techSignals = signalList(item.technical_signals);
   const fundSignals = signalList(item.fundamental_signals);
-  const sentSignals = signalList(item.sentiment_signals);
+  const sentSignals = signalList(item.sentiment_signals).filter(s => !s.includes("est."));
 
   return createPortal(
     <div
