@@ -151,6 +151,10 @@ def seed_running_trades() -> int:
     """
     For each active SWING/LONGTERM recommendation without an active running_trade,
     create a running_trade row so we can track it. Returns number of rows seeded.
+
+    Only seeds when entry is actually triggered:
+    - MARKET orders: always seed (immediate execution)
+    - LIMIT orders: only seed if CMP has reached the entry price
     """
     from dashboard.backend.db import (  # noqa: PLC0415
         get_stock_recommendations,
@@ -167,6 +171,23 @@ def seed_running_trades() -> int:
             if existing:
                 continue  # already tracked
             entry = float(row["entry_price"])
+            entry_type = (row.get("entry_type") or "MARKET").upper()
+
+            # ── Entry validation: skip LIMIT orders where price hasn't reached entry ──
+            if entry_type == "LIMIT":
+                cmp = _fetch_cmp(symbol)
+                if cmp is None:
+                    log.debug("Skip %s: no CMP available for LIMIT entry check", symbol)
+                    continue
+                # For LONG bias: CMP must be at or below entry (dip to entry zone)
+                # Allow 2% tolerance above entry for recent fills
+                if cmp > entry * 1.02:
+                    log.debug("Skip %s: LIMIT entry %.2f not triggered (CMP %.2f above entry)",
+                              symbol, entry, cmp)
+                    continue
+            else:
+                cmp = _fetch_cmp(symbol) or entry
+
             stop = float(row["stop_loss"]) if row.get("stop_loss") else entry * 0.95
             targets = row.get("targets", [])
             cmp = _fetch_cmp(symbol) or entry
@@ -196,6 +217,56 @@ def seed_running_trades() -> int:
     if seeded:
         log.info("Seeded %d new running_trade rows", seeded)
     return seeded
+
+
+def purge_untriggered_running_trades() -> int:
+    """
+    Remove running_trade rows for LIMIT-entry recommendations where CMP
+    never reached the entry price (i.e. entry was never triggered).
+    Returns count of rows purged.
+    """
+    from dashboard.backend.db import (  # noqa: PLC0415
+        list_running_trades,
+        get_connection,
+    )
+
+    rows = list_running_trades(limit=200, active_only=True)
+    if not rows:
+        return 0
+
+    purged = 0
+    conn = get_connection()
+    try:
+        for row in rows:
+            rec_id = row.get("recommendation_id")
+            if not rec_id:
+                continue
+            # Check if this recommendation is a LIMIT entry
+            rec = conn.execute(
+                "SELECT entry_type, scan_cmp FROM stock_recommendations WHERE id = ?",
+                (rec_id,),
+            ).fetchone()
+            if not rec or (rec["entry_type"] or "MARKET").upper() != "LIMIT":
+                continue
+            # For LIMIT entries: if CMP at scan time was above entry, entry never triggered
+            entry = float(row["entry_price"])
+            cmp = _fetch_cmp(row["symbol"])
+            if cmp is not None and cmp > entry * 1.02:
+                conn.execute(
+                    "UPDATE running_trades SET status = 'CANCELLED' WHERE id = ?",
+                    (row["id"],),
+                )
+                purged += 1
+                log.info("Purged untriggered running trade: %s (LIMIT entry %.2f, CMP %.2f)",
+                         row["symbol"], entry, cmp)
+        if purged:
+            conn.commit()
+    finally:
+        conn.close()
+
+    if purged:
+        log.info("Purged %d untriggered LIMIT running trades", purged)
+    return purged
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +547,11 @@ def _trigger_replacement_scan(horizon: str, exited_symbols: list[str]) -> None:
 
 def _tracker_loop() -> None:
     log.info("Trade tracker started (market=%ds, off=%ds)", TRACKER_INTERVAL_MARKET_S, TRACKER_INTERVAL_OFF_S)
+    # One-time cleanup of incorrectly seeded LIMIT trades on startup
+    try:
+        purge_untriggered_running_trades()
+    except Exception:
+        log.exception("Purge untriggered trades failed (non-fatal)")
     while True:
         try:
             seed_running_trades()
