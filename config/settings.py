@@ -38,6 +38,24 @@ class TradingSettings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
+    # Anthropic (Claude — carousel content generation)
+    anthropic_api_key: str = ""
+
+    # Bannerbear (Instagram carousel image generation)
+    bannerbear_api_key: str = ""
+    bannerbear_template_set_uid: str = ""  # Template Set UID for 3-slide collection
+    bannerbear_slide1_uid: str = ""        # Individual template: Hook slide
+    bannerbear_slide2_uid: str = ""        # Individual template: Trade Data slide
+    bannerbear_slide3_uid: str = ""        # Individual template: Decision slide
+
+    # Notion Content Calendar
+    notion_api_key: str = ""
+    notion_parent_page_id: str = ""
+    notion_content_db_id: str = ""
+
+    # Make.com webhook verification (optional)
+    make_webhook_secret: str = ""
+
     # Engine
     engine_mode: str = Field(default="AGGRESSIVE", description="CONSERVATIVE | BALANCED | AGGRESSIVE")
     backtest_mode: bool = False

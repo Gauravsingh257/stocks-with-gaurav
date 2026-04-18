@@ -29,7 +29,7 @@ if _env_path.exists():
             os.environ.setdefault(key.strip(), value.strip())
 
 from dashboard.backend.db import init_db, full_sync_from_csv, start_csv_watcher
-from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router, market_intelligence_router
+from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router, market_intelligence_router, portfolio_router, content_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 
 # ---------------------------------------------------------------------------
@@ -104,6 +104,21 @@ async def lifespan(app: FastAPI):
         log.info("Trade price tracker started")
     except Exception as exc:
         log.warning("Trade tracker not started: %s", exc)
+    # ── Portfolio system ─────────────────────────────────────────────────────
+    try:
+        from dashboard.backend.db.portfolio import init_portfolio_db, seed_portfolio_from_recommendations
+        init_portfolio_db()
+        seeded = seed_portfolio_from_recommendations()
+        if seeded:
+            log.info("[Portfolio] Seeded %d positions from existing running_trades", seeded)
+    except Exception as exc:
+        log.warning("Portfolio DB init failed (non-fatal): %s", exc)
+    try:
+        from services.portfolio_tracker import start_portfolio_tracker
+        start_portfolio_tracker()
+        log.info("Portfolio tracker started")
+    except Exception as exc:
+        log.warning("Portfolio tracker not started: %s", exc)
     log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
@@ -172,6 +187,8 @@ app.include_router(engine_router)  # Phase 7: decision trace
 app.include_router(research_router)
 app.include_router(kite_router)
 app.include_router(market_intelligence_router)
+app.include_router(portfolio_router)
+app.include_router(content_router)
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")

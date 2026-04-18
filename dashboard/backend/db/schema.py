@@ -260,7 +260,18 @@ def init_db() -> None:
     """Create all tables (idempotent — safe to call on every startup)."""
     conn = get_connection()
     try:
-        conn.executescript(DDL)
+        # Execute DDL, catching index errors for columns that need migration first
+        for statement in DDL.split(";"):
+            stmt = statement.strip()
+            if not stmt:
+                continue
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError as exc:
+                if "no such column" in str(exc):
+                    logger.debug("[DB] Skipping DDL (column not yet migrated): %s", exc)
+                else:
+                    raise
         conn.commit()
         logger.info(f"[DB] dashboard.db initialized at {DB_PATH}")
     finally:
@@ -271,7 +282,21 @@ def init_db() -> None:
     migrate_stock_recommendations()
     migrate_running_trades()
     migrate_trade_screenshots()
-    # performance_snapshots is created by DDL above (IF NOT EXISTS — always safe)
+
+    # Re-run DDL to create any indexes that failed before migration
+    conn = get_connection()
+    try:
+        for statement in DDL.split(";"):
+            stmt = statement.strip()
+            if not stmt or "CREATE INDEX" not in stmt.upper():
+                continue
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── CSV Watcher state ─────────────────────────────────────────────────────────

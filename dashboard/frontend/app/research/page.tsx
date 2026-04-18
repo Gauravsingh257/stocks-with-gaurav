@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, RefreshCw } from "lucide-react";
 
-import { api, type LongTermIdea, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
+import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
   if (!isoTime) return { label: "Never", stale: true };
@@ -16,6 +16,7 @@ function formatScanAge(isoTime: string | null): { label: string; stale: boolean 
 }
 import { LongTermIdeasCard } from "./LongTermIdeasCard";
 import { PerformanceOverview } from "./PerformanceOverview";
+import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
@@ -26,6 +27,7 @@ export default function ResearchPage() {
   const [running, setRunning] = useState<RunningTradeMonitorItem[]>([]);
   const [coverage, setCoverage] = useState<ResearchCoverageResponse | null>(null);
   const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
+  const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [runningScan, setRunningScan] = useState<"swing" | "longterm" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,8 +43,9 @@ export default function ResearchPage() {
       api.runningTradesResearch(40),
       api.researchCoverage(1800),
       api.researchPerformance(),
+      api.portfolioSummary(),
     ]);
-    const [swingRes, longtermRes, runningRes, coverageRes, perfRes] = results;
+    const [swingRes, longtermRes, runningRes, coverageRes, perfRes, portfolioRes] = results;
     if (swingRes.status === "fulfilled") {
       setSwing(swingRes.value?.items ?? []);
       setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
@@ -59,6 +62,9 @@ export default function ResearchPage() {
     }
     if (perfRes.status === "fulfilled") {
       setPerf(perfRes.value ?? null);
+    }
+    if (portfolioRes.status === "fulfilled") {
+      setPortfolio(portfolioRes.value ?? null);
     }
     const failed = results.filter((r) => r.status === "rejected").length;
     if (failed > 0) {
@@ -158,8 +164,55 @@ export default function ResearchPage() {
 
       <ResearchCoverageCard coverage={coverage} />
       <PerformanceOverview data={perf} />
-      <SwingIdeasTable items={swing} slotInfo={`${swing.length}/10 Active Slots`} />
-      <LongTermIdeasCard items={longterm} slotInfo={`${longterm.length}/10 Active Slots`} />
+
+      {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
+      <div style={{ marginTop: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--accent, #00d4ff)" }} />
+          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>Live Portfolio</h2>
+          <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)", color: "var(--accent)" }}>
+            {portfolio ? `${portfolio.swing.count + portfolio.longterm.count} Active` : "—"}
+          </span>
+        </div>
+        {portfolio ? (
+          <>
+            <PortfolioSection
+              title="Swing Portfolio"
+              positions={portfolio.swing.positions}
+              count={portfolio.swing.count}
+              max={portfolio.swing.max}
+              journalStats={portfolio.swing.journal_stats}
+              horizon="SWING"
+            />
+            <PortfolioSection
+              title="Long-Term Portfolio"
+              positions={portfolio.longterm.positions}
+              count={portfolio.longterm.count}
+              max={portfolio.longterm.max}
+              journalStats={portfolio.longterm.journal_stats}
+              horizon="LONGTERM"
+            />
+          </>
+        ) : (
+          <div className="glass" style={{ padding: 16, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            No portfolio data yet. Run a scan to populate.
+          </div>
+        )}
+      </div>
+
+      {/* ── SECTION 2: NEW OPPORTUNITIES (Discovery Feed) ───── */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--warning, #f59e0b)" }} />
+          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>New Opportunities</h2>
+          <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "var(--warning, #f59e0b)" }}>
+            Discovery Feed
+          </span>
+        </div>
+        <SwingIdeasTable items={swing} slotInfo={`${swing.length} Ideas`} />
+        <LongTermIdeasCard items={longterm} slotInfo={`${longterm.length} Ideas`} />
+      </div>
+
       <RunningTradesMonitor items={running} />
     </div>
   );

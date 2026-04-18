@@ -313,6 +313,78 @@ export interface ResearchRunResponse {
   result: Record<string, unknown>;
 }
 
+// ── Portfolio types ────────────────────────────────────────────────────────
+export interface PortfolioPosition {
+  id: number;
+  symbol: string;
+  horizon: "SWING" | "LONGTERM";
+  direction: "LONG" | "SHORT";
+  entry_price: number;
+  stop_loss: number;
+  target_1: number | null;
+  target_2: number | null;
+  current_price: number | null;
+  profit_loss: number;
+  profit_loss_pct: number;
+  drawdown: number;
+  drawdown_pct: number;
+  high_since_entry: number | null;
+  low_since_entry: number | null;
+  days_held: number;
+  confidence_score: number;
+  reasoning: string;
+  status: "ACTIVE" | "TARGET_HIT" | "STOP_HIT" | "CLOSED" | "PARTIAL_EXIT";
+  exit_price: number | null;
+  exit_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+}
+
+export interface PortfolioJournalEntry {
+  id: number;
+  position_id: number;
+  symbol: string;
+  horizon: "SWING" | "LONGTERM";
+  direction: string;
+  entry_price: number;
+  exit_price: number | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  profit_loss: number;
+  profit_loss_pct: number;
+  days_held: number;
+  exit_reason: string;
+  created_at: string;
+  closed_at: string;
+}
+
+export interface PortfolioJournalStats {
+  total_trades: number;
+  wins: number;
+  losses: number;
+  hit_rate_pct: number;
+  avg_pnl_pct: number;
+  total_pnl_pct: number;
+  best_pnl_pct: number;
+  worst_pnl_pct: number;
+  avg_days_held: number;
+}
+
+export interface PortfolioBucketSummary {
+  positions: PortfolioPosition[];
+  count: number;
+  max: number;
+  journal_stats: PortfolioJournalStats;
+}
+
+export interface PortfolioSummary {
+  swing: PortfolioBucketSummary;
+  longterm: PortfolioBucketSummary;
+  overall_stats: PortfolioJournalStats;
+}
+
 export interface ResearchCoverageRun {
   run_time: string | null;
   universe_requested: number;
@@ -605,6 +677,27 @@ export const api = {
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
+
+  // ── Portfolio (persistent positions) ──────────────────────────────────────
+  portfolioSummary: () => get<PortfolioSummary>("/api/portfolio/summary"),
+  portfolioSwing: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/swing?limit=${limit}`),
+  portfolioLongterm: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/longterm?limit=${limit}`),
+  portfolioCounts: () => get<{ swing: number; swing_max: number; longterm: number; longterm_max: number }>("/api/portfolio/counts"),
+  portfolioJournal: (horizon?: string, limit = 50) => {
+    const q = new URLSearchParams();
+    if (horizon) q.set("horizon", horizon);
+    q.set("limit", String(limit));
+    return get<{ items: PortfolioJournalEntry[]; count: number }>(`/api/portfolio/journal/all?${q}`);
+  },
+  portfolioJournalStats: (horizon?: string) => {
+    const q = horizon ? `?horizon=${horizon}` : "";
+    return get<PortfolioJournalStats>(`/api/portfolio/journal/stats${q}`);
+  },
+  portfolioAutoPromote: () => post<{ ok: boolean; promoted: { swing: number; longterm: number } }>("/api/portfolio/auto-promote"),
+  portfolioSeed: () => post<{ ok: boolean; seeded: number }>("/api/portfolio/seed"),
+  portfolioRefreshPrices: () => post<{ ok: boolean; updated: number }>("/api/portfolio/refresh-prices"),
+  portfolioClosePosition: (positionId: number, exitPrice: number, exitReason = "MANUAL") =>
+    post<{ ok: boolean; symbol: string; pnl_pct: number }>(`/api/portfolio/${positionId}/close`, { exit_price: exitPrice, exit_reason: exitReason }),
 
   // ── Market Intelligence ───────────────────────────────────────────────────
   marketIntelSnapshot: () => get<MISnapshot>("/api/market-intelligence/snapshot"),
