@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { SwingIdea } from "@/lib/api";
 
 interface Props {
@@ -38,6 +38,149 @@ function fmtDateTime(iso: string | null | undefined): string {
 
 function signalList(signals: Record<string, string>) {
   return Object.values(signals || {}).filter(Boolean);
+}
+
+function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => void }) {
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [handleKeyDown]);
+
+  const techSignals = signalList(item.technical_signals);
+  const fundSignals = signalList(item.fundamental_signals);
+  const sentSignals = signalList(item.sentiment_signals);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "#111827", border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: 12, maxWidth: 580, width: "100%", maxHeight: "80vh",
+          overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          position: "sticky", top: 0, background: "#111827", zIndex: 1,
+        }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "1rem" }}>{item.symbol}</div>
+            <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", marginTop: 2 }}>Reasoning Evidence</div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 6, width: 32, height: 32, cursor: "pointer",
+              color: "var(--text-secondary)", fontSize: "1.1rem",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "16px 20px", display: "grid", gap: 16 }}>
+          {/* Summary */}
+          <div style={{
+            fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.5,
+            padding: "10px 14px", background: "rgba(255,255,255,0.03)", borderRadius: 8,
+          }}>
+            {item.reasoning_summary}
+          </div>
+
+          {/* Technical */}
+          {techSignals.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: "0.68rem", fontWeight: 700, color: "#5b9cf6",
+                textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8,
+              }}>
+                Technical Factors
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                {techSignals.map((s, i) => (
+                  <div key={`t-${i}`} style={{
+                    fontSize: "0.78rem", color: "var(--text-secondary)",
+                    padding: "6px 10px", background: "rgba(91,156,246,0.05)",
+                    borderRadius: 6, borderLeft: "2px solid rgba(91,156,246,0.3)",
+                  }}>
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Fundamental */}
+          {fundSignals.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: "0.68rem", fontWeight: 700, color: "#00d18c",
+                textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8,
+              }}>
+                Fundamental Factors
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                {fundSignals.map((s, i) => (
+                  <div key={`f-${i}`} style={{
+                    fontSize: "0.78rem", color: "var(--text-secondary)",
+                    padding: "6px 10px", background: "rgba(0,209,140,0.05)",
+                    borderRadius: 6, borderLeft: "2px solid rgba(0,209,140,0.3)",
+                  }}>
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Sentiment */}
+          {sentSignals.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: "0.68rem", fontWeight: 700, color: "#f0c060",
+                textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8,
+              }}>
+                Sentiment Factors
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                {sentSignals.map((s, i) => (
+                  <div key={`s-${i}`} style={{
+                    fontSize: "0.78rem", color: "var(--text-secondary)",
+                    padding: "6px 10px", background: "rgba(240,192,96,0.05)",
+                    borderRadius: 6, borderLeft: "2px solid rgba(240,192,96,0.3)",
+                  }}>
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function tvUrl(symbol: string, interval = "D") {
@@ -209,6 +352,7 @@ function ActionTag({ tag }: { tag?: string }) {
 }
 
 export function SwingIdeasTable({ items, slotInfo }: Props) {
+  const [reasoningItem, setReasoningItem] = useState<SwingIdea | null>(null);
   const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
 
   return (
@@ -287,31 +431,18 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
                       {fmtDateTime(item.signals_updated_at ?? item.created_at)}
                     </span>
                   </td>
-                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", maxWidth: 420 }}>
-                    <details>
-                      <summary style={{ cursor: "pointer", color: "var(--accent)" }}>View reasoning evidence</summary>
-                      <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
-                        <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{item.reasoning_summary}</div>
-                        <div style={{ fontSize: "0.78rem" }}>
-                          <strong>Technical Factors</strong>
-                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                            {signalList(item.technical_signals).map((s, i) => <li key={`t-${item.id}-${i}`}>{s}</li>)}
-                          </ul>
-                        </div>
-                        <div style={{ fontSize: "0.78rem" }}>
-                          <strong>Fundamental Factors</strong>
-                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                            {signalList(item.fundamental_signals).map((s, i) => <li key={`f-${item.id}-${i}`}>{s}</li>)}
-                          </ul>
-                        </div>
-                        <div style={{ fontSize: "0.78rem" }}>
-                          <strong>Sentiment Factors</strong>
-                          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                            {signalList(item.sentiment_signals).map((s, i) => <li key={`s-${item.id}-${i}`}>{s}</li>)}
-                          </ul>
-                        </div>
-                      </div>
-                    </details>
+                  <td style={{ padding: "10px 12px" }}>
+                    <button
+                      onClick={() => setReasoningItem(item)}
+                      style={{
+                        background: "rgba(41, 98, 255, 0.12)", border: "1px solid rgba(41, 98, 255, 0.3)",
+                        borderRadius: 6, padding: "5px 10px", cursor: "pointer",
+                        color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      View Evidence
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -319,6 +450,8 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
           </table>
         </div>
       )}
+
+      {reasoningItem && <ReasoningModal item={reasoningItem} onClose={() => setReasoningItem(null)} />}
     </div>
   );
 }

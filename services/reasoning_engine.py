@@ -44,14 +44,6 @@ def generate_evidence_reasoning(
         return "", evidence
 
     symbol_name = symbol.replace("NSE:", "").replace("NFO:", "")
-    sentence_1 = f"{symbol_name} is selected because {evidence[0]}"
-    if len(evidence) > 1:
-        sentence_1 += f" {evidence[1]}"
-
-    remaining = evidence[2:]
-    if not remaining:
-        return sentence_1, evidence
-
-    sentence_2 = " ".join(remaining)
-    reasoning = f"{sentence_1} {sentence_2}".strip()
+    top_3 = ". ".join(evidence[:3])
+    reasoning = f"{symbol_name} picked: {top_3}."
     return reasoning, evidence
