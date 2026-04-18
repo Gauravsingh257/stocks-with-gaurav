@@ -19,7 +19,9 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta, timezone
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 log = logging.getLogger("services.trade_tracker")
 
@@ -212,6 +214,7 @@ def seed_running_trades() -> int:
                 "distance_to_target": dist_target,
                 "distance_to_stop_loss": dist_sl,
                 "status": "RUNNING",
+                "entry_triggered_at": datetime.now(_IST).isoformat(),
             })
             seeded += 1
     if seeded:
@@ -362,8 +365,8 @@ def _update_all_running_trades() -> int:
             except Exception:
                 log.exception("Failed to log signal event for %s", sym)
 
-            # 2. Update recommendation status to match
-            _sync_recommendation_status(rec_id, status)
+            # 2. Update recommendation status + exit data
+            _sync_recommendation_status(rec_id, status, exit_price=cmp)
 
             # 3. Send Telegram alert
             _send_exit_alert(sym, status, entry, cmp, pl_pct, days_held, targets, stop)
@@ -395,17 +398,21 @@ def _update_all_running_trades() -> int:
 # Exit handling helpers
 # ---------------------------------------------------------------------------
 
-def _sync_recommendation_status(recommendation_id: int | None, status: str) -> None:
-    """Update the parent stock_recommendation status to match (ACTIVE → TARGET_HIT/STOP_HIT)."""
+def _sync_recommendation_status(recommendation_id: int | None, status: str,
+                                exit_price: float | None = None) -> None:
+    """Update the parent stock_recommendation status + exit fields."""
     if not recommendation_id:
         return
     try:
         from dashboard.backend.db import get_connection
         conn = get_connection()
         try:
+            now_ist = datetime.now(_IST).isoformat()
             conn.execute(
-                "UPDATE stock_recommendations SET status = ? WHERE id = ? AND status = 'ACTIVE'",
-                (status, recommendation_id),
+                """UPDATE stock_recommendations
+                   SET status = ?, exit_price = ?, exit_date = ?, exit_reason = ?
+                   WHERE id = ? AND status = 'ACTIVE'""",
+                (status, exit_price, now_ist, status, recommendation_id),
             )
             conn.commit()
         finally:

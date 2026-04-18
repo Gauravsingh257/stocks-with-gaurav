@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bot, RefreshCw } from "lucide-react";
+import { Bot } from "lucide-react";
 
 import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
 
@@ -29,9 +29,7 @@ export default function ResearchPage() {
   const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [runningScan, setRunningScan] = useState<"swing" | "longterm" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
 
@@ -81,31 +79,6 @@ export default function ResearchPage() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const runScan = useCallback(
-    async (scan: "swing" | "longterm") => {
-      try {
-        setError(null);
-        setScanNotice(null);
-        setRunningScan(scan);
-        const res =
-          scan === "swing" ? await api.runSwingScan() : await api.runLongtermScan();
-        const note = res.summary || res.message;
-        if (res.ok && note) {
-          setScanNotice(note);
-        } else if (!res.ok) {
-          setError((res.message as string | undefined) || `${scan} scan failed`);
-        }
-        await refresh();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : `Unable to run ${scan} scan right now.`;
-        setError(msg);
-      } finally {
-        setRunningScan(null);
-      }
-    },
-    [refresh]
-  );
-
   return (
     <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -130,36 +103,9 @@ export default function ResearchPage() {
             })()}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            className="btn-accent"
-            onClick={() => runScan("swing")}
-            disabled={runningScan !== null}
-            style={{ fontSize: "0.78rem", padding: "6px 12px", opacity: runningScan && runningScan !== "swing" ? 0.7 : 1 }}
-          >
-            {runningScan === "swing" ? "Running..." : "Run Swing Scan"}
-          </button>
-          <button
-            className="btn-accent"
-            onClick={() => runScan("longterm")}
-            disabled={runningScan !== null}
-            style={{ fontSize: "0.78rem", padding: "6px 12px", opacity: runningScan && runningScan !== "longterm" ? 0.7 : 1 }}
-          >
-            {runningScan === "longterm" ? "Running..." : "Run Long-Term Scan"}
-          </button>
-          <button className="btn-accent" onClick={refresh} style={{ fontSize: "0.78rem", padding: "6px 14px" }}>
-            <RefreshCw size={12} style={{ display: "inline", marginRight: 6 }} />
-            Refresh
-          </button>
-        </div>
       </div>
 
       {error && <div className="glass" style={{ padding: 12, color: "var(--danger)" }}>{error}</div>}
-      {scanNotice && !error && (
-        <div className="glass" style={{ padding: 12, color: "var(--accent)", border: "1px solid rgba(0,212,255,0.25)" }}>
-          {scanNotice}
-        </div>
-      )}
       {loading && <div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div>}
 
       <ResearchCoverageCard coverage={coverage} />

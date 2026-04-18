@@ -129,7 +129,10 @@ CREATE TABLE IF NOT EXISTS stock_recommendations (
     long_term_target      REAL,
     risk_factors          TEXT,
     reasoning             TEXT NOT NULL DEFAULT '',
-    status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED','EXPIRED')),
+    status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED','EXPIRED','TARGET_HIT','STOP_HIT')),
+    exit_price            REAL,
+    exit_date             TEXT,
+    exit_reason           TEXT,
     scan_run_id           INTEGER,
     signals_updated_at    TEXT,
     entry_type            TEXT NOT NULL DEFAULT 'MARKET',
@@ -160,7 +163,8 @@ CREATE TABLE IF NOT EXISTS running_trades (
     days_held             INTEGER NOT NULL DEFAULT 0,
     distance_to_target    REAL,
     distance_to_stop_loss REAL,
-    status                TEXT NOT NULL DEFAULT 'RUNNING' CHECK(status IN ('RUNNING','TARGET_HIT','STOP_HIT','CLOSED')),
+    status                TEXT NOT NULL DEFAULT 'RUNNING' CHECK(status IN ('RUNNING','TARGET_HIT','STOP_HIT','CLOSED','CANCELLED')),
+    entry_triggered_at    TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(recommendation_id) REFERENCES stock_recommendations(id)
@@ -510,6 +514,9 @@ def migrate_stock_recommendations() -> None:
             ("status", "TEXT NOT NULL DEFAULT 'ACTIVE'"),
             ("entry_type", "TEXT NOT NULL DEFAULT 'MARKET'"),
             ("scan_cmp", "REAL"),
+            ("exit_price", "REAL"),
+            ("exit_date", "TEXT"),
+            ("exit_reason", "TEXT"),
         ):
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} {col_def}")
@@ -530,6 +537,7 @@ def migrate_running_trades() -> None:
             ("high_since_entry", "REAL"),
             ("low_since_entry", "REAL"),
             ("days_held", "INTEGER NOT NULL DEFAULT 0"),
+            ("entry_triggered_at", "TEXT"),
         ]
         for col_name, col_def in new_cols:
             if col_name not in cols:
@@ -1068,8 +1076,8 @@ def create_running_trade(payload: dict) -> int:
                 symbol, recommendation_id, entry_price, stop_loss, targets,
                 current_price, profit_loss, profit_loss_pct, drawdown, drawdown_pct,
                 high_since_entry, low_since_entry, days_held,
-                distance_to_target, distance_to_stop_loss, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                distance_to_target, distance_to_stop_loss, status, entry_triggered_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload["symbol"],
@@ -1088,6 +1096,7 @@ def create_running_trade(payload: dict) -> int:
                 float(payload["distance_to_target"]) if payload.get("distance_to_target") is not None else None,
                 float(payload["distance_to_stop_loss"]) if payload.get("distance_to_stop_loss") is not None else None,
                 payload.get("status", "RUNNING"),
+                payload.get("entry_triggered_at"),
             ),
         )
         conn.commit()
