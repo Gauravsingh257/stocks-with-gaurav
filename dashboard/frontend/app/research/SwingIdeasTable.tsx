@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { SwingIdea } from "@/lib/api";
 
 interface Props {
@@ -58,11 +59,11 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
   const fundSignals = signalList(item.fundamental_signals);
   const sentSignals = signalList(item.sentiment_signals);
 
-  return (
+  return createPortal(
     <div
       onClick={onClose}
       style={{
-        position: "fixed", inset: 0, zIndex: 1000,
+        position: "fixed", inset: 0, zIndex: 9999,
         background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
         display: "flex", alignItems: "center", justifyContent: "center",
         padding: 20,
@@ -179,7 +180,8 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
