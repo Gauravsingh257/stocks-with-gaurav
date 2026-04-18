@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, TrendingUp, Eye, Globe, Zap
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 
@@ -13,7 +13,6 @@ const NAV = [
   { href: "/research",        label: "AI Research Center", icon: Bot        },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye           },
   { href: "/market-intelligence", label: "Market Intel", icon: Globe      },
-  { href: "/charts",          label: "SMC Charts",      icon: TrendingUp    },
 ];
 
 export default function Sidebar({

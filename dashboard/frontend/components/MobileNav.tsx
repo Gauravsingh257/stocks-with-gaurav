@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, BookOpen, Bot, Eye, Globe, TrendingUp } from "lucide-react";
+import { BarChart2, BookOpen, Bot, Eye, Globe } from "lucide-react";
 
 const ITEMS = [
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
@@ -10,7 +10,6 @@ const ITEMS = [
   { href: "/research", label: "Research", icon: Bot },
   { href: "/oi-intelligence", label: "OI", icon: Eye },
   { href: "/market-intelligence", label: "Market", icon: Globe },
-  { href: "/charts", label: "Charts", icon: TrendingUp },
 ];
 
 export default function MobileNav() {

@@ -8,11 +8,9 @@ import {
   Bot,
   Eye,
   Search,
-  TrendingUp,
 } from "lucide-react";
 
 const PAGES = [
-  { href: "/charts", label: "SMC Charts", icon: TrendingUp },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye },
   { href: "/research", label: "AI Research", icon: Bot },
