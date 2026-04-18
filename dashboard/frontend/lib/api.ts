@@ -37,8 +37,13 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function post<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "POST" });
+async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+  const opts: RequestInit = { method: "POST" };
+  if (body) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${BASE}${path}`, opts);
   if (!res.ok) {
     let detail = "";
     try {
