@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import type { SwingIdea } from "@/lib/api";
 
 interface Props {
@@ -60,7 +61,11 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
   const sentSignals = signalList(item.sentiment_signals).filter(s => !s.includes("est."));
 
   return createPortal(
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
       onClick={onClose}
       style={{
         position: "fixed", inset: 0, zIndex: 9999,
@@ -69,7 +74,11 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
         padding: 20,
       }}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ duration: 0.25, ease: "easeOut" }}
         onClick={e => e.stopPropagation()}
         style={{
           background: "#111827", border: "1px solid rgba(255,255,255,0.1)",
@@ -179,8 +188,8 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
             </div>
           )}
         </div>
-      </div>
-    </div>,
+      </motion.div>
+    </motion.div>,
     document.body
   );
 }
@@ -453,7 +462,9 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
         </div>
       )}
 
-      {reasoningItem && <ReasoningModal item={reasoningItem} onClose={() => setReasoningItem(null)} />}
+      <AnimatePresence>
+        {reasoningItem && <ReasoningModal item={reasoningItem} onClose={() => setReasoningItem(null)} />}
+      </AnimatePresence>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api, JournalTrade, SignalLogEntry, JournalIdeaRow } from "@/lib/api";
 import { pnlColor, StatusBadge } from "@/components/StatusBadge";
 import { Search, TrendingUp, TrendingDown, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import { FadeIn, StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 
 const LIMIT = 50;
 const SIGNAL_LIMIT = 50;
@@ -458,16 +459,16 @@ export default function JournalPage() {
   const totalR     = trades.reduce((s, t) => s + (t.pnl_r ?? 0), 0);
 
   return (
-    <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div>
+    <StaggerContainer stagger={0.07} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <StaggerItem>
         <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0">Trade Journal</h1>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "3px 0 0" }}>
           All trade records — intraday · swing picks · long-term ideas
         </p>
-      </div>
+      </StaggerItem>
 
       {/* Tab bar */}
-      <TabBar active={activeTab} onChange={(t) => setActiveTab(t)} />
+      <StaggerItem><TabBar active={activeTab} onChange={(t) => setActiveTab(t)} /></StaggerItem>
 
       {/* ── INTRADAY TAB ─────────────────────────────────────────────── */}
       {activeTab === "intraday" && (
@@ -583,10 +584,10 @@ export default function JournalPage() {
       )}
 
       {/* ── SWING TAB ──────────────────────────────────────────────────── */}
-      {activeTab === "swing" && <IdeasTab agentType="SWING" color="#00d18c" />}
+      {activeTab === "swing" && <StaggerItem><IdeasTab agentType="SWING" color="#00d18c" /></StaggerItem>}
 
       {/* ── LONG-TERM TAB ──────────────────────────────────────────────── */}
-      {activeTab === "longterm" && <IdeasTab agentType="LONGTERM" color="#a78bfa" />}
-    </div>
+      {activeTab === "longterm" && <StaggerItem><IdeasTab agentType="LONGTERM" color="#a78bfa" /></StaggerItem>}
+    </StaggerContainer>
   );
 }

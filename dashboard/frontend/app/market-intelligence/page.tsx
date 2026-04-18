@@ -4,6 +4,7 @@
  * Aggregates holiday calendar, FX rates, US macro (FRED), MF flows, and QuickChart.
  */
 import { useEffect, useState, useCallback } from "react";
+import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import {
   Globe, Calendar, DollarSign, TrendingUp, BarChart3,
   RefreshCw, AlertTriangle, Sun, ArrowUpRight, ArrowDownRight,
@@ -160,8 +161,9 @@ export default function MarketIntelligencePage() {
   const mfFlows = data?.mf_flows;
 
   return (
-    <div className="space-y-6">
+    <StaggerContainer stagger={0.08} className="space-y-6">
       {/* Header */}
+      <StaggerItem>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div
@@ -197,6 +199,7 @@ export default function MarketIntelligencePage() {
           Refresh
         </button>
       </div>
+      </StaggerItem>
 
       {/* Error banner */}
       {error && (
@@ -222,6 +225,7 @@ export default function MarketIntelligencePage() {
       )}
 
       {/* Main Grid */}
+      <StaggerItem>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 
         {/* ── FX Card ────────────────────────────────── */}
@@ -335,12 +339,15 @@ export default function MarketIntelligencePage() {
           </div>
         </Card>
       </div>
+      </StaggerItem>
 
       {/* Footer */}
+      <StaggerItem>
       <div className="text-center text-[0.65rem] py-2" style={{ color: "var(--text-dim, #64748b)" }}>
         Data from NSE · Frankfurter · FRED · mfapi.in
         {data?.fetched_at && ` · Last updated: ${new Date(data.fetched_at).toLocaleString()}`}
       </div>
-    </div>
+      </StaggerItem>
+    </StaggerContainer>
   );
 }

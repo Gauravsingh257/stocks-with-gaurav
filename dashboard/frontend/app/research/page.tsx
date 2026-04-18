@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Bot } from "lucide-react";
+import { FadeIn, StaggerContainer, StaggerItem, GlassCard } from "@/components/MotionWrappers";
 
 import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
 
@@ -80,7 +81,8 @@ export default function ResearchPage() {
   }, [refresh]);
 
   return (
-    <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <StaggerContainer stagger={0.08} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <StaggerItem>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 36, height: 36, borderRadius: 8, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)", display: "grid", placeItems: "center" }}>
@@ -104,14 +106,16 @@ export default function ResearchPage() {
           </div>
         </div>
       </div>
+      </StaggerItem>
 
-      {error && <div className="glass" style={{ padding: 12, color: "var(--danger)" }}>{error}</div>}
-      {loading && <div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div>}
+      {error && <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--danger)" }}>{error}</div></StaggerItem>}
+      {loading && <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div></StaggerItem>}
 
-      <ResearchCoverageCard coverage={coverage} />
-      <PerformanceOverview data={perf} />
+      <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
+      <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
+      <StaggerItem>
       <div style={{ marginTop: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--accent, #00d4ff)" }} />
@@ -145,8 +149,10 @@ export default function ResearchPage() {
           </div>
         )}
       </div>
+      </StaggerItem>
 
       {/* ── SECTION 2: NEW OPPORTUNITIES (Discovery Feed) ───── */}
+      <StaggerItem>
       <div style={{ marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--warning, #f59e0b)" }} />
@@ -158,8 +164,9 @@ export default function ResearchPage() {
         <SwingIdeasTable items={swing} slotInfo={`${swing.length} Ideas`} />
         <LongTermIdeasCard items={longterm} slotInfo={`${longterm.length} Ideas`} />
       </div>
+      </StaggerItem>
 
-      <RunningTradesMonitor items={running} />
-    </div>
+      <StaggerItem><RunningTradesMonitor items={running} /></StaggerItem>
+    </StaggerContainer>
   );
 }

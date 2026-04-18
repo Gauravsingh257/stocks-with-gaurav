@@ -12,6 +12,7 @@
  *  - Auto-reconnect WebSocket on disconnect
  */
 import { useEffect, useState, useCallback, useRef } from "react";
+import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import {
   Eye, Shield, Clock, RefreshCw, Wifi, WifiOff, AlertTriangle, Activity,
 } from "lucide-react";
@@ -131,9 +132,10 @@ export default function OIIntelligencePage() {
 
   /* ── Render ─────────────────────────────────────────────── */
   return (
-    <div className="w-full max-w-screen-2xl mx-auto px-4 md:px-6 lg:px-8 py-6">
+    <StaggerContainer stagger={0.07} className="w-full max-w-screen-2xl mx-auto px-4 md:px-6 lg:px-8 py-6">
       {/* Header */}
-      <div className="fade-in flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
+      <StaggerItem>
+      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
         <div>
           <h1 className="text-lg md:text-xl lg:text-2xl font-extrabold flex items-center gap-2.5 m-0" style={{ color: "var(--text-primary)" }}>
             <Eye size={22} color="var(--accent)" />
@@ -198,6 +200,7 @@ export default function OIIntelligencePage() {
           </button>
         </div>
       </div>
+      </StaggerItem>
 
       {/* Error */}
       {error && (
@@ -228,7 +231,8 @@ export default function OIIntelligencePage() {
 
       {/* Main Content */}
       {snapshot && (
-        <div className="fade-in flex flex-col gap-4">
+        <StaggerItem>
+        <div className="flex flex-col gap-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <PCRGauge pcr={snapshot.pcr} trend={snapshot.pcr_trend} confidence={snapshot.confidence} />
             <OverallBiasCard snapshot={snapshot} />
@@ -263,7 +267,8 @@ export default function OIIntelligencePage() {
             />
           </div>
         </div>
+        </StaggerItem>
       )}
-    </div>
+    </StaggerContainer>
   );
 }

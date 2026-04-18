@@ -14,6 +14,7 @@ import {
   ResearchPerformanceResponse, ResearchPickRow,
 } from "@/lib/api";
 import { pnlColor, StatusBadge } from "@/components/StatusBadge";
+import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -324,8 +325,9 @@ export default function AnalyticsPage() {
   const total  = summary?.total_trades ?? 0;
 
   return (
-    <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+    <StaggerContainer stagger={0.07} style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {/* Page header */}
+      <StaggerItem>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div>
           <h1 className="text-xl md:text-2xl lg:text-3xl font-bold m-0" style={{ color: "var(--text-primary)" }}>Analytics</h1>
@@ -340,13 +342,15 @@ export default function AnalyticsPage() {
           </span>
         )}
       </div>
+      </StaggerItem>
 
-      {/* ── HERO BAR ───────────────────────────────────────────────────── */}
-      <HeroBar intraday={summary} swing={swingPerf} longterm={ltPerf} />
+      {/* ── HERO BAR ───────────────────────────────────────────────────────── */}
+      <StaggerItem><HeroBar intraday={summary} swing={swingPerf} longterm={ltPerf} /></StaggerItem>
 
       {/* ── SECTION 1: INTRADAY ─────────────────────────────────────────── */}
-      <SectionDivider label="Intraday Trading" />
+      <StaggerItem><SectionDivider label="Intraday Trading" /></StaggerItem>
 
+      <StaggerItem>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12 }}>
         {[
           { label: "Total R",        value: `${totalR >= 0 ? "+" : ""}${totalR.toFixed(2)}R`, color: pnlColor(totalR) },
@@ -363,8 +367,10 @@ export default function AnalyticsPage() {
           </div>
         ))}
       </div>
+      </StaggerItem>
 
       {/* Equity curve */}
+      <StaggerItem>
       <div className="glass w-full overflow-hidden" style={{ padding: 20 }}>
         <div style={{ fontWeight: 600, marginBottom: 16, fontSize: "0.9rem" }}>Equity Curve (Cumulative R)</div>
         <ResponsiveContainer width="100%" height={chartHeight}>
@@ -384,7 +390,9 @@ export default function AnalyticsPage() {
           </LineChart>
         </ResponsiveContainer>
       </div>
+      </StaggerItem>
 
+      <StaggerItem>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="glass w-full overflow-hidden" style={{ padding: 20 }}>
           <div style={{ fontWeight: 600, marginBottom: 16, fontSize: "0.9rem" }}>Setup Performance (Total R)</div>
@@ -421,8 +429,10 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
       </div>
+      </StaggerItem>
 
       {/* Setup table */}
+      <StaggerItem>
       <div className="glass" style={{ overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: "0.9rem" }}>
           Setup Breakdown
@@ -455,21 +465,22 @@ export default function AnalyticsPage() {
           </table>
         </div>
       </div>
+      </StaggerItem>
 
       {/* ── SECTION 2: SWING SCAN ─────────────────────────────────────────── */}
       {swingPerf && (
-        <>
+        <StaggerItem>
           <SectionDivider label="Swing Scan Performance" />
           <ResearchSection data={swingPerf} label="Swing Scan Recommendations" color="#5b9cf6" />
-        </>
+        </StaggerItem>
       )}
 
       {/* ── SECTION 3: LONG-TERM ──────────────────────────────────────────── */}
       {ltPerf && (
-        <>
+        <StaggerItem>
           <SectionDivider label="Long-Term Investment Performance" />
           <ResearchSection data={ltPerf} label="Long-Term Investment Recommendations" color="#a78bfa" />
-        </>
+        </StaggerItem>
       )}
 
       {!swingPerf && !ltPerf && (
@@ -477,7 +488,7 @@ export default function AnalyticsPage() {
           No research performance data yet — run a scan on the Research page to get started.
         </div>
       )}
-    </div>
+    </StaggerContainer>
   );
 }
 
