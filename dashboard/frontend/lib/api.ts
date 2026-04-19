@@ -457,6 +457,44 @@ export interface ScanRunRow {
   notes: string | null;
 }
 
+export interface ResearchChartCandle {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface ResearchChartZone {
+  top: number;
+  bottom: number;
+  zone_type: string;
+  color: string;
+  border_color: string;
+  label: string;
+}
+
+export interface ResearchChartLevel {
+  type: string;
+  price: number;
+  label: string;
+  color: string;
+  style: string;
+  entry_type?: string;
+}
+
+export interface ResearchChartData {
+  symbol: string;
+  horizon: string;
+  candles: ResearchChartCandle[];
+  zones: ResearchChartZone[];
+  levels: ResearchChartLevel[];
+  setup: string;
+  confidence: number;
+  reasoning: string;
+}
+
 export interface ResearchAggregatePerformance {
   total_recommendations: number;
   active: number;
@@ -679,6 +717,8 @@ export const api = {
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),
+  researchChartData: (symbol: string, horizon = "SWING") =>
+    get<ResearchChartData>(`/api/research/chart-data/${encodeURIComponent(symbol)}?horizon=${horizon}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),

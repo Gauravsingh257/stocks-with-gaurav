@@ -194,8 +194,9 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
   );
 }
 
-function tvUrl(symbol: string, interval = "D") {
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}&interval=${interval}`;
+function chartUrl(symbol: string, horizon = "SWING") {
+  const s = symbol.replace("NSE:", "");
+  return `/research/chart?symbol=${encodeURIComponent(s)}&horizon=${horizon}`;
 }
 
 interface LevelsTooltipProps {
@@ -208,10 +209,8 @@ function LevelsTooltip({ item }: LevelsTooltipProps) {
   return (
     <div style={{ position: "relative", display: "inline-block" }}>
       <a
-        href={tvUrl(item.symbol)}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Open in TradingView"
+        href={chartUrl(item.symbol)}
+        title="Open Chart with Levels"
         onMouseEnter={() => setVisible(true)}
         onMouseLeave={() => setVisible(false)}
         style={{

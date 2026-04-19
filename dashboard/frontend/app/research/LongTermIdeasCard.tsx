@@ -90,6 +90,18 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
             <span style={{ transform: showReasoning ? "rotate(90deg)" : "none", transition: "transform 0.2s", fontSize: "0.7rem" }}>▶</span>
             {showReasoning ? "Hide Analysis" : "View Analysis"}
           </button>
+          <a
+            href={`/research/chart?symbol=${encodeURIComponent(item.symbol.replace("NSE:", ""))}&horizon=LONGTERM`}
+            style={{
+              background: "rgba(0, 209, 140, 0.08)", border: "1px solid rgba(0, 209, 140, 0.25)",
+              borderRadius: 5, padding: "3px 10px", cursor: "pointer",
+              color: "#00d18c", fontSize: "0.72rem", fontWeight: 500,
+              display: "inline-flex", alignItems: "center", gap: 4,
+              textDecoration: "none", transition: "background 0.2s",
+            }}
+          >
+            📊 Chart
+          </a>
           {showReasoning && (
             <div style={{ color: "var(--text-secondary)", fontSize: "0.78rem", marginTop: 6, padding: "8px 10px", background: "rgba(41, 98, 255, 0.04)", borderRadius: 6, borderLeft: "2px solid rgba(41, 98, 255, 0.3)", lineHeight: 1.5 }}>
               {reasoning}

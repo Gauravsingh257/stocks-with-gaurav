@@ -527,3 +527,188 @@ def get_research_performance():
         }
     finally:
         conn.close()
+
+
+# ── Research chart data endpoint ──────────────────────────────────────────────
+
+_chart_cache: dict[str, tuple[float, dict]] = {}
+_CHART_CACHE_TTL = 300  # 5 minutes
+
+@router.get("/api/research/chart-data/{symbol}")
+@router.get("/research/chart-data/{symbol}")
+def get_research_chart_data(symbol: str, horizon: str = Query("SWING")):
+    """
+    Return daily OHLC candles + SMC zones + trade levels for a research stock.
+    Used by the interactive chart overlay page.
+    """
+    import time as _t
+    symbol = symbol.upper().replace("NSE:", "")
+    horizon = horizon.upper()
+
+    cache_key = f"{symbol}:{horizon}"
+    cached = _chart_cache.get(cache_key)
+    if cached and (_t.time() - cached[0]) < _CHART_CACHE_TTL:
+        return cached[1]
+
+    # 1. Fetch recommendation from DB
+    reco = None
+    rows = get_stock_recommendations(horizon, limit=50)
+    for r in rows:
+        if r["symbol"].upper().replace("NSE:", "") == symbol:
+            reco = r
+            break
+
+    # 2. Fetch daily OHLC via yfinance
+    candles = _fetch_yfinance_ohlc(symbol, days=180)
+    if not candles:
+        raise HTTPException(status_code=404, detail=f"No OHLC data for {symbol}")
+
+    # 3. Detect SMC zones
+    zones = _detect_smc_zones(candles)
+
+    # 4. Build trade levels from recommendation
+    levels = []
+    if reco:
+        entry = float(reco["entry_price"])
+        sl = float(reco["stop_loss"]) if reco.get("stop_loss") else None
+        targets = reco.get("targets", [])
+        scan_cmp = float(reco["scan_cmp"]) if reco.get("scan_cmp") else None
+        entry_type = reco.get("entry_type", "MARKET")
+        setup = reco.get("setup", "")
+
+        levels.append({"type": "entry", "price": entry, "label": f"Entry ₹{entry:.2f}", "color": "#2962ff",
+                        "style": "solid", "entry_type": entry_type})
+        if sl:
+            levels.append({"type": "sl", "price": sl, "label": f"SL ₹{sl:.2f}", "color": "#ff4757", "style": "dashed"})
+        for i, t in enumerate(targets):
+            tv = float(t)
+            levels.append({"type": "target", "price": tv, "label": f"T{i+1} ₹{tv:.2f}", "color": "#00e096", "style": "dashed"})
+        if scan_cmp:
+            levels.append({"type": "cmp", "price": scan_cmp, "label": f"CMP ₹{scan_cmp:.2f}", "color": "#f0c060", "style": "dotted"})
+
+        # Entry zone for longterm
+        entry_zone = reco.get("entry_zone")
+        if entry_zone and isinstance(entry_zone, list) and len(entry_zone) == 2:
+            zones.append({
+                "top": float(entry_zone[1]),
+                "bottom": float(entry_zone[0]),
+                "zone_type": "ENTRY_ZONE",
+                "color": "rgba(41, 98, 255, 0.12)",
+                "border_color": "rgba(41, 98, 255, 0.4)",
+                "label": "Entry Zone",
+            })
+
+    # 5. Build response
+    response = {
+        "symbol": symbol,
+        "horizon": horizon,
+        "candles": candles,
+        "zones": zones,
+        "levels": levels,
+        "setup": reco.get("setup", "") if reco else "",
+        "confidence": float(reco["confidence_score"]) if reco else 0,
+        "reasoning": reco.get("reasoning", "") if reco else "",
+    }
+    _chart_cache[cache_key] = (_t.time(), response)
+    return response
+
+
+def _fetch_yfinance_ohlc(symbol: str, days: int = 180) -> list[dict]:
+    """Fetch daily OHLC from yfinance, return lightweight-charts format."""
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(f"{symbol}.NS")
+        df = ticker.history(period=f"{days}d")
+        if df.empty:
+            return []
+        candles = []
+        for idx, row in df.iterrows():
+            candles.append({
+                "time": idx.strftime("%Y-%m-%d"),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+            })
+        return candles
+    except Exception as e:
+        log.warning("yfinance fetch failed for %s: %s", symbol, e)
+        return []
+
+
+def _detect_smc_zones(candles: list[dict]) -> list[dict]:
+    """Run SMC zone detection (OB, FVG, structure) on daily candles."""
+    try:
+        from engine.swing import detect_daily_ob, detect_daily_fvg, detect_daily_structure, detect_weekly_trend
+        from services.research_levels import daily_candles_to_weekly
+
+        zones = []
+
+        # Daily OB
+        ob_long = detect_daily_ob(candles, "LONG")
+        if ob_long:
+            zones.append({
+                "top": ob_long[1], "bottom": ob_long[0],
+                "zone_type": "OB", "color": "rgba(0, 209, 140, 0.10)",
+                "border_color": "rgba(0, 209, 140, 0.5)", "label": "Order Block (Demand)",
+            })
+
+        ob_short = detect_daily_ob(candles, "SHORT")
+        if ob_short:
+            zones.append({
+                "top": ob_short[1], "bottom": ob_short[0],
+                "zone_type": "OB", "color": "rgba(255, 71, 87, 0.10)",
+                "border_color": "rgba(255, 71, 87, 0.5)", "label": "Order Block (Supply)",
+            })
+
+        # Daily FVG
+        fvg_long = detect_daily_fvg(candles, "LONG")
+        if fvg_long:
+            zones.append({
+                "top": fvg_long[1], "bottom": fvg_long[0],
+                "zone_type": "FVG", "color": "rgba(91, 156, 246, 0.10)",
+                "border_color": "rgba(91, 156, 246, 0.5)", "label": "FVG (Bullish)",
+            })
+
+        fvg_short = detect_daily_fvg(candles, "SHORT")
+        if fvg_short:
+            zones.append({
+                "top": fvg_short[1], "bottom": fvg_short[0],
+                "zone_type": "FVG", "color": "rgba(255, 152, 0, 0.10)",
+                "border_color": "rgba(255, 152, 0, 0.5)", "label": "FVG (Bearish)",
+            })
+
+        # Daily structure
+        ds, ds_info = detect_daily_structure(candles)
+        if ds_info and ds_info.get("level"):
+            zones.append({
+                "top": ds_info["level"], "bottom": ds_info["level"],
+                "zone_type": "STRUCTURE", "color": "rgba(240, 192, 96, 0.15)",
+                "border_color": "#f0c060", "label": f"Structure ({ds})",
+            })
+
+        # Weekly zones (for longterm)
+        weekly = daily_candles_to_weekly(candles)
+        if len(weekly) >= 10:
+            wt = detect_weekly_trend(weekly)
+            if wt in ("BULLISH", "STRONG_BULL"):
+                w_ob = detect_daily_ob(weekly, "LONG")
+                if w_ob:
+                    zones.append({
+                        "top": w_ob[1], "bottom": w_ob[0],
+                        "zone_type": "WEEKLY_OB", "color": "rgba(0, 209, 140, 0.06)",
+                        "border_color": "rgba(0, 209, 140, 0.3)", "label": "Weekly OB (Demand)",
+                    })
+                w_fvg = detect_daily_fvg(weekly, "LONG")
+                if w_fvg:
+                    zones.append({
+                        "top": w_fvg[1], "bottom": w_fvg[0],
+                        "zone_type": "WEEKLY_FVG", "color": "rgba(91, 156, 246, 0.06)",
+                        "border_color": "rgba(91, 156, 246, 0.3)", "label": "Weekly FVG (Bullish)",
+                    })
+
+        return zones
+    except Exception as e:
+        log.warning("SMC zone detection failed: %s", e)
+        return []
