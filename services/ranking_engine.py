@@ -125,6 +125,39 @@ def _research_fetch_days() -> int:
     return int(os.getenv("RESEARCH_FETCH_DAYS", "420"))
 
 
+# ── Liquidity filter on real OHLCV data ──────────────────────────
+_MIN_AVG_VOLUME = int(os.getenv("RESEARCH_MIN_AVG_VOLUME", "50000"))  # 50k shares/day
+_MIN_AVG_TURNOVER_CR = float(os.getenv("RESEARCH_MIN_AVG_TURNOVER_CR", "1.0"))  # ₹1 Cr daily turnover
+
+
+def _passes_liquidity_filter(daily_df, symbol: str) -> bool:
+    """Reject stocks with inadequate daily volume using real OHLCV data."""
+    try:
+        import pandas as pd
+        if daily_df is None or not hasattr(daily_df, 'columns'):
+            return True  # can't check, let it through
+        vol_col = 'volume' if 'volume' in daily_df.columns else 'Volume' if 'Volume' in daily_df.columns else None
+        close_col = 'close' if 'close' in daily_df.columns else 'Close' if 'Close' in daily_df.columns else None
+        if vol_col is None or close_col is None:
+            return True
+        # Use last 20 trading days
+        recent = daily_df.tail(20)
+        if len(recent) < 5:
+            return True
+        avg_vol = float(recent[vol_col].mean())
+        avg_close = float(recent[close_col].mean())
+        avg_turnover_cr = (avg_vol * avg_close) / 1e7  # in crores
+        if avg_vol < _MIN_AVG_VOLUME:
+            log.debug("REJECT %s: avg_vol %.0f < %d", symbol, avg_vol, _MIN_AVG_VOLUME)
+            return False
+        if avg_turnover_cr < _MIN_AVG_TURNOVER_CR:
+            log.debug("REJECT %s: avg_turnover %.2f Cr < %.1f Cr", symbol, avg_turnover_cr, _MIN_AVG_TURNOVER_CR)
+            return False
+        return True
+    except Exception:
+        return True  # fail open
+
+
 async def _fetch_daily_df(ingestion: DataIngestion, symbol: str) -> object:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
@@ -221,6 +254,8 @@ async def _materialize_swing_idea(
     symbol = row.symbol
     _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
     daily_df = await _fetch_daily_df(ingestion, symbol)
+    if not _passes_liquidity_filter(daily_df, symbol):
+        return None
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
         log.debug("No OHLC swing levels for %s", symbol)
@@ -294,6 +329,8 @@ async def _materialize_longterm_idea(
     symbol = row.symbol
     _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[symbol]
     daily_df = await _fetch_daily_df(ingestion, symbol)
+    if not _passes_liquidity_filter(daily_df, symbol):
+        return None
     lt = build_longterm_trade_levels(symbol, daily_df, nifty_daily)
     if not lt:
         log.debug("No OHLC long-term levels for %s", symbol)
