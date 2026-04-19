@@ -263,8 +263,13 @@ async def _materialize_swing_idea(
     entry, stop, targets, setup, smc_meta = levels
     entry_price = float(entry)
     stop_loss = float(stop)
-    entry_type = smc_meta.get("entry_type", "MARKET") if smc_meta else "MARKET"
-    scan_cmp = float(smc_meta.get("cmp", 0)) if smc_meta and smc_meta.get("cmp") else None
+    if smc_meta:
+        entry_type = smc_meta.get("entry_type", "MARKET")
+        scan_cmp = float(smc_meta.get("cmp", 0)) if smc_meta.get("cmp") else None
+    else:
+        # ATR pullback: entry is below CMP → LIMIT order
+        entry_type = "LIMIT" if "PULLBACK" in setup else "MARKET"
+        scan_cmp = None
 
     # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
     if smc_meta:

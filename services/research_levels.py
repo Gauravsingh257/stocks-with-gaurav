@@ -38,10 +38,11 @@ MIN_LONGTERM_UPSIDE_PCT = float(os.getenv("MIN_LONGTERM_UPSIDE_PCT", "30.0"))  #
 
 def _swing_atr_fallback_enabled() -> bool:
     """
-    Default ON: ATR fallback creates conservative long plans for stocks where SMC found nothing
-    or returned SHORT. Disable with RESEARCH_SWING_ATR_FALLBACK=0.
+    Default OFF: ATR fallback creates generic long plans with entry at CMP — no SMC
+    zone-based entry. Enable for testing with RESEARCH_SWING_ATR_FALLBACK=1.
+    Keeping this OFF ensures only stocks with real SMC structure appear as swing picks.
     """
-    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "1").strip().lower() not in ("0", "false", "no")
+    return os.getenv("RESEARCH_SWING_ATR_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 
 
 def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:
@@ -136,7 +137,12 @@ def atr_fallback_levels(
     *,
     force_long: bool = False,
 ) -> tuple[float, float, list[float], str] | None:
-    """When score_swing_candidate fails quality gates, use ATR / structure-neutral plan at CMP."""
+    """When score_swing_candidate fails quality gates, use ATR-based plan.
+
+    Instead of blindly entering at CMP, look for a recent swing low as
+    a pullback entry (LIMIT) so the user waits for a retest rather than
+    chasing the move.
+    """
     if len(candles) < 30:
         return None
     close = candles[-1]["close"]
@@ -145,30 +151,43 @@ def atr_fallback_levels(
         return None
     window = min(20, len(candles))
     sma = sum(c["close"] for c in candles[-window:]) / window
-    # Research swing stock picks are long-only — use force_long to avoid SHORT/CMP-below-SMA plans.
     if force_long:
         direction = "LONG"
     else:
         direction = "LONG" if close >= sma else "SHORT"
     min_risk = max(atr * 1.5, close * 0.03)
     if direction == "LONG":
-        entry = round(close, 2)
+        # Find recent swing low for pullback entry instead of CMP
+        recent_lows = []
+        for i in range(max(2, len(candles) - 20), len(candles) - 1):
+            if (candles[i]["low"] < candles[i - 1]["low"]
+                    and candles[i]["low"] < candles[i + 1]["low"]):
+                recent_lows.append(candles[i]["low"])
+        if recent_lows:
+            # Use the nearest swing low that is below CMP as LIMIT entry
+            swing_low = max(l for l in recent_lows if l < close) if any(l < close for l in recent_lows) else None
+            if swing_low and (close - swing_low) / close < 0.10:  # within 10%
+                entry = round(swing_low + atr * 0.3, 2)  # slightly above swing low
+            else:
+                entry = round(close - atr, 2)  # 1 ATR pullback
+        else:
+            entry = round(close - atr, 2)  # 1 ATR pullback
         sl = round(entry - min_risk, 2)
         if sl >= entry:
             return None
         r = entry - sl
         t1 = round(entry + r * 1.5, 2)
         t2 = round(entry + r * 3.0, 2)
-        setup = "ATR_FALLBACK_LONG"
+        setup = "ATR_PULLBACK_LONG"
     else:
-        entry = round(close, 2)
+        entry = round(close + atr, 2)  # 1 ATR pullback for SHORT
         sl = round(entry + min_risk, 2)
         if sl <= entry:
             return None
         r = sl - entry
         t1 = round(entry - r * 1.5, 2)
         t2 = round(entry - r * 3.0, 2)
-        setup = "ATR_FALLBACK_SHORT"
+        setup = "ATR_PULLBACK_SHORT"
     if not entry_vs_close_sane(entry, close):
         return None
     return entry, sl, [t1, t2], setup

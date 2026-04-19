@@ -325,14 +325,30 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
             entry = round(ob[1], 2)
             entry_type = "LIMIT"
         else:
-            # Fall back to BOS level (prior swing high broken = now support) or CMP
+            # Fall back to BOS level (prior swing high broken = now support) or recent swing low
             bos_level = ds_info.get("level", price)
-            # Enter on pullback to BOS level if price is above it, else CMP
+            # Enter on pullback to BOS level if price is above it
             if price > bos_level * 1.005:
                 entry = round(bos_level, 2)
                 entry_type = "LIMIT"
             else:
-                entry = price
+                # Use recent daily swing low as pullback entry
+                recent_lows = []
+                for i in range(max(2, len(daily_data) - 15), len(daily_data) - 1):
+                    if (daily_data[i]["low"] < daily_data[i - 1]["low"]
+                            and daily_data[i]["low"] < daily_data[i + 1]["low"]):
+                        recent_lows.append(daily_data[i]["low"])
+                if recent_lows:
+                    best_low = max(l for l in recent_lows if l < price) if any(l < price for l in recent_lows) else None
+                    if best_low and (price - best_low) / price < 0.06:
+                        entry = round(best_low + atr * 0.2, 2)
+                        entry_type = "LIMIT"
+                    else:
+                        entry = round(price - atr * 0.5, 2)
+                        entry_type = "LIMIT"
+                else:
+                    entry = round(price - atr * 0.5, 2)
+                    entry_type = "LIMIT"
 
         sl = (ob[0] - atr * 0.3) if ob else ((ds_info.get("swing_low", price - atr * 2)) - atr * 0.3)
         # Ensure SL is below entry; if zone-based entry pulls entry below SL, fall back to CMP entry
@@ -815,7 +831,23 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
         if price > ws_info["level"] * 1.01:
             entry_type = "LIMIT"
     else:
-        entry = round(price, 2)
+        # No zone above CMP — use recent daily swing low as LIMIT pullback entry
+        recent_lows = []
+        for i in range(max(2, len(daily_data) - 20), len(daily_data) - 1):
+            if (daily_data[i]["low"] < daily_data[i - 1]["low"]
+                    and daily_data[i]["low"] < daily_data[i + 1]["low"]):
+                recent_lows.append(daily_data[i]["low"])
+        if recent_lows:
+            best_low = max(l for l in recent_lows if l < price) if any(l < price for l in recent_lows) else None
+            if best_low and (price - best_low) / price < 0.08:
+                entry = round(best_low + atr * 0.2, 2)
+                entry_type = "LIMIT"
+            else:
+                entry = round(price - atr * 0.5, 2)
+                entry_type = "LIMIT"
+        else:
+            entry = round(price - atr * 0.5, 2)
+            entry_type = "LIMIT"
 
     # SL below weekly demand zone or weekly swing low
     if w_ob:
