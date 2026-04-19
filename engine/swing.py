@@ -357,6 +357,11 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
             entry_type = "MARKET"
             sl = (ob[0] - atr * 0.3) if ob else ((ds_info.get("swing_low", price - atr * 2)) - atr * 0.3)
         sl = round(sl, 2)
+        # Cap swing SL at max 5% from entry to keep risk manageable
+        max_swing_sl_pct = float(os.getenv("MAX_SWING_SL_PCT", "5.0")) / 100
+        sl_floor = round(entry * (1 - max_swing_sl_pct), 2)
+        if sl < sl_floor:
+            sl = sl_floor
         target = round(entry + (entry - sl) * 3, 2)
     else:
         # SHORT entry: FVG midpoint > OB low > CHoCH level > CMP
@@ -384,6 +389,11 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
             entry_type = "MARKET"
             sl = (ob[1] + atr * 0.3) if ob else ((ds_info.get("swing_high", price + atr * 2)) + atr * 0.3)
         sl = round(sl, 2)
+        # Cap swing SL at max 5% from entry (SHORT side)
+        max_swing_sl_pct = float(os.getenv("MAX_SWING_SL_PCT", "5.0")) / 100
+        sl_ceil = round(entry * (1 + max_swing_sl_pct), 2)
+        if sl > sl_ceil:
+            sl = sl_ceil
         target = round(entry - (sl - entry) * 3, 2)
 
     risk = abs(entry - sl)
@@ -859,6 +869,12 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
 
     if sl >= entry:
         sl = round(entry - weekly_atr * 1.5, 2)
+
+    # Cap longterm SL at max 8% from entry
+    max_lt_sl_pct = float(os.getenv("MAX_LONGTERM_SL_PCT", "8.0")) / 100
+    sl_floor = round(entry * (1 - max_lt_sl_pct), 2)
+    if sl < sl_floor:
+        sl = sl_floor
 
     # Target: 3R from weekly structure
     risk = abs(entry - sl)
