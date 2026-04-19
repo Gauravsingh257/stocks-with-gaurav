@@ -889,7 +889,7 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
         breakdown["rr"] = 0
 
     # QUALITY GATE: minimum score 5/11 for longterm
-    min_lt_quality = int(os.getenv("MIN_LONGTERM_QUALITY", "5"))
+    min_lt_quality = int(os.getenv("MIN_LONGTERM_QUALITY", "4"))
     if score < min_lt_quality or rr < 2.0:
         return None
 

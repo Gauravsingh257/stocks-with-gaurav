@@ -33,7 +33,7 @@ RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_P
 RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
 # Minimum upside thresholds (soft floors) — picks below these are rejected
 MIN_SWING_UPSIDE_PCT = float(os.getenv("MIN_SWING_UPSIDE_PCT", "8.0"))       # 8% minimum for swing
-MIN_LONGTERM_UPSIDE_PCT = float(os.getenv("MIN_LONGTERM_UPSIDE_PCT", "30.0"))  # 30% minimum for longterm
+MIN_LONGTERM_UPSIDE_PCT = float(os.getenv("MIN_LONGTERM_UPSIDE_PCT", "15.0"))  # 15% minimum for longterm
 
 
 def _swing_atr_fallback_enabled() -> bool:
