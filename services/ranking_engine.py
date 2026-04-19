@@ -348,7 +348,7 @@ async def _materialize_longterm_idea(
             if k in ("news_sentiment", "sector_rotation", "macro_sentiment")
         },
         reasoning=reasoning,
-        fair_value_estimate=round(entry_price + (long_target - entry_price) * 0.6, 2) if long_target and entry_price else None,
+        fair_value_estimate=round(float(entry) + (long_target - float(entry)) * 0.6, 2) if long_target and entry else None,
         entry_zone=entry_zone,
         long_term_target=long_target,
         risk_factors=None,
