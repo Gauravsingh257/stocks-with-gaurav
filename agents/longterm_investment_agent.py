@@ -55,7 +55,7 @@ class LongTermInvestmentAgent(BaseAgent):
             long_target = idea.long_term_target or (idea.targets[0] if idea.targets else idea.entry_price)
             stop_loss = idea.stop_loss
             thesis = idea.reasoning
-            risk_factors = idea.risk_factors or ["Earnings miss risk", "Sector rotation reversal", "Macro policy volatility"]
+            risk_factors = idea.risk_factors or []
 
             # Entry type + CMP from scoring
             entry_type = getattr(idea, "entry_type", "MARKET") or "MARKET"
@@ -139,5 +139,15 @@ class LongTermInvestmentAgent(BaseAgent):
         try:
             from services.trade_tracker import seed_running_trades
             seed_running_trades()
+        except Exception:
+            pass
+
+        # Auto-promote into persistent portfolio
+        try:
+            from services.idea_selector import select_and_promote
+            promoted = select_and_promote("LONGTERM")
+            if promoted:
+                import logging as _log
+                _log.getLogger("LongTermInvestmentAgent").info("Portfolio: promoted %d longterm positions", promoted)
         except Exception:
             pass

@@ -816,8 +816,9 @@ def create_stock_recommendation(payload: dict) -> int:
                 setup, expected_holding_period, technical_signals, fundamental_signals,
                 sentiment_signals, technical_factors, fundamental_factors, sentiment_factors,
                 fair_value_estimate, entry_zone, long_term_target, risk_factors, reasoning,
-                signal_first_detected_at, data_authenticity, scan_run_id, entry_type, scan_cmp, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+                signal_first_detected_at, signals_updated_at,
+                data_authenticity, scan_run_id, entry_type, scan_cmp, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
             """,
             (
                 payload["symbol"],
@@ -839,6 +840,7 @@ def create_stock_recommendation(payload: dict) -> int:
                 float(payload["long_term_target"]) if payload.get("long_term_target") is not None else None,
                 json.dumps(payload.get("risk_factors", [])),
                 payload.get("reasoning", ""),
+                datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S"),
                 datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S"),
                 payload.get("data_authenticity", "unknown"),
                 scan_run_id,

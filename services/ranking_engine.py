@@ -348,10 +348,10 @@ async def _materialize_longterm_idea(
             if k in ("news_sentiment", "sector_rotation", "macro_sentiment")
         },
         reasoning=reasoning,
-        fair_value_estimate=round(long_target * 0.9, 2),
+        fair_value_estimate=round(entry_price + (long_target - entry_price) * 0.6, 2) if long_target and entry_price else None,
         entry_zone=entry_zone,
         long_term_target=long_target,
-        risk_factors=["Earnings miss risk", "Macro sentiment reversal", "Liquidity contraction"],
+        risk_factors=None,
         entry_type=entry_type,
         scan_cmp=scan_cmp,
     )
@@ -389,6 +389,9 @@ async def _collect_ideas_from_pool(
                     row, rank_score, evidence_map, ingestion, nifty_daily
                 )
         if idea is None:
+            continue
+        # Skip penny stocks below ₹100
+        if idea.entry_price < 100:
             continue
         ideas.append(replace(idea, rank=rank_counter))
         rank_counter += 1
