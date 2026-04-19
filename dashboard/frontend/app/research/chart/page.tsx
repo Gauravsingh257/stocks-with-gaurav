@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
@@ -8,6 +8,8 @@ import {
   createChart,
   type IChartApi,
   type ISeriesApi,
+  CandlestickSeries,
+  HistogramSeries,
   ColorType,
   LineStyle,
   CrosshairMode,
@@ -26,6 +28,14 @@ function setupBadgeColor(setup: string): string {
 }
 
 export default function ResearchChartPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "#5b9cf6", background: "#0a0e17", height: "100vh" }}>Loading chart...</div>}>
+      <ChartContent />
+    </Suspense>
+  );
+}
+
+function ChartContent() {
   const searchParams = useSearchParams();
   const symbol = searchParams.get("symbol") || "";
   const horizon = searchParams.get("horizon") || "SWING";
@@ -83,7 +93,7 @@ export default function ResearchChartPage() {
     chartRef.current = chart;
 
     // Candlestick series
-    const candleSeries = chart.addCandlestickSeries({
+    const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#00d18c",
       downColor: "#ff4e6a",
       borderDownColor: "#ff4e6a",
@@ -103,7 +113,7 @@ export default function ResearchChartPage() {
     );
 
     // Volume series
-    const volumeSeries = chart.addHistogramSeries({
+    const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
     });
