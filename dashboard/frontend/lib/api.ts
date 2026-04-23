@@ -184,6 +184,7 @@ export interface JournalTrade {
   pnl_r:       number;
   score:       number | null;
   notes:       string | null;
+  signal_id?:  string | null;  // Phase 4A: link back to originating signal_log row
 }
 
 /** Row from ai_learning signal_log (Telegram + metadata); used by journal + analytics fallback. */
@@ -223,6 +224,18 @@ export interface SignalLogPage {
   source:     string;
 }
 
+export interface SmcEvidence {
+  ob_zone: { low: number; high: number; tf: string } | null;
+  fvg_range: { low: number; high: number; tf: string } | null;
+  sweep_level: { price: number; side: "low" | "high" } | null;
+  structure: "BOS" | "CHOCH" | "NONE";
+  structure_dir: "BULLISH" | "BEARISH" | "";
+  structure_level: number | null;
+  displacement_atr_mult: number;
+  confluence_breakdown: Record<string, number>;
+  timeframe: string;
+}
+
 export interface SwingIdea {
   id: number;
   symbol: string;
@@ -248,8 +261,13 @@ export interface SwingIdea {
   status?: string;
   entry_type?: string;
   scan_cmp?: number | null;
+  cmp_source?: string | null;
+  cmp_age_sec?: number | null;
   entry_gap_pct?: number | null;
   action_tag?: string;
+  smc_evidence?: SmcEvidence | null;
+  sector?: string | null;
+  target_source?: string | null;
 }
 
 export interface LongTermIdea {
@@ -280,8 +298,13 @@ export interface LongTermIdea {
   status?: string;
   entry_type?: string;
   scan_cmp?: number | null;
+  cmp_source?: string | null;
+  cmp_age_sec?: number | null;
   entry_gap_pct?: number | null;
   action_tag?: string;
+  smc_evidence?: SmcEvidence | null;
+  sector?: string | null;
+  target_source?: string | null;
 }
 
 export interface RunningTradeMonitorItem {
@@ -289,6 +312,8 @@ export interface RunningTradeMonitorItem {
   symbol: string;
   entry_price: number;
   current_price: number;
+  cmp_source?: string | null;
+  cmp_age_sec?: number | null;
   stop_loss: number;
   targets: number[];
   profit_loss: number;
@@ -444,6 +469,30 @@ export interface ResearchPerformanceSummary {
 export interface ResearchPerformanceResponse {
   summary: ResearchPerformanceSummary;
   picks: ResearchPickRow[];
+}
+
+/** Phase 4C: stock_recommendations outcome rollup (drives "Research Hit Rate" card). */
+export interface ResearchOutcomesSetupRow {
+  setup: string;
+  wins: number;
+  losses: number;
+  total: number;
+  hit_rate_pct: number;
+}
+
+export interface ResearchOutcomes {
+  horizon: "SWING" | "LONGTERM" | "ALL";
+  window_days: number;
+  total: number;
+  active: number;
+  target_hit: number;
+  stop_hit: number;
+  expired: number;
+  resolved: number;
+  hit_rate_pct: number;
+  avg_pnl_r: number;
+  profit_factor: number;
+  by_setup: ResearchOutcomesSetupRow[];
 }
 
 export interface ScanRunRow {
@@ -712,11 +761,13 @@ export const api = {
 
   // AI Research Center
   swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),
-  longtermResearch: (limit = 12) => get<{ items: LongTermIdea[]; count: number }>(`/api/research/longterm?limit=${limit}`),
+  longtermResearch: (limit = 12) => get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean } }>(`/api/research/longterm?limit=${limit}`),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),
+  researchOutcomes: (horizon: "swing" | "longterm" | "all" = "swing", days = 30) =>
+    get<ResearchOutcomes>(`/api/research/outcomes?horizon=${horizon}&days=${days}`),
   researchChartData: (symbol: string, horizon = "SWING") =>
     get<ResearchChartData>(`/api/research/chart-data/${encodeURIComponent(symbol)}?horizon=${horizon}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),

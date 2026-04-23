@@ -53,7 +53,9 @@ TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-BACKEND_URL = os.getenv("RAILWAY_BACKEND_URL", "https://web-production-2781a.up.railway.app").strip().rstrip("/")
+# Railway backend URL must be set explicitly via env (no hard-coded fallback —
+# old defaults silently broke when the Railway service was renamed).
+BACKEND_URL = os.getenv("RAILWAY_BACKEND_URL", "").strip().rstrip("/")
 
 # ── Logging ────────────────────────────────────────────────────────
 _scheduled = "--scheduled" in sys.argv
@@ -126,7 +128,7 @@ def _get_request_token() -> str:
     resp = session.post(KITE_LOGIN_URL, data={
         "user_id": USER_ID,
         "password": PASSWORD,
-    })
+    }, timeout=20)
 
     if resp.status_code != 200:
         raise RuntimeError(f"Login POST failed: HTTP {resp.status_code} — {resp.text[:200]}")
@@ -148,7 +150,7 @@ def _get_request_token() -> str:
         "twofa_value": totp_code,
         "twofa_type": "totp",
         "skip_session": "",
-    })
+    }, timeout=20)
 
     # Some Zerodha accounts reject twofa_type="totp" — retry without it
     if resp2.status_code == 400:
@@ -157,7 +159,7 @@ def _get_request_token() -> str:
             "user_id": USER_ID,
             "request_id": request_id,
             "twofa_value": totp_code,
-        })
+        }, timeout=20)
 
     if resp2.status_code != 200:
         raise RuntimeError(f"2FA POST failed: HTTP {resp2.status_code} — {resp2.text[:200]}")
@@ -269,31 +271,35 @@ def _store_token(access_token: str) -> None:
 
     # 4. Push to Railway backend (public endpoint → stores in Railway Redis) — with retry
     railway_ok = False
-    for _try in range(1, 4):
-        try:
-            import requests
-            resp = requests.post(
-                f"{BACKEND_URL}/api/kite/store-token",
-                json={"access_token": access_token},
-                headers={"X-Sync-Key": os.getenv("TRADES_SYNC_KEY", "")},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                log.info("Pushed token to Railway backend (%s)", BACKEND_URL)
-                railway_ok = True
-                break
-            else:
-                log.warning("Railway push attempt %d/3 returned %d: %s", _try, resp.status_code, resp.text[:100])
-        except Exception as e:
-            log.warning("Railway push attempt %d/3 failed: %s", _try, e)
-        if _try < 3:
-            time.sleep(5)
+    if not BACKEND_URL:
+        log.info("Skipping Railway backend push (RAILWAY_BACKEND_URL not set)")
+        railway_ok = True  # don't flag as failure if intentionally disabled
+    else:
+        for _try in range(1, 4):
+            try:
+                import requests
+                resp = requests.post(
+                    f"{BACKEND_URL}/api/kite/store-token",
+                    json={"access_token": access_token},
+                    headers={"X-Sync-Key": os.getenv("TRADES_SYNC_KEY", "")},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    log.info("Pushed token to Railway backend (%s)", BACKEND_URL)
+                    railway_ok = True
+                    break
+                else:
+                    log.warning("Railway push attempt %d/3 returned %d: %s", _try, resp.status_code, resp.text[:100])
+            except Exception as e:
+                log.warning("Railway push attempt %d/3 failed: %s", _try, e)
+            if _try < 3:
+                time.sleep(5)
 
     # 5. Alert if remote sync failed
     sync_failures = []
     if REDIS_URL and not redis_ok:
         sync_failures.append("Redis")
-    if not railway_ok:
+    if BACKEND_URL and not railway_ok:
         sync_failures.append("Railway backend")
     if sync_failures:
         fail_msg = ", ".join(sync_failures)

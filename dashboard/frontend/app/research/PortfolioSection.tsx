@@ -20,7 +20,9 @@ function fmt(v: number | null | undefined, dec = 2) {
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
-    return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const s = String(iso).replace(" ", "T");
+    const norm = s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s + "Z";
+    return new Date(norm).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch {
     return "-";
   }

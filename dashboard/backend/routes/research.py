@@ -4,12 +4,14 @@ Research Center APIs for swing ideas, long-term ideas, and running trades.
 """
 
 import logging
+import os
 import threading
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
+from services.price_resolver import resolve_cmp
 
 router = APIRouter(tags=["research"])
 log = logging.getLogger("dashboard.research")
@@ -19,6 +21,30 @@ _auto_scan_lock = threading.Lock()
 _auto_scan_running: set[str] = set()
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
+MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
+
+
+def _utc_iso(s: str | None) -> str | None:
+    """
+    Normalize a SQLite datetime('now') string to an ISO-8601 UTC string with
+    explicit "Z" suffix so JavaScript's Date constructor parses it correctly.
+    SQLite's datetime('now') returns naive UTC like '2026-04-23 03:00:00';
+    without a timezone marker, the browser would mis-interpret it as local time.
+    """
+    if not s:
+        return s
+    try:
+        s = str(s).strip()
+        if not s:
+            return None
+        # already has timezone info
+        if s.endswith("Z") or "+" in s[10:] or s.endswith("+00:00"):
+            return s
+        # SQLite uses space separator; normalize to ISO 'T'
+        s = s.replace(" ", "T", 1)
+        return s + "Z"
+    except Exception:
+        return s
 
 
 def _is_data_stale(horizon: str) -> bool:
@@ -74,6 +100,20 @@ def _swing_payload(limit: int) -> dict:
     rows = get_stock_recommendations("SWING", limit=limit)
     runs = get_ranking_runs(horizon="SWING", limit=1)
     last_scan = runs[0]["run_time"] if runs else None
+
+    # ── Resolve live CMP for all symbols in one batch (Phase 1: single source
+    # of truth). Falls back to scan_cmp from DB when no live source is
+    # available so the API never returns null. ──
+    scan_cmp_map: dict[str, float] = {}
+    for r in rows:
+        sc = r.get("scan_cmp")
+        if sc is not None:
+            try:
+                scan_cmp_map[r["symbol"]] = float(sc)
+            except (TypeError, ValueError):
+                pass
+    cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=scan_cmp_map)
+
     items: list[dict] = []
     for row in rows:
         targets = row.get("targets", [])
@@ -85,7 +125,19 @@ def _swing_payload(limit: int) -> dict:
         reward = abs((target_2 or target_1 or entry) - entry)
         rr = reward / max(risk, 0.01)
         entry_type = row.get("entry_type", "MARKET")
-        scan_cmp = float(row["scan_cmp"]) if row.get("scan_cmp") else None
+
+        # ── Live CMP via resolver (overrides stale scan_cmp). cmp_source +
+        # cmp_age_sec exposed so the frontend can render a trust badge. ──
+        sym = row["symbol"]
+        live = cmp_resolved.get(sym)
+        if live:
+            scan_cmp = float(live["price"])
+            cmp_source = live["source"]
+            cmp_age_sec = int(live["age_sec"])
+        else:
+            scan_cmp = float(row["scan_cmp"]) if row.get("scan_cmp") else None
+            cmp_source = "scan_snapshot" if scan_cmp is not None else "unknown"
+            cmp_age_sec = None
 
         # ── Entry gap: how far CMP is from entry (for LONG: positive = CMP above entry) ──
         entry_gap_pct = None
@@ -93,6 +145,12 @@ def _swing_payload(limit: int) -> dict:
             entry_gap_pct = round((scan_cmp - entry) / entry * 100, 1)
 
         # ── Action tag logic ──
+        # Determine LONG vs SHORT from target vs entry geometry
+        is_long = (target_2 or target_1 or entry) >= entry
+        favorable_move_R = 0.0
+        if scan_cmp and risk > 0:
+            favorable_move_R = ((scan_cmp - entry) / risk) if is_long else ((entry - scan_cmp) / risk)
+
         action_tag = "EXECUTE_NOW"  # default for MARKET entries
         if entry_type == "LIMIT":
             if scan_cmp and entry > 0:
@@ -107,12 +165,18 @@ def _swing_payload(limit: int) -> dict:
                     action_tag = "WAIT_FOR_RETEST"
             else:
                 action_tag = "WAIT_FOR_RETEST"
+        # Phase 3.4: IN_MOTION demotion if price already >0.5R in our favor
+        # (applies regardless of MARKET/LIMIT, but never overrides MISSED)
+        if action_tag != "MISSED" and favorable_move_R > 0.5:
+            action_tag = "IN_MOTION"
 
         items.append(
             {
                 "id": row["id"],
                 "symbol": row["symbol"],
                 "setup": row.get("setup") or "SWING",
+                "sector": row.get("sector"),
+                "target_source": row.get("target_source"),
                 "entry_price": entry,
                 "stop_loss": stop,
                 "target_1": target_1,
@@ -127,24 +191,39 @@ def _swing_payload(limit: int) -> dict:
                 "fundamental_factors": row.get("fundamental_factors", {}),
                 "sentiment_factors": row.get("sentiment_factors", {}),
                 "reasoning_summary": row.get("reasoning", ""),
-                "signal_first_detected_at": row.get("signal_first_detected_at") or row.get("created_at"),
-                "signals_updated_at": row.get("signals_updated_at") or row.get("signal_first_detected_at") or row.get("signal_first_detected_at") or row.get("created_at"),
-                "created_at": row.get("created_at"),
+                "signal_first_detected_at": _utc_iso(row.get("signal_first_detected_at") or row.get("created_at")),
+                "signals_updated_at": _utc_iso(row.get("signals_updated_at") or row.get("signal_first_detected_at") or row.get("created_at")),
+                "created_at": _utc_iso(row.get("created_at")),
                 "data_authenticity": row.get("data_authenticity", "unknown"),
                 "status": row.get("status", "ACTIVE"),
                 "entry_type": entry_type,
                 "scan_cmp": scan_cmp,
+                "cmp_source": cmp_source,
+                "cmp_age_sec": cmp_age_sec,
                 "entry_gap_pct": entry_gap_pct,
                 "action_tag": action_tag,
+                "smc_evidence": row.get("smc_evidence"),
             }
         )
-    return {"items": items, "count": len(items), "last_scan_time": last_scan}
+    return {"items": items, "count": len(items), "last_scan_time": _utc_iso(last_scan)}
 
 
 def _longterm_payload(limit: int) -> dict:
     rows = get_stock_recommendations("LONGTERM", limit=limit)
     runs = get_ranking_runs(horizon="LONGTERM", limit=1)
     last_scan = runs[0]["run_time"] if runs else None
+
+    # ── Same single-source-of-truth resolver as swing payload. ──
+    scan_cmp_map: dict[str, float] = {}
+    for r in rows:
+        sc = r.get("scan_cmp")
+        if sc is not None:
+            try:
+                scan_cmp_map[r["symbol"]] = float(sc)
+            except (TypeError, ValueError):
+                pass
+    cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=scan_cmp_map)
+
     items: list[dict] = []
     for row in rows:
         targets = row.get("targets", [])
@@ -155,7 +234,17 @@ def _longterm_payload(limit: int) -> dict:
         reward = abs(float(long_target) - entry) if long_target else 0
         rr = reward / max(risk, 0.01)
         entry_type = row.get("entry_type", "MARKET")
-        scan_cmp = float(row["scan_cmp"]) if row.get("scan_cmp") else None
+
+        sym = row["symbol"]
+        live = cmp_resolved.get(sym)
+        if live:
+            scan_cmp = float(live["price"])
+            cmp_source = live["source"]
+            cmp_age_sec = int(live["age_sec"])
+        else:
+            scan_cmp = float(row["scan_cmp"]) if row.get("scan_cmp") else None
+            cmp_source = "scan_snapshot" if scan_cmp is not None else "unknown"
+            cmp_age_sec = None
 
         # ── Entry gap: how far CMP is from entry ──
         entry_gap_pct = None
@@ -163,6 +252,10 @@ def _longterm_payload(limit: int) -> dict:
             entry_gap_pct = round((scan_cmp - entry) / entry * 100, 1)
 
         # ── Action tag logic ──
+        favorable_move_R = 0.0
+        if scan_cmp and risk > 0:
+            favorable_move_R = (scan_cmp - entry) / risk  # longterm is LONG-only
+
         action_tag = "EXECUTE_NOW"
         if entry_type == "LIMIT":
             if scan_cmp and entry > 0:
@@ -177,12 +270,17 @@ def _longterm_payload(limit: int) -> dict:
                     action_tag = "WAIT_FOR_RETEST"
             else:
                 action_tag = "WAIT_FOR_RETEST"
+        # Phase 3.4: IN_MOTION demotion if price already >0.5R favorable
+        if action_tag != "MISSED" and favorable_move_R > 0.5:
+            action_tag = "IN_MOTION"
 
         items.append(
             {
                 "id": row["id"],
                 "symbol": row["symbol"],
                 "setup": row.get("setup") or "LONGTERM",
+                "sector": row.get("sector"),
+                "target_source": row.get("target_source"),
                 "long_term_thesis": row.get("reasoning", ""),
                 "fair_value_estimate": row.get("fair_value_estimate"),
                 "entry_price": entry,
@@ -200,27 +298,63 @@ def _longterm_payload(limit: int) -> dict:
                 "technical_factors": row.get("technical_factors", {}),
                 "sentiment_factors": row.get("sentiment_factors", {}),
                 "reasoning_summary": row.get("reasoning", ""),
-                "signal_first_detected_at": row.get("signal_first_detected_at") or row.get("created_at"),
-                "signals_updated_at": row.get("signals_updated_at") or row.get("signal_first_detected_at") or row.get("created_at"),
-                "created_at": row.get("created_at"),
+                "signal_first_detected_at": _utc_iso(row.get("signal_first_detected_at") or row.get("created_at")),
+                "signals_updated_at": _utc_iso(row.get("signals_updated_at") or row.get("signal_first_detected_at") or row.get("created_at")),
+                "created_at": _utc_iso(row.get("created_at")),
                 "data_authenticity": row.get("data_authenticity", "unknown"),
                 "status": row.get("status", "ACTIVE"),
                 "entry_type": entry_type,
                 "scan_cmp": scan_cmp,
+                "cmp_source": cmp_source,
+                "cmp_age_sec": cmp_age_sec,
                 "entry_gap_pct": entry_gap_pct,
                 "action_tag": action_tag,
+                "smc_evidence": row.get("smc_evidence"),
             }
         )
-    return {"items": items, "count": len(items), "last_scan_time": last_scan}
+    # Slot status — surfaces why long-term scan may not have produced new ideas.
+    occupied = len(rows)
+    slot_status = {
+        "occupied": occupied,
+        "max": MAX_LONGTERM_SLOTS,
+        "slots_full": occupied >= MAX_LONGTERM_SLOTS,
+    }
+    return {
+        "items": items,
+        "count": len(items),
+        "last_scan_time": _utc_iso(last_scan),
+        "slot_status": slot_status,
+    }
 
 
 def _running_trades_payload(limit: int) -> dict:
     rows = list_running_trades(limit=limit, active_only=True)
+
+    # ── Refresh CMP via the central resolver so research + running trades
+    # never disagree on price for the same symbol. Falls back to the stored
+    # current_price (last daemon update) if no live source is available. ──
+    stored_cmp_map: dict[str, float] = {}
+    for r in rows:
+        try:
+            stored_cmp_map[r["symbol"]] = float(r["current_price"])
+        except (TypeError, ValueError, KeyError):
+            pass
+    cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=stored_cmp_map)
+
     items: list[dict] = []
     for row in rows:
         targets = [float(t) for t in row.get("targets", [])]
         entry = float(row["entry_price"])
-        current = float(row["current_price"])
+        sym = row["symbol"]
+        live = cmp_resolved.get(sym)
+        if live:
+            current = float(live["price"])
+            cmp_source = live["source"]
+            cmp_age_sec = int(live["age_sec"])
+        else:
+            current = float(row["current_price"])
+            cmp_source = "db_snapshot"
+            cmp_age_sec = None
         stop = float(row["stop_loss"])
         max_target = max(targets) if targets else entry
         range_size = max(max_target - entry, 0.01)
@@ -237,10 +371,12 @@ def _running_trades_payload(limit: int) -> dict:
                 "symbol": row["symbol"],
                 "entry_price": entry,
                 "current_price": current,
+                "cmp_source": cmp_source,
+                "cmp_age_sec": cmp_age_sec,
                 "stop_loss": stop,
                 "targets": targets,
-                "profit_loss": float(row.get("profit_loss", 0)),
-                "profit_loss_pct": float(row.get("profit_loss_pct", 0)),
+                "profit_loss": round(current - entry, 2),
+                "profit_loss_pct": round((current - entry) / entry * 100, 2) if entry else 0.0,
                 "drawdown": float(row.get("drawdown", 0)),
                 "drawdown_pct": float(row.get("drawdown_pct", 0)),
                 "high_since_entry": row.get("high_since_entry"),
@@ -292,7 +428,7 @@ def get_research_coverage(target_universe: int = Query(1800, ge=100, le=5000)):
         requested = int(row.get("universe_requested", target_universe))
         coverage_pct = round((scanned / requested) * 100, 2) if requested > 0 else 0.0
         return {
-            "run_time": row.get("run_time"),
+            "run_time": _utc_iso(row.get("run_time")),
             "universe_requested": requested,
             "universe_scanned": scanned,
             "quality_passed": int(row.get("quality_passed", 0)),
@@ -405,9 +541,16 @@ def run_swing_scan():
 
 @router.post("/api/research/run/longterm")
 @router.post("/research/run/longterm")
-def run_longterm_scan():
-    """Trigger long-term scan. Returns immediately; work runs in a background thread."""
+def run_longterm_scan(force: bool = Query(False, description="Bypass slot-full check and scan anyway")):
+    """Trigger long-term scan. Returns immediately; work runs in a background thread.
+
+    When force=true, the agent ignores the "all slots occupied" guard and runs a
+    full scan, useful when you want fresh ideas even if existing recommendations
+    are still active.
+    """
     try:
+        if force:
+            os.environ["LONGTERM_FORCE_SCAN"] = "1"
         return _start_research_scan_background("LongTermInvestmentAgent", "longterm")
     except Exception as e:
         log.exception("run_longterm_scan failed: %s", e)
@@ -527,6 +670,103 @@ def get_research_performance():
         }
     finally:
         conn.close()
+
+
+# ── Phase 4C: research outcomes (TARGET_HIT / STOP_HIT / EXPIRED rollup) ──────
+
+@router.get("/api/research/outcomes")
+@router.get("/research/outcomes")
+def get_research_outcomes(
+    horizon: str = Query("swing", pattern="^(swing|longterm|all)$"),
+    days: int = Query(30, ge=1, le=365),
+):
+    """Aggregate stock_recommendations outcomes over the last ``days`` days.
+
+    Returns per-status counts, hit-rate, average R, profit-factor, and a
+    per-setup breakdown. Drives the "Research Hit Rate" analytics card.
+    """
+    horizon_filter = horizon.upper()
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    conn = get_connection()
+    try:
+        params: list = [cutoff]
+        sql_where = "WHERE COALESCE(exit_date, created_at) >= ?"
+        if horizon_filter in ("SWING", "LONGTERM"):
+            sql_where += " AND agent_type = ?"
+            params.append(horizon_filter)
+
+        rows = conn.execute(
+            f"""
+            SELECT id, symbol, agent_type, setup, status, pnl_r, exit_date,
+                   created_at, entry_price, stop_loss
+              FROM stock_recommendations
+              {sql_where}
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    total = len(rows)
+    by_status = {"ACTIVE": 0, "TARGET_HIT": 0, "STOP_HIT": 0, "EXPIRED": 0, "ARCHIVED": 0}
+    pnl_vals: list[float] = []
+    wins_r = 0.0
+    losses_r = 0.0
+    for r in rows:
+        st = (r["status"] or "ACTIVE").upper()
+        by_status[st] = by_status.get(st, 0) + 1
+        if st in ("TARGET_HIT", "STOP_HIT", "EXPIRED"):
+            try:
+                pr = float(r["pnl_r"]) if r["pnl_r"] is not None else 0.0
+            except (TypeError, ValueError):
+                pr = 0.0
+            pnl_vals.append(pr)
+            if pr > 0:
+                wins_r += pr
+            elif pr < 0:
+                losses_r += abs(pr)
+
+    resolved = by_status["TARGET_HIT"] + by_status["STOP_HIT"] + by_status["EXPIRED"]
+    decisive = by_status["TARGET_HIT"] + by_status["STOP_HIT"]
+    hit_rate = round(by_status["TARGET_HIT"] / decisive * 100, 2) if decisive else 0.0
+    avg_pnl_r = round(sum(pnl_vals) / len(pnl_vals), 3) if pnl_vals else 0.0
+    profit_factor = round(wins_r / losses_r, 2) if losses_r > 0 else (wins_r if wins_r > 0 else 0.0)
+
+    # Per-setup breakdown (decisive trades only)
+    by_setup: dict[str, dict] = {}
+    for r in rows:
+        st = (r["status"] or "").upper()
+        if st not in ("TARGET_HIT", "STOP_HIT"):
+            continue
+        setup = (r["setup"] or "UNKNOWN").upper()
+        bucket = by_setup.setdefault(setup, {"setup": setup, "wins": 0, "losses": 0})
+        if st == "TARGET_HIT":
+            bucket["wins"] += 1
+        else:
+            bucket["losses"] += 1
+    setup_rows = []
+    for s in by_setup.values():
+        n = s["wins"] + s["losses"]
+        s["total"] = n
+        s["hit_rate_pct"] = round(s["wins"] / n * 100, 2) if n else 0.0
+        setup_rows.append(s)
+    setup_rows.sort(key=lambda x: x["total"], reverse=True)
+
+    return {
+        "horizon": horizon_filter,
+        "window_days": days,
+        "total": total,
+        "active": by_status["ACTIVE"],
+        "target_hit": by_status["TARGET_HIT"],
+        "stop_hit": by_status["STOP_HIT"],
+        "expired": by_status["EXPIRED"],
+        "resolved": resolved,
+        "hit_rate_pct": hit_rate,
+        "avg_pnl_r": avg_pnl_r,
+        "profit_factor": profit_factor,
+        "by_setup": setup_rows,
+    }
 
 
 # ── Research chart data endpoint ──────────────────────────────────────────────

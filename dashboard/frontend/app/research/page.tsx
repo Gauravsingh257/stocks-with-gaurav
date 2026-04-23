@@ -8,7 +8,9 @@ import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePe
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
   if (!isoTime) return { label: "Never", stale: true };
-  const diff = Date.now() - new Date(isoTime + "Z").getTime();
+  // Defensively ensure exactly one trailing Z so naive UTC strings parse correctly
+  const normalized = isoTime.endsWith("Z") ? isoTime : isoTime + "Z";
+  const diff = Date.now() - new Date(normalized).getTime();
   const hours = Math.floor(diff / 3_600_000);
   if (hours < 1) return { label: "< 1h ago", stale: false };
   if (hours < 24) return { label: `${hours}h ago`, stale: hours > 12 };
@@ -33,6 +35,7 @@ export default function ResearchPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
+  const [longtermSlotStatus, setLongtermSlotStatus] = useState<{ occupied: number; max: number; slots_full: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -52,6 +55,7 @@ export default function ResearchPage() {
     if (longtermRes.status === "fulfilled") {
       setLongterm(longtermRes.value?.items ?? []);
       setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
+      setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
     }
     if (runningRes.status === "fulfilled") {
       setRunning(runningRes.value?.items ?? []);
@@ -96,10 +100,15 @@ export default function ResearchPage() {
             {(() => {
               const swingAge = formatScanAge(lastSwingScan);
               const ltAge = formatScanAge(lastLongtermScan);
+              const slotsFull = longtermSlotStatus?.slots_full;
+              const ltLabel = slotsFull
+                ? `all ${longtermSlotStatus.max} slots occupied (next scan when one closes)`
+                : ltAge.label;
+              const ltStale = ltAge.stale && !slotsFull;
               return (
-                <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: swingAge.stale || ltAge.stale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
-                  Last scan — Swing: {swingAge.label} · Long-term: {ltAge.label}
-                  {(swingAge.stale || ltAge.stale) && " (auto-refresh in progress)"}
+                <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: swingAge.stale || ltStale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
+                  Last scan — Swing: {swingAge.label} · Long-term: {ltLabel}
+                  {(swingAge.stale || ltStale) && " (auto-refresh in progress)"}
                 </p>
               );
             })()}

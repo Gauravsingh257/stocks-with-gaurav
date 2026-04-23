@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import type { SwingIdea } from "@/lib/api";
+import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
+import { SmcEvidencePanel } from "./SmcEvidencePanel";
 
 interface Props {
   items: SwingIdea[];
@@ -15,10 +17,16 @@ function fmt(v: number | null | undefined) {
   return v.toFixed(2);
 }
 
+function _toIsoUtc(iso: string): string {
+  // Normalize to a Date-parseable UTC string (handles "YYYY-MM-DD HH:MM:SS" and missing Z)
+  const s = iso.replace(" ", "T");
+  return s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s + "Z";
+}
+
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
-    const d = new Date(iso);
+    const d = new Date(_toIsoUtc(iso));
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch {
     return "-";
@@ -28,7 +36,7 @@ function fmtDate(iso: string | null | undefined): string {
 function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
-    const d = new Date(iso);
+    const d = new Date(_toIsoUtc(iso));
     return d.toLocaleString("en-IN", {
       day: "2-digit", month: "short", year: "numeric",
       hour: "2-digit", minute: "2-digit", hour12: true,
@@ -58,7 +66,7 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
 
   const techSignals = signalList(item.technical_signals);
   const fundSignals = signalList(item.fundamental_signals);
-  const sentSignals = signalList(item.sentiment_signals).filter(s => !s.includes("est."));
+  const sentSignals = signalList(item.sentiment_signals);
 
   return createPortal(
     <motion.div
@@ -118,6 +126,9 @@ function ReasoningModal({ item, onClose }: { item: SwingIdea; onClose: () => voi
           }}>
             {item.reasoning_summary}
           </div>
+
+          {/* Phase 2: Real SMC Evidence — replaces (est.) tech prose */}
+          <SmcEvidencePanel evidence={item.smc_evidence} />
 
           {/* Technical */}
           {techSignals.length > 0 && (
@@ -347,6 +358,7 @@ function ActionTag({ tag }: { tag?: string }) {
   const configs: Record<string, { bg: string; fg: string; label: string; icon: string }> = {
     EXECUTE_NOW: { bg: "rgba(0,209,140,0.18)", fg: "#00d18c", label: "Execute Now", icon: "\u{1F7E2}" },
     WAIT_FOR_RETEST: { bg: "rgba(240,192,96,0.18)", fg: "#f0c060", label: "Wait for Retest", icon: "\u{1F7E1}" },
+    IN_MOTION: { bg: "rgba(120,160,255,0.18)", fg: "#7ea8ff", label: "In Progress", icon: "\u{1F535}" },
     MISSED: { bg: "rgba(255,78,106,0.18)", fg: "#ff4e6a", label: "Missed Trade", icon: "\u{1F534}" },
   };
   const c = configs[tag] || configs.WAIT_FOR_RETEST!;
@@ -394,9 +406,24 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
               {items.map((item, idx) => (
                 <tr key={item.id} style={{ borderBottom: "1px solid var(--border-muted)" }}>
                   <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
-                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>{item.symbol}</td>
+                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span>{item.symbol}</span>
+                      {item.sector ? (
+                        <span style={{
+                          fontSize: "0.6rem", color: "var(--text-secondary)",
+                          fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase",
+                        }}>
+                          {item.sector}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
-                  <td style={{ padding: "10px 12px", fontWeight: 500 }}>{item.scan_cmp ? fmt(item.scan_cmp) : "-"}</td>
+                  <td style={{ padding: "10px 12px", fontWeight: 500 }}>
+                    {item.scan_cmp ? fmt(item.scan_cmp) : "-"}
+                    <CmpFreshnessBadge source={item.cmp_source} ageSec={item.cmp_age_sec} />
+                  </td>
                   <td style={{ padding: "10px 12px" }}><EntryGapBadge gap={item.entry_gap_pct} /></td>
                   <td style={{ padding: "10px 12px" }}>
                     <span style={{

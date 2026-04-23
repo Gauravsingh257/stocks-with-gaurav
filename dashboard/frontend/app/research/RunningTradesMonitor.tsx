@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { RunningTradeMonitorItem } from "@/lib/api";
+import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
 
 interface Props {
   items: RunningTradeMonitorItem[];
@@ -12,17 +13,22 @@ function fmt(v: number | null | undefined, dec = 2) {
   return v.toFixed(dec);
 }
 
+function _toIsoUtc(iso: string): string {
+  const s = iso.replace(" ", "T");
+  return s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s + "Z";
+}
+
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
-    return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    return new Date(_toIsoUtc(iso)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch { return "-"; }
 }
 
 function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
-    return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    return new Date(_toIsoUtc(iso)).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
   } catch { return "-"; }
 }
 
@@ -108,14 +114,14 @@ function TradeCard({ item, rank }: TradeCardProps) {
       {/* Key stats grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 0, borderBottom: "1px solid var(--border-muted)" }}>
         {[
-          { label: "Entry", value: fmt(entry), color: "var(--text-primary)" },
-          { label: "CMP (Live)", value: fmt(cmp), color: gainPct >= 0 ? "#00d18c" : "#ff4d6d" },
-          { label: "Stop Loss", value: fmt(sl), color: "#ff4d6d" },
-          { label: "Target", value: fmt(maxTarget), color: "#00d18c" },
-        ].map(({ label, value, color }) => (
+          { label: "Entry", value: fmt(entry), color: "var(--text-primary)", badge: null as ReactNode },
+          { label: "CMP (Live)", value: fmt(cmp), color: gainPct >= 0 ? "#00d18c" : "#ff4d6d", badge: <CmpFreshnessBadge source={item.cmp_source} ageSec={item.cmp_age_sec} /> },
+          { label: "Stop Loss", value: fmt(sl), color: "#ff4d6d", badge: null },
+          { label: "Target", value: fmt(maxTarget), color: "#00d18c", badge: null },
+        ].map(({ label, value, color, badge }) => (
           <div key={label} style={{ padding: "10px 14px", borderRight: "1px solid var(--border-muted)" }}>
             <div style={{ fontSize: "0.66rem", color: "var(--text-secondary)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
-            <div style={{ fontSize: "0.9rem", fontWeight: 700, color }}>{value}</div>
+            <div style={{ fontSize: "0.9rem", fontWeight: 700, color }}>{value}{badge}</div>
           </div>
         ))}
       </div>

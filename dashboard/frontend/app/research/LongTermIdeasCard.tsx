@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { LongTermIdea } from "@/lib/api";
+import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
+import { SmcEvidencePanel } from "./SmcEvidencePanel";
 
 interface Props {
   items: LongTermIdea[];
@@ -30,6 +32,7 @@ function gapColor(gap: number | null | undefined): string {
 function actionBadge(tag: string | undefined) {
   if (tag === "EXECUTE_NOW") return { label: "Execute Now", bg: "#00c85322", color: "#00c853", border: "#00c85344" };
   if (tag === "WAIT_FOR_RETEST") return { label: "Wait for Retest", bg: "#ff980022", color: "#ff9800", border: "#ff980044" };
+  if (tag === "IN_MOTION") return { label: "In Progress", bg: "#7ea8ff22", color: "#7ea8ff", border: "#7ea8ff44" };
   if (tag === "MISSED") return { label: "Missed", bg: "#ff525222", color: "#ff5252", border: "#ff525244" };
   return null;
 }
@@ -37,7 +40,9 @@ function actionBadge(tag: string | undefined) {
 function fmtDate(d: string | null | undefined) {
   if (!d) return "-";
   try {
-    const dt = new Date(d);
+    const s = String(d).replace(" ", "T");
+    const norm = s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s + "Z";
+    const dt = new Date(norm);
     return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch {
     return String(d).slice(0, 10);
@@ -61,6 +66,16 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <strong>{item.symbol}</strong>
+          {item.sector ? (
+            <span style={{
+              fontSize: "0.6rem", padding: "1px 6px", borderRadius: 4,
+              background: "rgba(255,255,255,0.04)", color: "var(--text-secondary)",
+              border: "1px solid var(--border-muted)", letterSpacing: 0.3,
+              textTransform: "uppercase", fontWeight: 500,
+            }}>
+              {item.sector}
+            </span>
+          ) : null}
           <span style={{ fontSize: "0.65rem", padding: "1px 6px", borderRadius: 4, background: badge.color + "22", color: badge.color, border: `1px solid ${badge.color}44` }}>{badge.label}</span>
           {item.entry_type && (
             <span style={{ fontSize: "0.65rem", padding: "1px 6px", borderRadius: 4, background: item.entry_type === "LIMIT" ? "#ff980022" : "#00c85322", color: item.entry_type === "LIMIT" ? "#ff9800" : "#00c853", border: `1px solid ${item.entry_type === "LIMIT" ? "#ff980044" : "#00c85344"}` }}>{item.entry_type}</span>
@@ -107,6 +122,11 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
               {reasoning}
             </div>
           )}
+          {showReasoning && (
+            <div style={{ marginTop: 8 }}>
+              <SmcEvidencePanel evidence={item.smc_evidence} />
+            </div>
+          )}
         </div>
       )}
 
@@ -114,6 +134,7 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
       <div style={{ fontSize: "0.78rem", display: "grid", gap: 4 }}>
         {item.scan_cmp != null && (
           <div><span style={{ color: "var(--text-secondary)" }}>CMP:</span> <strong>{fmt(item.scan_cmp)}</strong>
+            <CmpFreshnessBadge source={item.cmp_source} ageSec={item.cmp_age_sec} />
             {item.entry_gap_pct != null && (
               <span style={{ marginLeft: 8, color: gapColor(item.entry_gap_pct), fontWeight: 600 }}>
                 ({item.entry_gap_pct > 0 ? "+" : ""}{item.entry_gap_pct.toFixed(1)}%)

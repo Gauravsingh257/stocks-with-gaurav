@@ -5,6 +5,7 @@ import asyncio
 from agents.base import BaseAgent, AgentResult
 from dashboard.backend.db import create_stock_recommendation, log_ranking_run, get_stock_recommendations
 from services import generate_rankings
+from services.portfolio_constructor import apply_sector_cap
 
 MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "10"))
 
@@ -16,21 +17,35 @@ class LongTermInvestmentAgent(BaseAgent):
     priority = "high"
 
     def run(self, result: AgentResult) -> None:
-        # Slot-aware scanning: only fill empty slots
+        # Slot-aware scanning: only fill empty slots (unless force-scan flag is set)
+        force_scan = __import__("os").environ.pop("LONGTERM_FORCE_SCAN", "").strip() == "1"
         active_recs = get_stock_recommendations("LONGTERM", limit=MAX_LONGTERM_SLOTS)
         active_count = len(active_recs)
         empty_slots = MAX_LONGTERM_SLOTS - active_count
         active_symbols = [r["symbol"] for r in active_recs]
 
-        if empty_slots <= 0:
+        # Cross-horizon dedup — symbols already shown as SWING picks should not
+        # also surface as LONGTERM picks in the same scan window.
+        try:
+            swing_active = get_stock_recommendations("SWING", limit=50)
+            cross_horizon_symbols = [r["symbol"] for r in swing_active]
+        except Exception:
+            cross_horizon_symbols = []
+        exclude_set = list({*active_symbols, *cross_horizon_symbols})
+
+        if empty_slots <= 0 and not force_scan:
             result.status = "OK"
             result.summary = f"All {MAX_LONGTERM_SLOTS} longterm slots occupied — scan skipped."
             result.metrics = {"active_slots": active_count, "empty_slots": 0}
             return
 
+        # When forcing a scan with no empty slots, still pull a fresh top-K so
+        # users see refreshed candidates ranked alongside the current active set.
+        scan_top_k = empty_slots if empty_slots > 0 else MAX_LONGTERM_SLOTS
+
         ranking = asyncio.run(generate_rankings(
-            "LONGTERM", top_k=empty_slots, target_universe=1800,
-            exclude_symbols=active_symbols,
+            "LONGTERM", top_k=scan_top_k, target_universe=1800,
+            exclude_symbols=exclude_set,
         ))
 
         # Log ranking run upfront to get scan_run_id for all recommendations
@@ -47,7 +62,9 @@ class LongTermInvestmentAgent(BaseAgent):
         saved = 0
         findings: list[dict] = []
         active_symbols: list[str] = []
-        for idea in ranking.ideas:
+        # Phase 3.3: drop ideas exceeding sector cap
+        capped_ideas = apply_sector_cap(ranking.ideas)
+        for idea in capped_ideas:
             symbol = idea.symbol
             entry_low = idea.entry_price
             entry_high = idea.entry_zone[1] if idea.entry_zone and len(idea.entry_zone) > 1 else idea.entry_price
@@ -93,6 +110,9 @@ class LongTermInvestmentAgent(BaseAgent):
                 "scan_run_id": run_id,
                 "entry_type": entry_type,
                 "scan_cmp": scan_cmp,
+                "smc_evidence": idea.smc_evidence,
+                "sector": idea.sector,
+                "target_source": idea.target_source,
             }
             create_stock_recommendation(row)
             saved += 1

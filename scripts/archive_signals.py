@@ -27,7 +27,8 @@ from pathlib import Path
 import requests
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BACKEND = "https://web-production-2781a.up.railway.app"
+import os
+BACKEND = os.getenv("RAILWAY_BACKEND_URL", "https://web-production-2781a.up.railway.app").rstrip("/")
 SIGNAL_HISTORY_DIR = Path(__file__).resolve().parents[1] / "signal_history"
 TIMEOUT = 15
 

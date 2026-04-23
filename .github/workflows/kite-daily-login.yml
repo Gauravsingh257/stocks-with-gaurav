@@ -1,0 +1,63 @@
+name: Kite Daily Auto-Login
+
+# Runs the TOTP-based Kite login every weekday morning and pushes the fresh
+# access_token to Railway Redis + dashboard backend. Replaces the laptop
+# Windows Task Scheduler "SMC_AutoLogin" task so the system no longer depends
+# on the home PC being on at 08:50 IST.
+
+on:
+  schedule:
+    # 03:20 UTC = 08:50 IST (Mon–Fri). GitHub cron runs in UTC.
+    - cron: "20 3 * * 1-5"
+  workflow_dispatch: {}  # allow manual trigger from the Actions tab
+
+concurrency:
+  group: kite-daily-login
+  cancel-in-progress: false
+
+jobs:
+  login:
+    name: Run auto_login.py
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyotp redis kiteconnect
+
+      - name: Run Kite auto-login
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          RAILWAY_BACKEND_URL: ${{ secrets.RAILWAY_BACKEND_URL }}
+          TRADES_SYNC_KEY: ${{ secrets.TRADES_SYNC_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python auto_login.py --scheduled
+          echo "--- last 30 lines of auto_login.log ---"
+          tail -n 30 auto_login.log || true
+
+      - name: Verify Kite connection on Railway backend
+        env:
+          BACKEND_URL: ${{ secrets.RAILWAY_BACKEND_URL }}
+        run: |
+          set -e
+          echo "Checking $BACKEND_URL/api/system/health ..."
+          health=$(curl -fsSL "$BACKEND_URL/api/system/health")
+          echo "$health" | python -c "import json,sys; d=json.load(sys.stdin); print(f\"kite_connected={d.get('kite_connected')} token_source={d.get('token_source')} reason={d.get('kite_disconnect_reason','')}\"); sys.exit(0 if d.get('kite_connected') else 1)"
