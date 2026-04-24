@@ -42,7 +42,7 @@ export function ResearchCoverageCard({ coverage }: Props) {
               <div>Selected: {swing.selected_count}</div>
               {swing.selected_count === 0 && swing.ranked_candidates > 0 && (
                 <div style={{ color: "var(--warning)", marginTop: 4 }}>
-                  No ideas materialized (SMC/levels). Check logs or run again after deploy.
+                  No valid setups found based on current market conditions. Try again later or adjust filters.
                 </div>
               )}
             </div>
@@ -63,7 +63,7 @@ export function ResearchCoverageCard({ coverage }: Props) {
               <div>Selected: {longterm.selected_count}</div>
               {longterm.selected_count === 0 && longterm.ranked_candidates > 0 && (
                 <div style={{ color: "var(--warning)", marginTop: 4 }}>
-                  No long-term ideas saved — levels or filters excluded all candidates.
+                  No valid setups found based on current market conditions. Try again later or adjust filters.
                 </div>
               )}
             </div>

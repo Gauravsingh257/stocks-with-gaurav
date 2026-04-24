@@ -615,6 +615,35 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
     return result
 
 
+@router.get("/api/search-stock/suggestions")
+@router.get("/search-stock/suggestions")
+def get_stock_search_suggestions(
+    q: str = Query("", min_length=0, max_length=32),
+    limit: int = Query(10, ge=1, le=25),
+):
+    """Return NSE symbol suggestions for the global Research search box."""
+    try:
+        from services.stock_search_analysis import stock_suggestions
+        return {"items": stock_suggestions(q, limit=limit)}
+    except Exception as exc:
+        log.exception("stock suggestions failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/api/search-stock")
+@router.get("/search-stock")
+def search_stock(symbol: str = Query(..., min_length=1, max_length=32)):
+    """Analyze a single NSE symbol on demand using existing SMC + fundamentals logic."""
+    try:
+        from services.stock_search_analysis import analyze_stock
+        return analyze_stock(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        log.exception("stock analysis failed for %s: %s", symbol, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):

@@ -323,6 +323,53 @@ export interface LongTermIdea {
   promoter_pct?: number | null;
 }
 
+export interface StockSuggestion {
+  symbol: string;
+  name: string;
+  exchange: string;
+}
+
+export interface StockAnalysisZone {
+  type: string;
+  bottom?: number;
+  top?: number;
+  level?: number;
+}
+
+export interface StockAnalysis {
+  symbol: string;
+  name: string;
+  exchange: string;
+  cmp: number | null;
+  cmp_source?: string;
+  cmp_age_sec?: number | null;
+  entry_zone: number[] | null;
+  stop_loss: number | null;
+  target: number | null;
+  risk_reward: number;
+  confidence_score: number;
+  setup_type: string;
+  horizon: "SWING" | "LONGTERM" | string;
+  recommendation: "Strong Buy" | "Watchlist" | "Avoid" | string;
+  reason: string;
+  criteria_not_met: string[];
+  smc_zones: StockAnalysisZone[];
+  fundamentals: {
+    score?: number;
+    pe_ratio?: number | null;
+    roe_pct?: number | null;
+    roce_pct?: number | null;
+    revenue_growth_pct?: number | null;
+    debt_equity?: number | null;
+    market_cap_cr?: number | null;
+    promoter_pct?: number | null;
+    sector?: string | null;
+    industry?: string | null;
+    data_source?: string;
+  };
+  updated_at: string;
+}
+
 export interface RunningTradeMonitorItem {
   id: number;
   symbol: string;
@@ -828,6 +875,10 @@ export const api = {
     get<ResearchOutcomes>(`/api/research/outcomes?horizon=${horizon}&days=${days}`),
   researchChartData: (symbol: string, horizon = "SWING") =>
     get<ResearchChartData>(`/api/research/chart-data/${encodeURIComponent(symbol)}?horizon=${horizon}`),
+  stockSuggestions: (q: string, limit = 10) =>
+    get<{ items: StockSuggestion[] }>(`/api/search-stock/suggestions?q=${encodeURIComponent(q)}&limit=${limit}`),
+  searchStock: (symbol: string) =>
+    get<StockAnalysis>(`/api/search-stock?symbol=${encodeURIComponent(symbol)}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackRecord: (horizon: "swing" | "longterm" | "all" = "all", limit = 100) =>

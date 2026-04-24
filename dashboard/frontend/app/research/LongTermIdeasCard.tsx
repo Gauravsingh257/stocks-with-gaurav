@@ -113,11 +113,9 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <a
-            href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={`/stock/${encodeURIComponent(item.symbol.replace("NSE:", ""))}`}
             style={{ color: "inherit", textDecoration: "none", fontWeight: 700 }}
-            title="Open on TradingView"
+            title="Open full stock analysis"
           >
             {item.symbol.replace("NSE:", "")} <span style={{ fontSize: "0.55rem", opacity: 0.4 }}>↗</span>
           </a>
@@ -251,16 +249,16 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
 
 export function LongTermIdeasCard({ items, slotInfo, onScan, scanning }: Props) {
   return (
-    <div className="glass" style={{ padding: 16 }}>
+    <div id="longterm-ideas" className="glass" style={{ padding: 16 }}>
       <div style={{ fontWeight: 600, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Long-Term Investment Ideas</span>
         {slotInfo && <span style={{ fontSize: "0.75rem", color: "var(--accent)", fontWeight: 500 }}>{slotInfo}</span>}
       </div>
       {items.length === 0 ? (
         <div style={{ color: "var(--text-secondary)", padding: "24px 0", textAlign: "center" }}>
-          <div style={{ fontSize: "1.1rem", marginBottom: 8 }}>No high-quality long-term opportunities found</div>
+          <div style={{ fontSize: "1.1rem", marginBottom: 8 }}>No long-term setups currently</div>
           <div style={{ fontSize: "0.82rem", color: "var(--text-dim)" }}>
-            The weekly SMC analysis found no stocks meeting our quality bar. Only genuine setups with confirmed weekly structure, OB/FVG zones, and institutional volume will appear here.
+            No valid long-term setups found based on current market conditions. Try again later or adjust filters.
           </div>
           {onScan && (
             <button

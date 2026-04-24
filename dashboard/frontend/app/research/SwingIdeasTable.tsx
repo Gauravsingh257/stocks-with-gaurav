@@ -473,7 +473,7 @@ function useSortedItems(items: SwingIdea[], sortKey: SortKey, sortAsc: boolean):
   });
 }
 
-export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
+export function SwingIdeasTable({ items, slotInfo }: Props) {
   const [reasoningItem, setReasoningItem] = useState<SwingIdea | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortAsc, setSortAsc] = useState(false);
@@ -541,25 +541,22 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
       {items.length === 0 ? (
         <div style={{ padding: "24px", textAlign: "center" }}>
           <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem", fontWeight: 500 }}>
-            No high-quality swing opportunities found
+            No swing setups currently
           </div>
           <div style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginTop: 6 }}>
             The system only recommends stocks when genuine SMC setups are detected.
           </div>
-          {onScan && (
-            <button
-              onClick={onScan}
-              disabled={scanning}
+          <a
+              href="#longterm-ideas"
               style={{
-                marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
-                fontSize: "0.75rem", cursor: scanning ? "wait" : "pointer",
+                display: "inline-flex", marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
+                fontSize: "0.75rem", cursor: "pointer", textDecoration: "none",
                 background: "rgba(0,212,255,0.12)", border: "1px solid rgba(0,212,255,0.3)",
-                color: "var(--accent)", opacity: scanning ? 0.6 : 1,
+                color: "var(--accent)",
               }}
             >
-              {scanning ? "Scanning..." : "Run Swing Scan"}
-            </button>
-          )}
+              View Long-term ideas
+            </a>
         </div>
       ) : (
         <>
@@ -584,9 +581,8 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <QualityRing score={item.confidence_score} />
                         <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                          <a href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
-                            target="_blank" rel="noopener noreferrer"
-                            style={{ color: "inherit", textDecoration: "none" }} title="Open on TradingView">
+                          <a href={`/stock/${encodeURIComponent(item.symbol.replace("NSE:", ""))}`}
+                            style={{ color: "inherit", textDecoration: "none" }} title="Open full stock analysis">
                             {item.symbol.replace("NSE:", "")}<span style={{ fontSize: "0.55rem", marginLeft: 3, opacity: 0.4 }}>↗</span>
                           </a>
                           {item.sector && <span style={{ fontSize: "0.58rem", color: "var(--text-secondary)", fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase" }}>{item.sector}</span>}

@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
+import StockCard from "@/components/StockCard";
 
-import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
+import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion, type SwingIdea } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
@@ -25,6 +26,7 @@ import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
+import { TopIdeas } from "./TopIdeas";
 
 /** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
 function normalizeTicker(s: string): string {
@@ -35,13 +37,42 @@ function normalizeTicker(s: string): string {
     .toLowerCase();
 }
 
-const RESEARCH_FETCH_LIMIT = 80;
+const RESEARCH_FETCH_LIMIT = 100;
 
 const SCAN_BTN: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "6px 14px", borderRadius: 8, fontWeight: 600, fontSize: "0.72rem",
   cursor: "pointer", border: "1px solid", transition: "opacity 0.2s",
 };
+
+function SelectionCriteriaPanel({ items }: { items?: string[] }) {
+  const reasons = items && items.length > 0
+    ? items
+    : ["No valid order block", "No liquidity sweep", "No BOS confirmation"];
+  return (
+    <div className="glass" style={{ padding: 14 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Selection criteria not met:</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {reasons.map((reason) => (
+          <span
+            key={reason}
+            style={{
+              fontSize: "0.75rem",
+              padding: "4px 9px",
+              borderRadius: 999,
+              background: "rgba(245,158,11,0.1)",
+              border: "1px solid rgba(245,158,11,0.22)",
+              color: "var(--warning)",
+              fontWeight: 650,
+            }}
+          >
+            {reason}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function ResearchPage() {
   const [swing, setSwing] = useState<SwingIdea[]>([]);
@@ -59,6 +90,10 @@ export default function ResearchPage() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<StockSuggestion[]>([]);
+  const [analysis, setAnalysis] = useState<StockAnalysis | null>(null);
+  const [searching, setSearching] = useState(false);
   const [sectorFilter, setSectorFilter] = useState<string>("ALL");
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
   const [compareSymbols, setCompareSymbols] = useState<Set<string>>(new Set());
@@ -132,6 +167,34 @@ export default function ResearchPage() {
     }
     setTimeout(() => setScanning(null), 5_000);
   }, [refresh]);
+
+  useEffect(() => {
+    const q = globalQuery.trim();
+    if (q.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      api.stockSuggestions(q, 8)
+        .then((res) => setSuggestions(res.items ?? []))
+        .catch(() => setSuggestions([]));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [globalQuery]);
+
+  const runGlobalSearch = useCallback(async (symbol: string) => {
+    const clean = symbol.replace("NSE:", "").trim().toUpperCase();
+    if (!clean) return;
+    setGlobalQuery(clean);
+    setSuggestions([]);
+    setSearching(true);
+    try {
+      const res = await api.searchStock(clean);
+      setAnalysis(res);
+    } finally {
+      setSearching(false);
+    }
+  }, []);
 
   const scanButton = useCallback((horizon: "swing" | "longterm", variant: "accent" | "warning" = "accent") => {
     const isActive = scanning === horizon;
@@ -257,7 +320,7 @@ export default function ResearchPage() {
             {lastRefresh && (
               <p style={{ margin: "1px 0 0", fontSize: "0.62rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00d18c", display: "inline-block", animation: "pulse 2s infinite" }} />
-                Data refreshed {lastRefresh.toLocaleTimeString()} · Auto-updates every {isEmpty ? "2m" : "30s"}
+                Last updated: {lastRefresh.toLocaleTimeString()} · Auto-updates every {isEmpty ? "2m" : "30s"}
               </p>
             )}
           </div>
@@ -277,6 +340,66 @@ export default function ResearchPage() {
       </div>
       </StaggerItem>
 
+      {/* ── GLOBAL NSE STOCK SEARCH ─────────────────────────────── */}
+      <StaggerItem>
+        <div className="glass" style={{ padding: 14, display: "grid", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Global NSE Stock Search</div>
+            <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+              Search any NSE symbol to generate a fresh SMC + fundamentals analysis card.
+            </p>
+          </div>
+          <div style={{ position: "relative", maxWidth: 420 }}>
+            <Search
+              size={14}
+              aria-hidden
+              style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", pointerEvents: "none" }}
+            />
+            <input
+              type="search"
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") runGlobalSearch(globalQuery);
+              }}
+              placeholder="Search NSE symbol, e.g. RELIANCE"
+              className="input-dark"
+              style={{ width: "100%", paddingLeft: 32, paddingRight: 86 }}
+            />
+            <button
+              type="button"
+              onClick={() => runGlobalSearch(globalQuery)}
+              disabled={searching || globalQuery.trim().length === 0}
+              style={{
+                position: "absolute", right: 4, top: 4, bottom: 4,
+                borderRadius: 6, border: "1px solid rgba(0,212,255,0.3)",
+                background: "rgba(0,212,255,0.12)", color: "var(--accent)",
+                fontSize: "0.72rem", fontWeight: 700, padding: "0 12px",
+                cursor: searching ? "wait" : "pointer", opacity: globalQuery.trim() ? 1 : 0.55,
+              }}
+            >
+              {searching ? "..." : "Analyze"}
+            </button>
+            {suggestions.length > 0 && (
+              <div style={{ position: "absolute", zIndex: 30, top: "calc(100% + 6px)", left: 0, right: 0, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-surface)", boxShadow: "0 18px 40px rgba(0,0,0,0.35)", overflow: "hidden" }}>
+                {suggestions.map((s) => (
+                  <button
+                    key={s.symbol}
+                    type="button"
+                    onClick={() => runGlobalSearch(s.symbol)}
+                    style={{ width: "100%", textAlign: "left", padding: "9px 12px", background: "transparent", border: 0, borderBottom: "1px solid var(--border)", color: "var(--text-primary)", cursor: "pointer", fontWeight: 650 }}
+                  >
+                    {s.symbol}
+                    <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: "0.72rem" }}>{s.exchange}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {analysis && <StockCard analysis={analysis} />}
+        </div>
+      </StaggerItem>
+
       {/* ── FILTER BAR ──────────────────────────────────────────── */}
       <StaggerItem>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -292,7 +415,7 @@ export default function ResearchPage() {
               name="research-symbol-filter"
               autoComplete="off"
               enterKeyHint="search"
-              placeholder="Filter by symbol (e.g. RELIANCE)…"
+              placeholder="Filter loaded ideas..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="input-dark"
@@ -353,7 +476,7 @@ export default function ResearchPage() {
           </div>
         </div>
         <p style={{ margin: "4px 0 0", fontSize: "0.68rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-          Filters the <strong>swing</strong> and <strong>long-term</strong> idea tables on this page (loaded from the latest scan). It does not search all NSE stocks.
+          Showing top {RESEARCH_FETCH_LIMIT} results per horizon. Filters the <strong>swing</strong> and <strong>long-term</strong> idea tables on this page (loaded from the latest scan). It does not search all NSE stocks.
           {user?.role === "FREE" && " Free accounts see a preview list — upgrade to Premium to filter the full set."}
         </p>
         {filterSummary && (
@@ -414,7 +537,12 @@ export default function ResearchPage() {
         </StaggerItem>
       )}
 
+      <StaggerItem>
+        <TopIdeas swing={swing} longterm={longterm} />
+      </StaggerItem>
+
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
+      <StaggerItem><SelectionCriteriaPanel items={analysis?.criteria_not_met} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
