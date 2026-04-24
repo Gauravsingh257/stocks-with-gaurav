@@ -563,8 +563,8 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
         </div>
       ) : (
         <>
-          {/* Desktop table */}
-          <div className="hidden md:block" style={{ overflowX: "auto" }}>
+          {/* Single table (horizontal scroll on narrow screens) — mobile card layout removed to avoid duplicate data */}
+          <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
@@ -623,44 +623,6 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
                 ))}
               </tbody>
             </table>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="md:hidden" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 12px" }}>
-            {sorted.map((item) => (
-              <div key={item.id} style={{ border: "1px solid var(--border-muted)", borderRadius: 10, padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <QualityRing score={item.confidence_score} />
-                    <div>
-                      <a href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
-                        target="_blank" rel="noopener noreferrer"
-                        style={{ color: "inherit", textDecoration: "none", fontWeight: 700, fontSize: "0.95rem" }}>
-                        {item.symbol.replace("NSE:", "")}<span style={{ fontSize: "0.6rem", marginLeft: 3, opacity: 0.4 }}>↗</span>
-                      </a>
-                      {item.sector && <div style={{ fontSize: "0.6rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.3 }}>{item.sector}</div>}
-                    </div>
-                  </div>
-                  <ActionTag tag={item.action_tag} />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 12px", fontSize: "0.74rem", marginBottom: 8 }}>
-                  <div><span style={{ color: "var(--text-dim)" }}>Entry</span><br /><strong>{fmt(item.entry_price)}</strong></div>
-                  <div><span style={{ color: "var(--text-dim)" }}>CMP</span><br /><strong>{item.scan_cmp ? fmt(item.scan_cmp) : "-"}</strong></div>
-                  <div><span style={{ color: "var(--text-dim)" }}>Gap</span><br /><EntryGapBadge gap={item.entry_gap_pct} /></div>
-                  <div><span style={{ color: "var(--text-dim)" }}>SL</span><br /><strong style={{ color: "#ff4e6a" }}>{fmt(item.stop_loss)}</strong></div>
-                  <div><span style={{ color: "var(--text-dim)" }}>Target</span><br /><strong style={{ color: "#00d18c" }}>{fmt(item.target_1)}</strong></div>
-                  <div><span style={{ color: "var(--text-dim)" }}>PE</span><br /><FundBadge value={item.pe_ratio} good={0} warn={30} /></div>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <RRBar rr={item.risk_reward} />
-                  <Sparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} />
-                  <button onClick={() => setReasoningItem(item)}
-                    style={{ background: "rgba(41,98,255,0.12)", border: "1px solid rgba(41,98,255,0.3)", borderRadius: 6, padding: "4px 10px", cursor: "pointer", color: "var(--accent)", fontSize: "0.68rem", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
-                    Evidence
-                  </button>
-                </div>
-              </div>
-            ))}
           </div>
         </>
       )}
