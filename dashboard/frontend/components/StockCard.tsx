@@ -80,6 +80,23 @@ export default function StockCard({
         <Metric label="Confidence" value={pct(analysis.confidence_score)} tone={analysis.confidence_score >= 70 ? "success" : analysis.confidence_score >= 50 ? "warning" : "danger"} />
       </div>
 
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", color: "var(--text-dim)", fontSize: "0.66rem", marginBottom: 4 }}>
+          <span>Conviction</span>
+          <span>{pct(analysis.confidence_score)}</span>
+        </div>
+        <div style={{ height: 7, borderRadius: 999, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+          <div
+            style={{
+              width: `${Math.max(0, Math.min(100, analysis.confidence_score))}%`,
+              height: "100%",
+              borderRadius: 999,
+              background: analysis.confidence_score >= 70 ? "var(--success)" : analysis.confidence_score >= 50 ? "var(--warning)" : "var(--danger)",
+            }}
+          />
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: "0.72rem", padding: "3px 8px", borderRadius: 6, background: "rgba(0,212,255,0.1)", color: "var(--accent)", border: "1px solid rgba(0,212,255,0.18)", fontWeight: 700 }}>
           {setupLabel(analysis.horizon, analysis.setup_type)}
@@ -97,6 +114,41 @@ export default function StockCard({
       <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: compact ? "0.78rem" : "0.84rem", lineHeight: 1.55 }}>
         {analysis.reason}
       </p>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", paddingTop: 2 }}>
+        <Link
+          href={`/stock/${encodeURIComponent(analysis.symbol)}`}
+          style={{
+            textDecoration: "none",
+            padding: "7px 11px",
+            borderRadius: 8,
+            border: "1px solid rgba(0,212,255,0.28)",
+            background: "rgba(0,212,255,0.1)",
+            color: "var(--accent)",
+            fontSize: "0.74rem",
+            fontWeight: 850,
+          }}
+        >
+          Open Full Analysis
+        </Link>
+        <a
+          href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(analysis.symbol)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            textDecoration: "none",
+            padding: "7px 11px",
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "rgba(255,255,255,0.03)",
+            color: "var(--text-secondary)",
+            fontSize: "0.74rem",
+            fontWeight: 750,
+          }}
+        >
+          TradingView
+        </a>
+      </div>
     </div>
   );
 }

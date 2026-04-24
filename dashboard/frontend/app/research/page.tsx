@@ -24,6 +24,8 @@ import { LongTermIdeasCard } from "./LongTermIdeasCard";
 import { PerformanceOverview } from "./PerformanceOverview";
 import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
+import { ResearchConversionPanel } from "./ResearchConversionPanel";
+import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
 import { TopIdeas } from "./TopIdeas";
@@ -94,6 +96,7 @@ export default function ResearchPage() {
   const [suggestions, setSuggestions] = useState<StockSuggestion[]>([]);
   const [analysis, setAnalysis] = useState<StockAnalysis | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [sectorFilter, setSectorFilter] = useState<string>("ALL");
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
   const [compareSymbols, setCompareSymbols] = useState<Set<string>>(new Set());
@@ -188,9 +191,12 @@ export default function ResearchPage() {
     setGlobalQuery(clean);
     setSuggestions([]);
     setSearching(true);
+    setSearchError(null);
     try {
       const res = await api.searchStock(clean);
       setAnalysis(res);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Could not analyze this stock right now.");
     } finally {
       setSearching(false);
     }
@@ -340,16 +346,30 @@ export default function ResearchPage() {
       </div>
       </StaggerItem>
 
+      <StaggerItem>
+        <ResearchConversionPanel
+          perf={perf}
+          coverage={coverage}
+          user={user}
+          onQuickAnalyze={runGlobalSearch}
+        />
+      </StaggerItem>
+
       {/* ── GLOBAL NSE STOCK SEARCH ─────────────────────────────── */}
       <StaggerItem>
-        <div className="glass" style={{ padding: 14, display: "grid", gap: 12 }}>
-          <div>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Global NSE Stock Search</div>
+        <div id="global-search" className="glass" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid rgba(0,212,255,0.14)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div>
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>Global NSE Stock Search</div>
             <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.78rem" }}>
-              Search any NSE symbol to generate a fresh SMC + fundamentals analysis card.
+              Start here. Search any NSE symbol to generate a fresh SMC + fundamentals analysis card.
             </p>
+            </div>
+            <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 999, color: "var(--success)", background: "rgba(0,224,150,0.1)", border: "1px solid rgba(0,224,150,0.22)", fontWeight: 800 }}>
+              CMP + Entry + SL + Target
+            </span>
           </div>
-          <div style={{ position: "relative", maxWidth: 420 }}>
+          <div style={{ position: "relative", maxWidth: 520 }}>
             <Search
               size={14}
               aria-hidden
@@ -364,7 +384,7 @@ export default function ResearchPage() {
               }}
               placeholder="Search NSE symbol, e.g. RELIANCE"
               className="input-dark"
-              style={{ width: "100%", paddingLeft: 32, paddingRight: 86 }}
+              style={{ width: "100%", paddingLeft: 34, paddingRight: 96, minHeight: 42, fontSize: "0.88rem", fontWeight: 650 }}
             />
             <button
               type="button"
@@ -374,7 +394,7 @@ export default function ResearchPage() {
                 position: "absolute", right: 4, top: 4, bottom: 4,
                 borderRadius: 6, border: "1px solid rgba(0,212,255,0.3)",
                 background: "rgba(0,212,255,0.12)", color: "var(--accent)",
-                fontSize: "0.72rem", fontWeight: 700, padding: "0 12px",
+                fontSize: "0.76rem", fontWeight: 800, padding: "0 14px",
                 cursor: searching ? "wait" : "pointer", opacity: globalQuery.trim() ? 1 : 0.55,
               }}
             >
@@ -396,6 +416,28 @@ export default function ResearchPage() {
               </div>
             )}
           </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {["RELIANCE", "INFY", "MARUTI", "BHARTIARTL"].map((symbol) => (
+              <button
+                key={symbol}
+                type="button"
+                onClick={() => runGlobalSearch(symbol)}
+                style={{ border: "1px solid var(--border)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", borderRadius: 999, padding: "4px 9px", fontSize: "0.7rem", cursor: "pointer", fontWeight: 700 }}
+              >
+                {symbol}
+              </button>
+            ))}
+          </div>
+          {searching && (
+            <div style={{ padding: 12, borderRadius: 10, background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.14)", color: "var(--accent)", fontSize: "0.82rem", fontWeight: 750 }}>
+              Running SMC + fundamentals analysis...
+            </div>
+          )}
+          {searchError && (
+            <div style={{ padding: 12, borderRadius: 10, background: "rgba(255,71,87,0.08)", border: "1px solid rgba(255,71,87,0.18)", color: "var(--danger)", fontSize: "0.82rem", fontWeight: 700 }}>
+              {searchError}
+            </div>
+          )}
           {analysis && <StockCard analysis={analysis} />}
         </div>
       </StaggerItem>
@@ -539,6 +581,13 @@ export default function ResearchPage() {
 
       <StaggerItem>
         <TopIdeas swing={swing} longterm={longterm} />
+      </StaggerItem>
+
+      <StaggerItem>
+        <RetentionPanel
+          hasIdeas={swing.length + longterm.length > 0}
+          hasPortfolio={Boolean(portfolio && (portfolio.swing.count + portfolio.longterm.count) > 0)}
+        />
       </StaggerItem>
 
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>

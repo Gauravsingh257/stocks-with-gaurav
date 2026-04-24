@@ -83,17 +83,35 @@ export function TopIdeas({ swing, longterm }: { swing: SwingIdea[]; longterm: Lo
     .slice(0, 3);
 
   if (items.length === 0) {
-    return null;
+    return (
+      <section className="glass" style={{ padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--success)" }} />
+          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>Top Picks</h2>
+          <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(148,163,184,0.12)", border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+            Awaiting Setups
+          </span>
+        </div>
+        <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.84rem", lineHeight: 1.55 }}>
+          No high-conviction ideas are available yet. Use Global NSE Search for an on-demand analysis, or run a scan to refresh the ranked opportunity list.
+        </p>
+      </section>
+    );
   }
 
   return (
     <section>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--success)" }} />
-        <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>Top Picks</h2>
-        <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,224,150,0.12)", border: "1px solid rgba(0,224,150,0.25)", color: "var(--success)" }}>
-          High Conviction
-        </span>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--success)" }} />
+          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>Top Picks</h2>
+          <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,224,150,0.12)", border: "1px solid rgba(0,224,150,0.25)", color: "var(--success)" }}>
+            High Conviction
+          </span>
+        </div>
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.76rem" }}>
+          Ranked by confidence first, risk/reward second
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
         {items.map((item) => (
