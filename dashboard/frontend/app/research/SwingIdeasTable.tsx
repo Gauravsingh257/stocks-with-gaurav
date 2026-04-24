@@ -1,11 +1,53 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import type { SwingIdea } from "@/lib/api";
+import { api } from "@/lib/api";
 import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
 import { SmcEvidencePanel } from "./SmcEvidencePanel";
+
+const _sparkCache: Record<string, number[]> = {};
+
+function Sparkline({ symbol, entry, sl }: { symbol: string; entry: number; sl: number }) {
+  const [points, setPoints] = useState<number[] | null>(_sparkCache[symbol] || null);
+
+  useEffect(() => {
+    if (_sparkCache[symbol]) { setPoints(_sparkCache[symbol]); return; }
+    let cancelled = false;
+    api.researchChartData(symbol, "SWING").then((d) => {
+      if (cancelled) return;
+      const closes = (d?.candles ?? []).slice(-30).map((c: { close: number }) => c.close);
+      _sparkCache[symbol] = closes;
+      setPoints(closes);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  if (!points || points.length < 5) return <div style={{ width: 80, height: 28 }} />;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const w = 80;
+  const h = 28;
+  const path = points.map((p, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = h - ((p - min) / range) * (h - 4) - 2;
+    return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const last = points[points.length - 1];
+  const color = last >= entry ? "#00d18c" : last <= sl ? "#ff4e6a" : "#5b9cf6";
+  const entryY = h - ((entry - min) / range) * (h - 4) - 2;
+
+  return (
+    <svg width={w} height={h} style={{ display: "block" }}>
+      <line x1={0} y1={entryY} x2={w} y2={entryY} stroke="rgba(255,255,255,0.12)" strokeWidth={0.5} strokeDasharray="2,2" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={w} cy={Number(path.split(",").pop())} r={2} fill={color} />
+    </svg>
+  );
+}
 
 interface Props {
   items: SwingIdea[];
@@ -572,8 +614,8 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
                     <DataBadge auth={item.data_authenticity} />
                     <StatusBadge status={item.status} />
                   </td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <LevelsTooltip item={item} />
+                  <td style={{ padding: "6px 8px" }}>
+                    <Sparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} />
                   </td>
                   <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>
                     {fmtDate(item.signal_first_detected_at || item.created_at)}

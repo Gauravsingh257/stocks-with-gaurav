@@ -1,9 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { LongTermIdea } from "@/lib/api";
+import { api } from "@/lib/api";
 import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
 import { SmcEvidencePanel } from "./SmcEvidencePanel";
+
+const _ltSparkCache: Record<string, number[]> = {};
+
+function LTSparkline({ symbol, entry, sl, target }: { symbol: string; entry: number; sl: number; target: number | null }) {
+  const [points, setPoints] = useState<number[] | null>(_ltSparkCache[symbol] || null);
+
+  useEffect(() => {
+    if (_ltSparkCache[symbol]) { setPoints(_ltSparkCache[symbol]); return; }
+    let cancelled = false;
+    api.researchChartData(symbol, "LONGTERM").then((d) => {
+      if (cancelled) return;
+      const closes = (d?.candles ?? []).slice(-60).map((c: { close: number }) => c.close);
+      _ltSparkCache[symbol] = closes;
+      setPoints(closes);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  if (!points || points.length < 5) return null;
+  const allVals = [...points, entry, sl, ...(target != null ? [target] : [])];
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
+  const range = max - min || 1;
+  const w = 140;
+  const h = 40;
+  const path = points.map((p, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = h - ((p - min) / range) * (h - 4) - 2;
+    return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const last = points[points.length - 1];
+  const color = last >= entry ? "#00d18c" : "#ff4e6a";
+  const entryY = h - ((entry - min) / range) * (h - 4) - 2;
+  const slY = h - ((sl - min) / range) * (h - 4) - 2;
+
+  return (
+    <svg width={w} height={h} style={{ display: "block", margin: "4px 0" }}>
+      <line x1={0} y1={entryY} x2={w} y2={entryY} stroke="rgba(0,209,140,0.25)" strokeWidth={0.5} strokeDasharray="3,2" />
+      <line x1={0} y1={slY} x2={w} y2={slY} stroke="rgba(255,78,106,0.2)" strokeWidth={0.5} strokeDasharray="2,2" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={w} cy={Number(path.split(",").pop())} r={2.5} fill={color} />
+    </svg>
+  );
+}
 
 interface Props {
   items: LongTermIdea[];
@@ -187,6 +232,7 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
         {hasRiskFactors && (
           <div style={{ fontSize: "0.74rem" }}><span style={{ color: "var(--text-secondary)" }}>Risks:</span> {item.risk_factors.join(", ")}</div>
         )}
+        <LTSparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} target={item.long_term_target} />
         <div style={{ color: "var(--text-dim)", fontSize: "0.7rem", marginTop: 4 }}>
           Detected: {fmtDate(item.signal_first_detected_at)} | Updated: {fmtDate(item.signals_updated_at)}
         </div>
