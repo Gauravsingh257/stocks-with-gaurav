@@ -181,9 +181,9 @@ def seed_running_trades() -> int:
                 if cmp is None:
                     log.debug("Skip %s: no CMP available for LIMIT entry check", symbol)
                     continue
-                # For LONG bias: CMP must be at or below entry (dip to entry zone)
-                # Allow 2% tolerance above entry for recent fills
-                if cmp > entry * 1.02:
+                # For LONG bias: CMP must be at or below entry (price actually visited limit).
+                # Allow only 0.25% slack for tick noise / fast moves through the level.
+                if cmp > entry * 1.0025:
                     log.debug("Skip %s: LIMIT entry %.2f not triggered (CMP %.2f above entry)",
                               symbol, entry, cmp)
                     continue
@@ -251,10 +251,10 @@ def purge_untriggered_running_trades() -> int:
             ).fetchone()
             if not rec or (rec["entry_type"] or "MARKET").upper() != "LIMIT":
                 continue
-            # For LIMIT entries: if CMP at scan time was above entry, entry never triggered
+            # For LIMIT entries: if CMP is still above entry+0.25%, entry never triggered
             entry = float(row["entry_price"])
             cmp = _fetch_cmp(row["symbol"])
-            if cmp is not None and cmp > entry * 1.02:
+            if cmp is not None and cmp > entry * 1.0025:
                 conn.execute(
                     "UPDATE running_trades SET status = 'CANCELLED' WHERE id = ?",
                     (row["id"],),
@@ -583,6 +583,11 @@ def start_trade_tracker() -> None:
 
 def refresh_now() -> dict:
     """Trigger an immediate update cycle (used by the /refresh API endpoint)."""
+    purged = 0
+    try:
+        purged = purge_untriggered_running_trades()
+    except Exception:
+        log.exception("Purge untriggered trades failed (non-fatal)")
     seeded = seed_running_trades()
     updated = _update_all_running_trades()
-    return {"seeded": seeded, "updated": updated}
+    return {"seeded": seeded, "updated": updated, "purged": purged}

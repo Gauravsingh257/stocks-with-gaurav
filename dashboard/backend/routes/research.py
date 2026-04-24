@@ -572,7 +572,7 @@ def tracker_refresh():
     try:
         from services.trade_tracker import refresh_now
         result = refresh_now()
-        return {"ok": True, "seeded": result["seeded"], "updated": result["updated"]}
+        return {"ok": True, "seeded": result["seeded"], "updated": result["updated"], "purged": result.get("purged", 0)}
     except Exception as e:
         log.exception("tracker_refresh failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
