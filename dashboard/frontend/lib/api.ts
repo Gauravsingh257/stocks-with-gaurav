@@ -883,6 +883,7 @@ export const api = {
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackRecord: (horizon: "swing" | "longterm" | "all" = "all", limit = 100) =>
     get<TrackRecordResponse>(`/api/research/track-record?horizon=${horizon}&limit=${limit}`),
+  submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
   scanStatus: () => get<{ in_flight: string[]; horizons: Record<string, { status: string; started_at?: string; finished_at?: string; error?: string; summary?: string; agent?: string; trigger?: string }> }>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
 

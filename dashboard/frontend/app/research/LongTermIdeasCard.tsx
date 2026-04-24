@@ -55,6 +55,7 @@ interface Props {
   slotInfo?: string;
   onScan?: () => void;
   scanning?: boolean;
+  onSearchAnyStock?: () => void;
 }
 
 function fmt(v: number | null | undefined) {
@@ -247,7 +248,7 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
   );
 }
 
-export function LongTermIdeasCard({ items, slotInfo, onScan, scanning }: Props) {
+export function LongTermIdeasCard({ items, slotInfo, onScan, scanning, onSearchAnyStock }: Props) {
   return (
     <div id="longterm-ideas" className="glass" style={{ padding: 16 }}>
       <div style={{ fontWeight: 600, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -258,22 +259,38 @@ export function LongTermIdeasCard({ items, slotInfo, onScan, scanning }: Props) 
         <div style={{ color: "var(--text-secondary)", padding: "24px 0", textAlign: "center" }}>
           <div style={{ fontSize: "1.1rem", marginBottom: 8 }}>No long-term setups currently</div>
           <div style={{ fontSize: "0.82rem", color: "var(--text-dim)" }}>
-            No valid long-term setups found based on current market conditions. Try again later or adjust filters.
+            No setups found in current market conditions. Try global search, run a scan again, or adjust filters.
           </div>
-          {onScan && (
-            <button
-              onClick={onScan}
-              disabled={scanning}
-              style={{
-                marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
-                fontSize: "0.75rem", cursor: scanning ? "wait" : "pointer",
-                background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)",
-                color: "#f59e0b", opacity: scanning ? 0.6 : 1,
-              }}
-            >
-              {scanning ? "Scanning..." : "Run Long-Term Scan"}
-            </button>
-          )}
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginTop: 14 }}>
+            {onSearchAnyStock && (
+              <button
+                type="button"
+                onClick={onSearchAnyStock}
+                style={{
+                  padding: "6px 16px", borderRadius: 8, fontWeight: 700, fontSize: "0.75rem", cursor: "pointer",
+                  background: "rgba(0,212,255,0.14)", border: "1px solid rgba(0,212,255,0.35)",
+                  color: "var(--accent)",
+                }}
+              >
+                Search any stock
+              </button>
+            )}
+            {onScan && (
+              <button
+                type="button"
+                onClick={onScan}
+                disabled={scanning}
+                style={{
+                  padding: "6px 16px", borderRadius: 8, fontWeight: 700, fontSize: "0.75rem",
+                  cursor: scanning ? "wait" : "pointer", opacity: scanning ? 0.65 : 1,
+                  background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)",
+                  color: "#f59e0b",
+                }}
+              >
+                {scanning ? "Scanning…" : "Run scan again"}
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>

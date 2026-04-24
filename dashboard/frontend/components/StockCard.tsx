@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { StockAnalysis } from "@/lib/api";
-import { recommendationColors } from "@/utils/calculateConfidence";
+import { confidenceVisualTier, recommendationColors } from "@/utils/calculateConfidence";
 
 function money(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -77,7 +77,11 @@ export default function StockCard({
         <Metric label="Stop Loss" value={money(analysis.stop_loss)} tone="danger" />
         <Metric label="Target" value={money(analysis.target)} tone="success" />
         <Metric label="R:R" value={analysis.risk_reward ? `1:${analysis.risk_reward.toFixed(1)}` : "-"} />
-        <Metric label="Confidence" value={pct(analysis.confidence_score)} tone={analysis.confidence_score >= 70 ? "success" : analysis.confidence_score >= 50 ? "warning" : "danger"} />
+        <Metric
+          label="Confidence"
+          value={pct(analysis.confidence_score)}
+          tone={confidenceVisualTier(analysis.confidence_score)}
+        />
       </div>
 
       <div>
@@ -91,7 +95,12 @@ export default function StockCard({
               width: `${Math.max(0, Math.min(100, analysis.confidence_score))}%`,
               height: "100%",
               borderRadius: 999,
-              background: analysis.confidence_score >= 70 ? "var(--success)" : analysis.confidence_score >= 50 ? "var(--warning)" : "var(--danger)",
+              background:
+                analysis.confidence_score >= 80
+                  ? "var(--success)"
+                  : analysis.confidence_score >= 50
+                    ? "var(--warning)"
+                    : "var(--danger)",
             }}
           />
         </div>

@@ -57,6 +57,11 @@ async def lifespan(app: FastAPI):
             init_auth_tables()
         except Exception as auth_exc:
             log.info("Auth table init skipped: %s", auth_exc)
+        try:
+            from dashboard.backend.routes.research import init_research_leads_table
+            init_research_leads_table()
+        except Exception as lead_exc:
+            log.info("Research leads table init skipped: %s", lead_exc)
         synced = full_sync_from_csv(force=True)
         log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
     except Exception as exc:

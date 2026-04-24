@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download } from "lucide-react";
+import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronDown, Mail } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
@@ -29,6 +29,7 @@ import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
 import { TopIdeas } from "./TopIdeas";
+import { DailyIdeasLeadModal } from "./DailyIdeasLeadModal";
 
 /** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
 function normalizeTicker(s: string): string {
@@ -48,30 +49,61 @@ const SCAN_BTN: React.CSSProperties = {
 };
 
 function SelectionCriteriaPanel({ items }: { items?: string[] }) {
+  const [open, setOpen] = useState(false);
   const reasons = items && items.length > 0
     ? items
     : ["No valid order block", "No liquidity sweep", "No BOS confirmation"];
   return (
     <div className="glass" style={{ padding: 14 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Selection criteria not met:</div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {reasons.map((reason) => (
-          <span
-            key={reason}
-            style={{
-              fontSize: "0.75rem",
-              padding: "4px 9px",
-              borderRadius: 999,
-              background: "rgba(245,158,11,0.1)",
-              border: "1px solid rgba(245,158,11,0.22)",
-              color: "var(--warning)",
-              fontWeight: 650,
-            }}
-          >
-            {reason}
-          </span>
-        ))}
-      </div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          background: "transparent",
+          border: "none",
+          color: "var(--text-primary)",
+          cursor: "pointer",
+          fontWeight: 800,
+          fontSize: "0.88rem",
+          padding: 0,
+        }}
+      >
+        <span>Why no setups found (transparency)</span>
+        <ChevronDown size={18} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s", color: "var(--text-dim)" }} />
+      </button>
+      {!open && (
+        <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
+          Typical gaps: no_order_block · no_liquidity_sweep · no_BOS — expand for the live checklist for your last search (or defaults).
+        </p>
+      )}
+      {open && (
+        <>
+          <div style={{ fontWeight: 650, margin: "10px 0 8px", fontSize: "0.78rem", color: "var(--text-secondary)" }}>Selection criteria not met:</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {reasons.map((reason) => (
+              <span
+                key={reason}
+                style={{
+                  fontSize: "0.75rem",
+                  padding: "4px 9px",
+                  borderRadius: 999,
+                  background: "rgba(245,158,11,0.1)",
+                  border: "1px solid rgba(245,158,11,0.22)",
+                  color: "var(--warning)",
+                  fontWeight: 650,
+                }}
+              >
+                {reason}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -101,6 +133,7 @@ export default function ResearchPage() {
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
   const [compareSymbols, setCompareSymbols] = useState<Set<string>>(new Set());
   const [gated, setGated] = useState(false);
+  const [leadModalOpen, setLeadModalOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -293,6 +326,10 @@ export default function ResearchPage() {
   }, [filteredSwing, filteredLongterm]);
 
   // ── Header scan age info ──
+  const scrollToGlobalSearch = useCallback(() => {
+    document.getElementById("global-search")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   const scanAgeInfo = useMemo(() => {
     const swingAge = formatScanAge(lastSwingScan);
     const ltAge = formatScanAge(lastLongtermScan);
@@ -306,6 +343,7 @@ export default function ResearchPage() {
 
   return (
     <StaggerContainer stagger={0.08} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <DailyIdeasLeadModal open={leadModalOpen} onClose={() => setLeadModalOpen(false)} />
       {/* ── HEADER ──────────────────────────────────────────────── */}
       <StaggerItem>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -329,6 +367,9 @@ export default function ResearchPage() {
                 Last updated: {lastRefresh.toLocaleTimeString()} · Auto-updates every {isEmpty ? "2m" : "30s"}
               </p>
             )}
+            <p style={{ margin: "4px 0 0", fontSize: "0.62rem", color: "var(--text-dim)", maxWidth: 640, lineHeight: 1.45 }}>
+              Data source: NSE-listed symbols; delayed OHLC and reference prices via Yahoo Finance where shown, plus live/broker-backed CMP when the engine resolver is connected.
+            </p>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -340,10 +381,26 @@ export default function ResearchPage() {
           }}>
             <History size={12} /> Track Record
           </Link>
+          <button
+            type="button"
+            onClick={() => setLeadModalOpen(true)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "6px 14px", borderRadius: 8, fontWeight: 600, fontSize: "0.72rem",
+              border: "1px solid rgba(91,156,246,0.35)", background: "rgba(91,156,246,0.1)",
+              color: "#5b9cf6", cursor: "pointer",
+            }}
+          >
+            <Mail size={12} /> Get daily ideas
+          </button>
           {scanButton("swing")}
           {scanButton("longterm", "warning")}
         </div>
       </div>
+      </StaggerItem>
+
+      <StaggerItem>
+        <SelectionCriteriaPanel items={analysis?.criteria_not_met} />
       </StaggerItem>
 
       <StaggerItem>
@@ -591,7 +648,6 @@ export default function ResearchPage() {
       </StaggerItem>
 
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
-      <StaggerItem><SelectionCriteriaPanel items={analysis?.criteria_not_met} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
@@ -641,8 +697,20 @@ export default function ResearchPage() {
             Discovery Feed
           </span>
         </div>
-        <SwingIdeasTable items={filteredSwing} slotInfo={`${filteredSwing.length} Ideas${hasFilters ? ` (filtered from ${swing.length})` : ""}`} onScan={() => triggerScan("swing")} scanning={scanning === "swing"} />
-        <LongTermIdeasCard items={filteredLongterm} slotInfo={`${filteredLongterm.length} Ideas${hasFilters ? ` (filtered from ${longterm.length})` : ""}`} onScan={() => triggerScan("longterm")} scanning={scanning === "longterm"} />
+        <SwingIdeasTable
+          items={filteredSwing}
+          slotInfo={`${filteredSwing.length} Ideas${hasFilters ? ` (filtered from ${swing.length})` : ""}`}
+          onScan={() => triggerScan("swing")}
+          scanning={scanning === "swing"}
+          onSearchAnyStock={scrollToGlobalSearch}
+        />
+        <LongTermIdeasCard
+          items={filteredLongterm}
+          slotInfo={`${filteredLongterm.length} Ideas${hasFilters ? ` (filtered from ${longterm.length})` : ""}`}
+          onScan={() => triggerScan("longterm")}
+          scanning={scanning === "longterm"}
+          onSearchAnyStock={scrollToGlobalSearch}
+        />
       </div>
       </StaggerItem>
 

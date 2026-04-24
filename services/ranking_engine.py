@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Literal
 
 from data.ingestion import DataIngestion
+from engine.swing import detect_daily_fvg, detect_daily_ob, detect_daily_structure
 from services.data_quality import evaluate_symbol_quality
 from services.factor_pipeline import FactorRow, build_factor_row
 from services.fundamental_analysis import analyze_fundamentals
@@ -16,7 +17,9 @@ from services.reasoning_engine import generate_evidence_reasoning
 from services.research_levels import (
     NIFTY_DAILY_SYMBOL,
     RESEARCH_POOL_MULT,
+    atr_fallback_levels,
     build_longterm_trade_levels,
+    build_longterm_watchlist_fallback,
     build_swing_trade_levels,
     df_to_candles,
 )
@@ -27,6 +30,38 @@ from services.universe_manager import UniverseSnapshot, load_nse_universe
 log = logging.getLogger("services.ranking_engine")
 
 Horizon = Literal["SWING", "LONGTERM"]
+
+
+def _empty_watchlist_fallback_enabled() -> bool:
+    return os.getenv("RESEARCH_EMPTY_FALLBACK", "1").strip().lower() in ("1", "true", "yes")
+
+
+def _watchlist_fallback_cap() -> int:
+    return max(1, min(10, int(os.getenv("RESEARCH_FALLBACK_WATCHLIST_COUNT", "5"))))
+
+
+def _log_swing_materialize_miss(symbol: str, daily_df: object) -> None:
+    """Emit structured SMC gap tags when strict swing levels cannot be built."""
+    try:
+        candles = df_to_candles(daily_df)
+        if len(candles) < 10:
+            log.info("[SWING] %s materialize miss: insufficient_candles", symbol)
+            return
+        tags: list[str] = []
+        if not detect_daily_ob(candles, "LONG"):
+            tags.append("no_order_block")
+        if not detect_daily_fvg(candles, "LONG"):
+            tags.append("no_liquidity_sweep")
+        st, _ = detect_daily_structure(candles)
+        if st not in ("BOS", "CHOCH"):
+            tags.append("no_BOS")
+        log.info(
+            "[SWING] %s materialize miss: %s",
+            symbol,
+            ",".join(tags) if tags else "filters_or_geometry",
+        )
+    except Exception as exc:
+        log.debug("swing miss diagnostics failed for %s: %s", symbol, exc)
 
 
 @dataclass(slots=True)
@@ -259,7 +294,7 @@ async def _materialize_swing_idea(
         return None
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
-        log.debug("No OHLC swing levels for %s", symbol)
+        _log_swing_materialize_miss(symbol, daily_df)
         return None
     entry, stop, targets, setup, smc_meta = levels
     entry_price = float(entry)
@@ -452,8 +487,206 @@ async def _collect_ideas_from_pool(
         else:
             idea = replace(idea, rank=rank_counter)
         rank_counter += 1
+        ideas.append(idea)
 
     return ideas
+
+
+async def _collect_watchlist_fallback(
+    horizon: Horizon,
+    limit: int,
+    scored: list[tuple[FactorRow, float]],
+    evidence_map: dict[str, tuple[dict, dict, dict, str]],
+    fund_map: dict | None,
+    exclude: set[str],
+    start_rank: int,
+) -> list[RankedIdea]:
+    """
+    When strict SMC materialization yields fewer ideas than requested, add a small set of
+    ATR / demand-zone watchlist rows so scans are not empty and users see near-setups.
+    """
+    if limit <= 0:
+        return []
+    ingestion = DataIngestion(source=_research_data_source())
+    nifty_df = await _fetch_daily_df(ingestion, NIFTY_DAILY_SYMBOL)
+    nifty_daily = df_to_candles(nifty_df)
+    sem = asyncio.Semaphore(int(os.getenv("RESEARCH_FETCH_CONCURRENCY", "6")))
+    out: list[RankedIdea] = []
+    rank_counter = start_rank
+
+    for row, rank_score in scored[: min(len(scored), 80)]:
+        if len(out) >= limit:
+            break
+        if row.symbol in exclude:
+            continue
+        if row.symbol not in evidence_map:
+            continue
+        async with sem:
+            daily_df = await _fetch_daily_df(ingestion, row.symbol)
+        if not _passes_liquidity_filter(daily_df, row.symbol):
+            continue
+        candles = df_to_candles(daily_df)
+        if len(candles) < 30:
+            continue
+
+        if horizon == "SWING":
+            fb = atr_fallback_levels(row.symbol, candles, force_long=True)
+            if not fb:
+                continue
+            entry, sl, targets, setup = fb
+            if entry < 100:
+                continue
+            if "SHORT" in setup:
+                continue
+            _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[row.symbol]
+            reasoning, _ = generate_evidence_reasoning(
+                symbol=row.symbol,
+                technical_signals=_hash_tech,
+                fundamental_signals=fundamental_signals,
+                sentiment_signals=sentiment_signals,
+                min_factors=2,
+                max_factors=5,
+            )
+            reasoning = (
+                "[Watchlist / near setup] Strict SMC gates were not satisfied for this name; "
+                "showing ATR pullback-style levels for monitoring only. "
+                + reasoning
+            )
+            confidence = min(round(float(rank_score) * 48.0, 2), 48.0)
+            entry_type = "LIMIT" if "PULLBACK" in setup else "MARKET"
+            scan_cmp = float(candles[-1]["close"])
+            idea = RankedIdea(
+                symbol=row.symbol,
+                rank=rank_counter,
+                rank_score=round(rank_score * 0.55, 6),
+                confidence_score=confidence,
+                entry_price=float(entry),
+                stop_loss=float(sl),
+                targets=list(targets),
+                setup=f"WATCHLIST_NEAR_{setup}",
+                expected_holding_period="1-8 weeks",
+                technical_signals={
+                    **_hash_tech,
+                    "watchlist_tier": "ATR near-setup — confirm SMC on chart before acting.",
+                },
+                fundamental_signals=fundamental_signals,
+                sentiment_signals=sentiment_signals,
+                technical_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("trend", "momentum", "breakout", "mtf_alignment", "liquidity", "volume_expansion")
+                },
+                fundamental_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("growth", "quality", "balance_sheet", "institutional_accumulation")
+                },
+                sentiment_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("news_sentiment", "sector_rotation", "macro_sentiment")
+                },
+                reasoning=reasoning,
+                fair_value_estimate=None,
+                entry_zone=None,
+                long_term_target=None,
+                risk_factors=None,
+                entry_type=entry_type,
+                scan_cmp=scan_cmp,
+            )
+        else:
+            lt = build_longterm_watchlist_fallback(row.symbol, daily_df, nifty_daily)
+            if not lt:
+                continue
+            entry, stop, targets, long_target, entry_zone, setup_note, _ltm = lt
+            if entry < 100:
+                continue
+            _hash_tech, fundamental_signals, sentiment_signals, _base_setup = evidence_map[row.symbol]
+            reasoning, _ = generate_evidence_reasoning(
+                symbol=row.symbol,
+                technical_signals=_hash_tech,
+                fundamental_signals=fundamental_signals,
+                sentiment_signals=sentiment_signals,
+                min_factors=2,
+                max_factors=5,
+            )
+            reasoning = (
+                "[Watchlist / near setup] Weekly SMC did not yield a primary long-term slot; "
+                "demand-zone / ATR framing for tracking. "
+                + reasoning
+            )
+            confidence = min(round(float(rank_score) * 46.0, 2), 46.0)
+            scan_cmp = float(candles[-1]["close"])
+            idea = RankedIdea(
+                symbol=row.symbol,
+                rank=rank_counter,
+                rank_score=round(rank_score * 0.52, 6),
+                confidence_score=confidence,
+                entry_price=float(entry),
+                stop_loss=float(stop),
+                targets=list(targets),
+                setup=setup_note,
+                expected_holding_period="6-24 months",
+                technical_signals={
+                    **_hash_tech,
+                    "watchlist_tier": "Long-term near-setup — weekly confirmation still required.",
+                },
+                fundamental_signals=fundamental_signals,
+                sentiment_signals=sentiment_signals,
+                technical_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("trend", "momentum", "breakout", "mtf_alignment", "liquidity", "volume_expansion")
+                },
+                fundamental_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("growth", "quality", "balance_sheet", "institutional_accumulation")
+                },
+                sentiment_factors={
+                    k: round(v, 4)
+                    for k, v in row.factors.items()
+                    if k in ("news_sentiment", "sector_rotation", "macro_sentiment")
+                },
+                reasoning=reasoning,
+                fair_value_estimate=round(float(entry) + (float(long_target) - float(entry)) * 0.55, 2)
+                if long_target
+                else None,
+                entry_zone=entry_zone,
+                long_term_target=float(long_target) if long_target else None,
+                risk_factors=None,
+                entry_type="LIMIT",
+                scan_cmp=scan_cmp,
+            )
+
+        if fund_map and row.symbol in fund_map:
+            snap = fund_map[row.symbol]
+            enriched_ff = dict(idea.fundamental_factors)
+            for attr in (
+                "raw_pe",
+                "raw_roe_pct",
+                "raw_roce_pct",
+                "raw_revenue_growth_pct",
+                "raw_debt_equity",
+                "raw_market_cap_cr",
+                "raw_promoter_pct",
+            ):
+                val = getattr(snap, attr, None)
+                if val is not None:
+                    enriched_ff[attr] = round(float(val), 2)
+            sector = getattr(snap, "sector", None) or getattr(snap, "industry", None)
+            idea = replace(idea, fundamental_factors=enriched_ff, sector=sector)
+
+        out.append(idea)
+        rank_counter += 1
+
+    log.info(
+        "[%s] watchlist fallback added %d near-setup row(s) (cap=%d)",
+        horizon,
+        len(out),
+        limit,
+    )
+    return out
 
 
 async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 1800, exclude_symbols: list[str] | None = None) -> RankingResult:
@@ -518,6 +751,20 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     )
 
     ideas = await _collect_ideas_from_pool(horizon, top_k, scored, evidence_map, fund_map=fund)
+
+    if _empty_watchlist_fallback_enabled() and len(ideas) < top_k and scored:
+        need = min(_watchlist_fallback_cap(), top_k - len(ideas))
+        if need > 0:
+            extra = await _collect_watchlist_fallback(
+                horizon,
+                need,
+                scored,
+                evidence_map,
+                fund,
+                exclude={i.symbol for i in ideas},
+                start_rank=len(ideas) + 1,
+            )
+            ideas.extend(extra)
 
     if not ideas:
         log.warning(

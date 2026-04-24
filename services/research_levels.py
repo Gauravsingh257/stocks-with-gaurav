@@ -431,3 +431,57 @@ def build_longterm_trade_levels(
         entry = round(close - 2 * atr, 2)
     setup_note = f"LONGTERM_{wt}_52W({round((close-lo52)/lo52*100,0):.0f}%aboveLow)"
     return entry, stop, [long_target], long_target, entry_zone, setup_note, None
+
+
+def build_longterm_watchlist_fallback(
+    symbol: str,
+    daily_df: pd.DataFrame,
+    nifty_daily: list[dict[str, Any]],
+) -> tuple[float, float, list[float], float, list[float], str, dict[str, Any] | None] | None:
+    """
+    Demand-zone / ATR long-term levels when weekly SMC yields no primary pick.
+    Used only by the ranking engine when the strict pipeline returns zero ideas
+    so the Research UI still shows a small set of watchlist candidates.
+    """
+    _ = nifty_daily  # parity with build_longterm_trade_levels signature
+    candles = df_to_candles(daily_df)
+    if len(candles) < 60:
+        return None
+    close = candles[-1]["close"]
+    atr = calculate_atr(candles, 14)
+    if close <= 0 or atr <= 0:
+        return None
+    weekly = daily_candles_to_weekly(candles)
+    wt = detect_weekly_trend(weekly) if len(weekly) >= 12 else "NEUTRAL"
+    lookback = min(252, len(candles))
+    hi52 = max(c["high"] for c in candles[-lookback:])
+    lo52 = min(c["low"] for c in candles[-lookback:])
+    demand_zone = _find_weekly_demand_zone(weekly, atr)
+    if demand_zone:
+        zone_low, zone_high = demand_zone
+        entry = round((zone_low + zone_high) / 2, 2)
+        entry_zone = [zone_low, zone_high]
+        stop = round(zone_low - 1.5 * atr, 2)
+    else:
+        entry = round(close - 2 * atr, 2)
+        entry_zone = [round(entry - atr, 2), round(entry + atr * 0.5, 2)]
+        stop = round(entry - 2.5 * atr, 2)
+    resistance = _find_key_resistance(weekly)
+    min_target = round(close * 1.15, 2)
+    long_target = max(resistance or 0, min_target)
+    long_target = round(long_target, 2)
+    risk = abs(entry - stop)
+    reward = abs(long_target - entry)
+    if risk <= 0 or reward / risk < 1.5:
+        entry = round(close, 2)
+        stop = round(close - 3 * atr, 2)
+        long_target = round(close * 1.20, 2)
+        entry_zone = [round(close - atr, 2), round(close, 2)]
+    if close > 0 and abs(entry - close) / close > 0.30:
+        entry = round(close - 2 * atr, 2)
+    setup_note = (
+        f"WATCHLIST_LONGTERM_{wt}_52W({round((close-lo52)/lo52*100,0):.0f}%aboveLow"
+        f"_hi{round(hi52, 0):.0f})"
+    )
+    log.info("[research] %s longterm watchlist fallback (near-setup path)", symbol)
+    return entry, stop, [long_target], long_target, entry_zone, setup_note, None

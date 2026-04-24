@@ -70,8 +70,10 @@ def test_atr_fallback_produces_cmp_entry():
     out = atr_fallback_levels("NSE:TEST", raw)
     assert out is not None
     entry, sl, targets, setup = out
-    assert setup.startswith("ATR_FALLBACK_")
-    assert abs(entry - raw[-1]["close"]) < 0.02
+    assert setup.startswith("ATR_")  # ATR_PULLBACK_* or legacy ATR_FALLBACK_*
+    close = raw[-1]["close"]
+    assert entry < close * 1.02  # pullback entry at or below CMP
+    assert (close - entry) / close < 0.08  # within ~8% of spot
     assert len(targets) == 2
     if "LONG" in setup:
         assert sl < entry < targets[1]
@@ -131,17 +133,18 @@ def test_swing_atr_fallback_respects_env(monkeypatch):
     assert out2 is not None
     entry, sl, targets, setup, smc_meta = out2
     assert smc_meta is None
-    assert "ATR_FALLBACK_LONG" in setup
+    assert "LONG" in setup and setup.startswith("ATR_")
     assert long_swing_geometry_ok(entry, sl, targets)
     monkeypatch.delenv("RESEARCH_SWING_ATR_FALLBACK", raising=False)
 
 
-def test_build_longterm_trade_levels():
+def test_build_longterm_trade_levels(monkeypatch):
+    monkeypatch.setenv("RESEARCH_LONGTERM_ATR_FALLBACK", "1")
     raw = _synthetic_uptrend_days(120)
     df = pd.DataFrame(raw)
-    lt = build_longterm_trade_levels(df)
+    lt = build_longterm_trade_levels("NSE:TEST", df, [])
     assert lt is not None
-    entry, stop, targets, long_target, zone, setup = lt
+    entry, stop, targets, long_target, zone, setup, _meta = lt
     assert setup.startswith("LONGTERM_")
     # Entry is a demand zone or pullback BELOW CMP (not necessarily at CMP)
     close = raw[-1]["close"]

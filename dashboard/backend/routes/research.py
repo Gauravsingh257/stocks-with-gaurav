@@ -8,7 +8,7 @@ import os
 import threading
 import traceback
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
@@ -87,6 +87,23 @@ _scan_history: dict[str, dict] = {}  # horizon -> latest scan result info
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
 FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
+
+RESEARCH_LEADS_DDL = """
+CREATE TABLE IF NOT EXISTS research_email_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+
+def init_research_leads_table() -> None:
+    try:
+        conn = get_connection()
+        conn.executescript(RESEARCH_LEADS_DDL)
+        conn.commit()
+    except Exception as exc:
+        log.warning("research_email_leads init: %s", exc)
 
 
 def _utc_iso(s: str | None) -> str | None:
@@ -1383,3 +1400,21 @@ def _detect_smc_zones(candles: list[dict]) -> list[dict]:
     except Exception as e:
         log.warning("SMC zone detection failed: %s", e)
         return []
+
+
+@router.post("/api/research/lead")
+@router.post("/research/lead")
+def post_research_email_lead(payload: dict = Body(...)):
+    """Store email for future daily-ideas / digest notifications (monetization capture)."""
+    init_research_leads_table()
+    raw = str((payload or {}).get("email", "")).strip().lower()
+    if len(raw) < 5 or "@" not in raw or "." not in raw.split("@", 1)[-1] or len(raw) > 120:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    try:
+        conn = get_connection()
+        conn.execute("INSERT OR IGNORE INTO research_email_leads (email) VALUES (?)", (raw,))
+        conn.commit()
+    except Exception as exc:
+        log.warning("research lead insert failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not save") from exc
+    return {"ok": True}

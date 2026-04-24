@@ -54,6 +54,8 @@ interface Props {
   slotInfo?: string;
   onScan?: () => void;
   scanning?: boolean;
+  /** Scroll to global NSE search (research page wires this). */
+  onSearchAnyStock?: () => void;
 }
 
 function fmt(v: number | null | undefined) {
@@ -473,7 +475,7 @@ function useSortedItems(items: SwingIdea[], sortKey: SortKey, sortAsc: boolean):
   });
 }
 
-export function SwingIdeasTable({ items, slotInfo }: Props) {
+export function SwingIdeasTable({ items, slotInfo, onScan, scanning, onSearchAnyStock }: Props) {
   const [reasoningItem, setReasoningItem] = useState<SwingIdea | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortAsc, setSortAsc] = useState(false);
@@ -546,17 +548,47 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
           <div style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginTop: 6 }}>
             The system only recommends stocks when genuine SMC setups are detected.
           </div>
-          <a
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginTop: 14 }}>
+            {onSearchAnyStock && (
+              <button
+                type="button"
+                onClick={onSearchAnyStock}
+                style={{
+                  padding: "6px 16px", borderRadius: 8, fontWeight: 700, fontSize: "0.75rem", cursor: "pointer",
+                  background: "rgba(0,212,255,0.14)", border: "1px solid rgba(0,212,255,0.35)",
+                  color: "var(--accent)",
+                }}
+              >
+                Search any stock
+              </button>
+            )}
+            {onScan && (
+              <button
+                type="button"
+                onClick={onScan}
+                disabled={scanning}
+                style={{
+                  padding: "6px 16px", borderRadius: 8, fontWeight: 700, fontSize: "0.75rem",
+                  cursor: scanning ? "wait" : "pointer", opacity: scanning ? 0.65 : 1,
+                  background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)",
+                  color: "#f59e0b",
+                }}
+              >
+                {scanning ? "Scanning…" : "Run scan again"}
+              </button>
+            )}
+            <a
               href="#longterm-ideas"
               style={{
-                display: "inline-flex", marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
+                display: "inline-flex", alignSelf: "center", padding: "6px 16px", borderRadius: 8, fontWeight: 600,
                 fontSize: "0.75rem", cursor: "pointer", textDecoration: "none",
-                background: "rgba(0,212,255,0.12)", border: "1px solid rgba(0,212,255,0.3)",
-                color: "var(--accent)",
+                background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)",
+                color: "var(--text-secondary)",
               }}
             >
-              View Long-term ideas
+              Long-term ideas
             </a>
+          </div>
         </div>
       ) : (
         <>
