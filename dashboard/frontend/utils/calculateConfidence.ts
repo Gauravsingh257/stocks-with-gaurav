@@ -1,3 +1,5 @@
+import type { StockAnalysis } from "@/lib/api";
+
 export type RecommendationLabel = "Strong Buy" | "Watchlist" | "Avoid";
 
 export interface ConfidenceInputs {
@@ -58,6 +60,72 @@ export function calculateConfidence(input: ConfidenceInputs): {
     finalScore >= 80 ? "Strong Buy" : finalScore >= 50 ? "Watchlist" : "Avoid";
 
   return { score: finalScore, recommendation };
+}
+
+/** True when the row is a primary SMC-backed setup (not empty / watchlist-tier filler). */
+export function isPrimarySmcSetupType(setupType: string): boolean {
+  if (!setupType || setupType === "No Valid SMC Setup") return false;
+  if (/^WATCHLIST_/i.test(setupType)) return false;
+  return true;
+}
+
+/**
+ * Recommendation label aligned with backend `stock_search_analysis._recommendation`:
+ * Strong Buy only if primary setup AND score ≥ 80; else Watchlist ≥ 50; else Avoid.
+ */
+export function recommendationLabelFromScanResult(analysis: StockAnalysis): RecommendationLabel {
+  const setupOk = isPrimarySmcSetupType(analysis.setup_type);
+  const c = analysis.confidence_score;
+  if (setupOk && c >= 80) return "Strong Buy";
+  if (c >= 50) return "Watchlist";
+  return "Avoid";
+}
+
+/** Map API / card payload into pillar inputs for `calculateConfidence` (confluence view). */
+export function stockAnalysisToConfidenceInputs(analysis: StockAnalysis): ConfidenceInputs {
+  const zones = analysis.smc_zones ?? [];
+  const zoneText = (z: (typeof zones)[0]) => `${z.type ?? ""} ${z.bottom ?? ""} ${z.top ?? ""} ${z.level ?? ""}`.toLowerCase();
+
+  const hasOb = zones.some((z) => /order block/.test(zoneText(z)));
+  const hasFvg = zones.some((z) => /fair value|fvg/.test(zoneText(z)));
+  const hasStructure = zones.some((z) => /structure|bos|choch/.test(zoneText(z)));
+
+  const primary = isPrimarySmcSetupType(analysis.setup_type);
+  const trendStrength = Math.min(1, primary ? 0.58 + (hasStructure ? 0.22 : 0) + (hasOb ? 0.12 : 0) : 0.36);
+  const volume = Math.min(1, 0.42 + Math.min(zones.length, 4) * 0.12 + (primary ? 0.08 : 0));
+
+  const f = analysis.fundamentals;
+  return {
+    trendStrength,
+    volume,
+    smcSignals: {
+      orderBlock: hasOb,
+      liquiditySweep: hasFvg,
+      bosConfirmation: hasStructure,
+      fvg: hasFvg,
+    },
+    fundamentals: {
+      score: f?.score,
+      roePct: f?.roe_pct ?? null,
+      debtEquity: f?.debt_equity ?? null,
+      revenueGrowthPct: f?.revenue_growth_pct ?? null,
+    },
+    riskReward: analysis.risk_reward ?? null,
+  };
+}
+
+/** API confidence score + confluence model from the same payload (for tooltips / parity checks). */
+export function confidenceInsightsFromStockAnalysis(analysis: StockAnalysis): {
+  apiScore: number;
+  confluence: ReturnType<typeof calculateConfidence>;
+  badgeLabel: RecommendationLabel;
+} {
+  const confluence = calculateConfidence(stockAnalysisToConfidenceInputs(analysis));
+  return {
+    apiScore: analysis.confidence_score,
+    confluence,
+    badgeLabel: recommendationLabelFromScanResult(analysis),
+  };
 }
 
 export function recommendationColors(label: string): { bg: string; fg: string; border: string } {

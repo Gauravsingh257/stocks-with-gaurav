@@ -1,8 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import type { StockAnalysis } from "@/lib/api";
-import { confidenceVisualTier, recommendationColors } from "@/utils/calculateConfidence";
+import {
+  confidenceInsightsFromStockAnalysis,
+  confidenceVisualTier,
+  recommendationColors,
+} from "@/utils/calculateConfidence";
 
 function money(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -29,7 +34,8 @@ export default function StockCard({
   compact?: boolean;
   badge?: string;
 }) {
-  const colors = recommendationColors(analysis.recommendation);
+  const { badgeLabel, confluence } = useMemo(() => confidenceInsightsFromStockAnalysis(analysis), [analysis]);
+  const colors = recommendationColors(badgeLabel);
   const entry =
     analysis.entry_zone && analysis.entry_zone.length >= 2
       ? `${money(analysis.entry_zone[0])}–${money(analysis.entry_zone[1])}`
@@ -66,7 +72,7 @@ export default function StockCard({
             </span>
           )}
           <span style={{ fontSize: "0.7rem", padding: "3px 9px", borderRadius: 999, background: colors.bg, color: colors.fg, border: `1px solid ${colors.border}`, fontWeight: 800 }}>
-            {analysis.recommendation}
+            {badgeLabel}
           </span>
         </div>
       </div>
@@ -81,6 +87,11 @@ export default function StockCard({
           label="Confidence"
           value={pct(analysis.confidence_score)}
           tone={confidenceVisualTier(analysis.confidence_score)}
+          title={
+            Math.abs(confluence.score - analysis.confidence_score) > 2
+              ? `Scan score ${Math.round(analysis.confidence_score)}% · Confluence pillars ${confluence.score}%`
+              : `Scan score ${Math.round(analysis.confidence_score)}% (confluence ${confluence.score}%)`
+          }
         />
       </div>
 
@@ -166,15 +177,17 @@ function Metric({
   label,
   value,
   tone,
+  title,
 }: {
   label: string;
   value: string;
   tone?: "success" | "danger" | "warning";
+  title?: string;
 }) {
   const color =
     tone === "success" ? "var(--success)" : tone === "danger" ? "var(--danger)" : tone === "warning" ? "var(--warning)" : "var(--text-primary)";
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", background: "rgba(255,255,255,0.02)" }}>
+    <div title={title} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", background: "rgba(255,255,255,0.02)" }}>
       <div style={{ color: "var(--text-dim)", fontSize: "0.64rem", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
         {label}
       </div>

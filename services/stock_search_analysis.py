@@ -168,7 +168,7 @@ def _criteria_not_met(candles: list[dict[str, Any]], setup_ok: bool) -> list[str
 
 
 def _recommendation(confidence: float, setup_ok: bool) -> str:
-    if setup_ok and confidence >= 75:
+    if setup_ok and confidence >= 80:
         return "Strong Buy"
     if confidence >= 50:
         return "Watchlist"

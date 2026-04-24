@@ -400,6 +400,10 @@ export default function ResearchPage() {
       </StaggerItem>
 
       <StaggerItem>
+        <TopIdeas swing={swing} longterm={longterm} />
+      </StaggerItem>
+
+      <StaggerItem>
         <SelectionCriteriaPanel items={analysis?.criteria_not_met} />
       </StaggerItem>
 
@@ -635,10 +639,6 @@ export default function ResearchPage() {
           </div>
         </StaggerItem>
       )}
-
-      <StaggerItem>
-        <TopIdeas swing={swing} longterm={longterm} />
-      </StaggerItem>
 
       <StaggerItem>
         <RetentionPanel
