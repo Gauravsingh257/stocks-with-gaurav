@@ -29,7 +29,7 @@ if _env_path.exists():
             os.environ.setdefault(key.strip(), value.strip())
 
 from dashboard.backend.db import init_db, full_sync_from_csv, start_csv_watcher
-from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router, market_intelligence_router, portfolio_router, content_router
+from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router, market_intelligence_router, portfolio_router, content_router, auth_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 
 # ---------------------------------------------------------------------------
@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI):
         init_db()
         from dashboard.backend.db.schema import migrate_stock_recommendations
         migrate_stock_recommendations()
+        from dashboard.backend.routes.auth import init_auth_tables
+        init_auth_tables()
         synced = full_sync_from_csv(force=True)
         log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
     except Exception as exc:
@@ -189,6 +191,7 @@ app.include_router(kite_router)
 app.include_router(market_intelligence_router)
 app.include_router(portfolio_router)
 app.include_router(content_router)
+app.include_router(auth_router)
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")

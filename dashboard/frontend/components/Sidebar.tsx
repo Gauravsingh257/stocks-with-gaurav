@@ -3,17 +3,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
+import { useAuth } from "@/lib/auth";
 
 const NAV = [
   { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
   { href: "/journal",         label: "Journal",         icon: BookOpen      },
   { href: "/research",        label: "AI Research Center", icon: Bot        },
+  { href: "/watchlist",       label: "Watchlist",       icon: Bookmark, auth: true },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye           },
   { href: "/market-intelligence", label: "Market Intel", icon: Globe      },
-];
+] as const;
 
 export default function Sidebar({
   isOpen = false,
@@ -23,6 +25,7 @@ export default function Sidebar({
   onClose?: () => void;
 }) {
   const path = usePathname();
+  const { user, logout } = useAuth();
 
   return (
     <>
@@ -78,7 +81,8 @@ export default function Sidebar({
 
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 mt-2">
-          {NAV.map(({ href, label, icon: Icon }) => {
+          {NAV.map(({ href, label, icon: Icon, ...rest }) => {
+            if ("auth" in rest && rest.auth && !user) return null;
             const active = path === href || (href !== "/" && path.startsWith(href));
             return (
               <Link
@@ -99,12 +103,34 @@ export default function Sidebar({
           <SidebarBotWidget />
         </div>
 
-        {/* Footer */}
+        {/* Auth section */}
         <div className="pt-3 border-t border-cyan-500/10">
-          <div
-            className="text-[0.7rem] text-center"
-            style={{ color: "var(--text-dim)" }}
-          >
+          {user ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--accent-dim)", border: "1px solid var(--accent)", display: "grid", placeItems: "center", fontSize: "0.7rem", fontWeight: 700, color: "var(--accent)" }}>
+                  {user.name?.[0]?.toUpperCase() || user.email[0].toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {user.name || user.email}
+                  </div>
+                  <div style={{ fontSize: "0.62rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 3 }}>
+                    {user.role === "PREMIUM" && <Crown size={9} color="#f59e0b" />}
+                    {user.role}
+                  </div>
+                </div>
+                <button onClick={logout} title="Sign out" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 4 }}>
+                  <LogOut size={14} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <Link href="/login" onClick={onClose} className="nav-link" style={{ justifyContent: "center", fontSize: "0.8rem" }}>
+              <LogIn size={14} /> Sign In
+            </Link>
+          )}
+          <div className="text-[0.65rem] text-center mt-2" style={{ color: "var(--text-dim)" }}>
             AI Engine · Active
           </div>
         </div>

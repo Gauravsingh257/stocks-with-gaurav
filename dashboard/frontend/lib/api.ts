@@ -509,6 +509,45 @@ export interface ResearchOutcomes {
   by_setup: ResearchOutcomesSetupRow[];
 }
 
+export interface TrackRecordPick {
+  id: number;
+  symbol: string;
+  agent_type: "SWING" | "LONGTERM";
+  setup: string | null;
+  status: string;
+  entry_price: number;
+  stop_loss: number | null;
+  targets: number[];
+  confidence_score: number;
+  current_price: number | null;
+  exit_price: number | null;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl_pct: number | null;
+  days_held: number | null;
+  high_since_entry: number | null;
+  low_since_entry: number | null;
+  created_at: string | null;
+  signals_updated_at: string | null;
+}
+
+export interface TrackRecordSummary {
+  total_picks: number;
+  resolved: number;
+  target_hit: number;
+  stop_hit: number;
+  hit_rate_pct: number;
+  avg_pnl_pct: number;
+  best_pnl_pct: number;
+  worst_pnl_pct: number;
+}
+
+export interface TrackRecordResponse {
+  picks: TrackRecordPick[];
+  total: number;
+  summary: TrackRecordSummary;
+}
+
 export interface ScanRunRow {
   run_time: string;
   horizon: "SWING" | "LONGTERM";
@@ -786,6 +825,8 @@ export const api = {
     get<ResearchChartData>(`/api/research/chart-data/${encodeURIComponent(symbol)}?horizon=${horizon}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
+  trackRecord: (horizon: "swing" | "longterm" | "all" = "all", limit = 100) =>
+    get<TrackRecordResponse>(`/api/research/track-record?horizon=${horizon}&limit=${limit}`),
   scanStatus: () => get<{ in_flight: string[]; horizons: Record<string, { status: string; started_at?: string; finished_at?: string; error?: string; summary?: string; agent?: string; trigger?: string }> }>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
 
@@ -809,6 +850,20 @@ export const api = {
   portfolioRefreshPrices: () => post<{ ok: boolean; updated: number }>("/api/portfolio/refresh-prices"),
   portfolioClosePosition: (positionId: number, exitPrice: number, exitReason = "MANUAL") =>
     post<{ ok: boolean; symbol: string; pnl_pct: number }>(`/api/portfolio/${positionId}/close`, { exit_price: exitPrice, exit_reason: exitReason }),
+
+  // ── Watchlist ──────────────────────────────────────────────────────────────
+  getWatchlist: (token: string) =>
+    fetch(`${BASE}/api/watchlist`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() as Promise<{ items: { symbol: string; added_at: string }[] }> : Promise.reject()),
+  addToWatchlist: (token: string, symbol: string) =>
+    fetch(`${BASE}/api/watchlist`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+    }).then((r) => r.json()),
+  removeFromWatchlist: (token: string, symbol: string) =>
+    fetch(`${BASE}/api/watchlist/${encodeURIComponent(symbol)}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json()),
 
   // ── Market Intelligence ───────────────────────────────────────────────────
   marketIntelSnapshot: () => get<MISnapshot>("/api/market-intelligence/snapshot"),

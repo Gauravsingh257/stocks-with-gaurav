@@ -32,6 +32,84 @@
   --color-border:     var(--border);
 }
 
+/* ── Light Theme ───────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-base:       #f5f7fa;
+  --bg-surface:    #ffffff;
+  --bg-card:       rgba(0,0,0,0.03);
+  --bg-card-hover: rgba(0,0,0,0.06);
+  --border:        rgba(0,0,0,0.1);
+  --border-glow:   rgba(0,120,180,0.25);
+
+  --accent:      #0078b4;
+  --accent-dim:  rgba(0,120,180,0.1);
+  --success:     #059669;
+  --danger:      #dc2626;
+  --warning:     #d97706;
+  --muted:       #94a3b8;
+
+  --text-primary:   #1e293b;
+  --text-secondary: #64748b;
+  --text-dim:       #94a3b8;
+}
+
+[data-theme="light"] body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .terminal-card,
+[data-theme="light"] .glass,
+[data-theme="light"] .glass-glow,
+[data-theme="light"] .stat-card {
+  background: rgba(255,255,255,0.85);
+  border-color: rgba(0,0,0,0.1);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+}
+
+[data-theme="light"] .data-table thead th {
+  background: rgba(0,0,0,0.04);
+  color: var(--text-secondary);
+  border-bottom-color: rgba(0,0,0,0.1);
+}
+
+[data-theme="light"] .data-table tbody tr:hover {
+  background: rgba(0,0,0,0.03);
+}
+
+[data-theme="light"] .input-dark {
+  background: rgba(0,0,0,0.04);
+  border-color: rgba(0,0,0,0.12);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .nav-link { color: var(--text-secondary); }
+[data-theme="light"] .nav-link:hover { background: rgba(0,0,0,0.05); color: var(--text-primary); }
+[data-theme="light"] .nav-link.active { background: rgba(0,120,180,0.08); color: var(--accent); border-color: rgba(0,120,180,0.2); }
+
+[data-theme="light"] .cyber-grid-bg { display: none; }
+[data-theme="light"] .scan-line-effect { display: none; }
+[data-theme="light"] .neon-text { animation: none; text-shadow: none; color: var(--accent); }
+
+[data-theme="light"] ::-webkit-scrollbar-track { background: var(--bg-base); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ── Print styles ──────────────────────────────────────────── */
+@media print {
+  body { background: white !important; color: black !important; }
+  .cyber-grid-bg, .scan-line-effect, nav, aside, header, footer,
+  button, .btn-accent { display: none !important; }
+  .glass, .terminal-card, .stat-card {
+    background: white !important; border: 1px solid #ddd !important;
+    box-shadow: none !important; backdrop-filter: none !important;
+    page-break-inside: avoid;
+  }
+  .data-table { font-size: 10px; }
+  .data-table thead th { background: #f0f0f0 !important; color: #333 !important; }
+}
+
 /* ── Reset & Base ───────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

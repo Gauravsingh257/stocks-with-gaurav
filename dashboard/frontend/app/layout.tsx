@@ -3,6 +3,8 @@ import "./globals.css";
 import { CyberGridOverlay, FloatingOrbs } from "@/components/FuturisticElements";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import LayoutClient from "@/components/LayoutClient";
+import ThemeProvider from "@/components/ThemeProvider";
+import { AuthProvider } from "@/lib/auth";
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
@@ -21,7 +23,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <CyberGridOverlay />
         <FloatingOrbs />
         <ErrorBoundary>
-          <LayoutClient>{children}</LayoutClient>
+          <AuthProvider>
+            <ThemeProvider>
+              <LayoutClient>{children}</LayoutClient>
+            </ThemeProvider>
+          </AuthProvider>
         </ErrorBoundary>
       </body>
     </html>

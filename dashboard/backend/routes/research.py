@@ -13,9 +13,34 @@ from fastapi import APIRouter, HTTPException, Query
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
 from services.price_resolver import resolve_cmp
+from dashboard.backend.routes.auth import get_optional_user
 
 router = APIRouter(tags=["research"])
 log = logging.getLogger("dashboard.research")
+
+
+# ── Telegram alert helper ─────────────────────────────────────────────────────
+
+def _telegram_notify(message: str) -> bool:
+    """Send a Telegram message using the configured bot. Non-blocking, best-effort."""
+    try:
+        import requests as _req
+        from config.settings import get_settings
+        settings = get_settings()
+        token = settings.telegram_bot_token
+        chat_id = settings.telegram_chat_id
+        if not token or not chat_id:
+            log.debug("Telegram not configured — skipping notification")
+            return False
+        resp = _req.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+            timeout=10,
+        )
+        return resp.ok
+    except Exception as exc:
+        log.warning("Telegram notification failed: %s", exc)
+        return False
 
 # ── Sector cache (lightweight, populated on demand from yfinance) ─────────
 _sector_cache: dict[str, str | None] = {}
@@ -57,6 +82,7 @@ _scan_history: dict[str, dict] = {}  # horizon -> latest scan result info
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
+FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
 
 
 def _utc_iso(s: str | None) -> str | None:
@@ -548,18 +574,55 @@ def _running_trades_payload(limit: int) -> dict:
     return {"items": items, "count": len(items)}
 
 
+def _notify_new_picks(horizon: str) -> None:
+    """Send Telegram alert summarizing current active picks after a scan completes."""
+    try:
+        rows = get_stock_recommendations(horizon, limit=10)
+        if not rows:
+            return
+        lines = [f"<b>{'Swing' if horizon == 'SWING' else 'Long-Term'} Scan Complete</b>"]
+        lines.append(f"<i>{len(rows)} active idea(s):</i>\n")
+        for r in rows[:5]:
+            sym = r.get("symbol", "?").replace("NSE:", "")
+            entry = float(r.get("entry_price", 0))
+            sl = float(r.get("stop_loss", 0)) if r.get("stop_loss") else 0
+            conf = float(r.get("confidence_score", 0))
+            action = r.get("entry_type", "MARKET")
+            lines.append(f"  {sym} — Entry ₹{entry:.0f} | SL ₹{sl:.0f} | Conf {conf:.0f}% [{action}]")
+        if len(rows) > 5:
+            lines.append(f"  ... +{len(rows) - 5} more")
+        lines.append("\nhttps://www.stockswithgaurav.com/research")
+        _telegram_notify("\n".join(lines))
+    except Exception as exc:
+        log.warning("Telegram new-pick notification failed: %s", exc)
+
+
 @router.get("/api/research/swing")
 @router.get("/research/swing")
-def get_swing_research(limit: int = Query(10, ge=1, le=100)):
+def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("SWING")
-    return _swing_payload(limit)
+    result = _swing_payload(limit)
+    is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
+    if not is_premium and len(result["items"]) > FREE_TIER_LIMIT:
+        result["items"] = result["items"][:FREE_TIER_LIMIT]
+        result["gated"] = True
+        result["total_available"] = result["count"]
+        result["count"] = FREE_TIER_LIMIT
+    return result
 
 
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
-def get_longterm_research(limit: int = Query(10, ge=1, le=100)):
+def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("LONGTERM")
-    return _longterm_payload(limit)
+    result = _longterm_payload(limit)
+    is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
+    if not is_premium and len(result["items"]) > FREE_TIER_LIMIT:
+        result["items"] = result["items"][:FREE_TIER_LIMIT]
+        result["gated"] = True
+        result["total_available"] = result["count"]
+        result["count"] = FREE_TIER_LIMIT
+    return result
 
 
 @router.get("/api/research/running-trades")
@@ -689,6 +752,7 @@ def _start_research_scan_background(agent_name: str, label: str) -> dict:
                     "agent": agent_name,
                     "trigger": "manual",
                 }
+                _notify_new_picks(horizon)
         except Exception as exc:
             log.exception("[%s] background scan failed", agent_name)
             _scan_history[horizon] = {
@@ -756,6 +820,123 @@ def run_longterm_scan(force: bool = Query(False, description="Bypass slot-full c
             "summary": str(e),
             "result": {},
         }
+
+
+@router.get("/api/research/track-record")
+@router.get("/research/track-record")
+def get_track_record(
+    horizon: str = Query("all", pattern="^(swing|longterm|all)$"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return historical track record of all recommendations with outcomes."""
+    conn = get_connection()
+    try:
+        params: list = []
+        where_parts = []
+        if horizon.upper() in ("SWING", "LONGTERM"):
+            where_parts.append("sr.agent_type = ?")
+            params.append(horizon.upper())
+
+        where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        params.append(limit)
+
+        rows = conn.execute(
+            f"""
+            SELECT sr.id, sr.symbol, sr.agent_type, sr.setup, sr.status,
+                   sr.entry_price, sr.stop_loss, sr.targets, sr.confidence_score,
+                   sr.scan_cmp, sr.exit_price, sr.exit_date, sr.exit_reason,
+                   sr.created_at, sr.signals_updated_at,
+                   rt.current_price, rt.profit_loss_pct, rt.days_held,
+                   rt.high_since_entry, rt.low_since_entry, rt.status AS trade_status
+            FROM stock_recommendations sr
+            LEFT JOIN running_trades rt ON rt.recommendation_id = sr.id
+                AND rt.id = (SELECT MAX(rt2.id) FROM running_trades rt2 WHERE rt2.recommendation_id = sr.id)
+            {where_clause}
+            ORDER BY datetime(sr.created_at) DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+        import json as _json
+
+        picks = []
+        total_resolved = 0
+        total_target_hit = 0
+        total_stop_hit = 0
+        pnl_vals = []
+
+        for row in rows:
+            row = dict(row)
+            status = row.get("trade_status") or row.get("status") or "ACTIVE"
+            entry = float(row["entry_price"])
+            current = float(row["current_price"]) if row.get("current_price") else None
+            exit_p = float(row["exit_price"]) if row.get("exit_price") else None
+            pnl_pct = float(row["profit_loss_pct"]) if row.get("profit_loss_pct") else None
+
+            if pnl_pct is None and current and entry > 0:
+                pnl_pct = round((current - entry) / entry * 100, 2)
+            if pnl_pct is None and exit_p and entry > 0:
+                pnl_pct = round((exit_p - entry) / entry * 100, 2)
+
+            targets_raw = row.get("targets", "[]")
+            try:
+                targets = _json.loads(targets_raw) if isinstance(targets_raw, str) else (targets_raw or [])
+            except Exception:
+                targets = []
+
+            if status in ("TARGET_HIT", "STOP_HIT", "CLOSED"):
+                total_resolved += 1
+                if pnl_pct is not None:
+                    pnl_vals.append(pnl_pct)
+                if status == "TARGET_HIT":
+                    total_target_hit += 1
+                elif status == "STOP_HIT":
+                    total_stop_hit += 1
+
+            picks.append({
+                "id": row["id"],
+                "symbol": row["symbol"],
+                "agent_type": row["agent_type"],
+                "setup": row.get("setup"),
+                "status": status,
+                "entry_price": entry,
+                "stop_loss": float(row["stop_loss"]) if row.get("stop_loss") else None,
+                "targets": targets,
+                "confidence_score": float(row.get("confidence_score", 0)),
+                "current_price": current,
+                "exit_price": exit_p,
+                "exit_date": row.get("exit_date"),
+                "exit_reason": row.get("exit_reason"),
+                "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+                "days_held": int(row["days_held"]) if row.get("days_held") else None,
+                "high_since_entry": float(row["high_since_entry"]) if row.get("high_since_entry") else None,
+                "low_since_entry": float(row["low_since_entry"]) if row.get("low_since_entry") else None,
+                "created_at": _utc_iso(row.get("created_at")),
+                "signals_updated_at": _utc_iso(row.get("signals_updated_at")),
+            })
+
+        hit_rate = round(total_target_hit / total_resolved * 100, 1) if total_resolved > 0 else 0
+        avg_pnl = round(sum(pnl_vals) / len(pnl_vals), 2) if pnl_vals else 0
+        best_pnl = round(max(pnl_vals), 2) if pnl_vals else 0
+        worst_pnl = round(min(pnl_vals), 2) if pnl_vals else 0
+
+        return {
+            "picks": picks,
+            "total": len(picks),
+            "summary": {
+                "total_picks": len(picks),
+                "resolved": total_resolved,
+                "target_hit": total_target_hit,
+                "stop_hit": total_stop_hit,
+                "hit_rate_pct": hit_rate,
+                "avg_pnl_pct": avg_pnl,
+                "best_pnl_pct": best_pnl,
+                "worst_pnl_pct": worst_pnl,
+            },
+        }
+    finally:
+        conn.close()
 
 
 @router.get("/api/research/scan-status")

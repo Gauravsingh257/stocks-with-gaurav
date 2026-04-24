@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
 import type { HealthData } from "@/lib/useHealth";
-import { Wifi, WifiOff, RefreshCw, Database, Activity } from "lucide-react";
+import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon } from "lucide-react";
+import { useTheme } from "@/components/ThemeProvider";
 
 function regimeBadge(r: string) {
   if (r === "BULLISH") return { cls: "badge badge-win", dot: "var(--success)", label: "BULLISH" };
@@ -18,6 +19,7 @@ interface TopBarProps {
 }
 
 export default function TopBar({ onMenuClick, terminalLayout = false, onTerminalLayoutToggle }: TopBarProps) {
+  const { theme, toggle: toggleTheme } = useTheme();
   const { snapshot, status } = useEngineSocket();
   const health = useHealth();
 
@@ -141,6 +143,23 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
             {terminalLayout ? "Classic Layout" : "Terminal Layout"}
           </button>
         )}
+
+        {/* Theme toggle */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          style={{
+            display: "grid", placeItems: "center",
+            width: 32, height: 32, borderRadius: 6,
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            cursor: "pointer", color: "var(--text-secondary)",
+            transition: "background 0.2s",
+          }}
+        >
+          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
 
         {/* Connect Kite — show when Kite disconnected or token missing; uses /api/kite/login proxy */}
         {health && (health.kite_connected === false || health.token_present === false) && (

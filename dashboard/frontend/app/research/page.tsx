@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, RefreshCw, Zap, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 
 import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type SwingIdea } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
   if (!isoTime) return { label: "Never", stale: true };
@@ -42,8 +44,14 @@ export default function ResearchPage() {
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
   const [longtermSlotStatus, setLongtermSlotStatus] = useState<{ occupied: number; max: number; slots_full: boolean } | null>(null);
+  const { user } = useAuth();
   const [scanning, setScanning] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sectorFilter, setSectorFilter] = useState<string>("ALL");
+  const [mcapFilter, setMcapFilter] = useState<string>("ALL");
+  const [compareSymbols, setCompareSymbols] = useState<Set<string>>(new Set());
+  const [gated, setGated] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -59,11 +67,13 @@ export default function ResearchPage() {
     if (swingRes.status === "fulfilled") {
       setSwing(swingRes.value?.items ?? []);
       setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
+      if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
     }
     if (longtermRes.status === "fulfilled") {
       setLongterm(longtermRes.value?.items ?? []);
       setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
       setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
+      if ((longtermRes.value as Record<string, unknown>)?.gated) setGated(true);
     }
     if (runningRes.status === "fulfilled") {
       setRunning(runningRes.value?.items ?? []);
@@ -137,6 +147,59 @@ export default function ResearchPage() {
     );
   }, [scanning, triggerScan]);
 
+  // ── Filter logic ──
+  const allSectors = useMemo(() => {
+    const s = new Set<string>();
+    [...swing, ...longterm].forEach((item) => {
+      if (item.sector) s.add(item.sector);
+    });
+    return Array.from(s).sort();
+  }, [swing, longterm]);
+
+  const filterItem = useCallback((item: { symbol: string; sector?: string | null; market_cap_cr?: number | null }) => {
+    if (searchQuery && !item.symbol.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (sectorFilter !== "ALL" && item.sector !== sectorFilter) return false;
+    if (mcapFilter !== "ALL") {
+      const mc = item.market_cap_cr ?? 0;
+      if (mcapFilter === "SMALL" && mc >= 5000) return false;
+      if (mcapFilter === "MID" && (mc < 5000 || mc >= 50000)) return false;
+      if (mcapFilter === "LARGE" && mc < 50000) return false;
+    }
+    return true;
+  }, [searchQuery, sectorFilter, mcapFilter]);
+
+  const filteredSwing = useMemo(() => swing.filter(filterItem), [swing, filterItem]);
+  const filteredLongterm = useMemo(() => longterm.filter(filterItem), [longterm, filterItem]);
+  const hasFilters = searchQuery || sectorFilter !== "ALL" || mcapFilter !== "ALL";
+
+  const toggleCompare = useCallback((symbol: string) => {
+    setCompareSymbols((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) next.delete(symbol);
+      else if (next.size < 3) next.add(symbol);
+      return next;
+    });
+  }, []);
+
+  const exportCSV = useCallback(() => {
+    const rows = [
+      ["Symbol", "Type", "Setup", "Entry", "SL", "Target1", "R:R", "Confidence", "Sector", "PE", "MCap(Cr)", "Action"].join(","),
+      ...filteredSwing.map((s) =>
+        [s.symbol, "SWING", s.setup, s.entry_price, s.stop_loss, s.target_1 ?? "", s.risk_reward, s.confidence_score, s.sector ?? "", s.pe_ratio ?? "", s.market_cap_cr ?? "", s.action_tag ?? ""].join(",")
+      ),
+      ...filteredLongterm.map((l) =>
+        [l.symbol, "LONGTERM", l.setup, l.entry_price, l.stop_loss, l.long_term_target ?? "", l.risk_reward, l.confidence_score, l.sector ?? "", l.pe_ratio ?? "", l.market_cap_cr ?? "", l.action_tag ?? ""].join(",")
+      ),
+    ].join("\n");
+    const blob = new Blob([rows], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `research-picks-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredSwing, filteredLongterm]);
+
   // ── Header scan age info ──
   const scanAgeInfo = useMemo(() => {
     const swingAge = formatScanAge(lastSwingScan);
@@ -176,11 +239,84 @@ export default function ResearchPage() {
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Link href="/research/track-record" style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "6px 14px", borderRadius: 8, fontWeight: 600, fontSize: "0.72rem",
+            border: "1px solid rgba(0,224,150,0.3)", background: "rgba(0,224,150,0.08)",
+            color: "#00e096", textDecoration: "none", transition: "opacity 0.2s",
+          }}>
+            <History size={12} /> Track Record
+          </Link>
           {scanButton("swing")}
           {scanButton("longterm", "warning")}
         </div>
       </div>
+      </StaggerItem>
+
+      {/* ── FILTER BAR ──────────────────────────────────────────── */}
+      <StaggerItem>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {/* Search */}
+          <div style={{ position: "relative", flex: "1 1 180px", maxWidth: 260 }}>
+            <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)" }} />
+            <input
+              type="text"
+              placeholder="Search symbol..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input-dark"
+              style={{ width: "100%", paddingLeft: 30, fontSize: "0.78rem" }}
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", padding: 2 }}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          {/* Sector */}
+          <select
+            value={sectorFilter}
+            onChange={(e) => setSectorFilter(e.target.value)}
+            className="input-dark"
+            style={{ fontSize: "0.78rem", minWidth: 130 }}
+          >
+            <option value="ALL">All Sectors</option>
+            {allSectors.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {/* MCap */}
+          <select
+            value={mcapFilter}
+            onChange={(e) => setMcapFilter(e.target.value)}
+            className="input-dark"
+            style={{ fontSize: "0.78rem", minWidth: 120 }}
+          >
+            <option value="ALL">All MCap</option>
+            <option value="SMALL">Small (&lt;5K Cr)</option>
+            <option value="MID">Mid (5K-50K Cr)</option>
+            <option value="LARGE">Large (&gt;50K Cr)</option>
+          </select>
+          {hasFilters && (
+            <button onClick={() => { setSearchQuery(""); setSectorFilter("ALL"); setMcapFilter("ALL"); }} style={{ ...SCAN_BTN, background: "rgba(255,71,87,0.08)", borderColor: "rgba(255,71,87,0.25)", color: "#ff4757", fontSize: "0.68rem", padding: "4px 10px" }}>
+              <X size={11} /> Clear
+            </button>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button onClick={exportCSV} style={{ ...SCAN_BTN, background: "rgba(0,224,150,0.08)", borderColor: "rgba(0,224,150,0.25)", color: "#00e096", fontSize: "0.68rem", padding: "5px 10px" }}>
+              <Download size={11} /> CSV
+            </button>
+            <button onClick={() => window.print()} style={{ ...SCAN_BTN, background: "rgba(91,156,246,0.08)", borderColor: "rgba(91,156,246,0.25)", color: "#5b9cf6", fontSize: "0.68rem", padding: "5px 10px" }}>
+              <Download size={11} /> Print
+            </button>
+            {compareSymbols.size >= 2 && (
+              <Link href={`/research/compare?symbols=${Array.from(compareSymbols).join(",")}`} style={{
+                ...SCAN_BTN, background: "rgba(240,192,96,0.1)", borderColor: "rgba(240,192,96,0.3)", color: "#f0c060", fontSize: "0.68rem", padding: "5px 10px", textDecoration: "none",
+              }}>
+                Compare {compareSymbols.size}
+              </Link>
+            )}
+          </div>
+        </div>
       </StaggerItem>
 
       {/* ── ERROR / LOADING ────────────────────────────────────── */}
@@ -279,10 +415,29 @@ export default function ResearchPage() {
             Discovery Feed
           </span>
         </div>
-        <SwingIdeasTable items={swing} slotInfo={`${swing.length} Ideas`} onScan={() => triggerScan("swing")} scanning={scanning === "swing"} />
-        <LongTermIdeasCard items={longterm} slotInfo={`${longterm.length} Ideas`} onScan={() => triggerScan("longterm")} scanning={scanning === "longterm"} />
+        <SwingIdeasTable items={filteredSwing} slotInfo={`${filteredSwing.length} Ideas${hasFilters ? ` (filtered from ${swing.length})` : ""}`} onScan={() => triggerScan("swing")} scanning={scanning === "swing"} />
+        <LongTermIdeasCard items={filteredLongterm} slotInfo={`${filteredLongterm.length} Ideas${hasFilters ? ` (filtered from ${longterm.length})` : ""}`} onScan={() => triggerScan("longterm")} scanning={scanning === "longterm"} />
       </div>
       </StaggerItem>
+
+      {/* ── PREMIUM UPSELL (shown when data is gated) ──────── */}
+      {gated && (!user || user.role === "FREE") && (
+        <StaggerItem>
+          <div className="glass" style={{
+            padding: "28px 24px", textAlign: "center",
+            background: "linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(0,212,255,0.04) 100%)",
+            border: "1px solid rgba(245,158,11,0.2)",
+          }}>
+            <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>Unlock Full Research</div>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 480, margin: "0 auto 16px", lineHeight: 1.6 }}>
+              You&apos;re viewing a limited preview. Upgrade to <strong>Premium</strong> for unlimited access to all stock ideas, full fundamentals, entry alerts, and priority scans.
+            </p>
+            <Link href={user ? "/research" : "/register"} className="btn-accent" style={{ textDecoration: "none", padding: "10px 28px", fontSize: "0.9rem" }}>
+              {user ? "Upgrade to Premium" : "Create Free Account"}
+            </Link>
+          </div>
+        </StaggerItem>
+      )}
 
       <StaggerItem><RunningTradesMonitor items={running} /></StaggerItem>
     </StaggerContainer>

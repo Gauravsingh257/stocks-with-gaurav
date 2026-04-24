@@ -17,8 +17,9 @@ from .kite              import router as kite_router
 from .market_intelligence import router as market_intelligence_router
 from .portfolio          import router as portfolio_router
 from .content            import router as content_router
+from .auth               import router as auth_router
 
 __all__ = ["trades_router", "analytics_router", "journal_router", "agents_router",
            "charts_router", "chat_router", "system_router", "oi_intelligence_router",
            "engine_router", "research_router", "kite_router", "market_intelligence_router",
-           "portfolio_router", "content_router"]
+           "portfolio_router", "content_router", "auth_router"]
