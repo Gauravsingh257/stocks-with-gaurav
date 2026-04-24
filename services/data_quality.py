@@ -40,6 +40,15 @@ def evaluate_symbol_quality(
             reasons.append(f"market_cap_too_low({fundamental.raw_market_cap_cr:.0f}Cr<{MIN_MARKET_CAP_CR:.0f}Cr)")
             return QualityGateResult(symbol=symbol, passed=False, score=0.0, reasons=reasons, data_authenticity="real")
 
+    # PE / earnings hard filter (only when real data available)
+    if fundamental.raw_pe is not None:
+        if fundamental.raw_pe < 0:
+            reasons.append("negative_earnings")
+            return QualityGateResult(symbol=symbol, passed=False, score=0.0, reasons=reasons, data_authenticity="real")
+        if fundamental.raw_pe > 200:
+            reasons.append(f"extreme_pe({fundamental.raw_pe:.0f})")
+            return QualityGateResult(symbol=symbol, passed=False, score=0.0, reasons=reasons, data_authenticity="real")
+
     # Data authenticity check: reject if only hash/synthetic data
     data_auth = "real"
     if fundamental.data_source == "hash":

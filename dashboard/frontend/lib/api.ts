@@ -268,6 +268,13 @@ export interface SwingIdea {
   smc_evidence?: SmcEvidence | null;
   sector?: string | null;
   target_source?: string | null;
+  pe_ratio?: number | null;
+  roe_pct?: number | null;
+  roce_pct?: number | null;
+  revenue_growth_pct?: number | null;
+  debt_equity?: number | null;
+  market_cap_cr?: number | null;
+  promoter_pct?: number | null;
 }
 
 export interface LongTermIdea {
@@ -305,6 +312,13 @@ export interface LongTermIdea {
   smc_evidence?: SmcEvidence | null;
   sector?: string | null;
   target_source?: string | null;
+  pe_ratio?: number | null;
+  roe_pct?: number | null;
+  roce_pct?: number | null;
+  revenue_growth_pct?: number | null;
+  debt_equity?: number | null;
+  market_cap_cr?: number | null;
+  promoter_pct?: number | null;
 }
 
 export interface RunningTradeMonitorItem {
@@ -772,6 +786,7 @@ export const api = {
     get<ResearchChartData>(`/api/research/chart-data/${encodeURIComponent(symbol)}?horizon=${horizon}`),
   runSwingScan: () => post<ResearchRunResponse>("/api/research/run/swing"),
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
+  scanStatus: () => get<{ in_flight: string[]; horizons: Record<string, { status: string; started_at?: string; finished_at?: string; error?: string; summary?: string; agent?: string; trigger?: string }> }>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
 
   // ── Portfolio (persistent positions) ──────────────────────────────────────

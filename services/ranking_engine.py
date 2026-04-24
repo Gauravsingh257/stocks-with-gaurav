@@ -404,6 +404,7 @@ async def _collect_ideas_from_pool(
     top_k: int,
     scored: list[tuple[FactorRow, float]],
     evidence_map: dict[str, tuple[dict, dict, dict, str]],
+    fund_map: dict | None = None,
 ) -> list[RankedIdea]:
     """Walk ranked pool (wider than top_k), fetch OHLC per symbol until top_k ideas or pool exhausted."""
     pool_n = min(len(scored), max(top_k * RESEARCH_POOL_MULT, top_k + 5))
@@ -435,7 +436,18 @@ async def _collect_ideas_from_pool(
         # Skip penny stocks below ₹100
         if idea.entry_price < 100:
             continue
-        ideas.append(replace(idea, rank=rank_counter))
+        # Inject raw fundamental values for frontend display
+        if fund_map and row.symbol in fund_map:
+            snap = fund_map[row.symbol]
+            enriched_ff = dict(idea.fundamental_factors)
+            for attr in ("raw_pe", "raw_roe_pct", "raw_roce_pct", "raw_revenue_growth_pct",
+                         "raw_debt_equity", "raw_market_cap_cr", "raw_promoter_pct"):
+                val = getattr(snap, attr, None)
+                if val is not None:
+                    enriched_ff[attr] = round(float(val), 2)
+            idea = replace(idea, rank=rank_counter, fundamental_factors=enriched_ff)
+        else:
+            idea = replace(idea, rank=rank_counter)
         rank_counter += 1
 
     return ideas
@@ -502,7 +514,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
         horizon, len(symbols), quality_passed, len(scored), top_k,
     )
 
-    ideas = await _collect_ideas_from_pool(horizon, top_k, scored, evidence_map)
+    ideas = await _collect_ideas_from_pool(horizon, top_k, scored, evidence_map, fund_map=fund)
 
     if not ideas:
         log.warning(

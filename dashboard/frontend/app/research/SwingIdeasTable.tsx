@@ -10,6 +10,8 @@ import { SmcEvidencePanel } from "./SmcEvidencePanel";
 interface Props {
   items: SwingIdea[];
   slotInfo?: string;
+  onScan?: () => void;
+  scanning?: boolean;
 }
 
 function fmt(v: number | null | undefined) {
@@ -373,9 +375,15 @@ function ActionTag({ tag }: { tag?: string }) {
   );
 }
 
-export function SwingIdeasTable({ items, slotInfo }: Props) {
+function FundBadge({ value, suffix, good, warn }: { value?: number | null; suffix?: string; good: number; warn: number }) {
+  if (value === null || value === undefined) return <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>;
+  const color = value >= good ? "#00d18c" : value >= warn ? "#f0c060" : "#ff4e6a";
+  return <span style={{ fontSize: "0.72rem", fontWeight: 600, color }}>{value.toFixed(1)}{suffix ?? ""}</span>;
+}
+
+export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
   const [reasoningItem, setReasoningItem] = useState<SwingIdea | null>(null);
-  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "Target 1", "Target 2", "Confidence", "Data", "Chart", "First Detected", "Last Updated", "Reasoning"];
+  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "T1", "T2", "Conf.", "PE", "ROE", "MCap", "Data", "Chart", "Detected", "Updated", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
@@ -389,8 +397,22 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
             No high-quality swing opportunities found
           </div>
           <div style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginTop: 6 }}>
-            The system only recommends stocks when genuine SMC setups are detected. Run a scan or check back later.
+            The system only recommends stocks when genuine SMC setups are detected.
           </div>
+          {onScan && (
+            <button
+              onClick={onScan}
+              disabled={scanning}
+              style={{
+                marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
+                fontSize: "0.75rem", cursor: scanning ? "wait" : "pointer",
+                background: "rgba(0,212,255,0.12)", border: "1px solid rgba(0,212,255,0.3)",
+                color: "var(--accent)", opacity: scanning ? 0.6 : 1,
+              }}
+            >
+              {scanning ? "Scanning..." : "Run Swing Scan"}
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
@@ -440,6 +462,15 @@ export function SwingIdeasTable({ items, slotInfo }: Props) {
                   <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_1)}</td>
                   <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_2)}</td>
                   <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
+                  <td style={{ padding: "10px 12px" }}><FundBadge value={item.pe_ratio} good={0} warn={30} /></td>
+                  <td style={{ padding: "10px 12px" }}><FundBadge value={item.roe_pct} suffix="%" good={15} warn={8} /></td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {item.market_cap_cr != null ? (
+                      <span style={{ fontSize: "0.72rem", fontWeight: 500, color: "var(--text-secondary)" }}>
+                        {item.market_cap_cr >= 10000 ? `${(item.market_cap_cr / 10000).toFixed(1)}L Cr` : `${Math.round(item.market_cap_cr)} Cr`}
+                      </span>
+                    ) : <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>}
+                  </td>
                   <td style={{ padding: "10px 12px" }}>
                     <DataBadge auth={item.data_authenticity} />
                     <StatusBadge status={item.status} />

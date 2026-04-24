@@ -199,6 +199,51 @@ def get_ltp(symbol: str) -> float | None:
         return float(val) if isinstance(val, (int, float)) else None
 
 
+def get_ltp_with_age(symbol: str) -> tuple[float, int] | None:
+    """Get LTP + age in seconds from Redis (or in-memory).
+
+    Returns ``(price, age_sec)`` or ``None`` if the key is missing / expired.
+    Age is derived from the remaining TTL of the Redis key (``LTP_TTL - ttl``).
+    For in-memory fallback, age is computed from the stored write time.
+
+    This is the function imported by ``services.price_resolver._read_ws_cache``
+    to power the Tier-1 (WebSocket cache) price resolution path.
+    """
+    key = ltp_key(symbol)
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(key)
+            if raw is None:
+                return None
+            price = float(raw)
+            ttl = r.ttl(key)
+            # ttl > 0  → key exists with expiry; compute age = LTP_TTL - remaining
+            # ttl == -1 → key exists, no expiry (treat as age 0)
+            # ttl == -2 → key doesn't exist (shouldn't reach here)
+            if isinstance(ttl, int) and ttl > 0:
+                age = max(0, LTP_TTL - ttl)
+            else:
+                age = 0
+            return (price, age)
+        except (TypeError, ValueError) as e:
+            log.debug("Redis get_ltp_with_age parse error %s: %s", key, e)
+            return None
+    # In-memory fallback
+    with _memory_lock:
+        entry = _memory_cache.get(key)
+        if entry is None:
+            return None
+        val, expires_at = entry
+        if time.time() > expires_at:
+            del _memory_cache[key]
+            return None
+        age = max(0, int(time.time() - (expires_at - LTP_TTL)))
+        if isinstance(val, (int, float)):
+            return (float(val), age)
+        return None
+
+
 def publish_ltp_update(payload: dict) -> None:
     """Publish LTP payload to Redis channel for WebSocket broadcast. Keys: NIFTY 50, NIFTY BANK."""
     r = _get_redis()

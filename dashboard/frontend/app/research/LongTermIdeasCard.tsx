@@ -8,6 +8,8 @@ import { SmcEvidencePanel } from "./SmcEvidencePanel";
 interface Props {
   items: LongTermIdea[];
   slotInfo?: string;
+  onScan?: () => void;
+  scanning?: boolean;
 }
 
 function fmt(v: number | null | undefined) {
@@ -158,6 +160,30 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
             <span style={{ marginLeft: 8 }}><span style={{ color: "var(--text-secondary)" }}>FV:</span> {fmt(item.fair_value_estimate)}</span>
           )}
         </div>
+        {(item.pe_ratio != null || item.roe_pct != null || item.market_cap_cr != null || item.debt_equity != null) && (
+          <div style={{ fontSize: "0.74rem", display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {item.pe_ratio != null && (
+              <span><span style={{ color: "var(--text-secondary)" }}>PE:</span>{" "}
+                <strong style={{ color: item.pe_ratio > 50 ? "#ff4e6a" : item.pe_ratio > 30 ? "#f0c060" : "#00d18c" }}>{item.pe_ratio.toFixed(1)}</strong>
+              </span>
+            )}
+            {item.roe_pct != null && (
+              <span><span style={{ color: "var(--text-secondary)" }}>ROE:</span>{" "}
+                <strong style={{ color: item.roe_pct >= 15 ? "#00d18c" : item.roe_pct >= 8 ? "#f0c060" : "#ff4e6a" }}>{item.roe_pct.toFixed(1)}%</strong>
+              </span>
+            )}
+            {item.market_cap_cr != null && (
+              <span><span style={{ color: "var(--text-secondary)" }}>MCap:</span>{" "}
+                <strong>{item.market_cap_cr >= 10000 ? `${(item.market_cap_cr / 10000).toFixed(1)}L Cr` : `${Math.round(item.market_cap_cr)} Cr`}</strong>
+              </span>
+            )}
+            {item.debt_equity != null && (
+              <span><span style={{ color: "var(--text-secondary)" }}>D/E:</span>{" "}
+                <strong style={{ color: item.debt_equity > 1.5 ? "#ff4e6a" : item.debt_equity > 0.5 ? "#f0c060" : "#00d18c" }}>{item.debt_equity.toFixed(2)}</strong>
+              </span>
+            )}
+          </div>
+        )}
         {hasRiskFactors && (
           <div style={{ fontSize: "0.74rem" }}><span style={{ color: "var(--text-secondary)" }}>Risks:</span> {item.risk_factors.join(", ")}</div>
         )}
@@ -169,7 +195,7 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
   );
 }
 
-export function LongTermIdeasCard({ items, slotInfo }: Props) {
+export function LongTermIdeasCard({ items, slotInfo, onScan, scanning }: Props) {
   return (
     <div className="glass" style={{ padding: 16 }}>
       <div style={{ fontWeight: 600, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -180,8 +206,22 @@ export function LongTermIdeasCard({ items, slotInfo }: Props) {
         <div style={{ color: "var(--text-secondary)", padding: "24px 0", textAlign: "center" }}>
           <div style={{ fontSize: "1.1rem", marginBottom: 8 }}>No high-quality long-term opportunities found</div>
           <div style={{ fontSize: "0.82rem", color: "var(--text-dim)" }}>
-            The weekly SMC analysis found no stocks meeting our quality bar. This means the system is working correctly &mdash; only genuine setups with confirmed weekly structure, OB/FVG zones, and institutional volume will appear here.
+            The weekly SMC analysis found no stocks meeting our quality bar. Only genuine setups with confirmed weekly structure, OB/FVG zones, and institutional volume will appear here.
           </div>
+          {onScan && (
+            <button
+              onClick={onScan}
+              disabled={scanning}
+              style={{
+                marginTop: 12, padding: "6px 16px", borderRadius: 8, fontWeight: 600,
+                fontSize: "0.75rem", cursor: scanning ? "wait" : "pointer",
+                background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)",
+                color: "#f59e0b", opacity: scanning ? 0.6 : 1,
+              }}
+            >
+              {scanning ? "Scanning..." : "Run Long-Term Scan"}
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>

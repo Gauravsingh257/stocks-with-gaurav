@@ -6,6 +6,7 @@ Research Center APIs for swing ideas, long-term ideas, and running trades.
 import logging
 import os
 import threading
+import traceback
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
@@ -19,6 +20,9 @@ log = logging.getLogger("dashboard.research")
 # Track in-flight auto-scans to avoid duplicate triggers
 _auto_scan_lock = threading.Lock()
 _auto_scan_running: set[str] = set()
+
+# Observable scan diagnostics — surfaced via GET /api/research/scan-status
+_scan_history: dict[str, dict] = {}  # horizon -> latest scan result info
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
@@ -45,6 +49,40 @@ def _utc_iso(s: str | None) -> str | None:
         return s + "Z"
     except Exception:
         return s
+
+
+def _extract_fundamentals(row: dict) -> dict:
+    """Pull structured fundamental metrics from the fundamental_factors JSON blob.
+
+    Returns a flat dict of nullable floats that the frontend can render as columns
+    (PE, ROE, ROCE, revenue growth, D/E, market cap, promoter %).
+    """
+    ff = row.get("fundamental_factors") or {}
+    if isinstance(ff, str):
+        try:
+            import json as _json
+            ff = _json.loads(ff)
+        except Exception:
+            ff = {}
+
+    def _f(key: str) -> float | None:
+        v = ff.get(key)
+        if v is None:
+            return None
+        try:
+            return round(float(v), 2)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "pe_ratio": _f("raw_pe"),
+        "roe_pct": _f("raw_roe_pct"),
+        "roce_pct": _f("raw_roce_pct"),
+        "revenue_growth_pct": _f("raw_revenue_growth_pct"),
+        "debt_equity": _f("raw_debt_equity"),
+        "market_cap_cr": _f("raw_market_cap_cr"),
+        "promoter_pct": _f("raw_promoter_pct"),
+    }
 
 
 def _is_data_stale(horizon: str) -> bool:
@@ -78,16 +116,44 @@ def _maybe_auto_scan(horizon: str) -> None:
             return
         _auto_scan_running.add(horizon)
 
+    started_at = datetime.utcnow().isoformat() + "Z"
+
     def _job() -> None:
         try:
             from agents.runner import run_agent_now
             out = run_agent_now(agent_name)
             if isinstance(out, dict) and out.get("error"):
                 log.error("[auto-scan %s] error: %s", horizon, out["error"])
+                _scan_history[horizon] = {
+                    "status": "error",
+                    "started_at": started_at,
+                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    "error": str(out["error"]),
+                    "agent": agent_name,
+                    "trigger": "auto",
+                }
             else:
-                log.info("[auto-scan %s] finished: %s", horizon, out.get("summary", out))
-        except Exception:
+                summary = out.get("summary", str(out)) if isinstance(out, dict) else str(out)
+                log.info("[auto-scan %s] finished: %s", horizon, summary)
+                _scan_history[horizon] = {
+                    "status": "success",
+                    "started_at": started_at,
+                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    "summary": summary,
+                    "agent": agent_name,
+                    "trigger": "auto",
+                }
+        except Exception as exc:
             log.exception("[auto-scan %s] failed", horizon)
+            _scan_history[horizon] = {
+                "status": "exception",
+                "started_at": started_at,
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "traceback": traceback.format_exc()[-1500:],
+                "agent": agent_name,
+                "trigger": "auto",
+            }
         finally:
             with _auto_scan_lock:
                 _auto_scan_running.discard(horizon)
@@ -215,6 +281,7 @@ def _swing_payload(limit: int) -> dict:
                 "entry_gap_pct": entry_gap_pct,
                 "action_tag": action_tag,
                 "smc_evidence": row.get("smc_evidence"),
+                **_extract_fundamentals(row),
             }
         )
     return {"items": items, "count": len(items), "last_scan_time": _utc_iso(last_scan)}
@@ -324,6 +391,7 @@ def _longterm_payload(limit: int) -> dict:
                 "entry_gap_pct": entry_gap_pct,
                 "action_tag": action_tag,
                 "smc_evidence": row.get("smc_evidence"),
+                **_extract_fundamentals(row),
             }
         )
     # Slot status — surfaces why long-term scan may not have produced new ideas.
@@ -509,18 +577,57 @@ def _start_research_scan_background(agent_name: str, label: str) -> dict:
     """
     Run ranking agent in a daemon thread so the HTTP request returns immediately.
     Full scans can take minutes (OHLC for finalist pool); avoids gateway timeouts on Railway/Vercel.
+    Results/errors are tracked in ``_scan_history`` for observability via ``/api/research/scan-status``.
     """
     from agents.runner import run_agent_now
+
+    horizon = label.upper()
+    started_at = datetime.utcnow().isoformat() + "Z"
+
+    _scan_history[horizon] = {
+        "status": "running",
+        "started_at": started_at,
+        "finished_at": None,
+        "error": None,
+        "agent": agent_name,
+        "trigger": "manual",
+    }
 
     def _job() -> None:
         try:
             out = run_agent_now(agent_name)
             if isinstance(out, dict) and out.get("error"):
                 log.error("[%s] background scan error: %s", agent_name, out["error"])
+                _scan_history[horizon] = {
+                    "status": "error",
+                    "started_at": started_at,
+                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    "error": str(out["error"]),
+                    "agent": agent_name,
+                    "trigger": "manual",
+                }
             else:
-                log.info("[%s] background scan finished: %s", agent_name, out.get("summary", out))
-        except Exception:
+                summary = out.get("summary", str(out)) if isinstance(out, dict) else str(out)
+                log.info("[%s] background scan finished: %s", agent_name, summary)
+                _scan_history[horizon] = {
+                    "status": "success",
+                    "started_at": started_at,
+                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    "summary": summary,
+                    "agent": agent_name,
+                    "trigger": "manual",
+                }
+        except Exception as exc:
             log.exception("[%s] background scan failed", agent_name)
+            _scan_history[horizon] = {
+                "status": "exception",
+                "started_at": started_at,
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "traceback": traceback.format_exc()[-1500:],
+                "agent": agent_name,
+                "trigger": "manual",
+            }
 
     threading.Thread(target=_job, daemon=True, name=f"research_{label}").start()
     return {
@@ -577,6 +684,30 @@ def run_longterm_scan(force: bool = Query(False, description="Bypass slot-full c
             "summary": str(e),
             "result": {},
         }
+
+
+@router.get("/api/research/scan-status")
+@router.get("/research/scan-status")
+def get_scan_status():
+    """Return the current state of research scans (in-flight + latest result per horizon).
+
+    This endpoint makes auto-scan failures observable. If a scan keeps failing silently
+    the frontend (or an operator) can inspect the error and traceback here.
+    """
+    with _auto_scan_lock:
+        in_flight = sorted(_auto_scan_running)
+    return {
+        "in_flight": in_flight,
+        "horizons": {
+            h: {k: v for k, v in info.items() if k != "traceback"}
+            for h, info in _scan_history.items()
+        },
+        "debug": {
+            h: info.get("traceback")
+            for h, info in _scan_history.items()
+            if info.get("traceback")
+        },
+    }
 
 
 @router.post("/api/research/tracker/refresh")
