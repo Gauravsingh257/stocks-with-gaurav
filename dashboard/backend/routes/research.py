@@ -13,7 +13,11 @@ from fastapi import APIRouter, HTTPException, Query
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
 from services.price_resolver import resolve_cmp
-from dashboard.backend.routes.auth import get_optional_user
+try:
+    from dashboard.backend.routes.auth import get_optional_user
+except ImportError:
+    def get_optional_user(authorization: str | None = None) -> dict | None:
+        return None
 
 router = APIRouter(tags=["research"])
 log = logging.getLogger("dashboard.research")

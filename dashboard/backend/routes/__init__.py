@@ -17,7 +17,12 @@ from .kite              import router as kite_router
 from .market_intelligence import router as market_intelligence_router
 from .portfolio          import router as portfolio_router
 from .content            import router as content_router
-from .auth               import router as auth_router
+
+try:
+    from .auth import router as auth_router
+except ImportError:
+    from fastapi import APIRouter
+    auth_router = APIRouter()
 
 __all__ = ["trades_router", "analytics_router", "journal_router", "agents_router",
            "charts_router", "chat_router", "system_router", "oi_intelligence_router",

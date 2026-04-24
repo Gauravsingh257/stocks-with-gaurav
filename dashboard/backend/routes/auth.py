@@ -5,14 +5,12 @@ Simple email/password authentication with JWT tokens.
 
 import logging
 import os
-import time
 from datetime import datetime, timezone, timedelta
-from functools import lru_cache
 
 import bcrypt
 import jwt
 from fastapi import APIRouter, HTTPException, Depends, Header
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from dashboard.backend.db import get_connection
 
