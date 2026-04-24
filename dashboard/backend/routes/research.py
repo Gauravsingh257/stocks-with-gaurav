@@ -154,15 +154,27 @@ def _swing_payload(limit: int) -> dict:
         action_tag = "EXECUTE_NOW"  # default for MARKET entries
         if entry_type == "LIMIT":
             if scan_cmp and entry > 0:
-                gap = abs(entry_gap_pct or 0)
+                # entry_gap_pct: positive = CMP above entry, negative = CMP below entry.
+                # For LONG LIMIT BUY: "EXECUTE_NOW" only when price has actually visited
+                # the limit zone (CMP at-or-below entry, with 0.25% tick slack).
+                gap = entry_gap_pct or 0.0
                 total_move = reward
-                progress = abs(scan_cmp - entry) / total_move if total_move > 0 else 0
-                if progress > 0.30:
-                    action_tag = "MISSED"
-                elif gap <= 2.0:
-                    action_tag = "EXECUTE_NOW"
+                progress = ((scan_cmp - entry) / total_move) if (total_move > 0 and is_long) else 0.0
+                if is_long:
+                    if progress > 0.30:
+                        action_tag = "MISSED"
+                    elif gap <= 0.25:  # CMP at/below entry (or within 0.25% tick noise)
+                        action_tag = "EXECUTE_NOW"
+                    else:
+                        action_tag = "WAIT_FOR_RETEST"
                 else:
-                    action_tag = "WAIT_FOR_RETEST"
+                    # SHORT LIMIT SELL: invert directional check
+                    if abs(progress) > 0.30 and scan_cmp < entry:
+                        action_tag = "MISSED"
+                    elif gap >= -0.25:
+                        action_tag = "EXECUTE_NOW"
+                    else:
+                        action_tag = "WAIT_FOR_RETEST"
             else:
                 action_tag = "WAIT_FOR_RETEST"
         # Phase 3.4: IN_MOTION demotion if price already >0.5R in our favor
@@ -259,12 +271,14 @@ def _longterm_payload(limit: int) -> dict:
         action_tag = "EXECUTE_NOW"
         if entry_type == "LIMIT":
             if scan_cmp and entry > 0:
-                gap = abs(entry_gap_pct or 0)
+                # LONGTERM is LONG-only. EXECUTE_NOW only when CMP has actually pulled
+                # back into the limit zone (at-or-below entry, with 0.25% tick slack).
+                gap = entry_gap_pct or 0.0
                 total_move = reward
-                progress = abs(scan_cmp - entry) / total_move if total_move > 0 else 0
+                progress = ((scan_cmp - entry) / total_move) if total_move > 0 else 0.0
                 if progress > 0.30:
                     action_tag = "MISSED"
-                elif gap <= 2.0:
+                elif gap <= 0.25:
                     action_tag = "EXECUTE_NOW"
                 else:
                     action_tag = "WAIT_FOR_RETEST"

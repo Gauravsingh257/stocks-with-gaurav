@@ -708,15 +708,19 @@ def create_stock_recommendation(payload: dict) -> int:
     targets = payload.get("targets", [])
     scan_cmp = float(payload["scan_cmp"]) if payload.get("scan_cmp") else None
     entry_type = payload.get("entry_type", "MARKET")
+    agent_type = payload.get("agent_type", "SWING")
+    # SWING gate: 30% (short-term, want fresh entries).
+    # LONGTERM gate: 60% (6–24 month horizon, accept ideas earlier in the trend).
+    progress_cap = 0.60 if agent_type == "LONGTERM" else 0.30
     if scan_cmp and targets and entry_type == "MARKET":
         final_target = float(targets[-1]) if isinstance(targets[-1], (int, float)) else entry
         total_move = abs(final_target - entry)
         if total_move > 0:
             progress = abs(scan_cmp - entry) / total_move
-            if progress > 0.30:
+            if progress > progress_cap:
                 logger.warning(
-                    "[hard-block] %s rejected: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f)",
-                    payload.get("symbol"), scan_cmp, progress * 100, entry, final_target,
+                    "[hard-block] %s (%s) rejected: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f, cap=%.0f%%)",
+                    payload.get("symbol"), agent_type, scan_cmp, progress * 100, entry, final_target, progress_cap * 100,
                 )
                 return -1  # signal rejected
 
