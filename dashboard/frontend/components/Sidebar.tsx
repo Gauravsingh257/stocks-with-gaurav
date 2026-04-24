@@ -8,14 +8,14 @@ import {
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
-const NAV = [
+const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
   { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
   { href: "/journal",         label: "Journal",         icon: BookOpen      },
   { href: "/research",        label: "AI Research Center", icon: Bot        },
   { href: "/watchlist",       label: "Watchlist",       icon: Bookmark, auth: true },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye           },
   { href: "/market-intelligence", label: "Market Intel", icon: Globe      },
-] as const;
+];
 
 export default function Sidebar({
   isOpen = false,
@@ -81,8 +81,8 @@ export default function Sidebar({
 
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 mt-2">
-          {NAV.map(({ href, label, icon: Icon, ...rest }) => {
-            if ("auth" in rest && rest.auth && !user) return null;
+          {NAV.map(({ href, label, icon: Icon, auth }) => {
+            if (auth && !user) return null;
             const active = path === href || (href !== "/" && path.startsWith(href));
             return (
               <Link
