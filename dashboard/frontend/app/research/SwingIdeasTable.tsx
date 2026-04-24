@@ -465,8 +465,8 @@ type SortKey = "confidence_score" | "entry_gap_pct" | "risk_reward" | "pe_ratio"
 function useSortedItems(items: SwingIdea[], sortKey: SortKey, sortAsc: boolean): SwingIdea[] {
   if (!sortKey) return items;
   return [...items].sort((a, b) => {
-    const av = (a as Record<string, unknown>)[sortKey] as number | null | undefined;
-    const bv = (b as Record<string, unknown>)[sortKey] as number | null | undefined;
+    const av = (a as unknown as Record<string, unknown>)[sortKey] as number | null | undefined;
+    const bv = (b as unknown as Record<string, unknown>)[sortKey] as number | null | undefined;
     const na = av ?? (sortAsc ? Infinity : -Infinity);
     const nb = bv ?? (sortAsc ? Infinity : -Infinity);
     return sortAsc ? na - nb : nb - na;
