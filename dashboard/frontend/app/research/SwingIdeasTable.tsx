@@ -375,21 +375,112 @@ function ActionTag({ tag }: { tag?: string }) {
   );
 }
 
+function QualityRing({ score }: { score: number }) {
+  const pct = Math.min(score, 100);
+  const r = 13;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (pct / 100) * circ;
+  const color = pct >= 70 ? "#00d18c" : pct >= 50 ? "#f0c060" : "#ff4e6a";
+  return (
+    <div style={{ position: "relative", width: 32, height: 32, flexShrink: 0 }}>
+      <svg width={32} height={32} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={16} cy={16} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={3} />
+        <circle cx={16} cy={16} r={r} fill="none" stroke={color} strokeWidth={3}
+          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
+      </svg>
+      <span style={{
+        position: "absolute", inset: 0, display: "flex", alignItems: "center",
+        justifyContent: "center", fontSize: "0.55rem", fontWeight: 700, color,
+      }}>
+        {Math.round(pct)}
+      </span>
+    </div>
+  );
+}
+
 function FundBadge({ value, suffix, good, warn }: { value?: number | null; suffix?: string; good: number; warn: number }) {
   if (value === null || value === undefined) return <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>;
   const color = value >= good ? "#00d18c" : value >= warn ? "#f0c060" : "#ff4e6a";
   return <span style={{ fontSize: "0.72rem", fontWeight: 600, color }}>{value.toFixed(1)}{suffix ?? ""}</span>;
 }
 
+type SortKey = "confidence_score" | "entry_gap_pct" | "risk_reward" | "pe_ratio" | "roe_pct" | "market_cap_cr" | null;
+
+function useSortedItems(items: SwingIdea[], sortKey: SortKey, sortAsc: boolean): SwingIdea[] {
+  if (!sortKey) return items;
+  return [...items].sort((a, b) => {
+    const av = (a as Record<string, unknown>)[sortKey] as number | null | undefined;
+    const bv = (b as Record<string, unknown>)[sortKey] as number | null | undefined;
+    const na = av ?? (sortAsc ? Infinity : -Infinity);
+    const nb = bv ?? (sortAsc ? Infinity : -Infinity);
+    return sortAsc ? na - nb : nb - na;
+  });
+}
+
 export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
   const [reasoningItem, setReasoningItem] = useState<SwingIdea | null>(null);
-  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "Stop Loss", "T1", "T2", "Conf.", "PE", "ROE", "MCap", "Data", "Chart", "Detected", "Updated", "Reasoning"];
+  const [sortKey, setSortKey] = useState<SortKey>(null);
+  const [sortAsc, setSortAsc] = useState(false);
+  const [filterAction, setFilterAction] = useState<string | null>(null);
+
+  const filtered = filterAction ? items.filter(i => i.action_tag === filterAction) : items;
+  const sorted = useSortedItems(filtered, sortKey, sortAsc);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(false); }
+  };
+
+  const sortableStyle = (key: SortKey): React.CSSProperties => ({
+    textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap",
+    cursor: "pointer", userSelect: "none",
+    color: sortKey === key ? "var(--accent)" : "var(--text-secondary)",
+  });
+
+  const sortArrow = (key: SortKey) => sortKey === key ? (sortAsc ? " ↑" : " ↓") : "";
+
+  const actionTags = Array.from(new Set(items.map(i => i.action_tag).filter(Boolean)));
+
+  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "SL", "T1", "T2", "Conf.", "PE", "ROE", "MCap", "Data", "Chart", "Detected", "Updated", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
-      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>Swing Trade Opportunities</span>
-        {slotInfo && <span style={{ fontSize: "0.75rem", color: "var(--accent)", fontWeight: 500 }}>{slotInfo}</span>}
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 600 }}>Swing Trade Opportunities</span>
+          {slotInfo && <span style={{ fontSize: "0.75rem", color: "var(--accent)", fontWeight: 500 }}>{slotInfo}</span>}
+        </div>
+        {items.length > 0 && actionTags.length > 1 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            <button
+              onClick={() => setFilterAction(null)}
+              style={{
+                padding: "2px 8px", borderRadius: 4, fontSize: "0.65rem", fontWeight: 600,
+                border: "1px solid", cursor: "pointer",
+                background: !filterAction ? "rgba(0,212,255,0.15)" : "transparent",
+                borderColor: !filterAction ? "rgba(0,212,255,0.4)" : "rgba(255,255,255,0.08)",
+                color: !filterAction ? "var(--accent)" : "var(--text-dim)",
+              }}
+            >
+              All
+            </button>
+            {actionTags.map(tag => (
+              <button
+                key={tag}
+                onClick={() => setFilterAction(filterAction === tag ? null : tag!)}
+                style={{
+                  padding: "2px 8px", borderRadius: 4, fontSize: "0.65rem", fontWeight: 600,
+                  border: "1px solid", cursor: "pointer",
+                  background: filterAction === tag ? "rgba(0,212,255,0.15)" : "transparent",
+                  borderColor: filterAction === tag ? "rgba(0,212,255,0.4)" : "rgba(255,255,255,0.08)",
+                  color: filterAction === tag ? "var(--accent)" : "var(--text-dim)",
+                }}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {items.length === 0 ? (
         <div style={{ padding: "24px", textAlign: "center" }}>
@@ -419,26 +510,32 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
-                {headers.map(h => (
-                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
-                ))}
+                {headers.map(h => {
+                  const keyMap: Record<string, SortKey> = { "Conf.": "confidence_score", "PE": "pe_ratio", "ROE": "roe_pct", "MCap": "market_cap_cr", "Gap": "entry_gap_pct" };
+                  const sk = keyMap[h];
+                  if (sk) return <th key={h} onClick={() => toggleSort(sk)} style={sortableStyle(sk)}>{h}{sortArrow(sk)}</th>;
+                  return <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>;
+                })}
               </tr>
             </thead>
             <tbody>
-              {items.map((item, idx) => (
+              {sorted.map((item, idx) => (
                 <tr key={item.id} style={{ borderBottom: "1px solid var(--border-muted)" }}>
                   <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span>{item.symbol}</span>
-                      {item.sector ? (
-                        <span style={{
-                          fontSize: "0.6rem", color: "var(--text-secondary)",
-                          fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase",
-                        }}>
-                          {item.sector}
-                        </span>
-                      ) : null}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <QualityRing score={item.confidence_score} />
+                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                        <span>{item.symbol}</span>
+                        {item.sector ? (
+                          <span style={{
+                            fontSize: "0.58rem", color: "var(--text-secondary)",
+                            fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase",
+                          }}>
+                            {item.sector}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   </td>
                   <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>

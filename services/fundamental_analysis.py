@@ -254,6 +254,8 @@ def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
         raw_promoter_pct=round(promoter_pct, 1) if promoter_pct else None,
         raw_institutional_pct=round(inst_pct, 1) if inst_pct else None,
         raw_market_cap_cr=mktcap_cr,
+        sector=info.get("sector"),
+        industry=info.get("industry"),
         data_source="yfinance",
     )
 
@@ -324,6 +326,8 @@ class FundamentalSnapshot:
     raw_promoter_pct: float | None = None
     raw_institutional_pct: float | None = None
     raw_market_cap_cr: float | None = None
+    sector: str | None = None
+    industry: str | None = None
     data_source: str = "hash"
 
     def as_factors(self) -> dict[str, Any]:

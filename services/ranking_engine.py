@@ -53,6 +53,7 @@ class RankedIdea:
     risk_factors: list[str] | None = None
     entry_type: str = "MARKET"
     scan_cmp: float | None = None
+    sector: str | None = None
 
 
 @dataclass(slots=True)
@@ -436,7 +437,7 @@ async def _collect_ideas_from_pool(
         # Skip penny stocks below ₹100
         if idea.entry_price < 100:
             continue
-        # Inject raw fundamental values for frontend display
+        # Inject raw fundamental values + sector for frontend display
         if fund_map and row.symbol in fund_map:
             snap = fund_map[row.symbol]
             enriched_ff = dict(idea.fundamental_factors)
@@ -445,7 +446,9 @@ async def _collect_ideas_from_pool(
                 val = getattr(snap, attr, None)
                 if val is not None:
                     enriched_ff[attr] = round(float(val), 2)
-            idea = replace(idea, rank=rank_counter, fundamental_factors=enriched_ff)
+            sector = getattr(snap, "sector", None) or getattr(snap, "industry", None)
+            idea = replace(idea, rank=rank_counter, fundamental_factors=enriched_ff,
+                           sector=sector)
         else:
             idea = replace(idea, rank=rank_counter)
         rank_counter += 1

@@ -17,6 +17,37 @@ from services.price_resolver import resolve_cmp
 router = APIRouter(tags=["research"])
 log = logging.getLogger("dashboard.research")
 
+# ── Sector cache (lightweight, populated on demand from yfinance) ─────────
+_sector_cache: dict[str, str | None] = {}
+_sector_cache_lock = threading.Lock()
+
+
+def _resolve_sector(symbol: str) -> str | None:
+    """Return sector string for an NSE symbol, cached in memory."""
+    clean = symbol.replace("NSE:", "")
+    with _sector_cache_lock:
+        if clean in _sector_cache:
+            return _sector_cache[clean]
+    try:
+        import yfinance as yf  # noqa: PLC0415
+        info = yf.Ticker(f"{clean}.NS").info or {}
+        sector = info.get("sector") or info.get("industry")
+    except Exception:
+        sector = None
+    with _sector_cache_lock:
+        _sector_cache[clean] = sector
+    return sector
+
+
+def _get_sector(row: dict) -> str | None:
+    """Return sector from DB row, or resolve via yfinance if missing."""
+    s = row.get("sector")
+    if s:
+        return s
+    symbol = row.get("symbol", "")
+    return _resolve_sector(symbol)
+
+
 # Track in-flight auto-scans to avoid duplicate triggers
 _auto_scan_lock = threading.Lock()
 _auto_scan_running: set[str] = set()
@@ -52,11 +83,14 @@ def _utc_iso(s: str | None) -> str | None:
 
 
 def _extract_fundamentals(row: dict) -> dict:
-    """Pull structured fundamental metrics from the fundamental_factors JSON blob.
+    """Pull structured fundamental metrics from fundamental_factors or parse from
+    fundamental_signals text as a fallback for older DB records.
 
     Returns a flat dict of nullable floats that the frontend can render as columns
     (PE, ROE, ROCE, revenue growth, D/E, market cap, promoter %).
     """
+    import re as _re
+
     ff = row.get("fundamental_factors") or {}
     if isinstance(ff, str):
         try:
@@ -74,7 +108,7 @@ def _extract_fundamentals(row: dict) -> dict:
         except (TypeError, ValueError):
             return None
 
-    return {
+    result = {
         "pe_ratio": _f("raw_pe"),
         "roe_pct": _f("raw_roe_pct"),
         "roce_pct": _f("raw_roce_pct"),
@@ -83,6 +117,44 @@ def _extract_fundamentals(row: dict) -> dict:
         "market_cap_cr": _f("raw_market_cap_cr"),
         "promoter_pct": _f("raw_promoter_pct"),
     }
+
+    # Fallback: parse values from fundamental_signals text (for older DB records)
+    if all(v is None for v in result.values()):
+        fs = row.get("fundamental_signals") or {}
+        if isinstance(fs, str):
+            try:
+                import json as _json2
+                fs = _json2.loads(fs)
+            except Exception:
+                fs = {}
+        all_text = " ".join(str(v) for v in fs.values())
+
+        if result["pe_ratio"] is None:
+            m = _re.search(r"PE[:\s]+([0-9.]+)x", all_text)
+            if m:
+                result["pe_ratio"] = round(float(m.group(1)), 1)
+
+        if result["debt_equity"] is None:
+            m = _re.search(r"D/E[:\s]+([0-9.]+)x", all_text)
+            if m:
+                result["debt_equity"] = round(float(m.group(1)), 2)
+
+        if result["promoter_pct"] is None:
+            m = _re.search(r"(?:Insider|Promoter)[^:]*:\s*([0-9.]+)%", all_text)
+            if m:
+                result["promoter_pct"] = round(float(m.group(1)), 1)
+
+        if result["revenue_growth_pct"] is None:
+            m = _re.search(r"Revenue:\s*([+-]?[0-9.]+)%", all_text)
+            if m:
+                result["revenue_growth_pct"] = round(float(m.group(1)), 1)
+
+        if result["market_cap_cr"] is None:
+            m = _re.search(r"MCap[:\s]+([0-9,.]+)\s*Cr", all_text)
+            if m:
+                result["market_cap_cr"] = round(float(m.group(1).replace(",", "")), 1)
+
+    return result
 
 
 def _is_data_stale(horizon: str) -> bool:
@@ -253,7 +325,7 @@ def _swing_payload(limit: int) -> dict:
                 "id": row["id"],
                 "symbol": row["symbol"],
                 "setup": row.get("setup") or "SWING",
-                "sector": row.get("sector"),
+                "sector": _get_sector(row),
                 "target_source": row.get("target_source"),
                 "entry_price": entry,
                 "stop_loss": stop,
@@ -360,7 +432,7 @@ def _longterm_payload(limit: int) -> dict:
                 "id": row["id"],
                 "symbol": row["symbol"],
                 "setup": row.get("setup") or "LONGTERM",
-                "sector": row.get("sector"),
+                "sector": _get_sector(row),
                 "target_source": row.get("target_source"),
                 "long_term_thesis": row.get("reasoning", ""),
                 "fair_value_estimate": row.get("fair_value_estimate"),
