@@ -43,6 +43,7 @@ export default function ResearchPage() {
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
   const [longtermSlotStatus, setLongtermSlotStatus] = useState<{ occupied: number; max: number; slots_full: boolean } | null>(null);
   const [scanning, setScanning] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -81,6 +82,7 @@ export default function ResearchPage() {
       setError("Some data could not be loaded. Run a scan or refresh — backend may still be syncing.");
     }
     setLoading(false);
+    setLastRefresh(new Date());
   }, []);
 
   const isEmpty = swing.length === 0 && longterm.length === 0 && running.length === 0 && !portfolio;
@@ -166,6 +168,12 @@ export default function ResearchPage() {
               {(scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale) && !scanning && " (auto-refresh in progress)"}
               {scanning && " (manual scan running...)"}
             </p>
+            {lastRefresh && (
+              <p style={{ margin: "1px 0 0", fontSize: "0.62rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00d18c", display: "inline-block", animation: "pulse 2s infinite" }} />
+                Data refreshed {lastRefresh.toLocaleTimeString()} · Auto-updates every {isEmpty ? "2m" : "30s"}
+              </p>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

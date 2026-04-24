@@ -440,6 +440,20 @@ function QualityRing({ score }: { score: number }) {
   );
 }
 
+function RRBar({ rr }: { rr: number }) {
+  const capped = Math.min(rr, 5);
+  const pct = (capped / 5) * 100;
+  const color = rr >= 3 ? "#00d18c" : rr >= 2 ? "#5b9cf6" : rr >= 1.5 ? "#f0c060" : "#ff4e6a";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 60 }}>
+      <div style={{ flex: 1, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color }} />
+      </div>
+      <span style={{ fontSize: "0.68rem", fontWeight: 700, color, whiteSpace: "nowrap" }}>1:{rr.toFixed(1)}</span>
+    </div>
+  );
+}
+
 function FundBadge({ value, suffix, good, warn }: { value?: number | null; suffix?: string; good: number; warn: number }) {
   if (value === null || value === undefined) return <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>;
   const color = value >= good ? "#00d18c" : value >= warn ? "#f0c060" : "#ff4e6a";
@@ -483,7 +497,7 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
 
   const actionTags = Array.from(new Set(items.map(i => i.action_tag).filter(Boolean)));
 
-  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Type", "Action", "SL", "T1", "T2", "Conf.", "PE", "ROE", "MCap", "Data", "Chart", "Detected", "Updated", "Reasoning"];
+  const headers = ["#", "Symbol", "Entry", "CMP", "Gap", "Action", "SL", "T1", "R:R", "Conf.", "PE", "MCap", "Chart", "Reasoning"];
 
   return (
     <div className="glass" style={{ overflow: "hidden" }}>
@@ -548,114 +562,107 @@ export function SwingIdeasTable({ items, slotInfo, onScan, scanning }: Props) {
           )}
         </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
-                {headers.map(h => {
-                  const keyMap: Record<string, SortKey> = { "Conf.": "confidence_score", "PE": "pe_ratio", "ROE": "roe_pct", "MCap": "market_cap_cr", "Gap": "entry_gap_pct" };
-                  const sk = keyMap[h];
-                  if (sk) return <th key={h} onClick={() => toggleSort(sk)} style={sortableStyle(sk)}>{h}{sortArrow(sk)}</th>;
-                  return <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>;
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((item, idx) => (
-                <tr key={item.id} style={{ borderBottom: "1px solid var(--border-muted)" }}>
-                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
-                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <QualityRing score={item.confidence_score} />
-                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                        <span>{item.symbol}</span>
-                        {item.sector ? (
-                          <span style={{
-                            fontSize: "0.58rem", color: "var(--text-secondary)",
-                            fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase",
-                          }}>
-                            {item.sector}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </td>
-                  <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
-                  <td style={{ padding: "10px 12px", fontWeight: 500 }}>
-                    {item.scan_cmp ? fmt(item.scan_cmp) : "-"}
-                    <CmpFreshnessBadge source={item.cmp_source} ageSec={item.cmp_age_sec} />
-                  </td>
-                  <td style={{ padding: "10px 12px" }}><EntryGapBadge gap={item.entry_gap_pct} /></td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <span style={{
-                      fontSize: "0.65rem", padding: "2px 6px", borderRadius: 4, fontWeight: 600,
-                      whiteSpace: "nowrap",
-                      background: item.entry_type === "LIMIT" ? "rgba(41, 98, 255, 0.15)" : "rgba(0, 209, 140, 0.15)",
-                      color: item.entry_type === "LIMIT" ? "#5b9cf6" : "#00d18c",
-                    }}>
-                      {item.entry_type === "LIMIT" ? "LIMIT (Zone)" : "MARKET"}
-                    </span>
-                  </td>
-                  <td style={{ padding: "10px 12px" }}><ActionTag tag={item.action_tag} /></td>
-                  <td style={{ padding: "10px 12px", color: "#ff4e6a" }}>{fmt(item.stop_loss)}</td>
-                  <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_1)}</td>
-                  <td style={{ padding: "10px 12px", color: "#00d18c" }}>{fmt(item.target_2)}</td>
-                  <td style={{ padding: "10px 12px", color: "#00ff88" }}>{item.confidence_score.toFixed(1)}%</td>
-                  <td style={{ padding: "10px 12px" }}><FundBadge value={item.pe_ratio} good={0} warn={30} /></td>
-                  <td style={{ padding: "10px 12px" }}><FundBadge value={item.roe_pct} suffix="%" good={15} warn={8} /></td>
-                  <td style={{ padding: "10px 12px" }}>
-                    {item.market_cap_cr != null ? (
-                      <span style={{ fontSize: "0.72rem", fontWeight: 500, color: "var(--text-secondary)" }}>
-                        {item.market_cap_cr >= 10000 ? `${(item.market_cap_cr / 10000).toFixed(1)}L Cr` : `${Math.round(item.market_cap_cr)} Cr`}
-                      </span>
-                    ) : <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>}
-                  </td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <DataBadge auth={item.data_authenticity} />
-                    <StatusBadge status={item.status} />
-                  </td>
-                  <td style={{ padding: "6px 8px" }}>
-                    <Sparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} />
-                  </td>
-                  <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>
-                    {fmtDate(item.signal_first_detected_at || item.created_at)}
-                  </td>
-                  <td style={{ padding: "10px 12px", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
-                    <span
-                      title={`Analysis last refreshed: ${fmtDateTime(item.signals_updated_at ?? item.created_at)}`}
-                      style={{
-                        color: "var(--text-secondary)",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        cursor: "default",
-                      }}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0, opacity: 0.6 }}>
-                        <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
-                        <path d="M6 3.5V6L7.5 7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-                      </svg>
-                      {fmtDateTime(item.signals_updated_at ?? item.created_at)}
-                    </span>
-                  </td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <button
-                      onClick={() => setReasoningItem(item)}
-                      style={{
-                        background: "rgba(41, 98, 255, 0.12)", border: "1px solid rgba(41, 98, 255, 0.3)",
-                        borderRadius: 6, padding: "5px 10px", cursor: "pointer",
-                        color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      View Evidence
-                    </button>
-                  </td>
+        <>
+          {/* Desktop table */}
+          <div className="hidden md:block" style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+                  {headers.map(h => {
+                    const keyMap: Record<string, SortKey> = { "Conf.": "confidence_score", "PE": "pe_ratio", "MCap": "market_cap_cr", "Gap": "entry_gap_pct" };
+                    const sk = keyMap[h];
+                    if (sk) return <th key={h} onClick={() => toggleSort(sk)} style={sortableStyle(sk)}>{h}{sortArrow(sk)}</th>;
+                    return <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>;
+                  })}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {sorted.map((item, idx) => (
+                  <tr key={item.id} style={{ borderBottom: "1px solid var(--border-muted)" }}>
+                    <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 500 }}>{idx + 1}</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <QualityRing score={item.confidence_score} />
+                        <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                          <a href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{ color: "inherit", textDecoration: "none" }} title="Open on TradingView">
+                            {item.symbol.replace("NSE:", "")}<span style={{ fontSize: "0.55rem", marginLeft: 3, opacity: 0.4 }}>↗</span>
+                          </a>
+                          {item.sector && <span style={{ fontSize: "0.58rem", color: "var(--text-secondary)", fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase" }}>{item.sector}</span>}
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>{fmt(item.entry_price)}</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 500 }}>
+                      {item.scan_cmp ? fmt(item.scan_cmp) : "-"}
+                      <CmpFreshnessBadge source={item.cmp_source} ageSec={item.cmp_age_sec} />
+                    </td>
+                    <td style={{ padding: "10px 12px" }}><EntryGapBadge gap={item.entry_gap_pct} /></td>
+                    <td style={{ padding: "10px 12px" }}><ActionTag tag={item.action_tag} /></td>
+                    <td style={{ padding: "10px 12px", color: "#ff4e6a", fontSize: "0.78rem" }}>{fmt(item.stop_loss)}</td>
+                    <td style={{ padding: "10px 12px", color: "#00d18c", fontSize: "0.78rem" }}>{fmt(item.target_1)}</td>
+                    <td style={{ padding: "8px 10px" }}><RRBar rr={item.risk_reward} /></td>
+                    <td style={{ padding: "10px 12px", color: "#00ff88", fontSize: "0.78rem", fontWeight: 600 }}>{item.confidence_score.toFixed(0)}%</td>
+                    <td style={{ padding: "10px 12px" }}><FundBadge value={item.pe_ratio} good={0} warn={30} /></td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {item.market_cap_cr != null ? (
+                        <span style={{ fontSize: "0.72rem", fontWeight: 500, color: "var(--text-secondary)" }}>
+                          {item.market_cap_cr >= 10000 ? `${(item.market_cap_cr / 10000).toFixed(1)}L Cr` : `${Math.round(item.market_cap_cr)} Cr`}
+                        </span>
+                      ) : <span style={{ color: "var(--text-dim)", fontSize: "0.72rem" }}>-</span>}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}><Sparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} /></td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <button onClick={() => setReasoningItem(item)}
+                        style={{ background: "rgba(41,98,255,0.12)", border: "1px solid rgba(41,98,255,0.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer", color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        View Evidence
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="md:hidden" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 12px" }}>
+            {sorted.map((item) => (
+              <div key={item.id} style={{ border: "1px solid var(--border-muted)", borderRadius: 10, padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <QualityRing score={item.confidence_score} />
+                    <div>
+                      <a href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
+                        target="_blank" rel="noopener noreferrer"
+                        style={{ color: "inherit", textDecoration: "none", fontWeight: 700, fontSize: "0.95rem" }}>
+                        {item.symbol.replace("NSE:", "")}<span style={{ fontSize: "0.6rem", marginLeft: 3, opacity: 0.4 }}>↗</span>
+                      </a>
+                      {item.sector && <div style={{ fontSize: "0.6rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.3 }}>{item.sector}</div>}
+                    </div>
+                  </div>
+                  <ActionTag tag={item.action_tag} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 12px", fontSize: "0.74rem", marginBottom: 8 }}>
+                  <div><span style={{ color: "var(--text-dim)" }}>Entry</span><br /><strong>{fmt(item.entry_price)}</strong></div>
+                  <div><span style={{ color: "var(--text-dim)" }}>CMP</span><br /><strong>{item.scan_cmp ? fmt(item.scan_cmp) : "-"}</strong></div>
+                  <div><span style={{ color: "var(--text-dim)" }}>Gap</span><br /><EntryGapBadge gap={item.entry_gap_pct} /></div>
+                  <div><span style={{ color: "var(--text-dim)" }}>SL</span><br /><strong style={{ color: "#ff4e6a" }}>{fmt(item.stop_loss)}</strong></div>
+                  <div><span style={{ color: "var(--text-dim)" }}>Target</span><br /><strong style={{ color: "#00d18c" }}>{fmt(item.target_1)}</strong></div>
+                  <div><span style={{ color: "var(--text-dim)" }}>PE</span><br /><FundBadge value={item.pe_ratio} good={0} warn={30} /></div>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <RRBar rr={item.risk_reward} />
+                  <Sparkline symbol={item.symbol} entry={item.entry_price} sl={item.stop_loss} />
+                  <button onClick={() => setReasoningItem(item)}
+                    style={{ background: "rgba(41,98,255,0.12)", border: "1px solid rgba(41,98,255,0.3)", borderRadius: 6, padding: "4px 10px", cursor: "pointer", color: "var(--accent)", fontSize: "0.68rem", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    Evidence
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       <AnimatePresence>

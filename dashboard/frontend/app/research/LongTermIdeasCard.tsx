@@ -112,7 +112,15 @@ function LongTermCard({ item }: { item: LongTermIdea }) {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <strong>{item.symbol}</strong>
+          <a
+            href={`https://www.tradingview.com/chart/?symbol=${item.symbol.replace("NSE:", "NSE%3A")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "inherit", textDecoration: "none", fontWeight: 700 }}
+            title="Open on TradingView"
+          >
+            {item.symbol.replace("NSE:", "")} <span style={{ fontSize: "0.55rem", opacity: 0.4 }}>↗</span>
+          </a>
           {item.sector ? (
             <span style={{
               fontSize: "0.6rem", padding: "1px 6px", borderRadius: 4,
