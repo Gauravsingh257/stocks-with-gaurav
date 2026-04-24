@@ -354,11 +354,13 @@ def build_longterm_trade_levels(
         target = float(lt["target"])
         rr = lt["rr"]
 
-        # Freshness gate: reject if CMP already moved >30% toward target (stale entry)
+        # Freshness gate: reject if CMP already moved >60% toward target (stale entry)
+        # LONGTERM uses 60% (vs 30% for SWING) — multi-month/year holding horizon tolerates
+        # entries deeper in the trend, since the residual move is still substantial in absolute terms.
         total_move = abs(target - entry)
         if total_move > 0:
             progress = abs(close - entry) / total_move
-            if progress > 0.30:
+            if progress > 0.60:
                 log.info(
                     "[research] %s longterm entry stale: CMP %.2f already %.0f%% toward target (entry=%.2f target=%.2f) — skip",
                     symbol, close, progress * 100, entry, target,

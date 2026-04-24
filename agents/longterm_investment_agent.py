@@ -110,13 +110,14 @@ class LongTermInvestmentAgent(BaseAgent):
                 "scan_run_id": run_id,
                 "entry_type": entry_type,
                 "scan_cmp": scan_cmp,
-                "smc_evidence": idea.smc_evidence,
-                "sector": idea.sector,
-                "target_source": idea.target_source,
+                "smc_evidence": getattr(idea, "smc_evidence", None),
+                "sector": getattr(idea, "sector", None),
+                "target_source": getattr(idea, "target_source", None),
             }
-            create_stock_recommendation(row)
-            saved += 1
-            active_symbols.append(symbol)
+            rec_id = create_stock_recommendation(row)
+            if rec_id and rec_id > 0:
+                saved += 1
+                active_symbols.append(symbol)
 
             findings.append(
                 {
