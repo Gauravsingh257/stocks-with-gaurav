@@ -55,8 +55,8 @@ async def lifespan(app: FastAPI):
         try:
             from dashboard.backend.routes.auth import init_auth_tables
             init_auth_tables()
-        except ImportError:
-            log.info("Auth module not available (bcrypt/PyJWT missing) — skipping auth table init")
+        except Exception as auth_exc:
+            log.info("Auth table init skipped: %s", auth_exc)
         synced = full_sync_from_csv(force=True)
         log.info("[DB] Initial sync: %s trades loaded from trade_ledger_2026.csv", synced)
     except Exception as exc:

@@ -8,7 +8,7 @@ import os
 import threading
 import traceback
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
