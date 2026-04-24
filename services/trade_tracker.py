@@ -151,8 +151,14 @@ def _fetch_cmp_batch(symbols: list[str]) -> dict[str, float]:
 
 def seed_running_trades() -> int:
     """
-    For each active SWING/LONGTERM recommendation without an active running_trade,
+    For each active SWING recommendation without an active running_trade,
     create a running_trade row so we can track it. Returns number of rows seeded.
+
+    LONGTERM is intentionally excluded — long-term ideas are research
+    recommendations (6-24 month horizon), not executed positions. They are
+    surfaced via the Long-Term Ideas card. The user (or a separate broker fill
+    feed) decides when to actually enter, and only then should a running trade
+    be created.
 
     Only seeds when entry is actually triggered:
     - MARKET orders: always seed (immediate execution)
@@ -165,7 +171,7 @@ def seed_running_trades() -> int:
     )
 
     seeded = 0
-    for horizon in ("SWING", "LONGTERM"):
+    for horizon in ("SWING",):
         rows = get_stock_recommendations(horizon, limit=50)
         for row in rows:
             symbol = row["symbol"]
@@ -224,8 +230,10 @@ def seed_running_trades() -> int:
 
 def purge_untriggered_running_trades() -> int:
     """
-    Remove running_trade rows for LIMIT-entry recommendations where CMP
-    never reached the entry price (i.e. entry was never triggered).
+    Cancel running_trade rows that should not exist:
+    1. LIMIT-entry recommendations where CMP never reached the entry price.
+    2. Any LONGTERM-horizon running trade — long-term ideas are recommendations,
+       not executed positions, and should not appear in the Running Trades Monitor.
     Returns count of rows purged.
     """
     from dashboard.backend.db import (  # noqa: PLC0415
@@ -244,14 +252,26 @@ def purge_untriggered_running_trades() -> int:
             rec_id = row.get("recommendation_id")
             if not rec_id:
                 continue
-            # Check if this recommendation is a LIMIT entry
             rec = conn.execute(
-                "SELECT entry_type, scan_cmp FROM stock_recommendations WHERE id = ?",
+                "SELECT entry_type, scan_cmp, agent_type FROM stock_recommendations WHERE id = ?",
                 (rec_id,),
             ).fetchone()
-            if not rec or (rec["entry_type"] or "MARKET").upper() != "LIMIT":
+            if not rec:
                 continue
-            # For LIMIT entries: if CMP is still above entry+0.25%, entry never triggered
+
+            # ── Rule 2: cancel any LONGTERM running trade ──
+            if (rec["agent_type"] or "").upper() == "LONGTERM":
+                conn.execute(
+                    "UPDATE running_trades SET status = 'CANCELLED' WHERE id = ?",
+                    (row["id"],),
+                )
+                purged += 1
+                log.info("Purged LONGTERM running trade (recos are not executions): %s", row["symbol"])
+                continue
+
+            # ── Rule 1: LIMIT entries where CMP never reached entry ──
+            if (rec["entry_type"] or "MARKET").upper() != "LIMIT":
+                continue
             entry = float(row["entry_price"])
             cmp = _fetch_cmp(row["symbol"])
             if cmp is not None and cmp > entry * 1.0025:
@@ -268,7 +288,7 @@ def purge_untriggered_running_trades() -> int:
         conn.close()
 
     if purged:
-        log.info("Purged %d untriggered LIMIT running trades", purged)
+        log.info("Purged %d running trades", purged)
     return purged
 
 
