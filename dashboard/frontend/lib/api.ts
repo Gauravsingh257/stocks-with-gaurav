@@ -31,8 +31,10 @@ export const API_BASE = getBackendBase();
 
 const BASE = getBackendBase();
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
+async function get<T>(path: string, authToken?: string | null): Promise<T> {
+  const init: RequestInit = { cache: "no-store" };
+  if (authToken) init.headers = { Authorization: `Bearer ${authToken}` };
+  const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -813,8 +815,11 @@ export const api = {
   },
 
   // AI Research Center
-  swingResearch: (limit = 12) => get<{ items: SwingIdea[]; count: number }>(`/api/research/swing?limit=${limit}`),
-  longtermResearch: (limit = 12) => get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean } }>(`/api/research/longterm?limit=${limit}`),
+  /** Pass authToken when logged in so PREMIUM users get full lists (search/filter work on all ideas). */
+  swingResearch: (limit = 12, authToken?: string | null) =>
+    get<{ items: SwingIdea[]; count: number; gated?: boolean }>(`/api/research/swing?limit=${limit}`, authToken),
+  longtermResearch: (limit = 12, authToken?: string | null) =>
+    get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),

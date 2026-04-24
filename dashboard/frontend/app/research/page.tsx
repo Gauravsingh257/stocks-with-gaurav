@@ -26,6 +26,17 @@ import { ResearchCoverageCard } from "./ResearchCoverageCard";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import { SwingIdeasTable } from "./SwingIdeasTable";
 
+/** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
+function normalizeTicker(s: string): string {
+  return s
+    .replace(/^NSE:/i, "")
+    .replace(/\.NS$/i, "")
+    .trim()
+    .toLowerCase();
+}
+
+const RESEARCH_FETCH_LIMIT = 80;
+
 const SCAN_BTN: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "6px 14px", borderRadius: 8, fontWeight: 600, fontSize: "0.72rem",
@@ -44,7 +55,7 @@ export default function ResearchPage() {
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
   const [longtermSlotStatus, setLongtermSlotStatus] = useState<{ occupied: number; max: number; slots_full: boolean } | null>(null);
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [scanning, setScanning] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -56,8 +67,8 @@ export default function ResearchPage() {
   const refresh = useCallback(async () => {
     setError(null);
     const results = await Promise.allSettled([
-      api.swingResearch(10),
-      api.longtermResearch(10),
+      api.swingResearch(RESEARCH_FETCH_LIMIT, token),
+      api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
       api.runningTradesResearch(40),
       api.researchCoverage(1800),
       api.researchPerformance(),
@@ -93,7 +104,7 @@ export default function ResearchPage() {
     }
     setLoading(false);
     setLastRefresh(new Date());
-  }, []);
+  }, [token]);
 
   const isEmpty = swing.length === 0 && longterm.length === 0 && running.length === 0 && !portfolio;
   const pollInterval = isEmpty ? 120_000 : 30_000;
@@ -157,7 +168,11 @@ export default function ResearchPage() {
   }, [swing, longterm]);
 
   const filterItem = useCallback((item: { symbol: string; sector?: string | null; market_cap_cr?: number | null }) => {
-    if (searchQuery && !item.symbol.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (searchQuery.trim()) {
+      const q = normalizeTicker(searchQuery);
+      const sym = normalizeTicker(item.symbol);
+      if (!sym.includes(q)) return false;
+    }
     if (sectorFilter !== "ALL" && item.sector !== sectorFilter) return false;
     if (mcapFilter !== "ALL") {
       const mc = item.market_cap_cr ?? 0;
@@ -170,7 +185,15 @@ export default function ResearchPage() {
 
   const filteredSwing = useMemo(() => swing.filter(filterItem), [swing, filterItem]);
   const filteredLongterm = useMemo(() => longterm.filter(filterItem), [longterm, filterItem]);
-  const hasFilters = searchQuery || sectorFilter !== "ALL" || mcapFilter !== "ALL";
+  const hasFilters = Boolean(searchQuery.trim()) || sectorFilter !== "ALL" || mcapFilter !== "ALL";
+
+  const filterSummary = useMemo(() => {
+    if (!hasFilters) return null;
+    return `${filteredSwing.length}/${swing.length} swing · ${filteredLongterm.length}/${longterm.length} long-term`;
+  }, [hasFilters, filteredSwing.length, swing.length, filteredLongterm.length, longterm.length]);
+
+  const noMatchesWithFilters =
+    hasFilters && swing.length + longterm.length > 0 && filteredSwing.length === 0 && filteredLongterm.length === 0;
 
   const toggleCompare = useCallback((symbol: string) => {
     setCompareSymbols((prev) => {
@@ -257,19 +280,31 @@ export default function ResearchPage() {
       {/* ── FILTER BAR ──────────────────────────────────────────── */}
       <StaggerItem>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {/* Search */}
-          <div style={{ position: "relative", flex: "1 1 180px", maxWidth: 260 }}>
-            <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)" }} />
+          {/* Search — filters loaded swing + long-term rows below (client-side); sign in as Premium for full lists */}
+          <div style={{ position: "relative", flex: "1 1 180px", maxWidth: 280, zIndex: 2 }}>
+            <Search
+              size={13}
+              aria-hidden
+              style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", pointerEvents: "none" }}
+            />
             <input
-              type="text"
-              placeholder="Search symbol..."
+              type="search"
+              name="research-symbol-filter"
+              autoComplete="off"
+              enterKeyHint="search"
+              placeholder="Filter by symbol (e.g. RELIANCE)…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="input-dark"
-              style={{ width: "100%", paddingLeft: 30, fontSize: "0.78rem" }}
+              style={{ width: "100%", paddingLeft: 30, paddingRight: searchQuery.trim() ? 32 : 10, fontSize: "0.78rem", position: "relative", zIndex: 1 }}
             />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", padding: 2 }}>
+            {searchQuery.trim() && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => setSearchQuery("")}
+                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", padding: 2, zIndex: 2 }}
+              >
                 <X size={12} />
               </button>
             )}
@@ -317,6 +352,20 @@ export default function ResearchPage() {
             )}
           </div>
         </div>
+        <p style={{ margin: "4px 0 0", fontSize: "0.68rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
+          Filters the <strong>swing</strong> and <strong>long-term</strong> idea tables on this page (loaded from the latest scan). It does not search all NSE stocks.
+          {user?.role === "FREE" && " Free accounts see a preview list — upgrade to Premium to filter the full set."}
+        </p>
+        {filterSummary && (
+          <p style={{ margin: "4px 0 0", fontSize: "0.72rem", color: "var(--accent)" }}>
+            Showing {filterSummary}
+          </p>
+        )}
+        {noMatchesWithFilters && (
+          <p style={{ margin: "6px 0 0", fontSize: "0.75rem", color: "var(--warning, #f59e0b)" }}>
+            No ideas match your filters. Try another symbol or clear filters.
+          </p>
+        )}
       </StaggerItem>
 
       {/* ── ERROR / LOADING ────────────────────────────────────── */}
