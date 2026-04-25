@@ -13,6 +13,25 @@ function fmt(value: number | null | undefined): string {
   return Number(value).toFixed(2);
 }
 
+function watchReason(item: ResearchDecisionCard): string {
+  const signals = item.technical_signals || {};
+  const detail = signals.ob_liquidity || signals.ob_fvg || signals.structure || signals.daily_structure;
+  if (detail) return `Reason: ${detail}`;
+  if (item.reasoning) return `Reason: ${item.reasoning.split(".")[0]}`;
+  return `Reason: ${item.setup || "SMC score is near the execution zone"}`;
+}
+
+function confidenceText(item: ResearchDecisionCard): string {
+  const score = Number(item.confidence_score || 0);
+  if (item.near_setup) return "Confidence: Near setup. One more confirmation can move it to Final.";
+  if (score >= 50) return "Confidence: Moderate. Setup quality is present, entry confirmation is still pending.";
+  return "Confidence: Early watchlist quality. Wait for price action confirmation.";
+}
+
+function riskNote(item: ResearchDecisionCard): string {
+  return `Risk note: Alert near entry ${fmt(item.entry_price)} and invalidate below SL ${fmt(item.stop_loss)}.`;
+}
+
 export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
   return (
     <section className="glass border-yellow-400 bg-yellow-500/5" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid #facc15", background: "rgba(234,179,8,0.05)" }}>
@@ -53,6 +72,17 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
                   <span>Entry <strong style={{ color: "var(--text-primary)" }}>{fmt(item.entry_price)}</strong></span>
                   <span>R:R <strong style={{ color: "var(--text-primary)" }}>{fmt(item.risk_reward)}</strong></span>
                 </div>
+
+                <div style={{ display: "grid", gap: 6, padding: 9, borderRadius: 8, background: "rgba(15,23,42,0.26)", border: "1px solid rgba(250,204,21,0.2)", fontSize: "0.71rem", lineHeight: 1.45 }}>
+                  <div style={{ color: "var(--text-primary)", fontWeight: 850 }}>Why this trade?</div>
+                  <div style={{ color: "var(--text-secondary)" }}>{watchReason(item)}</div>
+                  <div style={{ color: "#fde68a" }}>{confidenceText(item)}</div>
+                  <div style={{ color: "#fecaca" }}>{riskNote(item)}</div>
+                </div>
+
+                <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#1f1600", background: "#facc15", border: "1px solid rgba(250,204,21,0.65)", borderRadius: 7, padding: "7px 10px", textDecoration: "none", fontSize: "0.72rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  <Bell size={13} /> Add Alert
+                </Link>
               </article>
             );
           })}

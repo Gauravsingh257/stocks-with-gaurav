@@ -20,6 +20,29 @@ function targetOf(item: ResearchDecisionCard): number | null {
   return null;
 }
 
+function shortReason(item: ResearchDecisionCard): string {
+  const signals = item.technical_signals || {};
+  const evidence = [signals.daily_structure, signals.structure, signals.ob_fvg, signals.ob_liquidity]
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" + ");
+  if (evidence) return `Reason: ${evidence}`;
+  if (item.reasoning) return `Reason: ${item.reasoning.split(".")[0]}`;
+  return `Reason: ${item.setup || "SMC confirmation and risk levels are aligned"}`;
+}
+
+function confidenceText(item: ResearchDecisionCard): string {
+  const score = Number(item.confidence_score || 0);
+  if (score >= 70) return "Confidence: Strong because SMC, quality, and execution layers are aligned.";
+  if (score >= 60) return "Confidence: Good because the setup passed final SMC scoring with defined levels.";
+  return "Confidence: Actionable, but confirm the chart before execution.";
+}
+
+function riskNote(item: ResearchDecisionCard, target: number | null): string {
+  const rr = item.risk_reward ? `R:R ${fmt(item.risk_reward)}` : target ? "target mapped" : "target pending";
+  return `Risk note: Use SL ${fmt(item.stop_loss)}. ${rr}. Avoid entry if price is far from the planned zone.`;
+}
+
 export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
   const display = items.slice(0, 6);
 
@@ -70,8 +93,16 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <div><span style={{ color: "var(--text-dim)" }}>SL</span><br /><strong style={{ color: "#ff4e6a" }}>{fmt(item.stop_loss)}</strong></div>
                   <div><span style={{ color: "var(--text-dim)" }}>Target</span><br /><strong style={{ color: "#00e096" }}>{fmt(target)}</strong></div>
                 </div>
-                <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#5b9cf6", textDecoration: "none", fontSize: "0.72rem", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                  <Target size={12} /> Open chart validation
+
+                <div style={{ display: "grid", gap: 6, padding: 10, borderRadius: 8, background: "rgba(3,7,18,0.28)", border: "1px solid rgba(16,185,129,0.22)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+                  <div style={{ color: "var(--text-primary)", fontWeight: 850 }}>Why this trade?</div>
+                  <div style={{ color: "var(--text-secondary)" }}>{shortReason(item)}</div>
+                  <div style={{ color: "#a7f3d0" }}>{confidenceText(item)}</div>
+                  <div style={{ color: "#fca5a5" }}>{riskNote(item, target)}</div>
+                </div>
+
+                <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  <Target size={13} /> Execute Trade
                 </Link>
               </article>
             );

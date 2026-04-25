@@ -535,6 +535,7 @@ export interface ResearchDecisionCard {
   layer2_pass?: boolean;
   layer3_pass?: boolean;
   final_selected?: boolean;
+  near_setup?: boolean;
   rejection_reason?: string[];
   layer_details?: Record<string, unknown>;
   reasoning?: string;
