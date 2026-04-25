@@ -191,7 +191,7 @@ export default function ResearchPage() {
   ], [decisionFeed]);
 
   const isEmpty = decisionItems.length === 0 && running.length === 0 && !portfolio;
-  const pollInterval = isEmpty ? 120_000 : 30_000;
+  const pollInterval = 120_000;
 
   useEffect(() => {
     refresh();
@@ -630,6 +630,18 @@ export default function ResearchPage() {
       )}
       {loading && <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div></StaggerItem>}
 
+      <StaggerItem>
+        <FinalTrades items={filteredFinalTrades} />
+      </StaggerItem>
+
+      <StaggerItem>
+        <Watchlist items={filteredWatchlist} />
+      </StaggerItem>
+
+      <StaggerItem>
+        <DiscoveryFeed items={filteredDiscovery} />
+      </StaggerItem>
+
       {/* ── ONBOARDING CARD (shown when everything is empty) ──── */}
       {isEmpty && !loading && (
         <StaggerItem>
@@ -685,18 +697,6 @@ export default function ResearchPage() {
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
       <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
-
-      <StaggerItem>
-        <FinalTrades items={filteredFinalTrades} />
-      </StaggerItem>
-
-      <StaggerItem>
-        <Watchlist items={filteredWatchlist} />
-      </StaggerItem>
-
-      <StaggerItem>
-        <DiscoveryFeed items={filteredDiscovery} />
-      </StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
       <StaggerItem>

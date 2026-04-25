@@ -6,6 +6,7 @@ Research Center APIs for swing ideas, long-term ideas, and running trades.
 import logging
 import os
 import threading
+import time
 import traceback
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -83,10 +84,13 @@ _auto_scan_running: set[str] = set()
 
 # Observable scan diagnostics — surfaced via GET /api/research/scan-status
 _scan_history: dict[str, dict] = {}  # horizon -> latest scan result info
+_decision_cache_lock = threading.Lock()
+_decision_cache: dict[tuple[int, float, str], tuple[float, dict]] = {}
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
 FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
+DECISION_CACHE_SECONDS = int(os.getenv("RESEARCH_DECISION_CACHE_SECONDS", "600"))
 
 RESEARCH_LEADS_DDL = """
 CREATE TABLE IF NOT EXISTS research_email_leads (
@@ -1033,6 +1037,16 @@ async def get_discovery(
     from services.validation_engine import run_validation_scan
 
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    cache_key = (top_k, float(min_turnover_cr), src)
+    now = time.monotonic()
+    with _decision_cache_lock:
+        cached = _decision_cache.get(cache_key)
+        if cached and now - cached[0] < DECISION_CACHE_SECONDS:
+            payload = dict(cached[1])
+            payload["cache_hit"] = True
+            payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - (now - cached[0])))
+            return payload
+
     try:
         result = await run_validation_scan(
             "SWING",
@@ -1048,7 +1062,7 @@ async def get_discovery(
     cards = [record.to_trade_card() for record in result.selected]
     watchlist = [record.to_trade_card() for record in result.watchlist]
     discovery = [record.to_trade_card() for record in result.discovery]
-    return {
+    payload = {
         "data_source": src,
         "universe_size": result.universe.total_size or result.universe.actual_size,
         "scanned": result.coverage.scanned,
@@ -1065,7 +1079,12 @@ async def get_discovery(
         "watchlist": watchlist,
         "discovery": discovery,
         "fallback_items": discovery,
+        "cache_hit": False,
+        "cache_ttl_sec": DECISION_CACHE_SECONDS,
     }
+    with _decision_cache_lock:
+        _decision_cache[cache_key] = (time.monotonic(), payload)
+    return payload
 
 
 @router.get("/api/research/validation")
