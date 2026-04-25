@@ -113,6 +113,7 @@ class RankingResult:
     ideas: list[RankedIdea]
     rejections: list[RejectionRecord] | None = None
     fallback_used: bool = False
+    fallback_ideas: list[RankedIdea] | None = None
 
 
 def _stable_unit(symbol: str, salt: str) -> float:
@@ -769,10 +770,11 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
 
     ideas = await _collect_ideas_from_pool(horizon, top_k, scored, evidence_map, fund_map=fund)
 
+    fallback_ideas: list[RankedIdea] = []
     if _empty_watchlist_fallback_enabled() and len(ideas) < top_k and scored:
         need = min(_watchlist_fallback_cap(), top_k - len(ideas))
         if need > 0:
-            extra = await _collect_watchlist_fallback(
+            fallback_ideas = await _collect_watchlist_fallback(
                 horizon,
                 need,
                 scored,
@@ -781,7 +783,12 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
                 exclude={i.symbol for i in ideas},
                 start_rank=len(ideas) + 1,
             )
-            ideas.extend(extra)
+            if fallback_ideas:
+                log.info(
+                    "[%s] %d fallback near-setup row(s) retained for diagnostics only; not saved as final ideas",
+                    horizon,
+                    len(fallback_ideas),
+                )
 
     if not ideas:
         log.warning(
@@ -798,7 +805,8 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
         ranked_candidates=len(scored),
         ideas=ideas,
         rejections=rejections,
-        fallback_used=bool(ideas) and len(ideas) < top_k,
+        fallback_used=bool(fallback_ideas),
+        fallback_ideas=fallback_ideas,
     )
 
 

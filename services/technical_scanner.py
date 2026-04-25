@@ -147,6 +147,11 @@ def _snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | No
         ]
     )
 
+
+def snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | None:
+    """Public wrapper used by validation/backtest paths that already have OHLC slices."""
+    return _snapshot_from_ohlc(symbol, df)
+
     return TechnicalSnapshot(
         symbol=symbol,
         trend_structure=trend,

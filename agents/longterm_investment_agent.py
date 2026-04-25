@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from agents.base import BaseAgent, AgentResult
 from dashboard.backend.db import create_stock_recommendation, log_ranking_run, get_stock_recommendations
@@ -47,6 +48,21 @@ class LongTermInvestmentAgent(BaseAgent):
             "LONGTERM", top_k=scan_top_k, target_universe=1800,
             exclude_symbols=exclude_set,
         ))
+
+        validation_logged_rows = 0
+        if os.getenv("RESEARCH_AGENT_VALIDATION_LOG", "1").strip().lower() in ("1", "true", "yes"):
+            try:
+                from services.validation_engine import run_validation_scan
+
+                validation = asyncio.run(run_validation_scan(
+                    "LONGTERM",
+                    top_k=max(scan_top_k, 1),
+                    target_universe=1800,
+                    log_scan=True,
+                ))
+                validation_logged_rows = validation.logged_rows
+            except Exception as exc:
+                result.metrics = {**(result.metrics or {}), "validation_log_error": str(exc)}
 
         # Log ranking run upfront to get scan_run_id for all recommendations
         run_id = log_ranking_run(
@@ -144,6 +160,7 @@ class LongTermInvestmentAgent(BaseAgent):
             "actual_universe_size": ranking.universe.actual_size,
             "active_slots": active_count + saved,
             "empty_slots": empty_slots - saved,
+            "validation_logged_rows": validation_logged_rows,
         }
 
         result.findings = findings

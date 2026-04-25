@@ -6,7 +6,7 @@ import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronD
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
-import { api, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion, type SwingIdea } from "@/lib/api";
+import { api, type LayerReportResponse, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion, type SwingIdea } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
@@ -24,6 +24,7 @@ import { LongTermIdeasCard } from "./LongTermIdeasCard";
 import { PerformanceOverview } from "./PerformanceOverview";
 import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
+import { ResearchLayerDebugPanel } from "./ResearchLayerDebugPanel";
 import { ResearchConversionPanel } from "./ResearchConversionPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
@@ -113,6 +114,7 @@ export default function ResearchPage() {
   const [longterm, setLongterm] = useState<LongTermIdea[]>([]);
   const [running, setRunning] = useState<RunningTradeMonitorItem[]>([]);
   const [coverage, setCoverage] = useState<ResearchCoverageResponse | null>(null);
+  const [layerReport, setLayerReport] = useState<LayerReportResponse | null>(null);
   const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,10 +144,11 @@ export default function ResearchPage() {
       api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
       api.runningTradesResearch(40),
       api.researchCoverage(1800),
+      api.layerReport("SWING", 80),
       api.researchPerformance(),
       api.portfolioSummary(),
     ]);
-    const [swingRes, longtermRes, runningRes, coverageRes, perfRes, portfolioRes] = results;
+    const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
     if (swingRes.status === "fulfilled") {
       setSwing(swingRes.value?.items ?? []);
       setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
@@ -162,6 +165,9 @@ export default function ResearchPage() {
     }
     if (coverageRes.status === "fulfilled") {
       setCoverage(coverageRes.value ?? null);
+    }
+    if (layerReportRes.status === "fulfilled") {
+      setLayerReport(layerReportRes.value ?? null);
     }
     if (perfRes.status === "fulfilled") {
       setPerf(perfRes.value ?? null);
@@ -669,6 +675,7 @@ export default function ResearchPage() {
       </StaggerItem>
 
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
+      <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}

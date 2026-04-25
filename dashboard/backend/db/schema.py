@@ -248,6 +248,33 @@ CREATE TABLE IF NOT EXISTS signal_events (
 );
 CREATE INDEX IF NOT EXISTS idx_signal_events_symbol ON signal_events(symbol, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_events_type ON signal_events(event_type, created_at DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 12: signals_log (per-stock layer validation audit)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS signals_log (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id               TEXT NOT NULL,
+    horizon               TEXT NOT NULL DEFAULT 'SWING' CHECK(horizon IN ('SWING','LONGTERM')),
+    symbol                TEXT NOT NULL,
+    date                  TEXT NOT NULL,
+    cmp                   REAL,
+    entry                 REAL,
+    stop_loss             REAL,
+    target                REAL,
+    confidence            REAL NOT NULL DEFAULT 0,
+    layer1_pass           INTEGER NOT NULL DEFAULT 0,
+    layer2_pass           INTEGER NOT NULL DEFAULT 0,
+    layer3_pass           INTEGER NOT NULL DEFAULT 0,
+    final_selected        INTEGER NOT NULL DEFAULT 0,
+    rejection_reason      TEXT NOT NULL DEFAULT '[]',
+    layer_details         TEXT NOT NULL DEFAULT '{}',
+    coverage_report       TEXT NOT NULL DEFAULT '{}',
+    created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_signals_log_scan ON signals_log(scan_id, horizon);
+CREATE INDEX IF NOT EXISTS idx_signals_log_symbol ON signals_log(symbol, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signals_log_layers ON signals_log(horizon, final_selected, layer1_pass, layer2_pass, layer3_pass);
 """
 
 
@@ -286,6 +313,7 @@ def init_db() -> None:
     migrate_stock_recommendations()
     migrate_running_trades()
     migrate_trade_screenshots()
+    migrate_signals_log()
 
     # Re-run DDL to create any indexes that failed before migration
     conn = get_connection()
@@ -595,6 +623,63 @@ def migrate_trade_screenshots() -> None:
         logger.info("[DB] Trade screenshots + signal_rejections migration done")
     except Exception as e:
         logger.warning(f"[DB] Screenshot migration error (non-fatal): {e}")
+    finally:
+        conn.close()
+
+
+def migrate_signals_log() -> None:
+    """Ensure per-stock validation audit table exists with the latest columns."""
+    conn = get_connection()
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS signals_log (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id               TEXT NOT NULL,
+                horizon               TEXT NOT NULL DEFAULT 'SWING',
+                symbol                TEXT NOT NULL,
+                date                  TEXT NOT NULL,
+                cmp                   REAL,
+                entry                 REAL,
+                stop_loss             REAL,
+                target                REAL,
+                confidence            REAL NOT NULL DEFAULT 0,
+                layer1_pass           INTEGER NOT NULL DEFAULT 0,
+                layer2_pass           INTEGER NOT NULL DEFAULT 0,
+                layer3_pass           INTEGER NOT NULL DEFAULT 0,
+                final_selected        INTEGER NOT NULL DEFAULT 0,
+                rejection_reason      TEXT NOT NULL DEFAULT '[]',
+                layer_details         TEXT NOT NULL DEFAULT '{}',
+                coverage_report       TEXT NOT NULL DEFAULT '{}',
+                created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_signals_log_scan ON signals_log(scan_id, horizon);
+            CREATE INDEX IF NOT EXISTS idx_signals_log_symbol ON signals_log(symbol, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_signals_log_layers ON signals_log(horizon, final_selected, layer1_pass, layer2_pass, layer3_pass);
+        """)
+        cursor = conn.execute("PRAGMA table_info(signals_log)")
+        cols = {row[1] for row in cursor.fetchall()}
+        for col_name, col_def in (
+            ("scan_id", "TEXT NOT NULL DEFAULT ''"),
+            ("horizon", "TEXT NOT NULL DEFAULT 'SWING'"),
+            ("symbol", "TEXT NOT NULL DEFAULT ''"),
+            ("date", "TEXT NOT NULL DEFAULT ''"),
+            ("cmp", "REAL"),
+            ("entry", "REAL"),
+            ("stop_loss", "REAL"),
+            ("target", "REAL"),
+            ("confidence", "REAL NOT NULL DEFAULT 0"),
+            ("layer1_pass", "INTEGER NOT NULL DEFAULT 0"),
+            ("layer2_pass", "INTEGER NOT NULL DEFAULT 0"),
+            ("layer3_pass", "INTEGER NOT NULL DEFAULT 0"),
+            ("final_selected", "INTEGER NOT NULL DEFAULT 0"),
+            ("rejection_reason", "TEXT NOT NULL DEFAULT '[]'"),
+            ("layer_details", "TEXT NOT NULL DEFAULT '{}'"),
+            ("coverage_report", "TEXT NOT NULL DEFAULT '{}'"),
+            ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ):
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE signals_log ADD COLUMN {col_name} {col_def}")
+        conn.commit()
     finally:
         conn.close()
 
@@ -1288,6 +1373,138 @@ def log_ranking_run(
         )
         conn.commit()
         return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def log_signals_scan(records: list[dict]) -> int:
+    """Persist one complete validation scan into signals_log.
+
+    The caller passes one dict per symbol. Extra structured details are stored
+    as JSON so the UI/backtests can explain each accept/reject decision later.
+    Returns number of rows inserted.
+    """
+    if not records:
+        return 0
+    conn = get_connection()
+    try:
+        rows = []
+        for record in records:
+            targets = record.get("targets") or []
+            target = record.get("target")
+            if target is None and targets:
+                target = targets[-1]
+            rows.append(
+                (
+                    str(record.get("scan_id") or ""),
+                    str(record.get("horizon") or "SWING").upper(),
+                    str(record.get("symbol") or ""),
+                    str(record.get("date") or datetime.now(_IST).date().isoformat()),
+                    float(record["cmp"]) if record.get("cmp") is not None else None,
+                    float(record["entry"]) if record.get("entry") is not None else None,
+                    float(record["stop_loss"]) if record.get("stop_loss") is not None else None,
+                    float(target) if target is not None else None,
+                    float(record.get("confidence") or record.get("confidence_score") or 0),
+                    1 if record.get("layer1_pass") else 0,
+                    1 if record.get("layer2_pass") else 0,
+                    1 if record.get("layer3_pass") else 0,
+                    1 if record.get("final_selected") else 0,
+                    json.dumps(record.get("rejection_reason") or record.get("rejection_reasons") or []),
+                    json.dumps(record.get("layer_details") or {}),
+                    json.dumps(record.get("coverage_report") or {}),
+                )
+            )
+        conn.executemany(
+            """
+            INSERT INTO signals_log (
+                scan_id, horizon, symbol, date, cmp, entry, stop_loss, target,
+                confidence, layer1_pass, layer2_pass, layer3_pass, final_selected,
+                rejection_reason, layer_details, coverage_report
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def get_latest_signals_scan_report(horizon: str | None = None, limit: int = 100) -> dict:
+    """Return latest per-stock validation scan with funnel, coverage, and reasons."""
+    conn = get_connection()
+    try:
+        params: list = []
+        where = ""
+        if horizon:
+            where = "WHERE horizon = ?"
+            params.append(horizon.upper())
+        latest = conn.execute(
+            f"""
+            SELECT scan_id, horizon, MAX(datetime(created_at)) AS created_at
+            FROM signals_log
+            {where}
+            GROUP BY scan_id, horizon
+            ORDER BY datetime(created_at) DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if not latest:
+            return {"available": False, "message": "No signals_log scan has been recorded yet."}
+
+        scan_id = latest["scan_id"]
+        scan_horizon = latest["horizon"]
+        rows = conn.execute(
+            """
+            SELECT * FROM signals_log
+            WHERE scan_id = ? AND horizon = ?
+            ORDER BY final_selected DESC, confidence DESC, symbol ASC
+            """,
+            (scan_id, scan_horizon),
+        ).fetchall()
+
+        parsed: list[dict] = []
+        rejection_counts: dict[str, int] = {}
+        coverage_report: dict = {}
+        for row in rows:
+            item = dict(row)
+            try:
+                item["rejection_reason"] = json.loads(item.get("rejection_reason") or "[]")
+            except Exception:
+                item["rejection_reason"] = []
+            try:
+                item["layer_details"] = json.loads(item.get("layer_details") or "{}")
+            except Exception:
+                item["layer_details"] = {}
+            try:
+                item["coverage_report"] = json.loads(item.get("coverage_report") or "{}")
+            except Exception:
+                item["coverage_report"] = {}
+            if item["coverage_report"]:
+                coverage_report = item["coverage_report"]
+            for reason in item["rejection_reason"]:
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+            parsed.append(item)
+
+        total = len(parsed)
+        funnel = {
+            "total": total,
+            "layer1_pass": sum(1 for r in parsed if r.get("layer1_pass")),
+            "layer2_pass": sum(1 for r in parsed if r.get("layer2_pass")),
+            "layer3_pass": sum(1 for r in parsed if r.get("layer3_pass")),
+            "final_selected": sum(1 for r in parsed if r.get("final_selected")),
+        }
+        return {
+            "available": True,
+            "scan_id": scan_id,
+            "horizon": scan_horizon,
+            "created_at": latest["created_at"],
+            "funnel": funnel,
+            "coverage": coverage_report,
+            "rejection_counts": rejection_counts,
+            "sample": parsed[:limit],
+        }
     finally:
         conn.close()
 

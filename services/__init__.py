@@ -7,6 +7,8 @@ from .universe_manager import UniverseSnapshot, load_nse_universe
 from .data_quality import QualityGateResult, evaluate_symbol_quality
 from .factor_pipeline import FactorRow, build_factor_row
 from .ranking_engine import RankedIdea, RankingResult, generate_rankings, run_weekly_rankings
+from .validation_engine import LayerValidationRecord, ValidationScanResult, run_validation_scan
+from .backtest_engine import run_backtest, run_backtest_sync
 
 __all__ = [
     "TechnicalSnapshot",
@@ -29,4 +31,9 @@ __all__ = [
     "RankingResult",
     "generate_rankings",
     "run_weekly_rankings",
+    "LayerValidationRecord",
+    "ValidationScanResult",
+    "run_validation_scan",
+    "run_backtest",
+    "run_backtest_sync",
 ]

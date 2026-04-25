@@ -23,6 +23,8 @@ from .schema import (
     cleanup_duplicate_running_trades,
     log_ranking_run,
     get_ranking_runs,
+    log_signals_scan,
+    get_latest_signals_scan_report,
     snapshot_performance,
     DB_PATH,
 )
@@ -52,6 +54,8 @@ __all__ = [
     "cleanup_duplicate_running_trades",
     "log_ranking_run",
     "get_ranking_runs",
+    "log_signals_scan",
+    "get_latest_signals_scan_report",
     "snapshot_performance",
     "DB_PATH",
 ]

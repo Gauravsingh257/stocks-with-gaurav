@@ -1020,37 +1020,119 @@ async def get_discovery(
     min_turnover_cr: float = Query(1.0, ge=0.0),
     source: str = Query(None),
 ):
-    """LAYER 1 — pure momentum/volume/breakout discovery across the NSE universe.
+    """Strict validation feed across Discovery → Quality → SMC.
 
-    Always returns *something* actionable so the Research UI is never empty.
-    Each candidate includes a synthesized swing card (entry/SL/targets) using
-    ATR-style geometry so users can act immediately.
+    `items` contains only all-layer-pass stocks. If strict SMC returns no final
+    trades, `fallback_items` contains discovery-only rows for monitoring; those
+    rows are explicitly marked `fallback_only` and are never final selections.
     """
-    from services.discovery_engine import scan_discovery, synthesize_swing_levels
-    from services.universe_manager import load_nse_universe
+    from services.validation_engine import fallback_cards, run_validation_scan
 
-    snapshot = load_nse_universe(target_size=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "1000")))
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
     try:
-        candidates = await scan_discovery(
-            snapshot.symbols,
+        result = await run_validation_scan(
+            "SWING",
             top_k=top_k,
+            target_universe=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "1000")),
             min_turnover_cr=min_turnover_cr,
             source=src,
         )
     except Exception as exc:
-        log.exception("discovery scan failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"discovery_failed: {exc}")
+        log.exception("validation discovery scan failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}")
 
-    cards = [synthesize_swing_levels(c) for c in candidates]
+    cards = [record.to_trade_card() for record in result.selected]
+    fallback = fallback_cards(result.fallback, limit=top_k)
     return {
         "data_source": src,
-        "universe_size": snapshot.actual_size,
-        "scanned": len(snapshot.symbols),
+        "universe_size": result.universe.actual_size,
+        "scanned": result.coverage.scanned,
         "returned": len(cards),
+        "fallback_returned": len(fallback),
         "generated_at": datetime.now().isoformat(),
+        "scan_id": result.scan_id,
+        "coverage": result.coverage.to_dict(),
+        "funnel": result.funnel.to_dict(),
         "items": cards,
+        "fallback_items": fallback,
     }
+
+
+@router.get("/api/research/validation")
+@router.get("/research/validation")
+async def run_layer_validation(
+    horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$"),
+    top_k: int = Query(10, ge=1, le=50),
+    target_universe: int = Query(1800, ge=10, le=5000),
+    min_turnover_cr: float = Query(1.0, ge=0.0),
+    source: str | None = Query(None),
+):
+    """Run full 3-layer validation and log every stock to signals_log."""
+    from services.validation_engine import fallback_cards, run_validation_scan
+
+    src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    result = await run_validation_scan(
+        horizon.upper(),
+        top_k=top_k,
+        target_universe=target_universe,
+        min_turnover_cr=min_turnover_cr,
+        source=src,
+        log_scan=True,
+    )
+    return {
+        "scan_id": result.scan_id,
+        "horizon": result.horizon,
+        "coverage": result.coverage.to_dict(),
+        "funnel": result.funnel.to_dict(),
+        "logged_rows": result.logged_rows,
+        "items": [record.to_trade_card() for record in result.selected],
+        "fallback_items": fallback_cards(result.fallback, limit=top_k),
+        "records_sample": [record.to_dict() for record in result.records[:100]],
+    }
+
+
+@router.get("/api/research/layer-report")
+@router.get("/research/layer-report")
+def get_layer_report(
+    horizon: str | None = Query(None, pattern="^(SWING|LONGTERM)$"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return latest logged validation scan with layer funnel and rejection reasons."""
+    from dashboard.backend.db import get_latest_signals_scan_report
+
+    return get_latest_signals_scan_report(horizon=horizon, limit=limit)
+
+
+@router.get("/api/research/backtest")
+@router.get("/research/backtest")
+async def run_research_backtest(
+    start_date: str = Query(..., description="YYYY-MM-DD"),
+    end_date: str = Query(..., description="YYYY-MM-DD"),
+    horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$"),
+    top_n: int = Query(5, ge=1, le=20),
+    target_universe: int = Query(300, ge=10, le=1800),
+    hold_days: int = Query(20, ge=1, le=250),
+    scan_step_days: int = Query(5, ge=1, le=30),
+    source: str = Query("yfinance"),
+):
+    """Run an OHLC-sliced historical backtest of the 3-layer strategy."""
+    from services.backtest_engine import run_backtest
+
+    try:
+        return await run_backtest(
+            start_date=start_date,
+            end_date=end_date,
+            horizon=horizon.upper(),
+            top_n=top_n,
+            target_universe=target_universe,
+            hold_days=hold_days,
+            scan_step_days=scan_step_days,
+            source=source,
+            log_scans=False,
+        )
+    except Exception as exc:
+        log.exception("research backtest failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"backtest_failed: {exc}")
 
 
 @router.get("/api/research/scan-debug")
@@ -1069,10 +1151,16 @@ def get_scan_debug(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):
         result = None
 
     if result is None:
+        try:
+            from dashboard.backend.db import get_latest_signals_scan_report
+            logged = get_latest_signals_scan_report(horizon=horizon, limit=50)
+        except Exception:
+            logged = {"available": False}
         return {
             "horizon": horizon,
-            "available": False,
-            "message": "No cached ranking result yet. Trigger a scan via POST /api/research/run/{swing|longterm}.",
+            "available": bool(logged.get("available")),
+            "message": "No cached in-memory ranking result; returning latest signals_log report when available.",
+            "signals_log": logged,
             "scan_history": _scan_history.get(horizon.lower(), {}),
         }
 

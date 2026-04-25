@@ -498,6 +498,58 @@ export interface ResearchCoverageResponse {
   };
 }
 
+export interface LayerFunnelMetrics {
+  total: number;
+  layer1_pass: number;
+  layer2_pass: number;
+  layer3_pass: number;
+  final_selected: number;
+}
+
+export interface LayerCoverageReport {
+  total_universe?: number;
+  available_universe?: number;
+  scanned?: number;
+  data_available?: number;
+  missed?: number;
+  coverage_percent?: number;
+  missing_symbols?: string[];
+  sources?: Record<string, number>;
+}
+
+export interface LayerReportRow {
+  id: number;
+  scan_id: string;
+  horizon: "SWING" | "LONGTERM";
+  symbol: string;
+  date: string;
+  cmp: number | null;
+  entry: number | null;
+  stop_loss: number | null;
+  target: number | null;
+  confidence: number;
+  layer1_pass: number;
+  layer2_pass: number;
+  layer3_pass: number;
+  final_selected: number;
+  rejection_reason: string[];
+  layer_details: Record<string, unknown>;
+  coverage_report: LayerCoverageReport;
+  created_at: string;
+}
+
+export interface LayerReportResponse {
+  available: boolean;
+  message?: string;
+  scan_id?: string;
+  horizon?: "SWING" | "LONGTERM";
+  created_at?: string;
+  funnel?: LayerFunnelMetrics;
+  coverage?: LayerCoverageReport;
+  rejection_counts?: Record<string, number>;
+  sample?: LayerReportRow[];
+}
+
 // ── Research Performance & Journal interfaces ──────────────────────────────
 
 export interface ResearchPickRow {
@@ -870,6 +922,8 @@ export const api = {
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
+  layerReport: (horizon: "SWING" | "LONGTERM" = "SWING", limit = 80) =>
+    get<LayerReportResponse>(`/api/research/layer-report?horizon=${horizon}&limit=${limit}`),
   researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),
   researchOutcomes: (horizon: "swing" | "longterm" | "all" = "swing", days = 30) =>
     get<ResearchOutcomes>(`/api/research/outcomes?horizon=${horizon}&days=${days}`),
