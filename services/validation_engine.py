@@ -499,8 +499,9 @@ async def run_validation_scan(
         smc_confirmation = _smc_confirmation(df)
         record.smc = dict(smc_confirmation)
         levels = None
-        if _has_usable_ohlc(df) and nifty_daily:
-            if horizon == "SWING":
+        has_symbol_ohlc = _has_usable_ohlc(df)
+        if has_symbol_ohlc:
+            if horizon == "SWING" and nifty_daily:
                 levels = build_swing_trade_levels(symbol, df, nifty_daily)
                 if levels:
                     entry, stop, targets, setup, meta = levels
@@ -515,7 +516,7 @@ async def run_validation_scan(
                         merged_meta["confirmation_score"] = max(float(smc_confirmation.get("confirmation_score", 0.0) or 0.0), 70.0)
                         merged_meta["tier"] = "HIGH_CONVICTION" if merged_meta["confirmation_score"] > 70 else "CONFIRMED"
                         record.smc = merged_meta
-            else:
+            elif horizon != "SWING" and nifty_daily:
                 levels = build_longterm_trade_levels(symbol, df, nifty_daily)
                 if levels:
                     entry, stop, targets, _long_target, _entry_zone, setup, meta = levels
