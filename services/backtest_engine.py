@@ -24,6 +24,9 @@ class BacktestTrade:
     exit_price: float
     exit_reason: str
     return_pct: float
+    gross_return_pct: float
+    transaction_cost_pct: float
+    slippage_pct: float
     confidence: float
     setup: str | None
 
@@ -91,6 +94,8 @@ def _simulate_long_trade(
     confidence: float,
     setup: str | None,
     hold_days: int,
+    transaction_cost_pct: float,
+    slippage_pct: float,
 ) -> BacktestTrade | None:
     df = _normalize_frame(frame)
     if df is None:
@@ -99,11 +104,12 @@ def _simulate_long_trade(
     if start is None:
         return None
     start_idx, entry_row = start
-    entry = float(entry_row["open"])
-    if entry <= 0:
+    raw_entry = float(entry_row["open"])
+    if raw_entry <= 0:
         return None
+    entry = raw_entry * (1.0 + slippage_pct / 100.0)
 
-    exit_price = float(df.loc[min(start_idx + hold_days - 1, len(df) - 1), "close"])
+    raw_exit_price = float(df.loc[min(start_idx + hold_days - 1, len(df) - 1), "close"])
     exit_date = pd.Timestamp(df.loc[min(start_idx + hold_days - 1, len(df) - 1), "date"]).date().isoformat()
     exit_reason = "TIME_EXIT"
 
@@ -115,15 +121,18 @@ def _simulate_long_trade(
         high = float(row["high"])
         # Conservative same-day ordering: if both are touched, count stop first.
         if low <= stop_loss:
-            exit_price = float(stop_loss)
+            raw_exit_price = float(stop_loss)
             exit_date = row_date
             exit_reason = "STOP_LOSS"
             break
         if high >= target:
-            exit_price = float(target)
+            raw_exit_price = float(target)
             exit_date = row_date
             exit_reason = "TARGET_HIT"
             break
+    exit_price = raw_exit_price * (1.0 - slippage_pct / 100.0)
+    gross_return_pct = (raw_exit_price - raw_entry) / raw_entry * 100.0
+    net_return_pct = (exit_price - entry) / entry * 100.0 - (2.0 * transaction_cost_pct)
 
     return BacktestTrade(
         symbol=symbol,
@@ -135,7 +144,10 @@ def _simulate_long_trade(
         target=round(float(target), 2),
         exit_price=round(exit_price, 2),
         exit_reason=exit_reason,
-        return_pct=round((exit_price - entry) / entry * 100.0, 2),
+        return_pct=round(net_return_pct, 2),
+        gross_return_pct=round(gross_return_pct, 2),
+        transaction_cost_pct=round(float(transaction_cost_pct), 4),
+        slippage_pct=round(float(slippage_pct), 4),
         confidence=round(float(confidence), 2),
         setup=setup,
     )
@@ -164,6 +176,28 @@ def _sharpe(returns_pct: list[float]) -> float:
     return round((avg / stdev) * math.sqrt(252), 2)
 
 
+def _walk_forward(trades: list[BacktestTrade]) -> list[dict[str, Any]]:
+    buckets: dict[str, list[BacktestTrade]] = {}
+    for trade in trades:
+        window = str(trade.entry_date)[:7]
+        buckets.setdefault(window, []).append(trade)
+    output: list[dict[str, Any]] = []
+    for window in sorted(buckets):
+        rows = buckets[window]
+        returns = [row.return_pct for row in rows]
+        wins = [row for row in rows if row.return_pct > 0]
+        output.append(
+            {
+                "window": window,
+                "trades": len(rows),
+                "win_rate": round(len(wins) / len(rows) * 100.0, 2) if rows else 0.0,
+                "avg_return": round(sum(returns) / len(rows), 2) if rows else 0.0,
+                "max_drawdown": _max_drawdown(returns),
+            }
+        )
+    return output
+
+
 async def run_backtest(
     start_date: str,
     end_date: str,
@@ -175,6 +209,8 @@ async def run_backtest(
     source: str = "yfinance",
     scan_step_days: int = 1,
     log_scans: bool = False,
+    transaction_cost_pct: float = 0.10,
+    slippage_pct: float = 0.05,
 ) -> dict[str, Any]:
     """Historical validation/backtest using the same 3-layer scan engine.
 
@@ -217,17 +253,21 @@ async def run_backtest(
                 confidence=record.confidence_score,
                 setup=record.setup,
                 hold_days=hold_days,
+                transaction_cost_pct=transaction_cost_pct,
+                slippage_pct=slippage_pct,
             )
             if trade is not None:
                 trades.append(trade)
 
     returns = [trade.return_pct for trade in trades]
+    gross_returns = [trade.gross_return_pct for trade in trades]
     wins = [trade for trade in trades if trade.return_pct > 0]
     total = len(trades)
     metrics = {
         "total_trades": total,
         "win_rate": round(len(wins) / total * 100.0, 2) if total else 0.0,
         "avg_return": round(sum(returns) / total, 2) if total else 0.0,
+        "avg_gross_return": round(sum(gross_returns) / total, 2) if total else 0.0,
         "max_drawdown": _max_drawdown(returns),
         "sharpe_ratio": _sharpe(returns),
     }
@@ -238,8 +278,15 @@ async def run_backtest(
         "top_n": top_n,
         "hold_days": hold_days,
         "scan_step_days": scan_step_days,
+        "cost_assumptions": {
+            "transaction_cost_pct_per_side": transaction_cost_pct,
+            "slippage_pct_per_side": slippage_pct,
+            "entry_model": "next_candle_open_plus_slippage",
+            "exit_model": "target_stop_or_time_minus_slippage",
+        },
         "coverage": coverage or {},
         "funnel_by_day": daily_funnels,
+        "walk_forward": _walk_forward(trades),
         "metrics": metrics,
         "trades": [trade.to_dict() for trade in trades],
         "data_notes": [

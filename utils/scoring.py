@@ -11,9 +11,9 @@ Single source of truth for blending:
 
 Formula (per project spec):
 
-    score = 0.20 * trend
-          + 0.20 * volume
-          + 0.30 * momentum
+        score = 0.25 * trend
+            + 0.20 * volume
+            + 0.25 * momentum
           + 0.30 * smc
 
 Each input must already be 0..100. Output is clamped to 0..100.
@@ -69,7 +69,7 @@ def composite_score(
     v = _clamp(volume)
     m = _clamp(momentum)
     s = _clamp(smc)
-    composite = round(0.20 * t + 0.20 * v + 0.30 * m + 0.30 * s, 2)
+    composite = round(0.25 * t + 0.20 * v + 0.25 * m + 0.30 * s, 2)
     return ScoreBreakdown(trend=t, volume=v, momentum=m, smc=s, composite=composite)
 
 

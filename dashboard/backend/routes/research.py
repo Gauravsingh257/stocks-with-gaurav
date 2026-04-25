@@ -706,8 +706,12 @@ def get_research_coverage(target_universe: int = Query(1800, ge=100, le=5000)):
 
     return {
         "target_universe": target_universe,
-        "available_universe": universe.actual_size,
+        "available_universe": universe.total_size or universe.actual_size,
+        "returned_universe": universe.actual_size,
         "sources": universe.sources,
+        "cache_path": universe.cache_path,
+        "cache_date": universe.cache_date,
+        "source_errors": universe.source_errors,
         "latest": {
             "SWING": _shape(swing_latest[0] if swing_latest else None),
             "LONGTERM": _shape(long_latest[0] if long_latest else None),
@@ -1022,9 +1026,9 @@ async def get_discovery(
 ):
     """Strict validation feed across Discovery → Quality → SMC.
 
-    `items` contains only all-layer-pass stocks. If strict SMC returns no final
-    trades, `fallback_items` contains discovery-only rows for monitoring; those
-    rows are explicitly marked `fallback_only` and are never final selections.
+    `items` and `final_trades` contain only all-layer-pass stocks. Watchlist rows
+    have Discovery + Quality plus near SMC evidence. Fallback rows are emitted
+    only when both final trades and watchlist are empty.
     """
     from services.validation_engine import fallback_cards, run_validation_scan
 
@@ -1033,7 +1037,7 @@ async def get_discovery(
         result = await run_validation_scan(
             "SWING",
             top_k=top_k,
-            target_universe=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "1000")),
+            target_universe=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "2200")),
             min_turnover_cr=min_turnover_cr,
             source=src,
         )
@@ -1042,18 +1046,22 @@ async def get_discovery(
         raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}")
 
     cards = [record.to_trade_card() for record in result.selected]
+    watchlist = [record.to_trade_card() for record in result.watchlist]
     fallback = fallback_cards(result.fallback, limit=top_k)
     return {
         "data_source": src,
-        "universe_size": result.universe.actual_size,
+        "universe_size": result.universe.total_size or result.universe.actual_size,
         "scanned": result.coverage.scanned,
         "returned": len(cards),
+        "watchlist_returned": len(watchlist),
         "fallback_returned": len(fallback),
         "generated_at": datetime.now().isoformat(),
         "scan_id": result.scan_id,
         "coverage": result.coverage.to_dict(),
         "funnel": result.funnel.to_dict(),
         "items": cards,
+        "final_trades": cards,
+        "watchlist": watchlist,
         "fallback_items": fallback,
     }
 
@@ -1086,6 +1094,8 @@ async def run_layer_validation(
         "funnel": result.funnel.to_dict(),
         "logged_rows": result.logged_rows,
         "items": [record.to_trade_card() for record in result.selected],
+        "final_trades": [record.to_trade_card() for record in result.selected],
+        "watchlist": [record.to_trade_card() for record in result.watchlist],
         "fallback_items": fallback_cards(result.fallback, limit=top_k),
         "records_sample": [record.to_dict() for record in result.records[:100]],
     }
@@ -1110,10 +1120,12 @@ async def run_research_backtest(
     end_date: str = Query(..., description="YYYY-MM-DD"),
     horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$"),
     top_n: int = Query(5, ge=1, le=20),
-    target_universe: int = Query(300, ge=10, le=1800),
+    target_universe: int = Query(300, ge=10, le=5000),
     hold_days: int = Query(20, ge=1, le=250),
     scan_step_days: int = Query(5, ge=1, le=30),
     source: str = Query("yfinance"),
+    transaction_cost_pct: float = Query(0.10, ge=0.0, le=5.0),
+    slippage_pct: float = Query(0.05, ge=0.0, le=5.0),
 ):
     """Run an OHLC-sliced historical backtest of the 3-layer strategy."""
     from services.backtest_engine import run_backtest
@@ -1129,6 +1141,8 @@ async def run_research_backtest(
             scan_step_days=scan_step_days,
             source=source,
             log_scans=False,
+            transaction_cost_pct=transaction_cost_pct,
+            slippage_pct=slippage_pct,
         )
     except Exception as exc:
         log.exception("research backtest failed: %s", exc)

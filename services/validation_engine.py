@@ -11,8 +11,10 @@ from uuid import uuid4
 import pandas as pd
 
 from data.ingestion import DataIngestion
+from engine.indicators import calculate_atr
 from engine.swing import detect_daily_fvg, detect_daily_ob, detect_daily_structure
 from services.data_quality import evaluate_symbol_quality
+from services.decision_engine import build_decision_output
 from services.discovery_engine import DiscoveryCandidate, _compute_features, synthesize_swing_levels
 from services.fundamental_analysis import analyze_fundamentals
 from services.news_analysis import analyze_news_sentiment
@@ -141,6 +143,7 @@ class ValidationScanResult:
     universe: UniverseSnapshot
     records: list[LayerValidationRecord]
     selected: list[LayerValidationRecord]
+    watchlist: list[LayerValidationRecord]
     fallback: list[LayerValidationRecord]
     coverage: CoverageReport
     funnel: FunnelMetrics
@@ -152,6 +155,8 @@ class ValidationScanResult:
             "horizon": self.horizon,
             "coverage": self.coverage.to_dict(),
             "funnel": self.funnel.to_dict(),
+            "final_trades": [r.to_trade_card() for r in self.selected],
+            "watchlist": [r.to_trade_card() for r in self.watchlist],
             "selected": [r.to_trade_card() for r in self.selected],
             "fallback": [r.to_trade_card() for r in self.fallback],
             "records": [r.to_dict() for r in self.records],
@@ -234,18 +239,103 @@ def _discovery_failure_reasons(candidate: DiscoveryCandidate | None, df: pd.Data
 
 
 def _smc_failure_reasons(df: pd.DataFrame | None) -> list[str]:
+    confirmation = _smc_confirmation(df)
+    if confirmation.get("reason") == "insufficient_history":
+        return ["insufficient_history"]
+    missing = confirmation.get("missing") or []
+    if missing:
+        return list(missing)
+    return ["smc_geometry_failed"]
+
+
+def _smc_confirmation(df: pd.DataFrame | None) -> dict:
     candles = df_to_candles(df)
     if len(candles) < 30:
-        return ["insufficient_history"]
-    reasons: list[str] = []
-    if not detect_daily_ob(candles, "LONG"):
-        reasons.append("no_order_block")
-    if not detect_daily_fvg(candles, "LONG"):
-        reasons.append("no_liquidity_sweep")
-    structure, _info = detect_daily_structure(candles)
-    if structure not in ("BULLISH_BOS", "BULLISH_CHOCH"):
-        reasons.append("no_BOS")
-    return reasons or ["smc_geometry_failed"]
+        return {
+            "confirmation_score": 0.0,
+            "tier": "REJECTED",
+            "reason": "insufficient_history",
+            "missing": ["insufficient_history"],
+        }
+    order_block = detect_daily_ob(candles, "LONG")
+    liquidity = detect_daily_fvg(candles, "LONG")
+    structure, structure_info = detect_daily_structure(candles)
+    has_bos = structure in ("BULLISH_BOS", "BULLISH_CHOCH")
+    score = 0.0
+    missing: list[str] = []
+    if order_block:
+        score += 40.0
+    else:
+        missing.append("no_order_block")
+    if has_bos:
+        score += 30.0
+    else:
+        missing.append("no_BOS")
+    if liquidity:
+        score += 30.0
+    else:
+        missing.append("no_liquidity_sweep")
+    if score > 70:
+        tier = "HIGH_CONVICTION"
+    elif score >= 60:
+        tier = "CONFIRMED"
+    elif score >= 40:
+        tier = "NEAR_SETUP"
+    else:
+        tier = "REJECTED"
+    return {
+        "confirmation_score": score,
+        "tier": tier,
+        "order_block": [round(float(order_block[0]), 2), round(float(order_block[1]), 2)] if order_block else None,
+        "liquidity_zone": [round(float(liquidity[0]), 2), round(float(liquidity[1]), 2)] if liquidity else None,
+        "structure": structure,
+        "structure_info": structure_info or {},
+        "missing": missing,
+    }
+
+
+def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, confirmation: dict) -> tuple[float, float, list[float], str, dict] | None:
+    candles = df_to_candles(df)
+    if len(candles) < 30 or float(confirmation.get("confirmation_score", 0.0) or 0.0) < 40.0:
+        return None
+    close = float(candles[-1]["close"])
+    atr = float(calculate_atr(candles, 14) or 0.0)
+    if close <= 0 or atr <= 0:
+        return None
+    ob = confirmation.get("order_block") or None
+    liquidity = confirmation.get("liquidity_zone") or None
+    if ob:
+        entry = round((float(ob[0]) + float(ob[1])) / 2.0, 2)
+        entry_type = "LIMIT"
+    elif liquidity:
+        entry = round((float(liquidity[0]) + float(liquidity[1])) / 2.0, 2)
+        entry_type = "LIMIT"
+    else:
+        entry = round(close, 2)
+        entry_type = "MARKET"
+    if abs(entry - close) / close > 0.30:
+        entry = round(close - atr * 0.5, 2)
+    recent_low = min(float(c["low"]) for c in candles[-20:])
+    base_risk = max(atr * (2.2 if horizon == "LONGTERM" else 1.5), entry * 0.03)
+    ob_floor = float(ob[0]) if ob else recent_low
+    stop = min(entry - base_risk, ob_floor - atr * 0.25, recent_low - atr * 0.2)
+    stop = round(stop, 2)
+    if stop <= 0 or stop >= entry:
+        stop = round(entry - base_risk, 2)
+    if stop <= 0 or stop >= entry:
+        return None
+    risk = entry - stop
+    target_mult = 3.5 if horizon == "LONGTERM" else 3.0
+    targets = [round(entry + risk * 1.5, 2), round(entry + risk * target_mult, 2)]
+    tier = str(confirmation.get("tier", "SCORED"))
+    structure = str(confirmation.get("structure", "NEUTRAL"))
+    setup = f"SMC_{horizon}_SCORE_{int(float(confirmation.get('confirmation_score', 0.0) or 0.0))}_{tier}_{structure}"
+    meta = dict(confirmation)
+    meta["score"] = round(float(confirmation.get("confirmation_score", 0.0) or 0.0) / 100.0 * 12.0, 2)
+    meta["entry_type"] = entry_type
+    meta["scored_smc"] = True
+    meta["symbol"] = symbol
+    return entry, stop, targets, setup, meta
 
 
 def _smc_score(meta: dict | None, horizon: Horizon) -> float:
@@ -253,6 +343,8 @@ def _smc_score(meta: dict | None, horizon: Horizon) -> float:
         return 0.0
     max_score = 11.0 if horizon == "LONGTERM" else 12.0
     try:
+        if "confirmation_score" in meta:
+            return max(0.0, min(100.0, float(meta.get("confirmation_score", 0))))
         return max(0.0, min(100.0, float(meta.get("score", 0)) / max_score * 100.0))
     except Exception:
         return 0.0
@@ -386,6 +478,8 @@ async def run_validation_scan(
         else:
             _append_unique(record.rejection_reason, "quality_data_unavailable")
 
+        smc_confirmation = _smc_confirmation(df)
+        record.smc = dict(smc_confirmation)
         levels = None
         if _has_usable_ohlc(df) and nifty_daily:
             if horizon == "SWING":
@@ -398,8 +492,11 @@ async def run_validation_scan(
                         record.stop_loss = float(stop)
                         record.targets = [float(t) for t in targets]
                         record.setup = str(setup)
-                        record.smc = dict(meta or {})
-                        record.layer3_pass = True
+                        merged_meta = dict(smc_confirmation)
+                        merged_meta.update(dict(meta or {}))
+                        merged_meta["confirmation_score"] = max(float(smc_confirmation.get("confirmation_score", 0.0) or 0.0), 70.0)
+                        merged_meta["tier"] = "HIGH_CONVICTION" if merged_meta["confirmation_score"] > 70 else "CONFIRMED"
+                        record.smc = merged_meta
             else:
                 levels = build_longterm_trade_levels(symbol, df, nifty_daily)
                 if levels:
@@ -410,10 +507,24 @@ async def run_validation_scan(
                         record.stop_loss = float(stop)
                         record.targets = [float(t) for t in targets]
                         record.setup = str(setup)
-                        record.smc = dict(meta or {})
-                        record.layer3_pass = True
+                        merged_meta = dict(smc_confirmation)
+                        merged_meta.update(dict(meta or {}))
+                        merged_meta["confirmation_score"] = max(float(smc_confirmation.get("confirmation_score", 0.0) or 0.0), 70.0)
+                        merged_meta["tier"] = "HIGH_CONVICTION" if merged_meta["confirmation_score"] > 70 else "CONFIRMED"
+                        record.smc = merged_meta
+            if record.entry is None:
+                scored_levels = _scored_smc_levels(symbol, df, horizon, smc_confirmation)
+                if scored_levels:
+                    entry, stop, targets, setup, meta = scored_levels
+                    record.entry = float(entry)
+                    record.stop_loss = float(stop)
+                    record.targets = [float(t) for t in targets]
+                    record.setup = str(setup)
+                    record.smc = dict(meta)
+
+        record.layer3_pass = float((record.smc or {}).get("confirmation_score", 0.0) or 0.0) >= 60.0
         if not record.layer3_pass:
-            for reason in _smc_failure_reasons(df):
+            for reason in (record.smc or {}).get("missing", []) or _smc_failure_reasons(df):
                 _append_unique(record.rejection_reason, reason)
 
         smc_score = _smc_score(record.smc, horizon)
@@ -435,22 +546,21 @@ async def run_validation_scan(
             record.rejection_reason = []
         records.append(record)
 
-    selected = sorted((r for r in records if r.final_selected), key=lambda r: r.confidence_score, reverse=True)[:top_k]
-    fallback = sorted(
-        (r for r in records if r.layer1_pass and not r.final_selected),
-        key=lambda r: r.confidence_score,
-        reverse=True,
-    )[:top_k]
+    decisions = build_decision_output(records, limit=top_k)
+    selected = list(decisions.final_trades)
+    watchlist = list(decisions.watchlist)
+    fallback = list(decisions.fallback)
 
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
+    total_universe = universe.total_size if symbols is None and universe.total_size else int(target_universe)
     coverage = CoverageReport(
-        total_universe=int(target_universe),
-        available_universe=universe.actual_size,
+        total_universe=total_universe,
+        available_universe=universe.total_size or universe.actual_size,
         scanned=len(scan_symbols),
         data_available=len(scan_symbols) - len(no_data_symbols),
         missed=missed,
-        coverage_percent=round((len(scan_symbols) / max(int(target_universe), 1)) * 100, 2),
+        coverage_percent=round((len(scan_symbols) / max(total_universe, 1)) * 100, 2),
         missing_symbols=no_data_symbols[:100],
         sources=universe.sources,
     )
@@ -492,6 +602,7 @@ async def run_validation_scan(
         universe=universe,
         records=records,
         selected=selected,
+        watchlist=watchlist,
         fallback=fallback,
         coverage=coverage,
         funnel=funnel,
