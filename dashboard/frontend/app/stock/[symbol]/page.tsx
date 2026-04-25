@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import StockCard from "@/components/StockCard";
+import { TradingViewStockWidget } from "@/components/TradingViewStockWidget";
 import { api, type StockAnalysis } from "@/lib/api";
 
 function zoneText(zone: StockAnalysis["entry_zone"]) {
@@ -46,12 +47,7 @@ export default function StockDetailPage() {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(300px, 0.75fr)", gap: 16 }}>
             <div className="glass" style={{ padding: 10, minHeight: 440 }}>
-              <iframe
-                title={`${symbol} TradingView chart`}
-                src={`https://www.tradingview.com/widgetembed/?symbol=NSE:${encodeURIComponent(symbol)}&interval=D&theme=dark&style=1`}
-                style={{ width: "100%", height: 430, border: 0, borderRadius: 10 }}
-                allowFullScreen
-              />
+              <TradingViewStockWidget symbol={symbol} />
             </div>
             <StockCard analysis={analysis} />
           </div>
