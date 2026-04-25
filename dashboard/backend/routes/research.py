@@ -1055,7 +1055,7 @@ async def get_discovery(
 
 @router.get("/api/research/scan-debug")
 @router.get("/research/scan-debug")
-def get_scan_debug(horizon: str = Query("SWING", regex="^(SWING|LONGTERM)$")):
+def get_scan_debug(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):
     """Surface rejection counts + per-symbol reasons from the most recent ranking run.
 
     Used by the dashboard's `?debug=1` panel so operators can see exactly why a
