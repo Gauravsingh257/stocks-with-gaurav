@@ -29,7 +29,7 @@ from engine.swing import detect_weekly_trend, score_swing_candidate, score_longt
 log = logging.getLogger("services.research_levels")
 
 NIFTY_DAILY_SYMBOL = os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50")
-RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_PCT", "0.30"))
+RESEARCH_MAX_ENTRY_VS_CLOSE_PCT = float(os.getenv("RESEARCH_MAX_ENTRY_VS_CLOSE_PCT", "0.35"))
 RESEARCH_POOL_MULT = max(3, int(os.getenv("RESEARCH_POOL_MULT", "15")))
 # Minimum upside thresholds (soft floors) — picks below these are rejected
 MIN_SWING_UPSIDE_PCT = float(os.getenv("MIN_SWING_UPSIDE_PCT", "8.0"))       # 8% minimum for swing

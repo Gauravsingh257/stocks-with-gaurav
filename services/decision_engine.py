@@ -11,6 +11,7 @@ class DecisionRecord(Protocol):
     layer2_pass: bool
     layer3_pass: bool
     final_selected: bool
+    near_setup: bool
     smc: dict | None
     rejection_reason: list[str]
 
@@ -60,6 +61,30 @@ def _smc_score_value(record: DecisionRecord) -> float:
     return 0.0
 
 
+def _mark_near_setup(record: DecisionRecord, smc_score: float) -> None:
+    near_setup = 5.0 <= smc_score < 6.0
+    try:
+        record.near_setup = near_setup
+    except (AttributeError, TypeError):
+        pass
+    if record.smc is not None:
+        try:
+            record.smc["near_setup"] = near_setup
+        except TypeError:
+            pass
+
+
+def _band_rank(record: DecisionRecord) -> tuple[int, float, float]:
+    smc_score = _smc_score_value(record)
+    if smc_score >= 6.0:
+        band = 3
+    elif smc_score >= 4.0:
+        band = 2
+    else:
+        band = 1
+    return band, smc_score, float(record.confidence_score)
+
+
 def _unique(records: list[DecisionRecord], limit: int, excluded: set[str] | None = None) -> list[DecisionRecord]:
     picked: list[DecisionRecord] = []
     seen = set(excluded or set())
@@ -84,25 +109,32 @@ def near_valid_setups(signals: list[DecisionRecord], limit: int = 3, excluded: s
     """Return near setups using quality/discovery pass or meaningful SMC evidence."""
     candidates = [
         record
-        for record in sorted(signals, key=_rank_key, reverse=True)
-        if record.layer2_pass or record.layer1_pass or _smc_score_value(record) >= 4.0
+        for record in sorted(signals, key=_band_rank, reverse=True)
+        if _smc_score_value(record) >= 4.0 or record.layer2_pass or record.layer1_pass
     ]
     return _unique(candidates, limit, excluded)
 
 
 def relaxed_filter(signals: list[DecisionRecord], limit: int = 10, excluded: set[str] | None = None) -> list[DecisionRecord]:
-    return _unique([record for record in signals if _smc_score_value(record) >= 3.0], limit, excluded)
+    return _unique([record for record in signals if _smc_score_value(record) >= 2.0], limit, excluded)
 
 
 def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[DecisionRecord], list[DecisionRecord], list[DecisionRecord]]:
-    final_trades = _unique([record for record in records if record.layer3_pass], limit)
+    for record in records:
+        _mark_near_setup(record, _smc_score_value(record))
+
+    final_trades = _unique([record for record in records if _smc_score_value(record) >= 6.0], limit)
     used = {_symbol_key(record) for record in final_trades}
 
-    watchlist = _unique([record for record in records if record.layer2_pass], limit, excluded=used)
+    watchlist = _unique(
+        [record for record in records if 4.0 <= _smc_score_value(record) < 6.0],
+        limit,
+        excluded=used,
+    )
     used.update(_symbol_key(record) for record in watchlist)
 
     discovery = _unique(
-        [record for record in records if not record.layer3_pass and not record.layer2_pass],
+        [record for record in records if _smc_score_value(record) < 4.0],
         limit,
         excluded=used,
     )
@@ -111,14 +143,10 @@ def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[De
 
 def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> DecisionOutput:
     """Split full-pipeline records into one server-owned decision section per symbol."""
-    ordered = sorted(records, key=_rank_key, reverse=True)
+    ordered = sorted(records, key=_band_rank, reverse=True)
     final_trades, watchlist, discovery = _priority_bucket(ordered, limit)
 
     used = {_symbol_key(record) for record in final_trades}
-    if len(final_trades) == 0:
-        final_trades = top_n_by_score(ordered, n=min(3, limit))
-        used = {_symbol_key(record) for record in final_trades}
-
     watchlist = [record for record in watchlist if _symbol_key(record) not in used]
     discovery = [record for record in discovery if _symbol_key(record) not in used]
 
@@ -128,7 +156,7 @@ def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> Dec
     discovery = [record for record in discovery if _symbol_key(record) not in used]
 
     if len(discovery) == 0:
-        discovery = relaxed_filter(ordered, limit=limit, excluded=used)
+        discovery = _unique(ordered, limit=limit, excluded=used)
 
     print({
         "final": len(final_trades),

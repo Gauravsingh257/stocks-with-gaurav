@@ -76,6 +76,7 @@ class LayerValidationRecord:
     layer2_pass: bool = False
     layer3_pass: bool = False
     final_selected: bool = False
+    near_setup: bool = False
     rejection_reason: list[str] = field(default_factory=list)
     discovery: dict | None = None
     quality: dict | None = None
@@ -84,9 +85,10 @@ class LayerValidationRecord:
 
     @property
     def section(self) -> str:
-        if self.layer3_pass:
+        smc_score = _smc_score(self.smc, self.horizon) / 10.0
+        if smc_score >= 6.0:
             return "final"
-        if self.layer2_pass:
+        if smc_score >= 4.0:
             return "watchlist"
         return "discovery"
 
@@ -107,6 +109,7 @@ class LayerValidationRecord:
             "layer2_pass": self.layer2_pass,
             "layer3_pass": self.layer3_pass,
             "final_selected": self.final_selected,
+            "near_setup": self.near_setup,
             "section": self.section,
             "rejection_reason": self.rejection_reason,
             "layer_details": {
@@ -138,6 +141,7 @@ class LayerValidationRecord:
             "layer2_pass": self.layer2_pass,
             "layer3_pass": self.layer3_pass,
             "final_selected": self.final_selected,
+            "near_setup": self.near_setup,
             "section": self.section,
             "rejection_reason": self.rejection_reason,
             "layer_details": self.to_dict()["layer_details"],
@@ -307,7 +311,9 @@ def _smc_confirmation(df: pd.DataFrame | None) -> dict:
 
 def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, confirmation: dict) -> tuple[float, float, list[float], str, dict] | None:
     candles = df_to_candles(df)
-    if len(candles) < 30 or float(confirmation.get("confirmation_score", 0.0) or 0.0) < 40.0:
+    confirmation_score = float(confirmation.get("confirmation_score", 0.0) or 0.0)
+    has_partial_zone = bool(confirmation.get("order_block") or confirmation.get("liquidity_zone"))
+    if len(candles) < 30 or confirmation_score < 20.0 or not has_partial_zone:
         return None
     close = float(candles[-1]["close"])
     atr = float(calculate_atr(candles, 14) or 0.0)
@@ -327,9 +333,9 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     if abs(entry - close) / close > 0.30:
         entry = round(close - atr * 0.5, 2)
     recent_low = min(float(c["low"]) for c in candles[-20:])
-    base_risk = max(atr * (2.2 if horizon == "LONGTERM" else 1.5), entry * 0.03)
+    base_risk = max(atr * (2.0 if horizon == "LONGTERM" else 1.3), entry * 0.03)
     ob_floor = float(ob[0]) if ob else recent_low
-    stop = min(entry - base_risk, ob_floor - atr * 0.25, recent_low - atr * 0.2)
+    stop = min(entry - base_risk, ob_floor - atr * 0.2, recent_low - atr * 0.15)
     stop = round(stop, 2)
     if stop <= 0 or stop >= entry:
         stop = round(entry - base_risk, 2)
@@ -342,7 +348,8 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     structure = str(confirmation.get("structure", "NEUTRAL"))
     setup = f"SMC_{horizon}_SCORE_{int(float(confirmation.get('confirmation_score', 0.0) or 0.0))}_{tier}_{structure}"
     meta = dict(confirmation)
-    meta["score"] = round(float(confirmation.get("confirmation_score", 0.0) or 0.0) / 100.0 * 12.0, 2)
+    meta["score"] = round(confirmation_score / 10.0, 2)
+    meta["near_setup"] = 5.0 <= meta["score"] < 6.0
     meta["entry_type"] = entry_type
     meta["scored_smc"] = True
     meta["symbol"] = symbol
@@ -533,7 +540,13 @@ async def run_validation_scan(
                     record.setup = str(setup)
                     record.smc = dict(meta)
 
-        record.layer3_pass = float((record.smc or {}).get("confirmation_score", 0.0) or 0.0) >= 60.0
+        smc_band_score = _smc_score(record.smc, horizon) / 10.0
+        record.layer3_pass = smc_band_score >= 6.0
+        record.near_setup = 5.0 <= smc_band_score < 6.0
+        if record.smc is not None:
+            record.smc["near_setup"] = record.near_setup
+        if smc_band_score >= 4.0:
+            record.layer2_pass = True
         if not record.layer3_pass:
             for reason in (record.smc or {}).get("missing", []) or _smc_failure_reasons(df):
                 _append_unique(record.rejection_reason, reason)
@@ -552,7 +565,7 @@ async def run_validation_scan(
             candles = df_to_candles(df)
             if candles:
                 record.cmp = float(candles[-1]["close"])
-        record.final_selected = record.layer1_pass and record.layer2_pass and record.layer3_pass
+        record.final_selected = record.layer3_pass
         if record.final_selected:
             record.rejection_reason = []
         records.append(record)

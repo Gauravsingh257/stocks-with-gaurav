@@ -334,8 +334,7 @@ async def _materialize_swing_idea(
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
         confirmation = _smc_confirmation(daily_df)
-        if float(confirmation.get("confirmation_score", 0.0) or 0.0) >= 60.0:
-            levels = _scored_smc_levels(symbol, daily_df, "SWING", confirmation)
+        levels = _scored_smc_levels(symbol, daily_df, "SWING", confirmation)
         if not levels:
             _log_swing_materialize_miss(symbol, daily_df)
             return None
@@ -422,13 +421,12 @@ async def _materialize_longterm_idea(
     lt = build_longterm_trade_levels(symbol, daily_df, nifty_daily)
     if not lt:
         confirmation = _smc_confirmation(daily_df)
-        if float(confirmation.get("confirmation_score", 0.0) or 0.0) >= 60.0:
-            scored = _scored_smc_levels(symbol, daily_df, "LONGTERM", confirmation)
-            if scored:
-                entry, stop, targets, setup, lt_meta = scored
-                long_target = targets[-1] if targets else entry
-                entry_zone = [entry, entry]
-                lt = (entry, stop, targets, long_target, entry_zone, setup, lt_meta)
+        scored = _scored_smc_levels(symbol, daily_df, "LONGTERM", confirmation)
+        if scored:
+            entry, stop, targets, setup, lt_meta = scored
+            long_target = targets[-1] if targets else entry
+            entry_zone = [entry, entry]
+            lt = (entry, stop, targets, long_target, entry_zone, setup, lt_meta)
         if not lt:
             log.debug("No OHLC long-term levels for %s", symbol)
             return None
