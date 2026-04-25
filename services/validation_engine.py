@@ -82,6 +82,14 @@ class LayerValidationRecord:
     smc: dict | None = None
     score_breakdown: dict | None = None
 
+    @property
+    def section(self) -> str:
+        if self.layer3_pass:
+            return "final"
+        if self.layer2_pass:
+            return "watchlist"
+        return "discovery"
+
     def to_dict(self) -> dict:
         return {
             "scan_id": self.scan_id,
@@ -99,6 +107,7 @@ class LayerValidationRecord:
             "layer2_pass": self.layer2_pass,
             "layer3_pass": self.layer3_pass,
             "final_selected": self.final_selected,
+            "section": self.section,
             "rejection_reason": self.rejection_reason,
             "layer_details": {
                 "discovery": self.discovery or {},
@@ -129,6 +138,7 @@ class LayerValidationRecord:
             "layer2_pass": self.layer2_pass,
             "layer3_pass": self.layer3_pass,
             "final_selected": self.final_selected,
+            "section": self.section,
             "rejection_reason": self.rejection_reason,
             "layer_details": self.to_dict()["layer_details"],
             "reasoning": _record_reasoning(self),
@@ -144,7 +154,7 @@ class ValidationScanResult:
     records: list[LayerValidationRecord]
     selected: list[LayerValidationRecord]
     watchlist: list[LayerValidationRecord]
-    fallback: list[LayerValidationRecord]
+    discovery: list[LayerValidationRecord]
     coverage: CoverageReport
     funnel: FunnelMetrics
     logged_rows: int = 0
@@ -157,8 +167,9 @@ class ValidationScanResult:
             "funnel": self.funnel.to_dict(),
             "final_trades": [r.to_trade_card() for r in self.selected],
             "watchlist": [r.to_trade_card() for r in self.watchlist],
+            "discovery": [r.to_trade_card() for r in self.discovery],
             "selected": [r.to_trade_card() for r in self.selected],
-            "fallback": [r.to_trade_card() for r in self.fallback],
+            "fallback": [r.to_trade_card() for r in self.discovery],
             "records": [r.to_dict() for r in self.records],
             "logged_rows": self.logged_rows,
         }
@@ -549,7 +560,7 @@ async def run_validation_scan(
     decisions = build_decision_output(records, limit=top_k)
     selected = list(decisions.final_trades)
     watchlist = list(decisions.watchlist)
-    fallback = list(decisions.fallback)
+    discovery = list(decisions.discovery)
 
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
@@ -603,7 +614,7 @@ async def run_validation_scan(
         records=records,
         selected=selected,
         watchlist=watchlist,
-        fallback=fallback,
+        discovery=discovery,
         coverage=coverage,
         funnel=funnel,
         logged_rows=logged_rows,

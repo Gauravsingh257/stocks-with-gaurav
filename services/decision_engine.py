@@ -21,13 +21,14 @@ class DecisionRecord(Protocol):
 class DecisionOutput:
     final_trades: list[DecisionRecord]
     watchlist: list[DecisionRecord]
-    fallback: list[DecisionRecord]
+    discovery: list[DecisionRecord]
 
     def to_dict(self) -> dict:
         return {
             "final_trades": [record.to_trade_card() for record in self.final_trades],
             "watchlist": [record.to_trade_card() for record in self.watchlist],
-            "fallback": [record.to_trade_card() for record in self.fallback],
+            "discovery": [record.to_trade_card() for record in self.discovery],
+            "fallback": [record.to_trade_card() for record in self.discovery],
         }
 
 
@@ -42,25 +43,26 @@ def _rank_key(record: DecisionRecord) -> tuple[float, float]:
 
 
 def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> DecisionOutput:
-    """Split full-pipeline records into final trades, watchlist, and last-resort fallback.
-
-    Final trades require all layers. Watchlist first prefers discovery + quality
-    with a near SMC confirmation score. If the market slice has no final or near
-    setups, the best discovered records are also surfaced as monitoring rows so
-    the API is never fallback-only. Fallback remains a separately marked
-    last-resort bucket for backwards compatibility.
-    """
+    """Split full-pipeline records into one server-owned decision section per symbol."""
     ordered = sorted(records, key=_rank_key, reverse=True)
-    final_trades = [record for record in ordered if record.final_selected][:limit]
-    watchlist = [
-        record for record in ordered
-        if not record.final_selected
-        and record.layer1_pass
-        and record.layer2_pass
-        and str((record.smc or {}).get("tier", "")).upper() == "NEAR_SETUP"
-    ][:limit]
-    fallback: list[DecisionRecord] = []
-    if not final_trades and not watchlist:
-        fallback = [record for record in ordered if record.layer1_pass][:limit]
-        watchlist = list(fallback)
-    return DecisionOutput(final_trades=final_trades, watchlist=watchlist, fallback=fallback)
+    final_trades: list[DecisionRecord] = []
+    watchlist: list[DecisionRecord] = []
+    discovery: list[DecisionRecord] = []
+    seen: set[str] = set()
+
+    for record in ordered:
+        symbol_key = str(record.symbol).replace("NSE:", "").replace(".NS", "").upper()
+        if symbol_key in seen:
+            continue
+        seen.add(symbol_key)
+
+        if record.layer3_pass:
+            if len(final_trades) < limit:
+                final_trades.append(record)
+        elif record.layer2_pass:
+            if len(watchlist) < limit:
+                watchlist.append(record)
+        elif len(discovery) < limit:
+            discovery.append(record)
+
+    return DecisionOutput(final_trades=final_trades, watchlist=watchlist, discovery=discovery)

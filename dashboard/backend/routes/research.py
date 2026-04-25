@@ -1026,11 +1026,11 @@ async def get_discovery(
 ):
     """Strict validation feed across Discovery → Quality → SMC.
 
-    `items` and `final_trades` contain only all-layer-pass stocks. Watchlist rows
-    have Discovery + Quality plus near SMC evidence. Fallback rows are emitted
-    only when both final trades and watchlist are empty.
+    The backend assigns each stock to exactly one section: final, watchlist, or
+    discovery. The frontend renders these buckets directly so symbols do not
+    appear in multiple decision stages.
     """
-    from services.validation_engine import fallback_cards, run_validation_scan
+    from services.validation_engine import run_validation_scan
 
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
     try:
@@ -1043,18 +1043,19 @@ async def get_discovery(
         )
     except Exception as exc:
         log.exception("validation discovery scan failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}") from exc
 
     cards = [record.to_trade_card() for record in result.selected]
     watchlist = [record.to_trade_card() for record in result.watchlist]
-    fallback = fallback_cards(result.fallback, limit=top_k)
+    discovery = [record.to_trade_card() for record in result.discovery]
     return {
         "data_source": src,
         "universe_size": result.universe.total_size or result.universe.actual_size,
         "scanned": result.coverage.scanned,
         "returned": len(cards),
         "watchlist_returned": len(watchlist),
-        "fallback_returned": len(fallback),
+        "discovery_returned": len(discovery),
+        "fallback_returned": len(discovery),
         "generated_at": datetime.now().isoformat(),
         "scan_id": result.scan_id,
         "coverage": result.coverage.to_dict(),
@@ -1062,7 +1063,8 @@ async def get_discovery(
         "items": cards,
         "final_trades": cards,
         "watchlist": watchlist,
-        "fallback_items": fallback,
+        "discovery": discovery,
+        "fallback_items": discovery,
     }
 
 
@@ -1076,7 +1078,7 @@ async def run_layer_validation(
     source: str | None = Query(None),
 ):
     """Run full 3-layer validation and log every stock to signals_log."""
-    from services.validation_engine import fallback_cards, run_validation_scan
+    from services.validation_engine import run_validation_scan
 
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
     result = await run_validation_scan(
@@ -1096,7 +1098,8 @@ async def run_layer_validation(
         "items": [record.to_trade_card() for record in result.selected],
         "final_trades": [record.to_trade_card() for record in result.selected],
         "watchlist": [record.to_trade_card() for record in result.watchlist],
-        "fallback_items": fallback_cards(result.fallback, limit=top_k),
+        "discovery": [record.to_trade_card() for record in result.discovery],
+        "fallback_items": [record.to_trade_card() for record in result.discovery],
         "records_sample": [record.to_dict() for record in result.records[:100]],
     }
 

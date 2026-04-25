@@ -6,7 +6,7 @@ import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronD
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
-import { api, type LayerReportResponse, type LongTermIdea, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion, type SwingIdea } from "@/lib/api";
+import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
@@ -20,7 +20,6 @@ function formatScanAge(isoTime: string | null): { label: string; stale: boolean 
   return { label: `${days}d ago`, stale: true };
 }
 
-import { LongTermIdeasCard } from "./LongTermIdeasCard";
 import { PerformanceOverview } from "./PerformanceOverview";
 import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
@@ -28,9 +27,10 @@ import { ResearchLayerDebugPanel } from "./ResearchLayerDebugPanel";
 import { ResearchConversionPanel } from "./ResearchConversionPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
-import { SwingIdeasTable } from "./SwingIdeasTable";
-import { TopIdeas } from "./TopIdeas";
 import { DailyIdeasLeadModal } from "./DailyIdeasLeadModal";
+import { DiscoveryFeed } from "./DiscoveryFeed";
+import { FinalTrades } from "./FinalTrades";
+import { Watchlist } from "./Watchlist";
 
 /** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
 function normalizeTicker(s: string): string {
@@ -42,6 +42,7 @@ function normalizeTicker(s: string): string {
 }
 
 const RESEARCH_FETCH_LIMIT = 100;
+const DECISION_FEED_LIMIT = 30;
 
 const SCAN_BTN: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 6,
@@ -110,8 +111,7 @@ function SelectionCriteriaPanel({ items }: { items?: string[] }) {
 }
 
 export default function ResearchPage() {
-  const [swing, setSwing] = useState<SwingIdea[]>([]);
-  const [longterm, setLongterm] = useState<LongTermIdea[]>([]);
+  const [decisionFeed, setDecisionFeed] = useState<ResearchDecisionFeedResponse | null>(null);
   const [running, setRunning] = useState<RunningTradeMonitorItem[]>([]);
   const [coverage, setCoverage] = useState<ResearchCoverageResponse | null>(null);
   const [layerReport, setLayerReport] = useState<LayerReportResponse | null>(null);
@@ -133,7 +133,6 @@ export default function ResearchPage() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [sectorFilter, setSectorFilter] = useState<string>("ALL");
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
-  const [compareSymbols, setCompareSymbols] = useState<Set<string>>(new Set());
   const [gated, setGated] = useState(false);
   const [leadModalOpen, setLeadModalOpen] = useState(false);
 
@@ -142,23 +141,25 @@ export default function ResearchPage() {
     const results = await Promise.allSettled([
       api.swingResearch(RESEARCH_FETCH_LIMIT, token),
       api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
+      api.researchDecisionFeed(DECISION_FEED_LIMIT),
       api.runningTradesResearch(40),
       api.researchCoverage(2200),
       api.layerReport("SWING", 80),
       api.researchPerformance(),
       api.portfolioSummary(),
     ]);
-    const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
+    const [swingRes, longtermRes, decisionRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
     if (swingRes.status === "fulfilled") {
-      setSwing(swingRes.value?.items ?? []);
       setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
       if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
     }
     if (longtermRes.status === "fulfilled") {
-      setLongterm(longtermRes.value?.items ?? []);
       setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
       setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
       if ((longtermRes.value as Record<string, unknown>)?.gated) setGated(true);
+    }
+    if (decisionRes.status === "fulfilled") {
+      setDecisionFeed(decisionRes.value ?? null);
     }
     if (runningRes.status === "fulfilled") {
       setRunning(runningRes.value?.items ?? []);
@@ -183,7 +184,13 @@ export default function ResearchPage() {
     setLastRefresh(new Date());
   }, [token]);
 
-  const isEmpty = swing.length === 0 && longterm.length === 0 && running.length === 0 && !portfolio;
+  const decisionItems = useMemo(() => [
+    ...(decisionFeed?.final_trades ?? []),
+    ...(decisionFeed?.watchlist ?? []),
+    ...(decisionFeed?.discovery ?? []),
+  ], [decisionFeed]);
+
+  const isEmpty = decisionItems.length === 0 && running.length === 0 && !portfolio;
   const pollInterval = isEmpty ? 120_000 : 30_000;
 
   useEffect(() => {
@@ -223,6 +230,27 @@ export default function ResearchPage() {
     }, 250);
     return () => clearTimeout(handle);
   }, [globalQuery]);
+
+  useEffect(() => {
+    if (!decisionFeed) return;
+    const owners = new Map<string, string>();
+    const duplicates: string[] = [];
+    ([
+      ["final", decisionFeed.final_trades],
+      ["watchlist", decisionFeed.watchlist],
+      ["discovery", decisionFeed.discovery],
+    ] as const).forEach(([section, items]) => {
+      items.forEach((item) => {
+        const key = normalizeTicker(item.symbol).toUpperCase();
+        const owner = owners.get(key);
+        if (owner && owner !== section) duplicates.push(`${item.symbol}: ${owner} + ${section}`);
+        owners.set(key, section);
+      });
+    });
+    if (duplicates.length > 0) {
+      console.warn("[Research] Duplicate symbols across decision buckets", duplicates);
+    }
+  }, [decisionFeed]);
 
   const runGlobalSearch = useCallback(async (symbol: string) => {
     const clean = symbol.replace("NSE:", "").trim().toUpperCase();
@@ -269,11 +297,11 @@ export default function ResearchPage() {
   // ── Filter logic ──
   const allSectors = useMemo(() => {
     const s = new Set<string>();
-    [...swing, ...longterm].forEach((item) => {
+    decisionItems.forEach((item) => {
       if (item.sector) s.add(item.sector);
     });
     return Array.from(s).sort();
-  }, [swing, longterm]);
+  }, [decisionItems]);
 
   const filterItem = useCallback((item: { symbol: string; sector?: string | null; market_cap_cr?: number | null }) => {
     if (searchQuery.trim()) {
@@ -291,36 +319,31 @@ export default function ResearchPage() {
     return true;
   }, [searchQuery, sectorFilter, mcapFilter]);
 
-  const filteredSwing = useMemo(() => swing.filter(filterItem), [swing, filterItem]);
-  const filteredLongterm = useMemo(() => longterm.filter(filterItem), [longterm, filterItem]);
+  const filteredFinalTrades = useMemo(() => (decisionFeed?.final_trades ?? []).filter(filterItem), [decisionFeed, filterItem]);
+  const filteredWatchlist = useMemo(() => (decisionFeed?.watchlist ?? []).filter(filterItem), [decisionFeed, filterItem]);
+  const filteredDiscovery = useMemo(() => (decisionFeed?.discovery ?? []).filter(filterItem), [decisionFeed, filterItem]);
   const hasFilters = Boolean(searchQuery.trim()) || sectorFilter !== "ALL" || mcapFilter !== "ALL";
 
   const filterSummary = useMemo(() => {
     if (!hasFilters) return null;
-    return `${filteredSwing.length}/${swing.length} swing · ${filteredLongterm.length}/${longterm.length} long-term`;
-  }, [hasFilters, filteredSwing.length, swing.length, filteredLongterm.length, longterm.length]);
+    return `${filteredFinalTrades.length}/${decisionFeed?.final_trades.length ?? 0} final · ${filteredWatchlist.length}/${decisionFeed?.watchlist.length ?? 0} watchlist · ${filteredDiscovery.length}/${decisionFeed?.discovery.length ?? 0} discovery`;
+  }, [hasFilters, filteredFinalTrades.length, filteredWatchlist.length, filteredDiscovery.length, decisionFeed]);
 
   const noMatchesWithFilters =
-    hasFilters && swing.length + longterm.length > 0 && filteredSwing.length === 0 && filteredLongterm.length === 0;
-
-  const toggleCompare = useCallback((symbol: string) => {
-    setCompareSymbols((prev) => {
-      const next = new Set(prev);
-      if (next.has(symbol)) next.delete(symbol);
-      else if (next.size < 3) next.add(symbol);
-      return next;
-    });
-  }, []);
+    hasFilters && decisionItems.length > 0 && filteredFinalTrades.length === 0 && filteredWatchlist.length === 0 && filteredDiscovery.length === 0;
 
   const exportCSV = useCallback(() => {
     const rows = [
-      ["Symbol", "Type", "Setup", "Entry", "SL", "Target1", "R:R", "Confidence", "Sector", "PE", "MCap(Cr)", "Action"].join(","),
-      ...filteredSwing.map((s) =>
-        [s.symbol, "SWING", s.setup, s.entry_price, s.stop_loss, s.target_1 ?? "", s.risk_reward, s.confidence_score, s.sector ?? "", s.pe_ratio ?? "", s.market_cap_cr ?? "", s.action_tag ?? ""].join(",")
-      ),
-      ...filteredLongterm.map((l) =>
-        [l.symbol, "LONGTERM", l.setup, l.entry_price, l.stop_loss, l.long_term_target ?? "", l.risk_reward, l.confidence_score, l.sector ?? "", l.pe_ratio ?? "", l.market_cap_cr ?? "", l.action_tag ?? ""].join(",")
-      ),
+      ["Symbol", "Section", "Setup", "Entry", "SL", "Target", "R:R", "Confidence"].join(","),
+      ...([
+        ...filteredFinalTrades.map((item) => ({ section: "final", item })),
+        ...filteredWatchlist.map((item) => ({ section: "watchlist", item })),
+        ...filteredDiscovery.map((item) => ({ section: "discovery", item })),
+      ]).map(({ section, item }) => {
+        const targets = Array.isArray(item.targets) ? item.targets : [];
+        const target = item.target_2 ?? item.target_1 ?? targets[targets.length - 1] ?? "";
+        return [item.symbol, section, item.setup ?? "", item.entry_price ?? "", item.stop_loss ?? "", target, item.risk_reward ?? "", item.confidence_score ?? ""].join(",");
+      }),
     ].join("\n");
     const blob = new Blob([rows], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -329,13 +352,9 @@ export default function ResearchPage() {
     a.download = `research-picks-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [filteredSwing, filteredLongterm]);
+  }, [filteredFinalTrades, filteredWatchlist, filteredDiscovery]);
 
   // ── Header scan age info ──
-  const scrollToGlobalSearch = useCallback(() => {
-    document.getElementById("global-search")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
-
   const scanAgeInfo = useMemo(() => {
     const swingAge = formatScanAge(lastSwingScan);
     const ltAge = formatScanAge(lastLongtermScan);
@@ -360,7 +379,7 @@ export default function ResearchPage() {
           <div>
             <h1 className="m-0 text-xl md:text-2xl lg:text-3xl font-bold">AI Research Center</h1>
             <p style={{ margin: "2px 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-              Swing ideas, long-term theses, and running trade intelligence
+              Final trades, near setups, and discovery candidates from one decision engine
             </p>
             <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
               Last scan — Swing: {scanAgeInfo.swingAge.label} · Long-term: {scanAgeInfo.ltLabel}
@@ -403,10 +422,6 @@ export default function ResearchPage() {
           {scanButton("longterm", "warning")}
         </div>
       </div>
-      </StaggerItem>
-
-      <StaggerItem>
-        <TopIdeas swing={swing} longterm={longterm} />
       </StaggerItem>
 
       <StaggerItem>
@@ -512,7 +527,7 @@ export default function ResearchPage() {
       {/* ── FILTER BAR ──────────────────────────────────────────── */}
       <StaggerItem>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {/* Search — filters loaded swing + long-term rows below (client-side); sign in as Premium for full lists */}
+          {/* Search filters the decision buckets without reclassifying them. */}
           <div style={{ position: "relative", flex: "1 1 180px", maxWidth: 280, zIndex: 2 }}>
             <Search
               size={13}
@@ -575,17 +590,10 @@ export default function ResearchPage() {
             <button onClick={() => window.print()} style={{ ...SCAN_BTN, background: "rgba(91,156,246,0.08)", borderColor: "rgba(91,156,246,0.25)", color: "#5b9cf6", fontSize: "0.68rem", padding: "5px 10px" }}>
               <Download size={11} /> Print
             </button>
-            {compareSymbols.size >= 2 && (
-              <Link href={`/research/compare?symbols=${Array.from(compareSymbols).join(",")}`} style={{
-                ...SCAN_BTN, background: "rgba(240,192,96,0.1)", borderColor: "rgba(240,192,96,0.3)", color: "#f0c060", fontSize: "0.68rem", padding: "5px 10px", textDecoration: "none",
-              }}>
-                Compare {compareSymbols.size}
-              </Link>
-            )}
           </div>
         </div>
         <p style={{ margin: "4px 0 0", fontSize: "0.68rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-          Showing top {RESEARCH_FETCH_LIMIT} results per horizon. Filters the <strong>swing</strong> and <strong>long-term</strong> idea tables on this page (loaded from the latest scan). It does not search all NSE stocks.
+          Filters the server-assigned decision buckets on this page. It does not move stocks between Final Trade Ideas, Watchlist, and Discovery.
           {user?.role === "FREE" && " Free accounts see a preview list — upgrade to Premium to filter the full set."}
         </p>
         {filterSummary && (
@@ -669,7 +677,7 @@ export default function ResearchPage() {
 
       <StaggerItem>
         <RetentionPanel
-          hasIdeas={swing.length + longterm.length > 0}
+          hasIdeas={decisionItems.length > 0}
           hasPortfolio={Boolean(portfolio && (portfolio.swing.count + portfolio.longterm.count) > 0)}
         />
       </StaggerItem>
@@ -677,6 +685,18 @@ export default function ResearchPage() {
       <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
       <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
+
+      <StaggerItem>
+        <FinalTrades items={filteredFinalTrades} />
+      </StaggerItem>
+
+      <StaggerItem>
+        <Watchlist items={filteredWatchlist} />
+      </StaggerItem>
+
+      <StaggerItem>
+        <DiscoveryFeed items={filteredDiscovery} />
+      </StaggerItem>
 
       {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
       <StaggerItem>
@@ -712,33 +732,6 @@ export default function ResearchPage() {
             No portfolio data yet. Run a scan to populate.
           </div>
         )}
-      </div>
-      </StaggerItem>
-
-      {/* ── SECTION 2: NEW OPPORTUNITIES (Final Decision Feed) ───── */}
-      <StaggerItem>
-      <div style={{ marginTop: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--warning, #f59e0b)" }} />
-          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>New Opportunities</h2>
-          <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "var(--warning, #f59e0b)" }}>
-            Final Decision Feed
-          </span>
-        </div>
-        <SwingIdeasTable
-          items={filteredSwing}
-          slotInfo={`${filteredSwing.length} Ideas${hasFilters ? ` (filtered from ${swing.length})` : ""}`}
-          onScan={() => triggerScan("swing")}
-          scanning={scanning === "swing"}
-          onSearchAnyStock={scrollToGlobalSearch}
-        />
-        <LongTermIdeasCard
-          items={filteredLongterm}
-          slotInfo={`${filteredLongterm.length} Ideas${hasFilters ? ` (filtered from ${longterm.length})` : ""}`}
-          onScan={() => triggerScan("longterm")}
-          scanning={scanning === "longterm"}
-          onSearchAnyStock={scrollToGlobalSearch}
-        />
       </div>
       </StaggerItem>
 

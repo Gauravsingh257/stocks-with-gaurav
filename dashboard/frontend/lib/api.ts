@@ -511,8 +511,57 @@ export interface ResearchValidationResponse {
   items: Array<SwingIdea | LongTermIdea>;
   final_trades: Array<SwingIdea | LongTermIdea>;
   watchlist: Array<SwingIdea | LongTermIdea>;
+  discovery: Array<SwingIdea | LongTermIdea>;
   fallback_items: Array<SwingIdea | LongTermIdea>;
   records_sample: Array<Record<string, unknown>>;
+}
+
+export interface ResearchDecisionCard {
+  id?: number;
+  symbol: string;
+  setup?: string | null;
+  section?: "final" | "watchlist" | "discovery" | string;
+  entry_price?: number | null;
+  stop_loss?: number | null;
+  target_1?: number | null;
+  target_2?: number | null;
+  targets?: number[];
+  risk_reward?: number | null;
+  confidence_score: number;
+  scan_cmp?: number | null;
+  entry_type?: string | null;
+  expected_holding_period?: string | null;
+  layer1_pass?: boolean;
+  layer2_pass?: boolean;
+  layer3_pass?: boolean;
+  final_selected?: boolean;
+  rejection_reason?: string[];
+  layer_details?: Record<string, unknown>;
+  reasoning?: string;
+  reasoning_summary?: string;
+  technical_signals?: Record<string, string>;
+  sector?: string | null;
+  market_cap_cr?: number | null;
+  action_tag?: string;
+}
+
+export interface ResearchDecisionFeedResponse {
+  data_source: string;
+  universe_size: number;
+  scanned: number;
+  returned: number;
+  watchlist_returned: number;
+  discovery_returned?: number;
+  fallback_returned?: number;
+  generated_at: string;
+  scan_id: string;
+  coverage: LayerCoverageReport;
+  funnel: LayerFunnelMetrics;
+  items: ResearchDecisionCard[];
+  final_trades: ResearchDecisionCard[];
+  watchlist: ResearchDecisionCard[];
+  discovery: ResearchDecisionCard[];
+  fallback_items?: ResearchDecisionCard[];
 }
 
 export interface LayerFunnelMetrics {
@@ -941,6 +990,8 @@ export const api = {
   researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchValidation: (horizon: "SWING" | "LONGTERM" = "SWING", topK = 10, targetUniverse = 2200) =>
     get<ResearchValidationResponse>(`/api/research/validation?horizon=${horizon}&top_k=${topK}&target_universe=${targetUniverse}`),
+  researchDecisionFeed: (topK = 20, minTurnoverCr = 1) =>
+    get<ResearchDecisionFeedResponse>(`/api/research/discovery?top_k=${topK}&min_turnover_cr=${minTurnoverCr}`),
   layerReport: (horizon: "SWING" | "LONGTERM" = "SWING", limit = 80) =>
     get<LayerReportResponse>(`/api/research/layer-report?horizon=${horizon}&limit=${limit}`),
   researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),
