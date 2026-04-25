@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronDown, Mail } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
@@ -118,6 +118,7 @@ export default function ResearchPage() {
   const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [decisionFeedLoading, setDecisionFeedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
@@ -135,20 +136,31 @@ export default function ResearchPage() {
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
   const [gated, setGated] = useState(false);
   const [leadModalOpen, setLeadModalOpen] = useState(false);
+  const decisionFeedLoadingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     setError(null);
+    if (!decisionFeedLoadingRef.current) {
+      decisionFeedLoadingRef.current = true;
+      setDecisionFeedLoading(true);
+      api.researchDecisionFeed(DECISION_FEED_LIMIT)
+        .then((feed) => setDecisionFeed(feed ?? null))
+        .catch(() => setError("Decision feed is still warming up. Other research data loaded."))
+        .finally(() => {
+          decisionFeedLoadingRef.current = false;
+          setDecisionFeedLoading(false);
+        });
+    }
     const results = await Promise.allSettled([
       api.swingResearch(RESEARCH_FETCH_LIMIT, token),
       api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
-      api.researchDecisionFeed(DECISION_FEED_LIMIT),
       api.runningTradesResearch(40),
       api.researchCoverage(2200),
       api.layerReport("SWING", 80),
       api.researchPerformance(),
       api.portfolioSummary(),
     ]);
-    const [swingRes, longtermRes, decisionRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
+    const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
     if (swingRes.status === "fulfilled") {
       setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
       if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
@@ -157,9 +169,6 @@ export default function ResearchPage() {
       setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
       setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
       if ((longtermRes.value as Record<string, unknown>)?.gated) setGated(true);
-    }
-    if (decisionRes.status === "fulfilled") {
-      setDecisionFeed(decisionRes.value ?? null);
     }
     if (runningRes.status === "fulfilled") {
       setRunning(runningRes.value?.items ?? []);
@@ -629,6 +638,9 @@ export default function ResearchPage() {
         </StaggerItem>
       )}
       {loading && <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Loading research data...</div></StaggerItem>}
+      {!loading && decisionFeedLoading && !decisionFeed && (
+        <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Decision feed is warming up...</div></StaggerItem>
+      )}
 
       <StaggerItem>
         <FinalTrades items={filteredFinalTrades} />
