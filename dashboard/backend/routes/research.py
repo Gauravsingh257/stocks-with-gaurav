@@ -1013,6 +1013,95 @@ def get_scan_status():
     }
 
 
+@router.get("/api/research/discovery")
+@router.get("/research/discovery")
+async def get_discovery(
+    top_k: int = Query(20, ge=1, le=100),
+    min_turnover_cr: float = Query(1.0, ge=0.0),
+    source: str = Query(None),
+):
+    """LAYER 1 — pure momentum/volume/breakout discovery across the NSE universe.
+
+    Always returns *something* actionable so the Research UI is never empty.
+    Each candidate includes a synthesized swing card (entry/SL/targets) using
+    ATR-style geometry so users can act immediately.
+    """
+    from services.discovery_engine import scan_discovery, synthesize_swing_levels
+    from services.universe_manager import load_nse_universe
+
+    snapshot = load_nse_universe(target_size=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "1000")))
+    src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    try:
+        candidates = await scan_discovery(
+            snapshot.symbols,
+            top_k=top_k,
+            min_turnover_cr=min_turnover_cr,
+            source=src,
+        )
+    except Exception as exc:
+        log.exception("discovery scan failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"discovery_failed: {exc}")
+
+    cards = [synthesize_swing_levels(c) for c in candidates]
+    return {
+        "data_source": src,
+        "universe_size": snapshot.actual_size,
+        "scanned": len(snapshot.symbols),
+        "returned": len(cards),
+        "generated_at": datetime.now().isoformat(),
+        "items": cards,
+    }
+
+
+@router.get("/api/research/scan-debug")
+@router.get("/research/scan-debug")
+def get_scan_debug(horizon: str = Query("SWING", regex="^(SWING|LONGTERM)$")):
+    """Surface rejection counts + per-symbol reasons from the most recent ranking run.
+
+    Used by the dashboard's `?debug=1` panel so operators can see exactly why a
+    given scan returned 0 (or fewer than expected) ideas. Reads the latest
+    `RankingResult` cached by the agents runner.
+    """
+    try:
+        from agents.runner import get_last_ranking_result  # type: ignore
+        result = get_last_ranking_result(horizon)
+    except Exception:
+        result = None
+
+    if result is None:
+        return {
+            "horizon": horizon,
+            "available": False,
+            "message": "No cached ranking result yet. Trigger a scan via POST /api/research/run/{swing|longterm}.",
+            "scan_history": _scan_history.get(horizon.lower(), {}),
+        }
+
+    rejections = getattr(result, "rejections", None) or []
+    reasons_by_stage: dict[str, dict[str, int]] = {}
+    for r in rejections:
+        stage = getattr(r, "stage", "unknown")
+        reason = getattr(r, "reason", "unknown")
+        reasons_by_stage.setdefault(stage, {})
+        reasons_by_stage[stage][reason] = reasons_by_stage[stage].get(reason, 0) + 1
+
+    return {
+        "horizon": horizon,
+        "available": True,
+        "scanned": getattr(result, "scanned", 0),
+        "quality_passed": getattr(result, "quality_passed", 0),
+        "ranked_candidates": getattr(result, "ranked_candidates", 0),
+        "ideas_returned": len(getattr(result, "ideas", []) or []),
+        "fallback_used": getattr(result, "fallback_used", False),
+        "rejection_counts": {stage: sum(reasons.values()) for stage, reasons in reasons_by_stage.items()},
+        "rejections_by_reason": reasons_by_stage,
+        "rejections_sample": [
+            {"symbol": getattr(r, "symbol", ""), "stage": getattr(r, "stage", ""), "reason": getattr(r, "reason", "")}
+            for r in rejections[:50]
+        ],
+        "scan_history": _scan_history.get(horizon.lower(), {}),
+    }
+
+
 @router.post("/api/research/tracker/refresh")
 @router.post("/research/tracker/refresh")
 def tracker_refresh():

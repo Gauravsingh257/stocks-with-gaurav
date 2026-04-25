@@ -631,10 +631,31 @@ export default function ResearchPage() {
             </p>
             <p style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginBottom: 20 }}>
               No scan has been run yet. Start a scan to analyze the market — it takes 1–3 minutes.
+              <br />
+              <span style={{ color: "var(--text-secondary)" }}>
+                Need ideas right now? Hit the <strong>Discovery Feed</strong> below — momentum + breakout picks across the NSE universe, always returns something.
+              </span>
             </p>
             <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
               {scanButton("swing")}
               {scanButton("longterm", "warning")}
+              <a
+                href={`${process.env.NEXT_PUBLIC_API_URL || ""}/api/research/discovery?top_k=20`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  padding: "10px 18px",
+                  borderRadius: 8,
+                  background: "rgba(0,212,255,0.08)",
+                  border: "1px solid rgba(0,212,255,0.3)",
+                  color: "var(--accent)",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  textDecoration: "none",
+                }}
+              >
+                Browse Discovery Feed →
+              </a>
             </div>
           </div>
         </StaggerItem>

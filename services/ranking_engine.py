@@ -92,6 +92,18 @@ class RankedIdea:
 
 
 @dataclass(slots=True)
+class RejectionRecord:
+    """Why a single symbol was dropped during ranking. Surfaced via /api/research/scan-debug."""
+
+    symbol: str
+    stage: str   # one of: "quality", "reasoning", "materialize", "liquidity", "geometry", "freshness"
+    reason: str
+
+    def to_dict(self) -> dict:
+        return {"symbol": self.symbol, "stage": self.stage, "reason": self.reason}
+
+
+@dataclass(slots=True)
 class RankingResult:
     horizon: Horizon
     universe: UniverseSnapshot
@@ -99,6 +111,8 @@ class RankingResult:
     quality_passed: int
     ranked_candidates: int
     ideas: list[RankedIdea]
+    rejections: list[RejectionRecord] | None = None
+    fallback_used: bool = False
 
 
 def _stable_unit(symbol: str, salt: str) -> float:
@@ -697,7 +711,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
         excluded_set = set(exclude_symbols)
         symbols = [s for s in symbols if s not in excluded_set]
     if not symbols:
-        return RankingResult(horizon, universe, 0, 0, 0, [])
+        return RankingResult(horizon, universe, 0, 0, 0, [], rejections=[])
 
     tech = await scan_technical(symbols)
     fund = await analyze_fundamentals(symbols)
@@ -707,10 +721,12 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     evidence_map: dict[str, tuple[dict[str, str], dict[str, str], dict[str, str], str]] = {}
     quality_passed = 0
     authenticity_map: dict[str, str] = {}
+    rejections: list[RejectionRecord] = []
 
     for symbol in symbols:
         q = evaluate_symbol_quality(symbol, tech[symbol], fund[symbol], sent[symbol])
         if not q.passed:
+            rejections.append(RejectionRecord(symbol, "quality", getattr(q, "reason", "quality_gate")))
             continue
         quality_passed += 1
 
@@ -734,6 +750,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
             max_factors=6,
         )
         if len(factors_used) < 3:
+            rejections.append(RejectionRecord(symbol, "reasoning", f"only_{len(factors_used)}_factors"))
             continue
         evidence_map[symbol] = (
             evidence.technical_signals,
@@ -780,6 +797,8 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
         quality_passed=quality_passed,
         ranked_candidates=len(scored),
         ideas=ideas,
+        rejections=rejections,
+        fallback_used=bool(ideas) and len(ideas) < top_k,
     )
 
 
