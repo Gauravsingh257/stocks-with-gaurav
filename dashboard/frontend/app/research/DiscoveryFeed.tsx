@@ -9,6 +9,16 @@ function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
 }
 
+function setupLabel(setup: string | null | undefined): string {
+  const raw = String(setup || "").trim();
+  if (!raw) return "early-stage SMC candidate";
+  if (raw === "MOMENTUM_FALLBACK") return "momentum breakout candidate";
+  if (raw.startsWith("SMC_SWING")) return "SMC swing developing setup";
+  if (raw.startsWith("SMC_LONGTERM")) return "SMC long-term developing setup";
+  if (raw.startsWith("SMC_")) return "SMC developing setup";
+  return raw.replace(/_/g, " ").toLowerCase();
+}
+
 function explainReason(token: string): string {
   const key = token.trim().toLowerCase();
   if (key === "no_order_block") return "order block confirmation";
@@ -23,7 +33,7 @@ function reasons(item: ResearchDecisionCard): string {
   const raw = (item.rejection_reason || []).map(explainReason).filter(Boolean);
   return raw.length
     ? `Reason: Awaiting ${raw.slice(0, 2).join(" + ")}`
-    : `Reason: ${item.setup || "early-stage SMC candidate"}`;
+    : `Reason: ${setupLabel(item.setup) || "early-stage SMC candidate"}`;
 }
 
 function confidenceText(item: ResearchDecisionCard): string {

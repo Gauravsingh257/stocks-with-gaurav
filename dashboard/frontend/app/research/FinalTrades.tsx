@@ -8,6 +8,16 @@ function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
 }
 
+function setupLabel(setup: string | null | undefined): string {
+  const raw = String(setup || "").trim();
+  if (!raw) return "SMC confirmed";
+  if (raw === "MOMENTUM_FALLBACK") return "Momentum breakout candidate";
+  if (raw.startsWith("SMC_SWING")) return "SMC swing confirmation";
+  if (raw.startsWith("SMC_LONGTERM")) return "SMC long-term confirmation";
+  if (raw.startsWith("SMC_")) return "SMC confirmation";
+  return raw.replace(/_/g, " ");
+}
+
 function fmt(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
   return Number(value).toFixed(2);
@@ -28,7 +38,7 @@ function shortReason(item: ResearchDecisionCard): string {
     .join(" + ");
   if (evidence) return `Reason: ${evidence}`;
   if (item.reasoning) return `Reason: ${item.reasoning.split(".")[0]}`;
-  return `Reason: ${item.setup || "SMC confirmation and risk levels are aligned"}`;
+  return `Reason: ${setupLabel(item.setup) || "SMC confirmation and risk levels are aligned"}`;
 }
 
 function confidenceText(item: ResearchDecisionCard): string {
@@ -74,7 +84,7 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                     <Link href={`/stock/${encodeURIComponent(symbol)}`} style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 5 }}>
                       {symbol} <ExternalLink size={12} />
                     </Link>
-                    <div style={{ color: "var(--text-dim)", fontSize: "0.68rem", marginTop: 2 }}>{item.setup || "SMC confirmed"}</div>
+                    <div style={{ color: "var(--text-dim)", fontSize: "0.68rem", marginTop: 2 }}>{setupLabel(item.setup)}</div>
                   </div>
                   <div style={{ color: "#00e096", fontWeight: 850, fontSize: "0.86rem" }}>{Number(item.confidence_score || 0).toFixed(1)}%</div>
                 </div>

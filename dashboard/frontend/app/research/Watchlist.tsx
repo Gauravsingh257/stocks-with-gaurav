@@ -8,6 +8,16 @@ function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
 }
 
+function setupLabel(setup: string | null | undefined): string {
+  const raw = String(setup || "").trim();
+  if (!raw) return "Near setup";
+  if (raw === "MOMENTUM_FALLBACK") return "Momentum breakout candidate";
+  if (raw.startsWith("SMC_SWING")) return "SMC swing near-confirmation";
+  if (raw.startsWith("SMC_LONGTERM")) return "SMC long-term near-confirmation";
+  if (raw.startsWith("SMC_")) return "SMC near-confirmation";
+  return raw.replace(/_/g, " ");
+}
+
 function fmt(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
   return Number(value).toFixed(2);
@@ -19,7 +29,7 @@ function watchReason(item: ResearchDecisionCard): string {
   if (detail) return `Reason: ${detail}`;
   const reasoning = String(item.reasoning || "").trim();
   if (reasoning && !/^Rejected:/i.test(reasoning)) return `Reason: ${reasoning.split(".")[0]}`;
-  return `Reason: ${item.setup || "SMC score is near the execution zone"}`;
+  return `Reason: ${setupLabel(item.setup) || "SMC score is near the execution zone"}`;
 }
 
 function confidenceText(item: ResearchDecisionCard): string {
@@ -62,7 +72,7 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
                   </Link>
                   <span style={{ color: "#f59e0b", fontSize: "0.82rem", fontWeight: 850 }}>{Number(item.confidence_score || 0).toFixed(1)}%</span>
                 </div>
-                <div style={{ color: "var(--text-dim)", fontSize: "0.68rem" }}>{item.setup || "Quality passed, SMC pending"}</div>
+                <div style={{ color: "var(--text-dim)", fontSize: "0.68rem" }}>{setupLabel(item.setup) || "Quality passed, SMC pending"}</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#facc15", background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.34)", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 4 }}><TimerReset size={12} /> 🟡 Monitor</span>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#5b9cf6", background: "rgba(91,156,246,0.1)", border: "1px solid rgba(91,156,246,0.24)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><Eye size={12} /> Near OB</span>
