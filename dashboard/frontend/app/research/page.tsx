@@ -640,7 +640,7 @@ export default function ResearchPage() {
               {scanButton("swing")}
               {scanButton("longterm", "warning")}
               <a
-                href={`${process.env.NEXT_PUBLIC_API_URL || ""}/api/research/discovery?top_k=20`}
+                href="/api/research/discovery?top_k=20"
                 target="_blank"
                 rel="noreferrer"
                 style={{
