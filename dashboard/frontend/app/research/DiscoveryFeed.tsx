@@ -21,11 +21,13 @@ export function DiscoveryFeed({ items }: { items: ResearchDecisionCard[] }) {
     <section className="glass opacity-70" style={{ padding: 14, display: "grid", gap: 10, opacity: 0.7 }}>
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen(!open)}
         style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, width: "100%", background: "transparent", border: 0, padding: 0, color: "inherit", cursor: "pointer", textAlign: "left" }}
       >
         <div>
-          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 8 }}>🔍 Early Signals (Experimental)</h2>
+          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 8 }}>
+            {open ? "🔍 Early Signals (Click to Collapse)" : "🔍 Early Signals (Click to Expand)"}
+          </h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Low-confidence candidates for exploration only</p>
         </div>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.66rem", padding: "3px 8px", borderRadius: 6, background: "rgba(91,156,246,0.08)", border: "1px solid rgba(91,156,246,0.2)", color: "#93c5fd", fontWeight: 800 }}>
