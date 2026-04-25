@@ -8,6 +8,7 @@ from dashboard.backend.db import create_stock_recommendation, log_ranking_run, s
 from services import generate_rankings
 
 MAX_SWING_SLOTS = int(__import__("os").getenv("MAX_SWING_SLOTS", "10"))
+RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
 class SwingTradeAlphaAgent(BaseAgent):
@@ -30,7 +31,7 @@ class SwingTradeAlphaAgent(BaseAgent):
             return
 
         ranking = asyncio.run(generate_rankings(
-            "SWING", top_k=empty_slots, target_universe=1800,
+            "SWING", top_k=empty_slots, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
             exclude_symbols=active_symbols,
         ))
 
@@ -42,7 +43,7 @@ class SwingTradeAlphaAgent(BaseAgent):
                 validation = asyncio.run(run_validation_scan(
                     "SWING",
                     top_k=max(empty_slots, 1),
-                    target_universe=1800,
+                    target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
                     log_scan=True,
                 ))
                 validation_logged_rows = validation.logged_rows

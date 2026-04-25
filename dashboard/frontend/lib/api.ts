@@ -491,11 +491,28 @@ export interface ResearchCoverageRun {
 export interface ResearchCoverageResponse {
   target_universe: number;
   available_universe: number;
+  returned_universe?: number;
   sources: Record<string, number>;
+  cache_path?: string | null;
+  cache_date?: string | null;
+  source_errors?: Record<string, string> | null;
   latest: {
     SWING: ResearchCoverageRun | null;
     LONGTERM: ResearchCoverageRun | null;
   };
+}
+
+export interface ResearchValidationResponse {
+  scan_id: string;
+  horizon: "SWING" | "LONGTERM";
+  coverage: LayerCoverageReport;
+  funnel: LayerFunnelMetrics;
+  logged_rows: number;
+  items: Array<SwingIdea | LongTermIdea>;
+  final_trades: Array<SwingIdea | LongTermIdea>;
+  watchlist: Array<SwingIdea | LongTermIdea>;
+  fallback_items: Array<SwingIdea | LongTermIdea>;
+  records_sample: Array<Record<string, unknown>>;
 }
 
 export interface LayerFunnelMetrics {
@@ -921,7 +938,9 @@ export const api = {
     get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
-  researchCoverage: (targetUniverse = 1800) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
+  researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
+  researchValidation: (horizon: "SWING" | "LONGTERM" = "SWING", topK = 10, targetUniverse = 2200) =>
+    get<ResearchValidationResponse>(`/api/research/validation?horizon=${horizon}&top_k=${topK}&target_universe=${targetUniverse}`),
   layerReport: (horizon: "SWING" | "LONGTERM" = "SWING", limit = 80) =>
     get<LayerReportResponse>(`/api/research/layer-report?horizon=${horizon}&limit=${limit}`),
   researchPerformance: () => get<ResearchAggregatePerformance>("/api/research/performance"),

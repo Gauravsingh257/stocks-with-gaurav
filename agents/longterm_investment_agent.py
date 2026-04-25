@@ -9,6 +9,7 @@ from services import generate_rankings
 from services.portfolio_constructor import apply_sector_cap
 
 MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "10"))
+RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
 class LongTermInvestmentAgent(BaseAgent):
@@ -45,7 +46,7 @@ class LongTermInvestmentAgent(BaseAgent):
         scan_top_k = empty_slots if empty_slots > 0 else MAX_LONGTERM_SLOTS
 
         ranking = asyncio.run(generate_rankings(
-            "LONGTERM", top_k=scan_top_k, target_universe=1800,
+            "LONGTERM", top_k=scan_top_k, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
             exclude_symbols=exclude_set,
         ))
 
@@ -57,7 +58,7 @@ class LongTermInvestmentAgent(BaseAgent):
                 validation = asyncio.run(run_validation_scan(
                     "LONGTERM",
                     top_k=max(scan_top_k, 1),
-                    target_universe=1800,
+                    target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
                     log_scan=True,
                 ))
                 validation_logged_rows = validation.logged_rows

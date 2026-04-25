@@ -398,7 +398,7 @@ async def run_validation_scan(
     horizon: Horizon = "SWING",
     *,
     top_k: int = 10,
-    target_universe: int = 1800,
+    target_universe: int = 2200,
     symbols: list[str] | None = None,
     source: str | None = None,
     as_of: str | date | datetime | None = None,

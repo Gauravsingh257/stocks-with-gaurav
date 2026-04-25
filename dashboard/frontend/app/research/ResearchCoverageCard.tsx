@@ -21,12 +21,15 @@ export function ResearchCoverageCard({ coverage }: Props) {
 
   const swing = coverage.latest.SWING;
   const longterm = coverage.latest.LONGTERM;
+  const returned = coverage.returned_universe ?? coverage.available_universe;
+  const dynamicCount = coverage.sources?.nse_dynamic_cache ?? 0;
 
   return (
     <div className="glass" style={{ padding: 14 }}>
       <div style={{ fontWeight: 600, marginBottom: 10 }}>Universe Coverage</div>
       <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: 10 }}>
-        Requested: {coverage.target_universe} | Available: {coverage.available_universe}
+        Requested: {coverage.target_universe} | Returned: {returned} | Available: {coverage.available_universe}
+        {dynamicCount > 0 ? ` | NSE dynamic: ${dynamicCount}` : ""}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
         <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10 }}>

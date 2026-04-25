@@ -683,7 +683,7 @@ def get_running_trades(limit: int = Query(40, ge=1, le=200)):
 
 @router.get("/api/research/coverage")
 @router.get("/research/coverage")
-def get_research_coverage(target_universe: int = Query(1800, ge=100, le=5000)):
+def get_research_coverage(target_universe: int = Query(2200, ge=100, le=5000)):
     universe = load_nse_universe(target_size=target_universe)
     swing_latest = get_ranking_runs(horizon="SWING", limit=1)
     long_latest = get_ranking_runs(horizon="LONGTERM", limit=1)
@@ -1071,7 +1071,7 @@ async def get_discovery(
 async def run_layer_validation(
     horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$"),
     top_k: int = Query(10, ge=1, le=50),
-    target_universe: int = Query(1800, ge=10, le=5000),
+    target_universe: int = Query(2200, ge=10, le=5000),
     min_turnover_cr: float = Query(1.0, ge=0.0),
     source: str | None = Query(None),
 ):

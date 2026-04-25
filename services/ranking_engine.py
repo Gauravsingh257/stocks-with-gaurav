@@ -26,6 +26,7 @@ from services.research_levels import (
 from services.signal_explainer import extract_longterm_signals, extract_swing_signals
 from services.technical_scanner import scan_technical
 from services.universe_manager import UniverseSnapshot, load_nse_universe
+from services.validation_engine import _scored_smc_levels, _smc_confirmation
 
 log = logging.getLogger("services.ranking_engine")
 
@@ -295,6 +296,29 @@ def _real_longterm_signals(lt_meta: dict) -> tuple[dict[str, str], str]:
     return tech, full_reason
 
 
+def _scored_smc_signals(meta: dict, horizon: Horizon) -> tuple[dict[str, str], str]:
+    score = float(meta.get("confirmation_score", 0.0) or 0.0)
+    tier = str(meta.get("tier", "CONFIRMED"))
+    structure = str(meta.get("structure", "NEUTRAL"))
+    ob = meta.get("order_block")
+    liquidity = meta.get("liquidity_zone")
+    missing = meta.get("missing") or []
+    ob_text = f"OB {ob[0]}-{ob[1]}" if isinstance(ob, list) and len(ob) == 2 else "OB not present"
+    liq_text = f"liquidity/FVG {liquidity[0]}-{liquidity[1]}" if isinstance(liquidity, list) and len(liquidity) == 2 else "liquidity/FVG not present"
+    label = "Daily" if horizon == "SWING" else "Higher-timeframe"
+    tech = {
+        "smc_score": f"SMC confirmation score: {score:.0f}/100 — {tier.replace('_', ' ').title()}.",
+        "structure": f"{label} structure: {structure}.",
+        "ob_liquidity": f"{ob_text}; {liq_text}.",
+        "decision_layer": "Promoted by final decision engine; not a generic fallback.",
+    }
+    reason = (
+        f"Final decision engine passed scored SMC ({score:.0f}/100): {structure}, {ob_text}, {liq_text}."
+        + (f" Missing evidence: {', '.join(map(str, missing))}." if missing else "")
+    )
+    return tech, reason
+
+
 async def _materialize_swing_idea(
     row: FactorRow,
     rank_score: float,
@@ -309,8 +333,12 @@ async def _materialize_swing_idea(
         return None
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
-        _log_swing_materialize_miss(symbol, daily_df)
-        return None
+        confirmation = _smc_confirmation(daily_df)
+        if float(confirmation.get("confirmation_score", 0.0) or 0.0) >= 60.0:
+            levels = _scored_smc_levels(symbol, daily_df, "SWING", confirmation)
+        if not levels:
+            _log_swing_materialize_miss(symbol, daily_df)
+            return None
     entry, stop, targets, setup, smc_meta = levels
     entry_price = float(entry)
     stop_loss = float(stop)
@@ -324,7 +352,11 @@ async def _materialize_swing_idea(
 
     # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
     if smc_meta:
-        technical_signals, reasoning = _real_swing_signals(smc_meta)
+        if smc_meta.get("scored_smc"):
+            scored_tech, reasoning = _scored_smc_signals(smc_meta, "SWING")
+            technical_signals = {**_hash_tech, **scored_tech}
+        else:
+            technical_signals, reasoning = _real_swing_signals(smc_meta)
     else:
         technical_signals = _hash_tech
         reasoning, _ = generate_evidence_reasoning(
@@ -389,13 +421,26 @@ async def _materialize_longterm_idea(
         return None
     lt = build_longterm_trade_levels(symbol, daily_df, nifty_daily)
     if not lt:
-        log.debug("No OHLC long-term levels for %s", symbol)
-        return None
+        confirmation = _smc_confirmation(daily_df)
+        if float(confirmation.get("confirmation_score", 0.0) or 0.0) >= 60.0:
+            scored = _scored_smc_levels(symbol, daily_df, "LONGTERM", confirmation)
+            if scored:
+                entry, stop, targets, setup, lt_meta = scored
+                long_target = targets[-1] if targets else entry
+                entry_zone = [entry, entry]
+                lt = (entry, stop, targets, long_target, entry_zone, setup, lt_meta)
+        if not lt:
+            log.debug("No OHLC long-term levels for %s", symbol)
+            return None
     entry, stop, targets, long_target, entry_zone, setup, lt_meta = lt
 
     # Use real signals if SMC scored; fall back to hash-based signals for ATR fallback
     if lt_meta:
-        technical_signals, reasoning = _real_longterm_signals(lt_meta)
+        if lt_meta.get("scored_smc"):
+            scored_tech, reasoning = _scored_smc_signals(lt_meta, "LONGTERM")
+            technical_signals = {**_hash_tech, **scored_tech}
+        else:
+            technical_signals, reasoning = _real_longterm_signals(lt_meta)
         entry_type = lt_meta.get("entry_type", "MARKET")
         scan_cmp = lt_meta.get("cmp")
     else:
@@ -704,7 +749,7 @@ async def _collect_watchlist_fallback(
     return out
 
 
-async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 1800, exclude_symbols: list[str] | None = None) -> RankingResult:
+async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 2200, exclude_symbols: list[str] | None = None) -> RankingResult:
     universe = load_nse_universe(target_universe)
     symbols = universe.symbols
     # Exclude symbols already in active slots
@@ -810,7 +855,7 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     )
 
 
-def run_weekly_rankings(top_k: int = 10, target_universe: int = 1800) -> tuple[RankingResult, RankingResult]:
+def run_weekly_rankings(top_k: int = 10, target_universe: int = 2200) -> tuple[RankingResult, RankingResult]:
     swing = asyncio.run(generate_rankings("SWING", top_k=top_k, target_universe=target_universe))
     longterm = asyncio.run(generate_rankings("LONGTERM", top_k=top_k, target_universe=target_universe))
     return swing, longterm

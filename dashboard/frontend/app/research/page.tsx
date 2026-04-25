@@ -143,7 +143,7 @@ export default function ResearchPage() {
       api.swingResearch(RESEARCH_FETCH_LIMIT, token),
       api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
       api.runningTradesResearch(40),
-      api.researchCoverage(1800),
+      api.researchCoverage(2200),
       api.layerReport("SWING", 80),
       api.researchPerformance(),
       api.portfolioSummary(),
@@ -633,13 +633,13 @@ export default function ResearchPage() {
             </div>
             <h2 style={{ margin: "0 0 8px", fontSize: "1.2rem" }}>Welcome to the AI Research Center</h2>
             <p style={{ color: "var(--text-secondary)", maxWidth: 560, margin: "0 auto 8px", fontSize: "0.85rem", lineHeight: 1.6 }}>
-              This platform uses <strong>Smart Money Concepts</strong> (SMC) — order blocks, fair value gaps, and institutional flow analysis — combined with fundamental and sentiment scoring to identify high-conviction trade setups across 1800+ NSE stocks.
+              This platform uses <strong>Smart Money Concepts</strong> (SMC) — order blocks, fair value gaps, and institutional flow analysis — combined with fundamental and sentiment scoring to identify high-conviction trade setups across the full NSE equity universe.
             </p>
             <p style={{ color: "var(--text-dim)", fontSize: "0.78rem", marginBottom: 20 }}>
               No scan has been run yet. Start a scan to analyze the market — it takes 1–3 minutes.
               <br />
               <span style={{ color: "var(--text-secondary)" }}>
-                Need ideas right now? Hit the <strong>Discovery Feed</strong> below — momentum + breakout picks across the NSE universe, always returns something.
+                Need ideas right now? Open the <strong>Decision Feed</strong> below — every stock is logged through Discovery, Quality, and SMC before output is shown.
               </span>
             </p>
             <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
@@ -660,7 +660,7 @@ export default function ResearchPage() {
                   textDecoration: "none",
                 }}
               >
-                Browse Discovery Feed →
+                Browse Decision Feed
               </a>
             </div>
           </div>
@@ -715,14 +715,14 @@ export default function ResearchPage() {
       </div>
       </StaggerItem>
 
-      {/* ── SECTION 2: NEW OPPORTUNITIES (Discovery Feed) ───── */}
+      {/* ── SECTION 2: NEW OPPORTUNITIES (Final Decision Feed) ───── */}
       <StaggerItem>
       <div style={{ marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div style={{ width: 4, height: 24, borderRadius: 2, background: "var(--warning, #f59e0b)" }} />
           <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>New Opportunities</h2>
           <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "var(--warning, #f59e0b)" }}>
-            Discovery Feed
+            Final Decision Feed
           </span>
         </div>
         <SwingIdeasTable
