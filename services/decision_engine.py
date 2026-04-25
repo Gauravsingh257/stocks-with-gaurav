@@ -44,10 +44,11 @@ def _rank_key(record: DecisionRecord) -> tuple[float, float]:
 def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> DecisionOutput:
     """Split full-pipeline records into final trades, watchlist, and last-resort fallback.
 
-    Final trades require all layers. Watchlist requires discovery + quality and a
-    near SMC confirmation score. Fallback is only returned if both final and
-    watchlist are empty, and is still composed from stocks that entered the
-    pipeline rather than arbitrary static picks.
+    Final trades require all layers. Watchlist first prefers discovery + quality
+    with a near SMC confirmation score. If the market slice has no final or near
+    setups, the best discovered records are also surfaced as monitoring rows so
+    the API is never fallback-only. Fallback remains a separately marked
+    last-resort bucket for backwards compatibility.
     """
     ordered = sorted(records, key=_rank_key, reverse=True)
     final_trades = [record for record in ordered if record.final_selected][:limit]
@@ -61,4 +62,5 @@ def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> Dec
     fallback: list[DecisionRecord] = []
     if not final_trades and not watchlist:
         fallback = [record for record in ordered if record.layer1_pass][:limit]
+        watchlist = list(fallback)
     return DecisionOutput(final_trades=final_trades, watchlist=watchlist, fallback=fallback)
