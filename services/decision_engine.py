@@ -134,7 +134,7 @@ def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[De
     used.update(_symbol_key(record) for record in watchlist)
 
     discovery = _unique(
-        [record for record in records if _smc_score_value(record) < 4.0],
+        [record for record in records if 2.0 <= _smc_score_value(record) < 4.0],
         limit,
         excluded=used,
     )
@@ -156,7 +156,7 @@ def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> Dec
     discovery = [record for record in discovery if _symbol_key(record) not in used]
 
     if len(discovery) == 0:
-        discovery = _unique(ordered, limit=limit, excluded=used)
+        discovery = relaxed_filter(ordered, limit=limit, excluded=used)
 
     print({
         "final": len(final_trades),

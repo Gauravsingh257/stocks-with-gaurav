@@ -462,7 +462,6 @@ export default function ResearchPage() {
           perf={perf}
           coverage={coverage}
           user={user}
-          onQuickAnalyze={runGlobalSearch}
         />
       </StaggerItem>
 
@@ -473,7 +472,7 @@ export default function ResearchPage() {
             <div>
             <div style={{ fontWeight: 800, marginBottom: 4 }}>Global NSE Stock Search</div>
             <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.78rem" }}>
-              Start here. Search any NSE symbol to generate a fresh SMC + fundamentals analysis card.
+              Manual check only. Search a symbol to inspect evidence; it does not bypass Discovery → Watchlist → Final.
             </p>
             </div>
             <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 999, color: "var(--success)", background: "rgba(0,224,150,0.1)", border: "1px solid rgba(0,224,150,0.22)", fontWeight: 800 }}>
@@ -527,18 +526,9 @@ export default function ResearchPage() {
               </div>
             )}
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {["RELIANCE", "INFY", "MARUTI", "BHARTIARTL"].map((symbol) => (
-              <button
-                key={symbol}
-                type="button"
-                onClick={() => runGlobalSearch(symbol)}
-                style={{ border: "1px solid var(--border)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", borderRadius: 999, padding: "4px 9px", fontSize: "0.7rem", cursor: "pointer", fontWeight: 700 }}
-              >
-                {symbol}
-              </button>
-            ))}
-          </div>
+          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.68rem", lineHeight: 1.45 }}>
+            Search results are analysis-only. Execution remains available only after the decision engine promotes a stock into Final Trade Ideas.
+          </p>
           {searching && (
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.14)", color: "var(--accent)", fontSize: "0.82rem", fontWeight: 750 }}>
               Running SMC + fundamentals analysis...
@@ -664,9 +654,10 @@ export default function ResearchPage() {
 
       <StaggerItem>
         <div className="mb-6 rounded-xl bg-gray-900 p-4" style={{ border: "1px solid rgba(148,163,184,0.18)", display: "grid", gap: 6 }}>
-          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 800 }}>🔥 Final → Ready to trade</p>
-          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>🟡 Watchlist → Almost ready</p>
-          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 650 }}>🔍 Discovery → Early signals</p>
+          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 700 }}>🔍 Discovery → Track early SMC evidence</p>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 750 }}>🟡 Watchlist → Add alert near entry</p>
+          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 850 }}>🔥 Final → Ready to execute manually</p>
+          <p style={{ margin: "2px 0 0", color: "#34d399", fontSize: "0.76rem", fontWeight: 800 }}>Execution happens only after Final. No random stock suggestions.</p>
         </div>
       </StaggerItem>
 

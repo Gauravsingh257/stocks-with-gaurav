@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, BarChart2, Bookmark, Search, ShieldCheck, Sparkles, Target } from "lucide-react";
+import { ArrowRight, BarChart2, Bookmark, ShieldCheck, Sparkles, Target } from "lucide-react";
 import type { ResearchAggregatePerformance, ResearchCoverageResponse } from "@/lib/api";
 import type { AuthUser } from "@/lib/auth";
 
@@ -14,12 +14,10 @@ export function ResearchConversionPanel({
   perf,
   coverage,
   user,
-  onQuickAnalyze,
 }: {
   perf: ResearchAggregatePerformance | null;
   coverage: ResearchCoverageResponse | null;
   user: AuthUser | null;
-  onQuickAnalyze: (symbol: string) => void;
 }) {
   const totalIdeas = perf?.total_recommendations ?? 0;
   const hitRate = perf?.hit_rate_pct ?? null;
@@ -42,34 +40,16 @@ export function ResearchConversionPanel({
             <Sparkles size={13} /> Actionable AI Research
           </div>
           <h2 style={{ margin: "0 0 8px", fontSize: "clamp(1.45rem, 3vw, 2.25rem)", lineHeight: 1.08, fontWeight: 900 }}>
-            Search. Analyze. Decide with entry, SL, target and evidence.
+            Discovery → Watchlist → Final → Execution.
           </h2>
           <p style={{ margin: "0 0 14px", color: "var(--text-secondary)", maxWidth: 720, lineHeight: 1.6, fontSize: "0.92rem" }}>
-            Built for the journey a serious trader expects: instant NSE stock analysis, ranked ideas, transparent SMC criteria, and track record before conviction.
+            Every stock must earn its stage through SMC evidence, risk levels, and confidence scoring. This is a promotion pipeline, not random stock suggestions.
           </p>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {["RELIANCE", "HDFCBANK", "TCS", "SAIL"].map((symbol) => (
-              <button
-                key={symbol}
-                type="button"
-                onClick={() => onQuickAnalyze(symbol)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "7px 12px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(0,212,255,0.28)",
-                  background: "rgba(0,212,255,0.08)",
-                  color: "var(--accent)",
-                  cursor: "pointer",
-                  fontSize: "0.78rem",
-                  fontWeight: 750,
-                }}
-              >
-                <Search size={12} /> Analyze {symbol}
-              </button>
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, maxWidth: 680 }}>
+            <StagePill label="1. Discovery" value="Track only" />
+            <StagePill label="2. Watchlist" value="Add alert" />
+            <StagePill label="3. Final" value="Ready setup" />
+            <StagePill label="4. Execution" value="Manual action" />
           </div>
         </div>
 
@@ -115,6 +95,15 @@ export function ResearchConversionPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function StagePill({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(91,156,246,0.22)", background: "rgba(91,156,246,0.08)" }}>
+      <div style={{ color: "var(--text-primary)", fontSize: "0.76rem", fontWeight: 850 }}>{label}</div>
+      <div style={{ color: "var(--text-secondary)", fontSize: "0.68rem", fontWeight: 700, marginTop: 2 }}>{value}</div>
+    </div>
   );
 }
 

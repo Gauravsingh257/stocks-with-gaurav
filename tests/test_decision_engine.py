@@ -75,7 +75,7 @@ def test_decision_output_uses_soft_score_bands_and_near_setup_flag():
 
     assert [record.symbol for record in output.final_trades] == ["NSE:FINAL"]
     assert [record.symbol for record in output.watchlist] == ["NSE:NEAR", "NSE:WATCH"]
-    assert [record.symbol for record in output.discovery] == ["NSE:DISC", "NSE:EARLY"]
+    assert [record.symbol for record in output.discovery] == ["NSE:DISC"]
     near_record = output.watchlist[0]
     assert near_record.near_setup is True
     assert near_record.smc["near_setup"] is True
@@ -92,6 +92,19 @@ def test_decision_output_does_not_promote_low_score_layer_passes_to_watchlist():
     assert output.final_trades == []
     assert output.watchlist == []
     assert [record.symbol for record in output.discovery] == ["NSE:LOWQUALITY", "NSE:LOWDISC"]
+
+
+def test_decision_output_does_not_emit_zero_score_random_discovery():
+    records = [
+        DummyDecisionRecord("NSE:RANDOM1", 0.95, layer1_pass=True, smc={"score": 1.0}),
+        DummyDecisionRecord("NSE:RANDOM2", 0.90, layer2_pass=True, smc={"score": 0.0}),
+    ]
+
+    output = build_decision_output(records, limit=10)
+
+    assert output.final_trades == []
+    assert output.watchlist == []
+    assert output.discovery == []
 
 
 def test_scored_smc_levels_allow_partial_fvg_confirmation():
