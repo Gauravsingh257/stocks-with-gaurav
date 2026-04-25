@@ -110,7 +110,7 @@ def near_valid_setups(signals: list[DecisionRecord], limit: int = 3, excluded: s
     candidates = [
         record
         for record in sorted(signals, key=_band_rank, reverse=True)
-        if _smc_score_value(record) >= 4.0 or record.layer2_pass or record.layer1_pass
+        if _smc_score_value(record) >= 4.0
     ]
     return _unique(candidates, limit, excluded)
 

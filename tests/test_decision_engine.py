@@ -81,6 +81,19 @@ def test_decision_output_uses_soft_score_bands_and_near_setup_flag():
     assert near_record.smc["near_setup"] is True
 
 
+def test_decision_output_does_not_promote_low_score_layer_passes_to_watchlist():
+    records = [
+        DummyDecisionRecord("NSE:LOWQUALITY", 0.95, layer2_pass=True, smc={"score": 3.0}),
+        DummyDecisionRecord("NSE:LOWDISC", 0.90, layer1_pass=True, smc={"score": 2.0}),
+    ]
+
+    output = build_decision_output(records, limit=10)
+
+    assert output.final_trades == []
+    assert output.watchlist == []
+    assert [record.symbol for record in output.discovery] == ["NSE:LOWQUALITY", "NSE:LOWDISC"]
+
+
 def test_scored_smc_levels_allow_partial_fvg_confirmation():
     rows = []
     for idx in range(40):
