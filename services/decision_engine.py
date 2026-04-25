@@ -94,28 +94,25 @@ def relaxed_filter(signals: list[DecisionRecord], limit: int = 10, excluded: set
     return _unique([record for record in signals if _smc_score_value(record) >= 3.0], limit, excluded)
 
 
+def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[DecisionRecord], list[DecisionRecord], list[DecisionRecord]]:
+    final_trades = _unique([record for record in records if record.layer3_pass], limit)
+    used = {_symbol_key(record) for record in final_trades}
+
+    watchlist = _unique([record for record in records if record.layer2_pass], limit, excluded=used)
+    used.update(_symbol_key(record) for record in watchlist)
+
+    discovery = _unique(
+        [record for record in records if not record.layer3_pass and not record.layer2_pass],
+        limit,
+        excluded=used,
+    )
+    return final_trades, watchlist, discovery
+
+
 def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> DecisionOutput:
     """Split full-pipeline records into one server-owned decision section per symbol."""
     ordered = sorted(records, key=_rank_key, reverse=True)
-    final_trades: list[DecisionRecord] = []
-    watchlist: list[DecisionRecord] = []
-    discovery: list[DecisionRecord] = []
-    seen: set[str] = set()
-
-    for record in ordered:
-        symbol_key = _symbol_key(record)
-        if symbol_key in seen:
-            continue
-        seen.add(symbol_key)
-
-        if record.layer3_pass:
-            if len(final_trades) < limit:
-                final_trades.append(record)
-        elif record.layer2_pass:
-            if len(watchlist) < limit:
-                watchlist.append(record)
-        elif len(discovery) < limit:
-            discovery.append(record)
+    final_trades, watchlist, discovery = _priority_bucket(ordered, limit)
 
     used = {_symbol_key(record) for record in final_trades}
     if len(final_trades) == 0:

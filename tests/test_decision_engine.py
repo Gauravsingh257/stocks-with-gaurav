@@ -41,3 +41,18 @@ def test_relaxed_filter_uses_smc_score_threshold():
     ]
 
     assert [record.symbol for record in relaxed_filter(records)] == ["NSE:PASS"]
+
+
+def test_decision_output_prioritizes_final_over_duplicate_watchlist():
+    records = [
+        DummyDecisionRecord("NSE:DUP", 0.95, layer2_pass=True, smc={"score": 4.0}),
+        DummyDecisionRecord("NSE:DUP", 0.70, layer3_pass=True, smc={"score": 5.0}),
+        DummyDecisionRecord("NSE:WATCH", 0.80, layer2_pass=True, smc={"score": 4.0}),
+        DummyDecisionRecord("NSE:DISC", 0.60, layer1_pass=True, smc={"score": 3.0}),
+    ]
+
+    output = build_decision_output(records, limit=3)
+
+    assert [record.symbol for record in output.final_trades] == ["NSE:DUP"]
+    assert "NSE:DUP" not in [record.symbol for record in output.watchlist]
+    assert "NSE:DUP" not in [record.symbol for record in output.discovery]

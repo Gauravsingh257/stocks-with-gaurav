@@ -28,10 +28,10 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>🔥 Final Trade Ideas</h2>
-          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Fully validated setups ready for execution</p>
+          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Only high-conviction setups cleared for action</p>
         </div>
         <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(0,224,150,0.1)", border: "1px solid rgba(0,224,150,0.28)", color: "#00e096", fontWeight: 800 }}>
-          {display.length} Ready
+          Ready to Execute · {display.length}
         </span>
       </div>
 
@@ -58,10 +58,10 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
 
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: "#00e096", background: "rgba(0,224,150,0.12)", border: "1px solid rgba(0,224,150,0.28)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <ShieldCheck size={12} /> Strong Buy
+                    <ShieldCheck size={12} /> High Conviction
                   </span>
                   <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: "#f0c060", background: "rgba(240,192,96,0.12)", border: "1px solid rgba(240,192,96,0.28)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Activity size={12} /> Execute Now
+                    <Activity size={12} /> Ready to Execute
                   </span>
                 </div>
 

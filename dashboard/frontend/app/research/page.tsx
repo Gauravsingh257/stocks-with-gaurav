@@ -32,6 +32,8 @@ import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
 import { Watchlist } from "./Watchlist";
 
+type ResearchDecisionBuckets = Pick<ResearchDecisionFeedResponse, "final_trades" | "watchlist" | "discovery">;
+
 /** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
 function normalizeTicker(s: string): string {
   return s
@@ -43,6 +45,22 @@ function normalizeTicker(s: string): string {
 
 const RESEARCH_FETCH_LIMIT = 100;
 const DECISION_FEED_LIMIT = 30;
+
+function dedupeDecisionBuckets(feed: ResearchDecisionBuckets | null): ResearchDecisionBuckets {
+  const seen = new Set<string>();
+  const pick = (items: ResearchDecisionCard[] = []) => items.filter((item) => {
+    const key = normalizeTicker(item.symbol).toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return {
+    final_trades: pick(feed?.final_trades ?? []),
+    watchlist: pick(feed?.watchlist ?? []),
+    discovery: pick(feed?.discovery ?? []),
+  };
+}
 
 const SCAN_BTN: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 6,
@@ -193,11 +211,13 @@ export default function ResearchPage() {
     setLastRefresh(new Date());
   }, [token]);
 
+  const decisionBuckets = useMemo(() => dedupeDecisionBuckets(decisionFeed), [decisionFeed]);
+
   const decisionItems = useMemo(() => [
-    ...(decisionFeed?.final_trades ?? []),
-    ...(decisionFeed?.watchlist ?? []),
-    ...(decisionFeed?.discovery ?? []),
-  ], [decisionFeed]);
+    ...decisionBuckets.final_trades,
+    ...decisionBuckets.watchlist,
+    ...decisionBuckets.discovery,
+  ], [decisionBuckets]);
 
   const isEmpty = decisionItems.length === 0 && running.length === 0 && !portfolio;
   const pollInterval = 120_000;
@@ -245,9 +265,9 @@ export default function ResearchPage() {
     const owners = new Map<string, string>();
     const duplicates: string[] = [];
     ([
-      ["final", decisionFeed.final_trades],
-      ["watchlist", decisionFeed.watchlist],
-      ["discovery", decisionFeed.discovery],
+      ["final", decisionBuckets.final_trades],
+      ["watchlist", decisionBuckets.watchlist],
+      ["discovery", decisionBuckets.discovery],
     ] as const).forEach(([section, items]) => {
       items.forEach((item) => {
         const key = normalizeTicker(item.symbol).toUpperCase();
@@ -259,7 +279,7 @@ export default function ResearchPage() {
     if (duplicates.length > 0) {
       console.warn("[Research] Duplicate symbols across decision buckets", duplicates);
     }
-  }, [decisionFeed]);
+  }, [decisionFeed, decisionBuckets]);
 
   const runGlobalSearch = useCallback(async (symbol: string) => {
     const clean = symbol.replace("NSE:", "").trim().toUpperCase();
@@ -328,15 +348,15 @@ export default function ResearchPage() {
     return true;
   }, [searchQuery, sectorFilter, mcapFilter]);
 
-  const filteredFinalTrades = useMemo(() => (decisionFeed?.final_trades ?? []).filter(filterItem), [decisionFeed, filterItem]);
-  const filteredWatchlist = useMemo(() => (decisionFeed?.watchlist ?? []).filter(filterItem), [decisionFeed, filterItem]);
-  const filteredDiscovery = useMemo(() => (decisionFeed?.discovery ?? []).filter(filterItem), [decisionFeed, filterItem]);
+  const filteredFinalTrades = useMemo(() => decisionBuckets.final_trades.filter(filterItem), [decisionBuckets, filterItem]);
+  const filteredWatchlist = useMemo(() => decisionBuckets.watchlist.filter(filterItem), [decisionBuckets, filterItem]);
+  const filteredDiscovery = useMemo(() => decisionBuckets.discovery.filter(filterItem), [decisionBuckets, filterItem]);
   const hasFilters = Boolean(searchQuery.trim()) || sectorFilter !== "ALL" || mcapFilter !== "ALL";
 
   const filterSummary = useMemo(() => {
     if (!hasFilters) return null;
-    return `${filteredFinalTrades.length}/${decisionFeed?.final_trades.length ?? 0} final · ${filteredWatchlist.length}/${decisionFeed?.watchlist.length ?? 0} watchlist · ${filteredDiscovery.length}/${decisionFeed?.discovery.length ?? 0} discovery`;
-  }, [hasFilters, filteredFinalTrades.length, filteredWatchlist.length, filteredDiscovery.length, decisionFeed]);
+    return `${filteredFinalTrades.length}/${decisionBuckets.final_trades.length} final · ${filteredWatchlist.length}/${decisionBuckets.watchlist.length} watchlist · ${filteredDiscovery.length}/${decisionBuckets.discovery.length} early`;
+  }, [hasFilters, filteredFinalTrades.length, filteredWatchlist.length, filteredDiscovery.length, decisionBuckets]);
 
   const noMatchesWithFilters =
     hasFilters && decisionItems.length > 0 && filteredFinalTrades.length === 0 && filteredWatchlist.length === 0 && filteredDiscovery.length === 0;
@@ -388,7 +408,7 @@ export default function ResearchPage() {
           <div>
             <h1 className="m-0 text-xl md:text-2xl lg:text-3xl font-bold">AI Research Center</h1>
             <p style={{ margin: "2px 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-              Final trades, near setups, and discovery candidates from one decision engine
+              Final trades, near-entry watchlist, and early experimental signals from one decision engine
             </p>
             <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
               Last scan — Swing: {scanAgeInfo.swingAge.label} · Long-term: {scanAgeInfo.ltLabel}
@@ -602,7 +622,7 @@ export default function ResearchPage() {
           </div>
         </div>
         <p style={{ margin: "4px 0 0", fontSize: "0.68rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-          Filters the server-assigned decision buckets on this page. It does not move stocks between Final Trade Ideas, Watchlist, and Discovery.
+          Filters the server-assigned decision buckets on this page. It does not move stocks between Final Trade Ideas, Watchlist, and Early Signals.
           {user?.role === "FREE" && " Free accounts see a preview list — upgrade to Premium to filter the full set."}
         </p>
         {filterSummary && (
