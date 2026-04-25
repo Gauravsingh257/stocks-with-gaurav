@@ -15,14 +15,14 @@ function fmt(value: number | null | undefined): string {
 
 export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
   return (
-    <section className="glass" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid rgba(245,158,11,0.2)" }}>
+    <section className="glass border-yellow-400 bg-yellow-500/5" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid #facc15", background: "rgba(234,179,8,0.05)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>🟡 Watchlist (Near Entry)</h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Almost ready setups waiting for entry confirmation</p>
         </div>
-        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.26)", color: "#f59e0b", fontWeight: 800 }}>
-          Wait / Monitor · {items.length}
+        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.42)", color: "#facc15", fontWeight: 850 }}>
+          🟡 Monitor · {items.length}
         </span>
       </div>
 
@@ -35,7 +35,7 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
           {items.map((item) => {
             const symbol = cleanSymbol(item.symbol);
             return (
-              <article key={item.symbol} style={{ border: "1px solid rgba(245,158,11,0.2)", borderRadius: 8, padding: 12, background: "rgba(245,158,11,0.04)", display: "grid", gap: 9 }}>
+              <article className="border-yellow-400 bg-yellow-500/5" key={item.symbol} style={{ border: "1px solid #facc15", borderRadius: 8, padding: 12, background: "rgba(234,179,8,0.05)", display: "grid", gap: 9 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                   <Link href={`/stock/${encodeURIComponent(symbol)}`} style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 820, display: "inline-flex", alignItems: "center", gap: 5 }}>
                     {symbol} <ExternalLink size={12} />
@@ -44,7 +44,7 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
                 </div>
                 <div style={{ color: "var(--text-dim)", fontSize: "0.68rem" }}>{item.setup || "Quality passed, SMC pending"}</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#f59e0b", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.26)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><TimerReset size={12} /> Wait / Monitor</span>
+                  <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#facc15", background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.34)", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 4 }}><TimerReset size={12} /> 🟡 Monitor</span>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#5b9cf6", background: "rgba(91,156,246,0.1)", border: "1px solid rgba(91,156,246,0.24)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><Eye size={12} /> Near OB</span>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#b07cf0", background: "rgba(176,124,240,0.1)", border: "1px solid rgba(176,124,240,0.24)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><Bell size={12} /> Monitoring</span>
                 </div>

@@ -663,6 +663,14 @@ export default function ResearchPage() {
       )}
 
       <StaggerItem>
+        <div className="mb-6 rounded-xl bg-gray-900 p-4" style={{ border: "1px solid rgba(148,163,184,0.18)", display: "grid", gap: 6 }}>
+          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 800 }}>🔥 Final → Ready to trade</p>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>🟡 Watchlist → Almost ready</p>
+          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 650 }}>🔍 Discovery → Early signals</p>
+        </div>
+      </StaggerItem>
+
+      <StaggerItem>
         <FinalTrades items={filteredFinalTrades} />
       </StaggerItem>
 

@@ -24,14 +24,14 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
   const display = items.slice(0, 6);
 
   return (
-    <section className="glass" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid rgba(0,224,150,0.22)" }}>
+    <section className="glass border-emerald-500 shadow-xl" style={{ padding: 18, display: "grid", gap: 14, border: "1px solid #10b981", boxShadow: "0 24px 60px rgba(16,185,129,0.16), 0 0 28px rgba(16,185,129,0.14)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>🔥 Final Trade Ideas</h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Only high-conviction setups cleared for action</p>
         </div>
-        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(0,224,150,0.1)", border: "1px solid rgba(0,224,150,0.28)", color: "#00e096", fontWeight: 800 }}>
-          Ready to Execute · {display.length}
+        <span style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.5)", color: "#34d399", fontWeight: 900, boxShadow: "0 0 18px rgba(16,185,129,0.18)" }}>
+          🔥 Execute Now · {display.length}
         </span>
       </div>
 
@@ -40,12 +40,12 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
           No fully confirmed setup is ready right now.
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 14, padding: "4px 2px" }}>
           {display.map((item) => {
             const symbol = cleanSymbol(item.symbol);
             const target = targetOf(item);
             return (
-              <article key={item.symbol} style={{ border: "1px solid rgba(0,224,150,0.2)", borderRadius: 8, padding: 12, background: "rgba(0,224,150,0.04)", display: "grid", gap: 10 }}>
+              <article className="scale-105 border-emerald-500 shadow-xl" key={item.symbol} style={{ border: "1px solid #10b981", borderRadius: 8, padding: 14, background: "linear-gradient(180deg, rgba(16,185,129,0.12), rgba(16,185,129,0.045))", display: "grid", gap: 11, transform: "scale(1.03)", transformOrigin: "center", boxShadow: "0 18px 42px rgba(16,185,129,0.18), 0 0 24px rgba(16,185,129,0.16)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
                   <div>
                     <Link href={`/stock/${encodeURIComponent(symbol)}`} style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -60,8 +60,8 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: "#00e096", background: "rgba(0,224,150,0.12)", border: "1px solid rgba(0,224,150,0.28)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <ShieldCheck size={12} /> High Conviction
                   </span>
-                  <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: "#f0c060", background: "rgba(240,192,96,0.12)", border: "1px solid rgba(240,192,96,0.28)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Activity size={12} /> Ready to Execute
+                  <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: "#34d399", background: "rgba(16,185,129,0.16)", border: "1px solid rgba(16,185,129,0.4)", fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Activity size={12} /> 🔥 Execute Now
                   </span>
                 </div>
 
