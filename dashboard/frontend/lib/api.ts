@@ -31,12 +31,75 @@ export const API_BASE = getBackendBase();
 
 const BASE = getBackendBase();
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
+function parseRetryAfterSeconds(res: Response, detail?: unknown): number {
+  const header = Number(res.headers.get("Retry-After") || "");
+  if (Number.isFinite(header) && header > 0) return Math.floor(header);
+  if (detail && typeof detail === "object") {
+    const value = Number((detail as { retry_after_seconds?: unknown }).retry_after_seconds ?? 0);
+    if (Number.isFinite(value) && value > 0) return Math.floor(value);
+  }
+  return 1;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(path: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${BASE}${path}`, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`API ${path} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetchWithTimeout(path, init);
+
+    if (res.ok) {
+      return res.json() as Promise<T>;
+    }
+
+    let detail: unknown = null;
+    try {
+      detail = await res.json();
+    } catch {
+      detail = null;
+    }
+
+    if (res.status === 429 && attempt === 0) {
+      const retryAfterSec = Math.min(parseRetryAfterSeconds(res, detail), 5);
+      await delay(retryAfterSec * 1000);
+      continue;
+    }
+
+    const detailText =
+      detail && typeof detail === "object" && "detail" in detail && typeof (detail as { detail?: unknown }).detail === "string"
+        ? `: ${(detail as { detail: string }).detail}`
+        : "";
+    lastError = new Error(`API ${path} → ${res.status}${detailText}`);
+    break;
+  }
+
+  throw lastError ?? new Error(`API ${path} failed`);
+}
+
 async function get<T>(path: string, authToken?: string | null): Promise<T> {
   const init: RequestInit = { cache: "no-store" };
   if (authToken) init.headers = { Authorization: `Bearer ${authToken}` };
-  const res = await fetch(`${BASE}${path}`, init);
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
+  return requestJson<T>(path, init);
 }
 
 async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
@@ -45,18 +108,7 @@ async function post<T>(path: string, body?: Record<string, unknown>): Promise<T>
     opts.headers = { "Content-Type": "application/json" };
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(`${BASE}${path}`, opts);
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const body = (await res.json()) as { detail?: string };
-      detail = body?.detail ? `: ${body.detail}` : "";
-    } catch {
-      // ignore parse error
-    }
-    throw new Error(`API ${path} → ${res.status}${detail}`);
-  }
-  return res.json() as Promise<T>;
+  return requestJson<T>(path, opts);
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -790,6 +842,19 @@ export interface ScanHistoryResponse {
   total: number;
 }
 
+export interface ScanStatusResponse {
+  in_flight: string[];
+  horizons: Record<string, {
+    status: string;
+    started_at?: string;
+    finished_at?: string;
+    error?: string;
+    summary?: string;
+    agent?: string;
+    trigger?: string;
+  }>;
+}
+
 export interface PerformanceSnapshot {
   id: number;
   snapshot_date: string;
@@ -1009,7 +1074,7 @@ export const api = {
   trackRecord: (horizon: "swing" | "longterm" | "all" = "all", limit = 100) =>
     get<TrackRecordResponse>(`/api/research/track-record?horizon=${horizon}&limit=${limit}`),
   submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
-  scanStatus: () => get<{ in_flight: string[]; horizons: Record<string, { status: string; started_at?: string; finished_at?: string; error?: string; summary?: string; agent?: string; trigger?: string }> }>("/api/research/scan-status"),
+  scanStatus: () => get<ScanStatusResponse>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
 
   // ── Portfolio (persistent positions) ──────────────────────────────────────

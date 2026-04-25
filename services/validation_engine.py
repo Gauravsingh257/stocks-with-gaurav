@@ -376,7 +376,8 @@ def _record_reasoning(record: LayerValidationRecord) -> str:
             f"{(record.quality or {}).get('score', 0)}, SMC score "
             f"{(record.smc or {}).get('score', 0)}."
         )
-    return "Rejected: " + ", ".join(record.rejection_reason or ["no final setup"])
+    pending = ", ".join(record.rejection_reason or ["no final setup"])
+    return "Pending confirmation: " + pending
 
 
 def _record_technical_signals(record: LayerValidationRecord) -> dict[str, str]:

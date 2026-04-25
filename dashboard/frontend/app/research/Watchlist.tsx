@@ -17,7 +17,8 @@ function watchReason(item: ResearchDecisionCard): string {
   const signals = item.technical_signals || {};
   const detail = signals.ob_liquidity || signals.ob_fvg || signals.structure || signals.daily_structure;
   if (detail) return `Reason: ${detail}`;
-  if (item.reasoning) return `Reason: ${item.reasoning.split(".")[0]}`;
+  const reasoning = String(item.reasoning || "").trim();
+  if (reasoning && !/^Rejected:/i.test(reasoning)) return `Reason: ${reasoning.split(".")[0]}`;
   return `Reason: ${item.setup || "SMC score is near the execution zone"}`;
 }
 

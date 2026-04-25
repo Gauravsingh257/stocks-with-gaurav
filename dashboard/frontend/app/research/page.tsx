@@ -6,7 +6,7 @@ import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronD
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
-import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type StockAnalysis, type StockSuggestion } from "@/lib/api";
+import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
@@ -154,61 +154,83 @@ export default function ResearchPage() {
   const [mcapFilter, setMcapFilter] = useState<string>("ALL");
   const [gated, setGated] = useState(false);
   const [leadModalOpen, setLeadModalOpen] = useState(false);
+  const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
   const decisionFeedLoadingRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
+  const scanPollTokenRef = useRef(0);
+
+  const delay = useCallback(async (ms: number) => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }, []);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setError(null);
-    if (!decisionFeedLoadingRef.current) {
-      decisionFeedLoadingRef.current = true;
-      setDecisionFeedLoading(true);
-      api.researchDecisionFeed(DECISION_FEED_LIMIT)
-        .then((feed) => setDecisionFeed(feed ?? null))
-        .catch(() => setError("Decision feed is still warming up. Other research data loaded."))
-        .finally(() => {
-          decisionFeedLoadingRef.current = false;
-          setDecisionFeedLoading(false);
-        });
+    try {
+      if (!decisionFeedLoadingRef.current) {
+        decisionFeedLoadingRef.current = true;
+        setDecisionFeedLoading(true);
+        api.researchDecisionFeed(DECISION_FEED_LIMIT)
+          .then((feed) => setDecisionFeed(feed ?? null))
+          .catch(() => setError("Decision feed is still warming up. Other research data loaded."))
+          .finally(() => {
+            decisionFeedLoadingRef.current = false;
+            setDecisionFeedLoading(false);
+          });
+      }
+      const results = await Promise.allSettled([
+        api.swingResearch(RESEARCH_FETCH_LIMIT, token),
+        api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
+        api.runningTradesResearch(40),
+        api.researchCoverage(2200),
+        api.layerReport("SWING", 80),
+        api.researchPerformance(),
+        api.portfolioSummary(),
+        api.scanStatus(),
+      ]);
+      const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes, scanStatusRes] = results;
+      if (swingRes.status === "fulfilled") {
+        setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
+        if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
+      }
+      if (longtermRes.status === "fulfilled") {
+        setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
+        setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
+        if ((longtermRes.value as Record<string, unknown>)?.gated) setGated(true);
+      }
+      if (runningRes.status === "fulfilled") {
+        setRunning(runningRes.value?.items ?? []);
+      }
+      if (coverageRes.status === "fulfilled") {
+        setCoverage(coverageRes.value ?? null);
+      }
+      if (layerReportRes.status === "fulfilled") {
+        setLayerReport(layerReportRes.value ?? null);
+      }
+      if (perfRes.status === "fulfilled") {
+        setPerf(perfRes.value ?? null);
+      }
+      if (portfolioRes.status === "fulfilled") {
+        setPortfolio(portfolioRes.value ?? null);
+      }
+      if (scanStatusRes.status === "fulfilled") {
+        const nextStatus = scanStatusRes.value ?? null;
+        setScanStatus(nextStatus);
+        const swingFinishedAt = nextStatus?.horizons?.SWING?.finished_at;
+        const longtermFinishedAt = nextStatus?.horizons?.LONGTERM?.finished_at;
+        if (swingFinishedAt) setLastSwingScan(swingFinishedAt);
+        if (longtermFinishedAt) setLastLongtermScan(longtermFinishedAt);
+      }
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        setError("Some data could not be loaded. Run a scan or refresh — backend may still be syncing.");
+      }
+      setLastRefresh(new Date());
+    } finally {
+      setLoading(false);
+      refreshInFlightRef.current = false;
     }
-    const results = await Promise.allSettled([
-      api.swingResearch(RESEARCH_FETCH_LIMIT, token),
-      api.longtermResearch(RESEARCH_FETCH_LIMIT, token),
-      api.runningTradesResearch(40),
-      api.researchCoverage(2200),
-      api.layerReport("SWING", 80),
-      api.researchPerformance(),
-      api.portfolioSummary(),
-    ]);
-    const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes] = results;
-    if (swingRes.status === "fulfilled") {
-      setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
-      if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
-    }
-    if (longtermRes.status === "fulfilled") {
-      setLastLongtermScan((longtermRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
-      setLongtermSlotStatus((longtermRes.value as Record<string, unknown>)?.slot_status as { occupied: number; max: number; slots_full: boolean } | null ?? null);
-      if ((longtermRes.value as Record<string, unknown>)?.gated) setGated(true);
-    }
-    if (runningRes.status === "fulfilled") {
-      setRunning(runningRes.value?.items ?? []);
-    }
-    if (coverageRes.status === "fulfilled") {
-      setCoverage(coverageRes.value ?? null);
-    }
-    if (layerReportRes.status === "fulfilled") {
-      setLayerReport(layerReportRes.value ?? null);
-    }
-    if (perfRes.status === "fulfilled") {
-      setPerf(perfRes.value ?? null);
-    }
-    if (portfolioRes.status === "fulfilled") {
-      setPortfolio(portfolioRes.value ?? null);
-    }
-    const failed = results.filter((r) => r.status === "rejected").length;
-    if (failed > 0) {
-      setError("Some data could not be loaded. Run a scan or refresh — backend may still be syncing.");
-    }
-    setLoading(false);
-    setLastRefresh(new Date());
   }, [token]);
 
   const decisionBuckets = useMemo(() => dedupeDecisionBuckets(decisionFeed), [decisionFeed]);
@@ -230,21 +252,48 @@ export default function ResearchPage() {
     return () => clearInterval(t);
   }, [refresh, pollInterval]);
 
+  const pollScanUntilComplete = useCallback(async (horizon: "SWING" | "LONGTERM") => {
+    const token = scanPollTokenRef.current;
+    for (let i = 0; i < 24; i++) {
+      try {
+        const status = await api.scanStatus();
+        if (scanPollTokenRef.current !== token) return;
+        setScanStatus(status);
+        const info = status.horizons?.[horizon];
+        if (info?.finished_at) {
+          if (horizon === "SWING") setLastSwingScan(info.finished_at);
+          else setLastLongtermScan(info.finished_at);
+        }
+        const running = status.in_flight?.includes(horizon) || info?.status === "running";
+        if (!running) {
+          if (info?.status === "error" || info?.status === "exception") {
+            setError(info.error || `${horizon} scan failed.`);
+          }
+          break;
+        }
+      } catch {
+        // keep polling briefly to absorb transient backend/network failures
+      }
+      await delay(5_000);
+    }
+    if (scanPollTokenRef.current !== token) return;
+    setScanning(null);
+    refresh();
+  }, [delay, refresh]);
+
   const triggerScan = useCallback(async (horizon: "swing" | "longterm") => {
+    setError(null);
     setScanning(horizon);
+    scanPollTokenRef.current += 1;
     try {
       if (horizon === "swing") await api.runSwingScan();
       else await api.runLongtermScan();
+      void pollScanUntilComplete(horizon === "swing" ? "SWING" : "LONGTERM");
     } catch {
-      // scan trigger failed — will show in scan-status
+      setScanning(null);
+      setError("Scan trigger failed. Please try again in a few seconds.");
     }
-    // poll aggressively for a short window to pick up results
-    const polls = [5_000, 15_000, 30_000, 60_000, 90_000];
-    for (const delay of polls) {
-      setTimeout(() => refresh(), delay);
-    }
-    setTimeout(() => setScanning(null), 5_000);
-  }, [refresh]);
+  }, [pollScanUntilComplete]);
 
   useEffect(() => {
     const q = globalQuery.trim();
@@ -298,13 +347,21 @@ export default function ResearchPage() {
     }
   }, []);
 
+  const hasManualScanRunning = useMemo(() => {
+    const swingRunning = scanStatus?.horizons?.SWING?.status === "running" && scanStatus?.horizons?.SWING?.trigger === "manual";
+    const longtermRunning = scanStatus?.horizons?.LONGTERM?.status === "running" && scanStatus?.horizons?.LONGTERM?.trigger === "manual";
+    return Boolean(scanning || swingRunning || longtermRunning);
+  }, [scanStatus, scanning]);
+
   const scanButton = useCallback((horizon: "swing" | "longterm", variant: "accent" | "warning" = "accent") => {
-    const isActive = scanning === horizon;
+    const statusKey = horizon === "swing" ? "SWING" : "LONGTERM";
+    const statusRunning = scanStatus?.horizons?.[statusKey]?.status === "running" && scanStatus?.horizons?.[statusKey]?.trigger === "manual";
+    const isActive = scanning === horizon || statusRunning;
     const color = variant === "accent" ? "#00d4ff" : "#f59e0b";
     return (
       <button
         onClick={() => triggerScan(horizon)}
-        disabled={isActive || scanning !== null}
+        disabled={isActive || hasManualScanRunning}
         style={{
           ...SCAN_BTN,
           background: `${color}18`,
@@ -321,7 +378,7 @@ export default function ResearchPage() {
         {isActive ? "Scanning..." : `Scan ${horizon === "swing" ? "Swing" : "Long-Term"}`}
       </button>
     );
-  }, [scanning, triggerScan]);
+  }, [hasManualScanRunning, scanStatus, scanning, triggerScan]);
 
   // ── Filter logic ──
   const allSectors = useMemo(() => {
@@ -412,17 +469,17 @@ export default function ResearchPage() {
             </p>
             <p style={{ margin: "2px 0 0", fontSize: "0.7rem", color: scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale ? "var(--warning, #f59e0b)" : "var(--text-secondary)" }}>
               Last scan — Swing: {scanAgeInfo.swingAge.label} · Long-term: {scanAgeInfo.ltLabel}
-              {(scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale) && !scanning && " (auto-refresh in progress)"}
-              {scanning && " (manual scan running...)"}
+              {(scanAgeInfo.swingAge.stale || scanAgeInfo.ltStale) && !hasManualScanRunning && " (auto-refresh in progress)"}
+              {hasManualScanRunning && " (manual scan running...)"}
             </p>
             {lastRefresh && (
               <p style={{ margin: "1px 0 0", fontSize: "0.62rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00d18c", display: "inline-block", animation: "pulse 2s infinite" }} />
-                Last updated: {lastRefresh.toLocaleTimeString()} · Auto-updates every {isEmpty ? "2m" : "30s"}
+                Last updated: {lastRefresh.toLocaleTimeString()} · Auto-updates every 2m
               </p>
             )}
             <p style={{ margin: "4px 0 0", fontSize: "0.62rem", color: "var(--text-dim)", maxWidth: 640, lineHeight: 1.45 }}>
-              Data source: NSE-listed symbols; delayed OHLC and reference prices via Yahoo Finance where shown, plus live/broker-backed CMP when the engine resolver is connected.
+              Data source: NSE-listed symbols; delayed OHLC and reference prices via Yahoo Finance where shown, plus live/broker-backed CMP when the engine resolver is connected. Fundamental/news signals may use proxy baselines when live feeds are unavailable.
             </p>
           </div>
         </div>

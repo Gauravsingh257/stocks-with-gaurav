@@ -9,9 +9,21 @@ function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
 }
 
+function explainReason(token: string): string {
+  const key = token.trim().toLowerCase();
+  if (key === "no_order_block") return "order block confirmation";
+  if (key === "no_liquidity_sweep") return "liquidity sweep";
+  if (key === "no_bos") return "BOS/CHOCH structure shift";
+  if (key === "strong_downtrend") return "trend stabilization";
+  if (key === "weak_volume") return "volume expansion";
+  return token.replace(/_/g, " ");
+}
+
 function reasons(item: ResearchDecisionCard): string {
-  const raw = item.rejection_reason || [];
-  return raw.length ? `Reason: ${raw.slice(0, 3).join(" + ")}` : `Reason: ${item.setup || "early-stage SMC candidate"}`;
+  const raw = (item.rejection_reason || []).map(explainReason).filter(Boolean);
+  return raw.length
+    ? `Reason: Awaiting ${raw.slice(0, 2).join(" + ")}`
+    : `Reason: ${item.setup || "early-stage SMC candidate"}`;
 }
 
 function confidenceText(item: ResearchDecisionCard): string {
