@@ -1,9 +1,9 @@
 {
   "redirects": [
     {
-      "source": "/:path*",
+      "source": "/(.*)",
       "has": [{ "type": "host", "value": "www.stockswithgaurav.com" }],
-      "destination": "https://stockswithgaurav.com/:path*",
+      "destination": "https://stockswithgaurav.com/$1",
       "permanent": true
     }
   ],
