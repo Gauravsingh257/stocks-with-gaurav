@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronDown, Mail } from "lucide-react";
+import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronDown, Mail, Briefcase, Settings2 } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
@@ -31,6 +31,7 @@ import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
 import { Watchlist } from "./Watchlist";
 
+type ResearchTab = "research" | "portfolio" | "advanced";
 type ResearchDecisionBuckets = Pick<ResearchDecisionFeedResponse, "final_trades" | "watchlist" | "discovery">;
 
 /** Normalize ticker for substring search (handles NSE:SAIL, "SAIL ", etc.) */
@@ -154,6 +155,7 @@ export default function ResearchPage() {
   const [gated, setGated] = useState(false);
   const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<ResearchTab>("research");
   const decisionFeedLoadingRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const scanPollTokenRef = useRef(0);
@@ -240,6 +242,7 @@ export default function ResearchPage() {
     ...decisionBuckets.discovery,
   ], [decisionBuckets]);
 
+  const currentTab: ResearchTab = user ? activeTab : "research";
   const isEmpty = decisionItems.length === 0 && running.length === 0 && !portfolio;
   const pollInterval = 120_000;
 
@@ -509,6 +512,43 @@ export default function ResearchPage() {
       </div>
       </StaggerItem>
 
+      {/* ── TAB BAR (logged-in users only) ──────────────────── */}
+      {user && (
+        <StaggerItem>
+          <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 10, background: "rgba(148,163,184,0.06)", border: "1px solid rgba(148,163,184,0.12)" }}>
+            {([
+              { key: "research" as ResearchTab, label: "Research", icon: <Search size={13} /> },
+              { key: "portfolio" as ResearchTab, label: "Portfolio", icon: <Briefcase size={13} /> },
+              { key: "advanced" as ResearchTab, label: "Advanced", icon: <Settings2 size={13} /> },
+            ]).map(({ key, label, icon }) => {
+              const active = currentTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveTab(key)}
+                  style={{
+                    flex: 1,
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    padding: "8px 16px", borderRadius: 8,
+                    border: active ? "1px solid rgba(0,212,255,0.3)" : "1px solid transparent",
+                    background: active ? "rgba(0,212,255,0.1)" : "transparent",
+                    color: active ? "var(--accent, #00d4ff)" : "var(--text-secondary)",
+                    fontWeight: active ? 750 : 600,
+                    fontSize: "0.78rem",
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  {icon} {label}
+                </button>
+              );
+            })}
+          </div>
+        </StaggerItem>
+      )}
+
+      {/* ── RESEARCH TAB ──────────────────────────────────────── */}
+      {currentTab === "research" && (<>
       <StaggerItem>
         <SelectionCriteriaPanel items={analysis?.criteria_not_met} />
       </StaggerItem>
@@ -774,18 +814,28 @@ export default function ResearchPage() {
         </StaggerItem>
       )}
 
-      <StaggerItem>
-        <RetentionPanel
-          hasIdeas={decisionItems.length > 0}
-          hasPortfolio={Boolean(portfolio && (portfolio.swing.count + portfolio.longterm.count) > 0)}
-        />
-      </StaggerItem>
+            {/* ── PREMIUM UPSELL (shown when data is gated) ──────── */}
+      {gated && (!user || user.role === "FREE") && (
+        <StaggerItem>
+          <div className="glass" style={{
+            padding: "28px 24px", textAlign: "center",
+            background: "linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(0,212,255,0.04) 100%)",
+            border: "1px solid rgba(245,158,11,0.2)",
+          }}>
+            <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>Unlock Full Research View</div>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 480, margin: "0 auto 16px", lineHeight: 1.6 }}>
+              You&apos;re viewing a limited preview. Upgrade to <strong>Premium</strong> for unlimited access to all stock ideas, full fundamentals, entry alerts, and priority scans.
+            </p>
+            <Link href={user ? "/research" : "/register"} className="btn-accent" style={{ textDecoration: "none", padding: "10px 28px", fontSize: "0.9rem" }}>
+              {user ? "Upgrade to Premium" : "Create Free Account"}
+            </Link>
+          </div>
+        </StaggerItem>
+      )}
+      </>)}
 
-      <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
-      <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
-      <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
-
-      {/* â”€â”€ SECTION 1: LIVE PORTFOLIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── PORTFOLIO TAB ─────────────────────────────────────── */}
+      {currentTab === "portfolio" && user && (<>
       <StaggerItem>
       <div style={{ marginTop: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -821,27 +871,21 @@ export default function ResearchPage() {
         )}
       </div>
       </StaggerItem>
-
-      {/* â”€â”€ PREMIUM UPSELL (shown when data is gated) â”€â”€â”€â”€â”€â”€â”€â”€ */}
-      {gated && (!user || user.role === "FREE") && (
-        <StaggerItem>
-          <div className="glass" style={{
-            padding: "28px 24px", textAlign: "center",
-            background: "linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(0,212,255,0.04) 100%)",
-            border: "1px solid rgba(245,158,11,0.2)",
-          }}>
-            <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>Unlock Full Research View</div>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 480, margin: "0 auto 16px", lineHeight: 1.6 }}>
-              You&apos;re viewing a limited preview. Upgrade to <strong>Premium</strong> for unlimited access to all stock ideas, full fundamentals, entry alerts, and priority scans.
-            </p>
-            <Link href={user ? "/research" : "/register"} className="btn-accent" style={{ textDecoration: "none", padding: "10px 28px", fontSize: "0.9rem" }}>
-              {user ? "Upgrade to Premium" : "Create Free Account"}
-            </Link>
-          </div>
-        </StaggerItem>
-      )}
-
       <StaggerItem><RunningTradesMonitor items={running} /></StaggerItem>
+      </>)}
+
+      {/* ── ADVANCED TAB ──────────────────────────────────────── */}
+      {currentTab === "advanced" && user && (<>
+      <StaggerItem>
+        <RetentionPanel
+          hasIdeas={decisionItems.length > 0}
+          hasPortfolio={Boolean(portfolio && (portfolio.swing.count + portfolio.longterm.count) > 0)}
+        />
+      </StaggerItem>
+      <StaggerItem><ResearchCoverageCard coverage={coverage} /></StaggerItem>
+      <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
+      <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
+      </>)}
     </StaggerContainer>
   );
 }
