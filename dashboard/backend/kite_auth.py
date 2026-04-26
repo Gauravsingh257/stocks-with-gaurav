@@ -4,7 +4,7 @@ Kite Connect authentication for dashboard: login URL, token exchange, Redis-back
 
 - get_login_url(): returns Zerodha login URL (redirect URI is whitelisted in Kite app).
 - generate_access_token(request_token): exchanges request_token for access_token.
-- store_access_token(token): stores access_token in Redis with 24h TTL.
+- store_access_token(token): stores access_token in Redis with 28h TTL.
 - get_access_token(): reads from Redis first, then falls back to config.kite_auth (env/file).
 
 No password or OTP is stored. Only access_token is stored in Redis.
@@ -19,7 +19,7 @@ log = logging.getLogger("dashboard.kite_auth")
 # Redis key namespace (multi-account ready)
 KITE_ACCESS_TOKEN_KEY = "kite:access_token"
 KITE_LAST_LOGIN_KEY = "kite:last_login"
-KITE_TOKEN_TTL_SECONDS = 86400  # 24 hours
+KITE_TOKEN_TTL_SECONDS = 100800  # 28 hours — buffer for cron delay + timezone edge cases
 
 _redis_client: Optional[object] = None
 _redis_available = False

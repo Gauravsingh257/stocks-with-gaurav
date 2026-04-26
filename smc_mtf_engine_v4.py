@@ -5403,6 +5403,34 @@ def cleanup_structure_state(max_age_seconds=3600):
         if (now - state.get("time", now)).total_seconds() > max_age_seconds:
             STRUCTURE_STATE.pop(k, None)
 
+def _attempt_auto_login() -> bool:
+    """
+    Cloud auto-refresh: call auto_login.auto_login() to get a fresh Kite token.
+    Runs entirely via env vars (KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET, REDIS_URL).
+    Returns True if a new token was obtained and stored in Redis; False on failure.
+    Called by run_engine_main() whenever run_live_mode() exits (token expired / invalid).
+    """
+    required = ("KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET")
+    if not all(os.getenv(k, "").strip() for k in required):
+        logging.warning(
+            "[auto_login] Skipping — KITE_PASSWORD or KITE_TOTP_SECRET not set. "
+            "Add these to Railway engine service variables to enable cloud auto-refresh."
+        )
+        return False
+    try:
+        import auto_login as _al  # Import here to avoid module-level logging conflict at startup
+        logging.info("[auto_login] Attempting cloud token refresh...")
+        success = _al.auto_login()
+        if success:
+            logging.info("[auto_login] ✅ Token refreshed successfully — engine will pick it up on next reinit")
+        else:
+            logging.error("[auto_login] ❌ Token refresh failed — will retry after backoff")
+        return success
+    except Exception as e:
+        logging.error("[auto_login] Token refresh error: %s", e)
+        return False
+
+
 def check_token_age(max_hours=20) -> bool:
     """
     F4.4: Check if Kite token is stale (>20 hours old).
@@ -7096,18 +7124,36 @@ def run_engine_main():
     start_data_prefetcher()
     update_engine_state(engine="ON")
     _railway = bool(os.getenv("RAILWAY_ENVIRONMENT", ""))
+    _auto_login_backoff = 120  # seconds — doubles on repeated failure, max 600s
     while True:
         run_live_mode()
         if not _railway:
             logging.info("run_live_mode returned (token/data failure or redis_lock_lost). Exiting.")
             break
-        logging.info("run_live_mode exited — retrying in 120s (Railway auto-recovery)")
+        # ── Cloud auto-refresh: attempt Kite re-login before waiting ──────────
+        # This loop fires whenever run_live_mode() exits (token expired / invalid
+        # data connection / Redis lock lost). If KITE_PASSWORD + KITE_TOTP_SECRET
+        # are set in Railway env, a fresh token is obtained automatically with no
+        # laptop or manual intervention required.
         try:
             import engine_runtime
-            engine_runtime.set_engine_stage("RECOVERY_WAIT")
-            engine_runtime.safe_sleep(120)
+            engine_runtime.set_engine_stage("TOKEN_REFRESH")
         except Exception:
-            t.sleep(10)
+            pass
+        login_ok = _attempt_auto_login()
+        if login_ok:
+            _auto_login_backoff = 120  # reset on success
+            logging.info("run_live_mode: token refreshed — restarting in 5s")
+            t.sleep(5)
+        else:
+            logging.info("run_live_mode exited — retrying in %ds (Railway auto-recovery)", _auto_login_backoff)
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("RECOVERY_WAIT")
+                engine_runtime.safe_sleep(_auto_login_backoff)
+            except Exception:
+                t.sleep(_auto_login_backoff)
+            _auto_login_backoff = min(_auto_login_backoff * 2, 600)  # exponential backoff, cap 10min
 
 
 if __name__ == "__main__":

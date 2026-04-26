@@ -258,9 +258,10 @@ def _store_token(access_token: str) -> None:
             try:
                 import redis as _redis
                 r = _redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=10)
-                r.set("kite:access_token", access_token, ex=86400)
-                from datetime import datetime
-                r.set("kite:token_ts", datetime.now().isoformat(), ex=86400)
+                r.set("kite:access_token", access_token, ex=100800)  # 28h — buffer for cron delays
+                from datetime import datetime, timezone, timedelta
+                _IST = timezone(timedelta(hours=5, minutes=30))
+                r.set("kite:token_ts", datetime.now(_IST).isoformat(), ex=100800)
                 log.info("Stored in Redis (kite:access_token, TTL 24h)")
                 redis_ok = True
                 break

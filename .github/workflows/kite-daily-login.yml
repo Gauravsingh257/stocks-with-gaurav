@@ -1,14 +1,19 @@
 name: Kite Daily Auto-Login
 
-# Runs the TOTP-based Kite login every weekday morning and pushes the fresh
-# access_token to Railway Redis + dashboard backend. Replaces the laptop
-# Windows Task Scheduler "SMC_AutoLogin" task so the system no longer depends
-# on the home PC being on at 08:50 IST.
+# Fully automated Kite login — runs DAILY (incl. weekends) with two cron
+# triggers for resilience against GitHub Actions delays.  Pushes fresh
+# access_token to Railway Redis + dashboard backend.  No laptop dependency.
+#
+# Two schedules: 08:15 IST (primary) + 09:00 IST (fallback).
+# Fallback skips if primary already refreshed the token today.
 
 on:
   schedule:
-    # 03:20 UTC = 08:50 IST (Mon–Fri). GitHub cron runs in UTC.
-    - cron: "20 3 * * 1-5"
+    # Primary:  02:45 UTC = 08:15 IST — early attempt (buffer for GitHub delay)
+    # Fallback: 03:30 UTC = 09:00 IST — safety net if primary was delayed past market open
+    # Runs daily (0-6) including weekends so dashboard always shows a valid token.
+    - cron: "45 2 * * *"
+    - cron: "30 3 * * *"
   workflow_dispatch: {}  # allow manual trigger from the Actions tab
 
 concurrency:
@@ -36,7 +41,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pyotp redis kiteconnect
 
+      - name: Check if token is already fresh today
+        id: token_check
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        run: |
+          pip install redis -q
+          python -c "
+          import os, redis, sys
+          from datetime import datetime, timezone, timedelta
+          IST = timezone(timedelta(hours=5, minutes=30))
+          url = os.getenv('REDIS_URL','')
+          if not url:
+              print('skip=false'); sys.exit(0)
+          try:
+              r = redis.from_url(url, decode_responses=True, socket_timeout=10)
+              ts = r.get('kite:token_ts')
+              tok = r.get('kite:access_token')
+              if ts and tok:
+                  token_dt = datetime.fromisoformat(ts)
+                  now = datetime.now(IST)
+                  if token_dt.date() == now.date():
+                      print('Token already refreshed today — skipping login')
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write('skip=true\n')
+                      sys.exit(0)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write('skip=false\n')
+          except Exception as e:
+              print(f'Check failed ({e}), proceeding with login')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write('skip=false\n')
+          "
+
       - name: Run Kite auto-login
+        if: steps.token_check.outputs.skip != 'true'
         env:
           KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
           KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
@@ -54,6 +93,7 @@ jobs:
           tail -n 30 auto_login.log || true
 
       - name: Verify Kite connection on Railway backend
+        if: steps.token_check.outputs.skip != 'true'
         env:
           BACKEND_URL: ${{ secrets.RAILWAY_BACKEND_URL }}
         run: |
