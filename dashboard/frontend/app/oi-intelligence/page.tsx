@@ -63,7 +63,7 @@ export default function OIIntelligencePage() {
       const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
       wsUrl = `${wsProto}://${host}/ws`;
     }
-    if (!wsUrl) {
+    if (!wsUrl && typeof window !== "undefined") {
       const hostname = window.location.hostname;
       if (hostname === "localhost" || hostname === "127.0.0.1") {
         wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
@@ -202,20 +202,34 @@ export default function OIIntelligencePage() {
       </div>
       </StaggerItem>
 
-      {/* Error */}
-      {error && (
-        <div className="fade-in" style={{
-          padding: "10px 16px", borderRadius: 8, marginBottom: 16,
-          background: "rgba(255,71,87,0.08)", border: "1px solid rgba(255,71,87,0.2)",
-          color: "var(--danger)", fontSize: "0.8rem",
-          display: "flex", alignItems: "center", gap: 8,
+      {/* Error — show gentle message, not a hard red failure */}
+      {error && !loading && !snapshot && (
+        <StaggerItem>
+        <div className="glass" style={{
+          padding: "32px 24px", textAlign: "center", marginBottom: 16,
         }}>
-          <AlertTriangle size={14} /> {error}
+          <div style={{
+            width: 56, height: 56, borderRadius: 14,
+            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)",
+            display: "grid", placeItems: "center", margin: "0 auto 16px",
+          }}>
+            <Eye size={24} color="var(--warning)" />
+          </div>
+          <h2 style={{ margin: "0 0 8px", fontSize: "1.1rem", color: "var(--text-primary)" }}>OI Radar is offline</h2>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 480, margin: "0 auto 16px", lineHeight: 1.6 }}>
+            The OI Intelligence engine generates data during market hours (09:15–15:30 IST).
+            Outside that window, or when the backend service is warming up, this panel will be empty.
+          </p>
+          <button onClick={fetchSnapshot} className="btn-accent" style={{ padding: "8px 18px", fontSize: "0.8rem" }}>
+            <RefreshCw size={13} style={{ display: "inline", marginRight: 5, verticalAlign: "middle" }} />
+            Retry
+          </button>
         </div>
+        </StaggerItem>
       )}
 
       {/* Loading */}
-      {loading && !snapshot && (
+      {loading && !snapshot && !error && (
         <div style={{ textAlign: "center", padding: 80 }}>
           <div className="pulse-dot" style={{
             width: 48, height: 48, borderRadius: "50%",

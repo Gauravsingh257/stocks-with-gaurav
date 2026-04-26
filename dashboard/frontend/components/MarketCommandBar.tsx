@@ -295,8 +295,8 @@ export default function MarketCommandBar() {
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={engineOn === true ? "text-green-400" : engineOn === false ? "text-red-400" : "text-slate-400"}>
-        Engine {engineOn === true ? "ON" : engineOn === false ? "OFF" : "…"}
+      <span className={engineOn === true ? "text-green-400" : "text-slate-400"}>
+        Engine {engineOn === true ? "ON" : "…"}
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>

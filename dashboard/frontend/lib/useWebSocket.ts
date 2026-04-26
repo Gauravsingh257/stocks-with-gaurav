@@ -17,7 +17,7 @@ const MAX_WS_RETRIES_BEFORE_POLLING = 3;
 const WS_BACKOFF_BASE_MS = 3000;
 const WS_BACKOFF_MAX_MS = 30000;
 
-/** Never use same-domain /ws in production (Vercel cannot handle WebSocket). */
+/** Derive WS URL from env or return "" (no WS connection attempted). */
 function getWsUrl(): string {
   const env = process.env.NEXT_PUBLIC_WS_URL;
   if (env && env.trim()) return env.trim();
@@ -27,22 +27,16 @@ function getWsUrl(): string {
     const host = backend.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return `${wsProto}//${host}/ws`;
   }
-  if (typeof window === "undefined") return "ws://localhost:8000/ws";
-  const hostname = window.location.hostname;
-  if (hostname === "localhost" || hostname === "127.0.0.1")
-    return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+  if (typeof window !== "undefined") {
+    const hostname = window.location.hostname;
+    if (hostname === "localhost" || hostname === "127.0.0.1")
+      return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+  }
   return "";
 }
 
 function getBackendBase(): string {
-  const base = (process.env.NEXT_PUBLIC_BACKEND_URL || "").trim().replace(/\/$/, "");
-  if (typeof window !== "undefined" && !base && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
-    if (!(window as unknown as { __backend_url_warned?: boolean }).__backend_url_warned) {
-      (window as unknown as { __backend_url_warned?: boolean }).__backend_url_warned = true;
-      console.error("[API] BACKEND_URL not set — set NEXT_PUBLIC_BACKEND_URL in Vercel so REST/WS work.");
-    }
-  }
-  return base;
+  return (process.env.NEXT_PUBLIC_BACKEND_URL || "").trim().replace(/\/$/, "");
 }
 
 const BASE = getBackendBase();

@@ -31,10 +31,11 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   const healthEngineRunning = health?.engine_status === "running" || health?.engine_live === true;
   const engineRunning = snapshot?.engine_running ?? healthEngineRunning;
   const hbAge = snapshot?.engine_heartbeat_age_sec;
+  const hasData = snapshot != null;
   const transportLabel =
-    status === "connected" ? "WS LIVE" : status === "polling" ? "POLLING" : "CONNECTING";
+    status === "connected" ? "WS LIVE" : status === "polling" ? "POLLING" : hasData ? "RECONNECTING" : "STANDBY";
   const transportColor =
-    status === "connected" ? "var(--success)" : status === "polling" ? "var(--accent)" : "var(--warning)";
+    status === "connected" ? "var(--success)" : status === "polling" ? "var(--accent)" : "var(--text-dim)";
 
   return (
     <header
@@ -59,7 +60,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
       <div className="flex items-center gap-1.5 shrink-0">
         {status === "connected" || status === "polling"
           ? <Wifi size={14} color={status === "connected" ? "var(--success)" : "var(--accent)"} />
-          : <WifiOff size={14} color="var(--warning)" />
+          : <WifiOff size={14} color="var(--text-dim)" />
         }
         <span style={{ fontSize: "0.72rem", color: transportColor }}>
           {transportLabel}
@@ -73,20 +74,19 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
       {/* Engine loop heartbeat status */}
       <span
         className={`badge shrink-0 ${engineRunning ? "badge-live" : "badge-neutral"}`}
-        title={!snapshot?.engine_live && !engineRunning ? "Backend runs separately from engine — STALE is normal. Charts work if Kite is set on web." : undefined}
+        title={!engineRunning ? "Engine loop publishes snapshots during market hours. Outside trading hours this is expected." : undefined}
       >
         <span
-          className="pulse-dot"
           style={{
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: engineRunning ? "var(--success)" : "var(--warning)",
+            background: engineRunning ? "var(--success)" : "var(--text-dim)",
             display: "inline-block",
           }}
         />
-        ENGINE {engineRunning ? "RUNNING" : "AWAITING SNAPSHOT"}
-        {typeof hbAge === "number" ? ` · ${hbAge.toFixed(0)}s` : ""}
+        ENGINE {engineRunning ? "RUNNING" : "IDLE"}
+        {typeof hbAge === "number" && engineRunning ? ` · ${hbAge.toFixed(0)}s` : ""}
       </span>
 
       {/* Engine mode */}

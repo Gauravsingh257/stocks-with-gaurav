@@ -19,9 +19,10 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["*.trycloudflare.com"],
 
   async rewrites() {
-    const backend = process.env.BACKEND_URL ?? "http://localhost:8000";
-    if (process.env.VERCEL && !process.env.BACKEND_URL) {
-      console.warn("[next.config] BACKEND_URL is not set on Vercel — set it to your Railway Web URL or API will fail.");
+    const backend = process.env.BACKEND_URL || "";
+    if (!backend) {
+      console.warn("[next.config] BACKEND_URL is not set — /api/* and /ws rewrites will be no-ops. Set it to your Railway Web URL.");
+      return [];
     }
     return [
       { source: "/api/:path*", destination: `${backend}/api/:path*` },
