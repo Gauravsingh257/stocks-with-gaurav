@@ -5433,14 +5433,15 @@ def _attempt_auto_login() -> bool:
 
 def check_token_age(max_hours=20) -> bool:
     """
-    F4.4: Check if Kite token is stale (>20 hours old).
-    - Redis token: check kite:token_ts (set by zerodha_login). If missing, trust _reinit_kite's profile() validation.
-    - Env var: assume user manages freshness.
-    - File: check mtime.
+    F4.4: Check if Kite token is stale (>20 hours old OR from a previous calendar day).
+    Zerodha tokens expire at midnight IST (00:00) regardless of when they were issued,
+    so a token issued yesterday is ALWAYS expired even if it's only a few hours old.
+    - Redis token: check kite:token_ts. Reject if age > max_hours OR date != today.
+    - Env var / file: assume user manages freshness (no calendar check).
     Returns True if token is fresh enough, False if expired.
     """
     try:
-        # Redis timestamp (set alongside token by zerodha_login.py)
+        # Redis timestamp (set alongside token by auto_login.py / zerodha_login.py)
         redis_url = os.getenv("REDIS_URL", "").strip()
         if redis_url:
             try:
@@ -5452,12 +5453,18 @@ def check_token_age(max_hours=20) -> bool:
                     if ts:
                         from datetime import datetime as _dt
                         token_time = _dt.fromisoformat(ts)
-                        age_hours = (now_ist() - token_time).total_seconds() / 3600
+                        now_ist_dt = now_ist()
+                        age_hours = (now_ist_dt - token_time).total_seconds() / 3600
+                        # Zerodha kills tokens at midnight IST — reject if from a previous day
+                        if token_time.date() < now_ist_dt.date():
+                            print(f"❌ Redis token is from {token_time.date()} (today is {now_ist_dt.date()}) — EXPIRED at midnight")
+                            logging.critical("Token from previous day — expired at midnight IST")
+                            return False
                         if age_hours > max_hours:
                             print(f"❌ Redis token is {age_hours:.1f}h old (max {max_hours}h) — STALE")
                             logging.critical("Token expired: %.1fh old (Redis)", age_hours)
                             return False
-                        print(f"✅ Token age (Redis): {age_hours:.1f}h (max: {max_hours}h)")
+                        print(f"✅ Token age (Redis): {age_hours:.1f}h (max: {max_hours}h, date: {token_time.date()})")
                         return True
                     # No timestamp stored — trust the profile() call in _reinit_kite
                     print("✅ Token from Redis (no age info — validated by profile())")
@@ -5740,6 +5747,41 @@ def run_live_mode():
                     _last_lock_refresh = t.time()
             except Exception as _e:
                 logging.debug("Engine runtime lock refresh: %s", _e)
+
+            # ── Proactive pre-midnight Kite token refresh ────────────────────
+            # Zerodha tokens die at 00:00 IST. Refresh proactively at 23:45 IST
+            # so the engine never hits a gap at midnight.
+            try:
+                _now_ist = now_ist()
+                _now_time = _now_ist.time()
+                if time(23, 45) <= _now_time <= time(23, 59):
+                    _redis_url_pm = os.getenv("REDIS_URL", "").strip()
+                    _already_refreshed = False
+                    if _redis_url_pm:
+                        try:
+                            import redis as _r_pm
+                            _rr = _r_pm.from_url(_redis_url_pm, decode_responses=True)
+                            _pm_ts = _rr.get("kite:midnight_refresh_done")
+                            if _pm_ts == _now_ist.strftime("%Y-%m-%d"):
+                                _already_refreshed = True
+                        except Exception:
+                            pass
+                    if not _already_refreshed:
+                        logging.info("[midnight-refresh] 23:45 IST — proactive token refresh before midnight expiry")
+                        _pmr_ok = _attempt_auto_login()
+                        if _pmr_ok and _redis_url_pm:
+                            try:
+                                import redis as _r_pm2
+                                _rr2 = _r_pm2.from_url(_redis_url_pm, decode_responses=True)
+                                _rr2.set("kite:midnight_refresh_done", _now_ist.strftime("%Y-%m-%d"), ex=7200)
+                                logging.info("[midnight-refresh] ✅ Pre-midnight token refreshed successfully")
+                            except Exception:
+                                pass
+                        elif not _pmr_ok:
+                            logging.warning("[midnight-refresh] ❌ Pre-midnight refresh failed — will retry at next loop")
+            except Exception as _pm_e:
+                logging.debug("Pre-midnight refresh check: %s", _pm_e)
+            # ─────────────────────────────────────────────────────────────────
 
             # Kite token refresh: re-read from Redis/env/file so morning_login.bat takes effect without restart
             global _current_kite_token

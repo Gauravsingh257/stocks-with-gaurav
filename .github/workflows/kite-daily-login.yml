@@ -1,19 +1,23 @@
 name: Kite Daily Auto-Login
 
-# Fully automated Kite login — runs DAILY (incl. weekends) with two cron
-# triggers for resilience against GitHub Actions delays.  Pushes fresh
-# access_token to Railway Redis + dashboard backend.  No laptop dependency.
+# Fully automated Kite login — runs DAILY (incl. weekends) with THREE cron
+# triggers. No laptop dependency whatsoever.
 #
-# Two schedules: 08:15 IST (primary) + 09:00 IST (fallback).
-# Fallback skips if primary already refreshed the token today.
+# Schedule (all times IST):
+#   08:15 IST (02:45 UTC) — Primary morning login before market open
+#   09:00 IST (03:30 UTC) — Fallback if primary was delayed past market open
+#   23:45 IST (18:15 UTC) — Pre-midnight refresh: Zerodha kills tokens at 00:00 IST,
+#                           so we refresh 15 min early so the engine never gaps at midnight.
+# Each run skips if token was already refreshed today (dedup via Redis kite:token_ts).
 
 on:
   schedule:
-    # Primary:  02:45 UTC = 08:15 IST — early attempt (buffer for GitHub delay)
-    # Fallback: 03:30 UTC = 09:00 IST — safety net if primary was delayed past market open
-    # Runs daily (0-6) including weekends so dashboard always shows a valid token.
+    # Primary morning:   02:45 UTC = 08:15 IST
     - cron: "45 2 * * *"
+    # Morning fallback:  03:30 UTC = 09:00 IST
     - cron: "30 3 * * *"
+    # Pre-midnight:      18:15 UTC = 23:45 IST — refresh before Zerodha midnight expiry
+    - cron: "15 18 * * *"
   workflow_dispatch: {}  # allow manual trigger from the Actions tab
 
 concurrency:
@@ -54,13 +58,19 @@ jobs:
           url = os.getenv('REDIS_URL','')
           if not url:
               print('skip=false'); sys.exit(0)
+          now = datetime.now(IST)
+          # Pre-midnight run (23:30-23:59 IST): always refresh — Zerodha expires at 00:00 IST
+          if now.hour >= 23 and now.minute >= 30:
+              print('Pre-midnight run — always refreshing token before Zerodha midnight expiry')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write('skip=false\n')
+              sys.exit(0)
           try:
               r = redis.from_url(url, decode_responses=True, socket_timeout=10)
               ts = r.get('kite:token_ts')
               tok = r.get('kite:access_token')
               if ts and tok:
                   token_dt = datetime.fromisoformat(ts)
-                  now = datetime.now(IST)
                   if token_dt.date() == now.date():
                       print('Token already refreshed today — skipping login')
                       with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
