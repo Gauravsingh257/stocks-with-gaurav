@@ -1,12 +1,4 @@
 {
-  "redirects": [
-    {
-      "source": "/(.*)",
-      "has": [{ "type": "host", "value": "www.stockswithgaurav.com" }],
-      "destination": "https://stockswithgaurav.com/$1",
-      "permanent": true
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",
