@@ -23,6 +23,10 @@ export function ResearchConversionPanel({
   const hitRate = perf?.hit_rate_pct ?? null;
   const scanned = coverage?.latest?.SWING?.universe_scanned ?? coverage?.latest?.LONGTERM?.universe_scanned ?? 0;
   const available = coverage?.available_universe ?? 0;
+  const trackRecordLabel =
+    totalIdeas === 0
+      ? "No closed picks yet"
+      : `${totalIdeas} picks · ${fmtPct(hitRate)} hit rate`;
 
   return (
     <section
@@ -40,22 +44,22 @@ export function ResearchConversionPanel({
             <Sparkles size={13} /> Actionable AI Research
           </div>
           <h2 style={{ margin: "0 0 8px", fontSize: "clamp(1.45rem, 3vw, 2.25rem)", lineHeight: 1.08, fontWeight: 900 }}>
-            Discovery → Watchlist → Final → Execution.
+            Discovery to Watchlist to Final Review.
           </h2>
           <p style={{ margin: "0 0 14px", color: "var(--text-secondary)", maxWidth: 720, lineHeight: 1.6, fontSize: "0.92rem" }}>
-            Every stock must earn its stage through SMC evidence, risk levels, and confidence scoring. This is a promotion pipeline, not random stock suggestions.
+            Every stock must earn its stage through SMC evidence, risk levels, and confidence scoring. This is a research pipeline, not random stock suggestions.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, maxWidth: 680 }}>
             <StagePill label="1. Discovery" value="Track only" />
             <StagePill label="2. Watchlist" value="Add alert" />
             <StagePill label="3. Final" value="Ready setup" />
-            <StagePill label="4. Execution" value="Manual action" />
+            <StagePill label="4. Review" value="Manual decision" />
           </div>
         </div>
 
         <div style={{ display: "grid", gap: 10 }}>
           <TrustRow icon={<Target size={15} />} label="Research output" value="Entry · SL · Target · R:R" />
-          <TrustRow icon={<ShieldCheck size={15} />} label="Track record" value={`${totalIdeas} picks · ${fmtPct(hitRate)} hit rate`} />
+          <TrustRow icon={<ShieldCheck size={15} />} label="Track record" value={trackRecordLabel} />
           <TrustRow icon={<BarChart2 size={15} />} label="Market coverage" value={available ? `${scanned}/${available} NSE stocks scanned` : "Universe scan ready"} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 2 }}>
             <Link

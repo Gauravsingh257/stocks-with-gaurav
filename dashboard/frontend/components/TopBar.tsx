@@ -1,8 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
-import type { HealthData } from "@/lib/useHealth";
 import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
 
@@ -30,8 +28,13 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   const paper = snapshot?.paper_mode ?? false;
   const sigToday = snapshot?.signals_today ?? 0;
   const maxSig   = snapshot?.max_daily_signals ?? 5;
-  const engineRunning = snapshot?.engine_running ?? false;
+  const healthEngineRunning = health?.engine_status === "running" || health?.engine_live === true;
+  const engineRunning = snapshot?.engine_running ?? healthEngineRunning;
   const hbAge = snapshot?.engine_heartbeat_age_sec;
+  const transportLabel =
+    status === "connected" ? "WS LIVE" : status === "polling" ? "POLLING" : "CONNECTING";
+  const transportColor =
+    status === "connected" ? "var(--success)" : status === "polling" ? "var(--accent)" : "var(--warning)";
 
   return (
     <header
@@ -56,10 +59,10 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
       <div className="flex items-center gap-1.5 shrink-0">
         {status === "connected" || status === "polling"
           ? <Wifi size={14} color={status === "connected" ? "var(--success)" : "var(--accent)"} />
-          : <WifiOff size={14} color="var(--danger)" />
+          : <WifiOff size={14} color="var(--warning)" />
         }
-        <span style={{ fontSize: "0.72rem", color: status === "connected" ? "var(--success)" : status === "polling" ? "var(--accent)" : "var(--danger)" }}>
-          {status === "connected" ? "WS LIVE" : status === "polling" ? "POLLING" : status.toUpperCase()}
+        <span style={{ fontSize: "0.72rem", color: transportColor }}>
+          {transportLabel}
         </span>
       </div>
 
@@ -69,7 +72,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
       <div className="flex items-center gap-2 md:gap-5 overflow-x-auto min-w-0 flex-1">
       {/* Engine loop heartbeat status */}
       <span
-        className={`badge shrink-0 ${engineRunning ? "badge-live" : "badge-loss"}`}
+        className={`badge shrink-0 ${engineRunning ? "badge-live" : "badge-neutral"}`}
         title={!snapshot?.engine_live && !engineRunning ? "Backend runs separately from engine — STALE is normal. Charts work if Kite is set on web." : undefined}
       >
         <span
@@ -78,11 +81,11 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: engineRunning ? "var(--success)" : "var(--danger)",
+            background: engineRunning ? "var(--success)" : "var(--warning)",
             display: "inline-block",
           }}
         />
-        ENGINE {engineRunning ? "RUNNING" : "STALE"}
+        ENGINE {engineRunning ? "RUNNING" : "AWAITING SNAPSHOT"}
         {typeof hbAge === "number" ? ` · ${hbAge.toFixed(0)}s` : ""}
       </span>
 

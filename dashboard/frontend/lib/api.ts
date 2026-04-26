@@ -62,11 +62,11 @@ async function fetchWithTimeout(path: string, init: RequestInit, timeoutMs = REQ
   }
 }
 
-async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+async function requestJson<T>(path: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetchWithTimeout(path, init);
+    const res = await fetchWithTimeout(path, init, timeoutMs);
 
     if (res.ok) {
       return res.json() as Promise<T>;
@@ -96,19 +96,19 @@ async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   throw lastError ?? new Error(`API ${path} failed`);
 }
 
-async function get<T>(path: string, authToken?: string | null): Promise<T> {
+async function get<T>(path: string, authToken?: string | null, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const init: RequestInit = { cache: "no-store" };
   if (authToken) init.headers = { Authorization: `Bearer ${authToken}` };
-  return requestJson<T>(path, init);
+  return requestJson<T>(path, init, timeoutMs);
 }
 
-async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+async function post<T>(path: string, body?: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const opts: RequestInit = { method: "POST" };
   if (body) {
     opts.headers = { "Content-Type": "application/json" };
     opts.body = JSON.stringify(body);
   }
-  return requestJson<T>(path, opts);
+  return requestJson<T>(path, opts, timeoutMs);
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1048,9 +1048,9 @@ export const api = {
   // AI Research Center
   /** Pass authToken when logged in so PREMIUM users get full lists (search/filter work on all ideas). */
   swingResearch: (limit = 12, authToken?: string | null) =>
-    get<{ items: SwingIdea[]; count: number; gated?: boolean }>(`/api/research/swing?limit=${limit}`, authToken),
+    get<{ items: SwingIdea[]; count: number; gated?: boolean }>(`/api/research/swing?limit=${limit}`, authToken, 30_000),
   longtermResearch: (limit = 12, authToken?: string | null) =>
-    get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken),
+    get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken, 30_000),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),

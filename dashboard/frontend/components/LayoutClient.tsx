@@ -1,12 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import MobileNav from "@/components/MobileNav";
 import MarketCommandBar from "@/components/MarketCommandBar";
+import BackendStatusNotice from "@/components/BackendStatusNotice";
 import CommandPalette from "@/components/CommandPalette";
 import MultiPanelLayout from "@/components/MultiPanelLayout";
+import PublicAuthFrame from "@/components/PublicAuthFrame";
+import { isPublicDashboardPath } from "@/lib/publicShell";
 
 function Disclaimer() {
   return (
@@ -38,6 +42,15 @@ function Disclaimer() {
 export default function LayoutClient({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [terminalLayout, setTerminalLayout] = useState(false);
+  const pathname = usePathname();
+
+  if (pathname === "/") {
+    return <>{children}</>;
+  }
+
+  if (isPublicDashboardPath(pathname) && pathname !== "/") {
+    return <PublicAuthFrame>{children}</PublicAuthFrame>;
+  }
 
   return (
     <div className="flex flex-1 min-w-0 overflow-x-hidden min-h-screen">
@@ -47,6 +60,7 @@ export default function LayoutClient({ children }: { children: React.ReactNode }
       />
       <div className="flex-1 flex flex-col min-w-0 relative z-[2] overflow-hidden">
         <MarketCommandBar />
+        <BackendStatusNotice />
         <TopBar
           onMenuClick={() => setSidebarOpen((v) => !v)}
           terminalLayout={terminalLayout}

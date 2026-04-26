@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bell, ExternalLink, Eye, TimerReset } from "lucide-react";
+import { Bell, ExternalLink, Eye, Target, TimerReset } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
 
 function cleanSymbol(symbol: string): string {
@@ -48,11 +48,15 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
     <section className="glass border-yellow-400 bg-yellow-500/5" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid #facc15", background: "rgba(234,179,8,0.05)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>🟡 Watchlist (Near Entry)</h2>
+          <h2 className="m-0 text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <Target size={20} className="text-amber-400 shrink-0" aria-hidden />
+            <span>Watchlist (Near Entry)</span>
+          </h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Almost ready setups waiting for entry confirmation</p>
         </div>
-        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.42)", color: "#facc15", fontWeight: 850 }}>
-          🟡 Monitor · {items.length}
+        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.42)", color: "#facc15", fontWeight: 850 }} className="inline-flex items-center gap-1">
+          <TimerReset size={12} aria-hidden />
+          Monitor · {items.length}
         </span>
       </div>
 
@@ -74,7 +78,7 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
                 </div>
                 <div style={{ color: "var(--text-dim)", fontSize: "0.68rem" }}>{setupLabel(item.setup) || "Quality passed, SMC pending"}</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#facc15", background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.34)", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 4 }}><TimerReset size={12} /> 🟡 Monitor</span>
+                  <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#facc15", background: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.34)", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 4 }}><TimerReset size={12} aria-hidden /> Monitor</span>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#5b9cf6", background: "rgba(91,156,246,0.1)", border: "1px solid rgba(91,156,246,0.24)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><Eye size={12} /> Near OB</span>
                   <span style={{ fontSize: "0.65rem", padding: "3px 7px", borderRadius: 6, color: "#b07cf0", background: "rgba(176,124,240,0.1)", border: "1px solid rgba(176,124,240,0.24)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}><Bell size={12} /> Monitoring</span>
                 </div>

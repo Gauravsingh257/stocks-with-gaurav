@@ -5,12 +5,41 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import LayoutClient from "@/components/LayoutClient";
 import ThemeProvider from "@/components/ThemeProvider";
 import { AuthProvider } from "@/lib/auth";
+import { site } from "@/lib/site";
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
 export const metadata: Metadata = {
-  title: "Stocks With Gaurav - SMC Dashboard",
-  description: "Stocks With Gaurav - SMC Trading Dashboard",
+  metadataBase: new URL(site.url),
+  title: {
+    default: site.title,
+    template: `%s | ${site.name}`,
+  },
+  description: site.description,
+  applicationName: site.name,
+  creator: site.name,
+  publisher: site.name,
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    title: site.title,
+    description: site.description,
+    url: site.url,
+    siteName: site.name,
+    type: "website",
+    images: [{ url: site.ogImage, width: 1200, height: 630, alt: site.title }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: site.title,
+    description: site.description,
+    images: [site.ogImage],
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

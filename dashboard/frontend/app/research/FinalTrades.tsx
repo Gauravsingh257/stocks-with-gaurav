@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, ExternalLink, ShieldCheck, Target } from "lucide-react";
+import { Activity, ExternalLink, Flame, ShieldCheck, Target } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
 }
-
 function setupLabel(setup: string | null | undefined): string {
   const raw = String(setup || "").trim();
   if (!raw) return "SMC confirmed";
@@ -45,7 +44,7 @@ function confidenceText(item: ResearchDecisionCard): string {
   const score = Number(item.confidence_score || 0);
   if (score >= 70) return "Confidence: Strong because SMC, quality, and execution layers are aligned.";
   if (score >= 60) return "Confidence: Good because the setup passed final SMC scoring with defined levels.";
-  return "Confidence: Actionable, but confirm the chart before execution.";
+  return "Confidence: Review-ready, but confirm the chart before any manual action.";
 }
 
 function riskNote(item: ResearchDecisionCard, target: number | null): string {
@@ -60,11 +59,17 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
     <section className="glass border-emerald-500 shadow-xl" style={{ padding: 18, display: "grid", gap: 14, border: "1px solid #10b981", boxShadow: "0 24px 60px rgba(16,185,129,0.16), 0 0 28px rgba(16,185,129,0.14)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)" }}>🔥 Final Trade Ideas</h2>
-          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Only high-conviction setups cleared for action</p>
+          <h2 className="m-0 text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <Flame size={20} className="text-emerald-400 shrink-0" aria-hidden />
+            <span>Final Trade Ideas</span>
+          </h2>
+          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>High-conviction setups cleared for manual study</p>
         </div>
         <span style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.5)", color: "#34d399", fontWeight: 900, boxShadow: "0 0 18px rgba(16,185,129,0.18)" }}>
-          🔥 Execute Now · {display.length}
+          <span className="inline-flex items-center gap-1">
+            <Flame size={12} aria-hidden />
+            Final Review · {display.length}
+          </span>
         </span>
       </div>
 
@@ -94,7 +99,7 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                     <ShieldCheck size={12} /> High Conviction
                   </span>
                   <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: "#34d399", background: "rgba(16,185,129,0.16)", border: "1px solid rgba(16,185,129,0.4)", fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Activity size={12} /> 🔥 Execute Now
+                    <Activity size={12} /> Final Review
                   </span>
                 </div>
 
@@ -112,7 +117,7 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                 </div>
 
                 <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <Target size={13} /> Execute Trade
+                  <Target size={13} /> Study Chart
                 </Link>
               </article>
             );

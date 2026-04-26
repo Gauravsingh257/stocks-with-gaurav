@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
-import type { HealthData } from "@/lib/useHealth";
 import Sparkline from "@/components/Sparkline";
 import { API_BASE } from "@/lib/api";
+import { getMarketSession } from "@/lib/marketSession";
 
 const MAX_HISTORY = 40;
 const LABELS = ["NIFTY 50", "NIFTY BANK"] as const;
@@ -17,21 +17,6 @@ interface TickData {
   price: number;
   change: number;
   percentChange: number;
-}
-
-/** Market session from current time in IST (NSE: 9:15–15:30, preopen 9:00–9:15). */
-function getMarketSession(): "OPEN" | "PREOPEN" | "CLOSED" {
-  const now = new Date();
-  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const hour = ist.getHours();
-  const minute = ist.getMinutes();
-  const minutes = hour * 60 + minute;
-  const open = 9 * 60 + 15;
-  const preopen = 9 * 60;
-  const close = 15 * 60 + 30;
-  if (minutes >= open && minutes <= close) return "OPEN";
-  if (minutes >= preopen && minutes < open) return "PREOPEN";
-  return "CLOSED";
 }
 
 /** Full number only (no "k" shorthand). e.g. 23409, 54413 */
@@ -64,10 +49,10 @@ export default function MarketCommandBar() {
     BANKNIFTY: "",
   });
   const [backendTimestamp, setBackendTimestamp] = useState<string | null>(null);
-  const [apiNifty, setApiNifty] = useState<number | null>(null);
-  const [apiBanknifty, setApiBanknifty] = useState<number | null>(null);
+  const apiNifty = null;
+  const apiBanknifty = null;
   const [signalCount, setSignalCount] = useState<number>(0);
-  // Increments every second to drive "X sec ago" recomputation
+  // Stores current time every second to drive "X sec ago" recomputation.
   const [tick, setTick] = useState(0);
   const prevPriceRef = useRef<Record<string, number>>({});
 
@@ -89,9 +74,9 @@ export default function MarketCommandBar() {
     return () => clearInterval(t);
   }, []);
 
-  // 1-second ticker — drives "X sec ago" label recomputation
+  // 1-second ticker drives "X sec ago" label recomputation.
   useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 1_000);
+    const t = setInterval(() => setTick(Date.now()), 1_000);
     return () => clearInterval(t);
   }, []);
 
@@ -136,7 +121,7 @@ export default function MarketCommandBar() {
       const t = setTimeout(() => setFlashClass({ NIFTY: "", BANKNIFTY: "" }), 600);
       return () => clearTimeout(t);
     }
-  }, [snapshot?.index_ltp, snapshot?.snapshot_time]);
+  }, [snapshot?.index_ltp]);
 
   // Ticks derived from snapshot (for change/percent)
   const ticks = useMemo(() => {
@@ -146,26 +131,27 @@ export default function MarketCommandBar() {
     for (const label of LABELS) {
       const price = indexLtp[label];
       if (typeof price !== "number") continue;
-      const prev = prevPriceRef.current[label];
+      const short = SHORT_KEYS[label];
+      const series = history[short];
+      const prev = series.length >= 2 ? series[series.length - 2] : undefined;
       const change = prev !== undefined ? price - prev : 0;
       const percentChange = prev !== undefined && prev !== 0 ? (change / prev) * 100 : 0;
       out[label] = { price, change, percentChange };
     }
     return out;
-  }, [snapshot?.index_ltp, snapshot?.snapshot_time]);
+  }, [history, snapshot?.index_ltp]);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
   // Snapshot age in seconds (recomputes every tick via `tick` dependency)
   const snapshotAgeSeconds = useMemo(() => {
-    void tick; // force recompute every second
+    if (tick <= 0) return null;
     // Use the WS-received timestamp if available (most accurate), else fall back to
     // the snapshot_time field from REST polling
-    if (snapshotReceivedAt > 0) return Math.floor((Date.now() - snapshotReceivedAt) / 1_000);
+    if (snapshotReceivedAt > 0) return Math.floor((tick - snapshotReceivedAt) / 1_000);
     const t = snapshot?.snapshot_time ?? backendTimestamp;
     if (!t) return null;
-    return Math.floor((Date.now() - new Date(t).getTime()) / 1_000);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return Math.floor((tick - new Date(t).getTime()) / 1_000);
   }, [tick, snapshotReceivedAt, snapshot?.snapshot_time, backendTimestamp]);
 
   // Human-readable "X sec ago" label
@@ -202,12 +188,16 @@ export default function MarketCommandBar() {
     if (health.kite_connected === true)
       return { text: "Kite ON",       color: "text-green-400",  title: "Kite API connected" };
     if (health.token_present === false)
-      return { text: "🔐 Login",      color: "text-yellow-400", title: "Run RUN_ENGINE_ON_RAILWAY.bat to generate a new Zerodha token" };
+      return {
+        text: "🔐 Login",
+        color: "text-yellow-400",
+        title: "Zerodha access token missing — complete your cloud login flow (Railway worker + Kite) to refresh the session.",
+      };
     if (health.token_present === true && health.kite_connected === false) {
       const ttl = (health as Record<string, unknown>).token_expires_in_hours as number | undefined;
       if (ttl != null && ttl > 20)
         return { text: "Kite checking…", color: "text-yellow-400", title: "Token present, verifying session — may take a minute" };
-      return { text: "Kite expired",  color: "text-orange-400", title: "Token invalid or expired — run login bat" };
+      return { text: "Kite expired", color: "text-orange-400", title: "Token invalid or expired — refresh via your cloud Kite login flow." };
     }
     return { text: "Kite OFF", color: "text-gray-400", title: undefined };
   }, [health]);
@@ -221,6 +211,25 @@ export default function MarketCommandBar() {
   const sigToday = snapshot?.signals_today ?? signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
   const ds = dataSourceConfig[dataSource];
+  const streamIdleClosed = dataSource === "disconnected" && session === "CLOSED";
+  const streamLabel =
+    dataSource === "disconnected"
+      ? streamIdleClosed
+        ? "STANDBY"
+        : "CONNECTING"
+      : ds.label;
+  const streamTitle =
+    dataSource === "disconnected"
+      ? streamIdleClosed
+        ? "Session closed — live stream often idle; REST/API may still serve research data."
+        : "Waiting for backend snapshot or WebSocket."
+      : ds.title;
+  const streamColorClass =
+    dataSource === "disconnected"
+      ? streamIdleClosed
+        ? "text-slate-400"
+        : "text-yellow-400"
+      : ds.color;
 
   return (
     <div
@@ -296,10 +305,10 @@ export default function MarketCommandBar() {
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>
-      {/* Data source badge: LIVE / DELAYED / DISCONNECTED */}
-      <span className={`flex items-center gap-1 font-semibold ${ds.color}`} title={ds.title}>
-        <span aria-hidden>{ds.emoji}</span>
-        <span className="uppercase tracking-wide text-xs">{ds.label}</span>
+      {/* Data source badge: LIVE / DELAYED / standby when closed */}
+      <span className={`flex items-center gap-1 font-semibold ${streamColorClass}`} title={streamTitle}>
+        <span aria-hidden>{dataSource === "disconnected" ? (streamIdleClosed ? "○" : "WAIT") : ds.emoji}</span>
+        <span className="uppercase tracking-wide text-xs">{streamLabel}</span>
       </span>
 
       <span className="text-slate-500 hidden sm:inline">|</span>

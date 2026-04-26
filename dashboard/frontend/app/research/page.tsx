@@ -10,7 +10,7 @@ import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggr
 import { useAuth } from "@/lib/auth";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
-  if (!isoTime) return { label: "Never", stale: true };
+  if (!isoTime) return { label: "No scan yet", stale: false };
   const normalized = isoTime.endsWith("Z") ? isoTime : isoTime + "Z";
   const diff = Date.now() - new Date(normalized).getTime();
   const hours = Math.floor(diff / 3_600_000);
@@ -19,7 +19,6 @@ function formatScanAge(isoTime: string | null): { label: string; stale: boolean 
   const days = Math.floor(hours / 24);
   return { label: `${days}d ago`, stale: true };
 }
-
 import { PerformanceOverview } from "./PerformanceOverview";
 import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
@@ -380,7 +379,7 @@ export default function ResearchPage() {
     );
   }, [hasManualScanRunning, scanStatus, scanning, triggerScan]);
 
-  // ── Filter logic ──
+  // â”€â”€ Filter logic â”€â”€
   const allSectors = useMemo(() => {
     const s = new Set<string>();
     decisionItems.forEach((item) => {
@@ -440,7 +439,7 @@ export default function ResearchPage() {
     URL.revokeObjectURL(url);
   }, [filteredFinalTrades, filteredWatchlist, filteredDiscovery]);
 
-  // ── Header scan age info ──
+  // â”€â”€ Header scan age info â”€â”€
   const scanAgeInfo = useMemo(() => {
     const swingAge = formatScanAge(lastSwingScan);
     const ltAge = formatScanAge(lastLongtermScan);
@@ -455,7 +454,7 @@ export default function ResearchPage() {
   return (
     <StaggerContainer stagger={0.08} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <DailyIdeasLeadModal open={leadModalOpen} onClose={() => setLeadModalOpen(false)} />
-      {/* ── HEADER ──────────────────────────────────────────────── */}
+      {/* â”€â”€ HEADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <StaggerItem>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -502,7 +501,7 @@ export default function ResearchPage() {
               color: "#5b9cf6", cursor: "pointer",
             }}
           >
-            <Mail size={12} /> Get daily ideas
+            <Mail size={12} /> Get research digest
           </button>
           {scanButton("swing")}
           {scanButton("longterm", "warning")}
@@ -522,7 +521,7 @@ export default function ResearchPage() {
         />
       </StaggerItem>
 
-      {/* ── GLOBAL NSE STOCK SEARCH ─────────────────────────────── */}
+      {/* â”€â”€ GLOBAL NSE STOCK SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <StaggerItem>
         <div id="global-search" className="glass" style={{ padding: 16, display: "grid", gap: 12, border: "1px solid rgba(0,212,255,0.14)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
@@ -584,7 +583,7 @@ export default function ResearchPage() {
             )}
           </div>
           <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.68rem", lineHeight: 1.45 }}>
-            Search results are analysis-only. Execution remains available only after the decision engine promotes a stock into Final Trade Ideas.
+            Search results are analysis-only. Manual review becomes clearer after the decision engine promotes a stock into Final Trade Ideas.
           </p>
           {searching && (
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.14)", color: "var(--accent)", fontSize: "0.82rem", fontWeight: 750 }}>
@@ -600,7 +599,7 @@ export default function ResearchPage() {
         </div>
       </StaggerItem>
 
-      {/* ── FILTER BAR ──────────────────────────────────────────── */}
+      {/* â”€â”€ FILTER BAR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <StaggerItem>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {/* Search filters the decision buckets without reclassifying them. */}
@@ -684,7 +683,7 @@ export default function ResearchPage() {
         )}
       </StaggerItem>
 
-      {/* ── ERROR / LOADING ────────────────────────────────────── */}
+      {/* â”€â”€ ERROR / LOADING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {error && (
         <StaggerItem>
           <div className="glass" style={{ padding: 12, color: "var(--danger)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
@@ -711,10 +710,10 @@ export default function ResearchPage() {
 
       <StaggerItem>
         <div className="mb-6 rounded-xl bg-gray-900 p-4" style={{ border: "1px solid rgba(148,163,184,0.18)", display: "grid", gap: 6 }}>
-          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 700 }}>🔍 Discovery → Track early SMC evidence</p>
-          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 750 }}>🟡 Watchlist → Add alert near entry</p>
-          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 850 }}>🔥 Final → Ready to execute manually</p>
-          <p style={{ margin: "2px 0 0", color: "#34d399", fontSize: "0.76rem", fontWeight: 800 }}>Execution happens only after Final. No random stock suggestions.</p>
+          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 700 }}>Discovery → Track early SMC evidence</p>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 750 }}>Watchlist → Add alert near entry</p>
+          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 850 }}>Final → Ready for manual review</p>
+          <p style={{ margin: "2px 0 0", color: "#34d399", fontSize: "0.76rem", fontWeight: 800 }}>Use Final ideas for structured review only. No random stock suggestions.</p>
         </div>
       </StaggerItem>
 
@@ -730,7 +729,7 @@ export default function ResearchPage() {
         <DiscoveryFeed items={filteredDiscovery} />
       </StaggerItem>
 
-      {/* ── ONBOARDING CARD (shown when everything is empty) ──── */}
+      {/* â”€â”€ ONBOARDING CARD (shown when everything is empty) â”€â”€â”€â”€ */}
       {isEmpty && !loading && (
         <StaggerItem>
           <div className="glass" style={{ padding: "32px 24px", textAlign: "center" }}>
@@ -786,7 +785,7 @@ export default function ResearchPage() {
       <StaggerItem><ResearchLayerDebugPanel report={layerReport} /></StaggerItem>
       <StaggerItem><PerformanceOverview data={perf} /></StaggerItem>
 
-      {/* ── SECTION 1: LIVE PORTFOLIO ─────────────────────────── */}
+      {/* â”€â”€ SECTION 1: LIVE PORTFOLIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <StaggerItem>
       <div style={{ marginTop: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -823,7 +822,7 @@ export default function ResearchPage() {
       </div>
       </StaggerItem>
 
-      {/* ── PREMIUM UPSELL (shown when data is gated) ──────── */}
+      {/* â”€â”€ PREMIUM UPSELL (shown when data is gated) â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {gated && (!user || user.role === "FREE") && (
         <StaggerItem>
           <div className="glass" style={{
@@ -831,7 +830,7 @@ export default function ResearchPage() {
             background: "linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(0,212,255,0.04) 100%)",
             border: "1px solid rgba(245,158,11,0.2)",
           }}>
-            <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>Unlock Full Research</div>
+            <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>Unlock Full Research View</div>
             <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 480, margin: "0 auto 16px", lineHeight: 1.6 }}>
               You&apos;re viewing a limited preview. Upgrade to <strong>Premium</strong> for unlimited access to all stock ideas, full fundamentals, entry alerts, and priority scans.
             </p>

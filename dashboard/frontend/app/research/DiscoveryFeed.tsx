@@ -59,12 +59,15 @@ export function DiscoveryFeed({ items }: { items: ResearchDecisionCard[] }) {
       >
         <div>
           <h2 className="m-0 text-lg font-bold" style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 8 }}>
-            {open ? "🔍 Early Signals (Click to Collapse)" : "🔍 Early Signals (Click to Expand)"}
+            <Search size={20} className="text-sky-400 shrink-0" aria-hidden />
+            <span>{open ? "Early Signals (click to collapse)" : "Early Signals (click to expand)"}</span>
           </h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>Low-confidence candidates for exploration only</p>
         </div>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.66rem", padding: "3px 8px", borderRadius: 6, background: "rgba(91,156,246,0.08)", border: "1px solid rgba(91,156,246,0.2)", color: "#93c5fd", fontWeight: 800 }}>
-          🔍 Early Signal · {items.length} <ChevronDown size={14} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+          <Search size={12} aria-hidden />
+          Early Signal · {items.length}{" "}
+          <ChevronDown size={14} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} aria-hidden />
         </span>
       </button>
 
@@ -84,7 +87,7 @@ export function DiscoveryFeed({ items }: { items: ResearchDecisionCard[] }) {
                       {symbol} <ExternalLink size={12} />
                     </Link>
                     <span style={{ color: "#93c5fd", fontSize: "0.68rem", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <Search size={11} /> 🔍 Early Signal · {Number(item.confidence_score || 0).toFixed(1)}%
+                      <Search size={11} aria-hidden /> Early Signal · {Number(item.confidence_score || 0).toFixed(1)}%
                     </span>
                   </div>
                   <div style={{ display: "grid", gap: 4, minWidth: 0, lineHeight: 1.35 }}>
