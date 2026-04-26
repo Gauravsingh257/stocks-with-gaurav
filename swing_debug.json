@@ -1,0 +1,138 @@
+﻿[
+    {
+        "id":  1,
+        "symbol":  "NSE:SAIL",
+        "setup":  "SMC_SWING_STRONG_BULL_BULLISH_BOS",
+        "sector":  null,
+        "target_source":  null,
+        "entry_price":  174.4,
+        "stop_loss":  165.68,
+        "target_1":  188.79,
+        "target_2":  200.56,
+        "risk_reward":  3.0,
+        "confidence_score":  75.07,
+        "expected_holding_period":  "1-8 weeks",
+        "technical_signals":  {
+                                  "trend":  "Strong uptrend â trend score 96.4% (est.)",
+                                  "breakout":  "High breakout pressure near 20-day resistance (est.)",
+                                  "volume":  "Volume 2.4x above baseline â strong accumulation (est.)",
+                                  "rsi":  "RSI ~67 â bullish momentum (est.)",
+                                  "macd":  "MACD spread +0.47 â bullish crossover (est.)",
+                                  "relative_strength":  "Inline with NIFTY by +1.1% (est.)"
+                              },
+        "fundamental_signals":  {
+                                    "revenue_growth":  "Revenue: +11.8% YoY â steady (live)",
+                                    "profit_growth":  "Earnings: +167.6% YoY â accelerating (live)",
+                                    "sector_strength":  "PE 26.2x Â· PB 1.26x â attractive valuation",
+                                    "promoter_holding":  "Insider holding: 65.1% â high conviction",
+                                    "institutional_accumulation":  "Institutional: 19.7% â limited institutional interest",
+                                    "delivery_volume":  "Delivery trend: accumulation phase (71.0%)"
+                                },
+        "sentiment_signals":  {
+                                  "news_sentiment":  "News sentiment: neutral (est. â no live feed)",
+                                  "earnings_event":  "Earnings outlook: neutral (est. â no live feed)",
+                                  "sector_rotation":  "Sector flows: stable (est. â no live feed)",
+                                  "macro_sentiment":  "Macro backdrop: supportive (est. â no live feed)"
+                              },
+        "technical_factors":  {
+                                  "trend":  0.9641,
+                                  "momentum":  0.7729,
+                                  "breakout":  0.7775,
+                                  "mtf_alignment":  0.5531,
+                                  "liquidity":  0.674,
+                                  "volume_expansion":  0.6997
+                              },
+        "fundamental_factors":  {
+                                    "growth":  0.71,
+                                    "quality":  0.5593,
+                                    "balance_sheet":  0.8556,
+                                    "institutional_accumulation":  0.4935
+                                },
+        "sentiment_factors":  {
+                                  "news_sentiment":  0.5822,
+                                  "sector_rotation":  0.5178,
+                                  "macro_sentiment":  0.8063
+                              },
+        "reasoning_summary":  "SAIL picked: Strong uptrend â trend score 96.4% (est.). High breakout pressure near 20-day resistance (est.). Volume 2.4x above baseline â strong accumulation (est.).",
+        "signal_first_detected_at":  "2026-04-24T12:15:29Z",
+        "signals_updated_at":  "2026-04-24T07:30:00Z",
+        "created_at":  "2026-04-24T06:45:29Z",
+        "data_authenticity":  "real",
+        "status":  "ACTIVE",
+        "entry_type":  "LIMIT",
+        "scan_cmp":  177.84,
+        "cmp_source":  "kite_live",
+        "cmp_age_sec":  0,
+        "entry_gap_pct":  2.0,
+        "action_tag":  "EXECUTE_NOW",
+        "smc_evidence":  null
+    },
+    {
+        "id":  2,
+        "symbol":  "NSE:BHARATFORG",
+        "setup":  "SMC_SWING_BULLISH_BULLISH_BOS",
+        "sector":  null,
+        "target_source":  null,
+        "entry_price":  1826.25,
+        "stop_loss":  1734.94,
+        "target_1":  1976.91,
+        "target_2":  2100.18,
+        "risk_reward":  3.0,
+        "confidence_score":  61.61,
+        "expected_holding_period":  "1-8 weeks",
+        "technical_signals":  {
+                                  "trend":  "Constructive uptrend â trend score 71.8% (est.)",
+                                  "breakout":  "High breakout pressure near 20-day resistance (est.)",
+                                  "volume":  "Volume 2.9x above baseline â strong accumulation (est.)",
+                                  "rsi":  "RSI ~63 â bullish momentum (est.)",
+                                  "macd":  "MACD spread +0.13 â bullish crossover (est.)",
+                                  "relative_strength":  "Inline with NIFTY by +3.6% (est.)"
+                              },
+        "fundamental_signals":  {
+                                    "revenue_growth":  "Revenue: +25.0% YoY â strong growth (live)",
+                                    "profit_growth":  "Earnings: +21.8% YoY â accelerating (live)",
+                                    "sector_strength":  "PE 78.5x Â· PB 9.46x â stretched valuation",
+                                    "promoter_holding":  "Insider holding: 46.6% â moderate, watch pledging",
+                                    "institutional_accumulation":  "Institutional: 38.4% â strong FII/DII backing",
+                                    "delivery_volume":  "Delivery trend: accumulation phase (64.3%)"
+                                },
+        "sentiment_signals":  {
+                                  "news_sentiment":  "News sentiment: neutral (est. â no live feed)",
+                                  "earnings_event":  "Earnings outlook: neutral (est. â no live feed)",
+                                  "sector_rotation":  "Sector flows: stable (est. â no live feed)",
+                                  "macro_sentiment":  "Macro backdrop: neutral (est. â no live feed)"
+                              },
+        "technical_factors":  {
+                                  "trend":  0.7181,
+                                  "momentum":  0.6323,
+                                  "breakout":  0.8329,
+                                  "mtf_alignment":  0.6785,
+                                  "liquidity":  0.8784,
+                                  "volume_expansion":  0.967
+                              },
+        "fundamental_factors":  {
+                                    "growth":  0.643,
+                                    "quality":  0.5536,
+                                    "balance_sheet":  0.8215,
+                                    "institutional_accumulation":  0.9608
+                                },
+        "sentiment_factors":  {
+                                  "news_sentiment":  0.5386,
+                                  "sector_rotation":  0.4031,
+                                  "macro_sentiment":  0.5722
+                              },
+        "reasoning_summary":  "BHARATFORG picked: Constructive uptrend â trend score 71.8% (est.). High breakout pressure near 20-day resistance (est.). Volume 2.9x above baseline â strong accumulation (est.).",
+        "signal_first_detected_at":  "2026-04-24T12:15:29Z",
+        "signals_updated_at":  "2026-04-24T07:30:00Z",
+        "created_at":  "2026-04-24T06:45:29Z",
+        "data_authenticity":  "real",
+        "status":  "ACTIVE",
+        "entry_type":  "LIMIT",
+        "scan_cmp":  1853.7,
+        "cmp_source":  "kite_live",
+        "cmp_age_sec":  0,
+        "entry_gap_pct":  1.5,
+        "action_tag":  "EXECUTE_NOW",
+        "smc_evidence":  null
+    }
+]

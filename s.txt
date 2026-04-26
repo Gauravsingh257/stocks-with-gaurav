@@ -1,0 +1,1 @@
+{"ok":true,"scan":"swing","agent":"SwingTradeAlphaAgent","status":"accepted","summary":"Scan started in the background. Refresh in 1???3 minutes for results.","message":"Scan started in the background. Refresh in 1???3 minutes for results.","result":{}}
