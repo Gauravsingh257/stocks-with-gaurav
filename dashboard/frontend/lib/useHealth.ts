@@ -22,7 +22,7 @@ let _timer: ReturnType<typeof setInterval> | null = null;
 
 function fetchHealth() {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-  fetch(`${BASE}/api/system/health`)
+  fetch(`${BASE}/api/system/health`, { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
       if (d) {

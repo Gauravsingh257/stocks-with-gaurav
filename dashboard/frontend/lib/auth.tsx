@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const saved = localStorage.getItem("swg-auth-token");
     if (saved) {
       setToken(saved);
-      fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${saved}` } })
+      fetch(`${BASE}/api/auth/me`, { cache: "no-store", headers: { Authorization: `Bearer ${saved}` } })
         .then((r) => (r.ok ? r.json() : Promise.reject()))
         .then((data) => setUser(data))
         .catch(() => {

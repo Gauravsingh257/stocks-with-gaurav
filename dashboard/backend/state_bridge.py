@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 # memory for up to _SNAP_MEMORY_TTL_SEC seconds so the dashboard stays populated.
 _snap_cache: dict = {"snap": None, "ts": 0.0}
 _snap_lock = _threading.Lock()
-_SNAP_MEMORY_TTL_SEC = 600  # 10 min — covers Redis restart + engine cycle duration
+_SNAP_MEMORY_TTL_SEC = 60  # 1 min — tighter fallback; stale data clears faster
 
 try:
     from zoneinfo import ZoneInfo

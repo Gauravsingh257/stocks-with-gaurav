@@ -83,9 +83,33 @@ _auto_scan_lock = threading.Lock()
 _auto_scan_running: set[str] = set()
 
 # Observable scan diagnostics — surfaced via GET /api/research/scan-status
-_scan_history: dict[str, dict] = {}  # horizon -> latest scan result info
-_decision_cache_lock = threading.Lock()
-_decision_cache: dict[tuple[int, float, str], tuple[float, dict]] = {}
+# Redis-backed so state survives restarts and is shared across instances
+from dashboard.backend import cache as _cache
+
+def _scan_history_get(horizon: str) -> dict:
+    return _cache.get(f"research:scan_history:{horizon}") or {}
+
+def _scan_history_set(horizon: str, value: dict) -> None:
+    _cache.set(f"research:scan_history:{horizon}", value, ttl_seconds=86400)
+
+def _scan_history_all() -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for h in ("SWING", "LONGTERM", "swing", "longterm"):
+        v = _cache.get(f"research:scan_history:{h}")
+        if v:
+            result[h] = v
+    return result
+
+def _decision_cache_get(top_k: int, min_turnover: float, src: str) -> tuple[float, dict] | None:
+    key = f"research:decision:{top_k}:{min_turnover}:{src}"
+    cached = _cache.get(key)
+    if cached and isinstance(cached, dict):
+        return (cached.get("ts", 0.0), cached.get("payload", {}))
+    return None
+
+def _decision_cache_set(top_k: int, min_turnover: float, src: str, payload: dict) -> None:
+    key = f"research:decision:{top_k}:{min_turnover}:{src}"
+    _cache.set(key, {"ts": time.time(), "payload": payload}, ttl_seconds=DECISION_CACHE_SECONDS)
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
@@ -328,28 +352,28 @@ def _maybe_auto_scan(horizon: str) -> None:
             out = run_agent_now(agent_name)
             if isinstance(out, dict) and out.get("error"):
                 log.error("[auto-scan %s] error: %s", horizon, out["error"])
-                _scan_history[horizon] = {
+                _scan_history_set(horizon, {
                     "status": "error",
                     "started_at": started_at,
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "error": str(out["error"]),
                     "agent": agent_name,
                     "trigger": "auto",
-                }
+                })
             else:
                 summary = out.get("summary", str(out)) if isinstance(out, dict) else str(out)
                 log.info("[auto-scan %s] finished: %s", horizon, summary)
-                _scan_history[horizon] = {
+                _scan_history_set(horizon, {
                     "status": "success",
                     "started_at": started_at,
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "summary": summary,
                     "agent": agent_name,
                     "trigger": "auto",
-                }
+                })
         except Exception as exc:
             log.exception("[auto-scan %s] failed", horizon)
-            _scan_history[horizon] = {
+            _scan_history_set(horizon, {
                 "status": "exception",
                 "started_at": started_at,
                 "finished_at": datetime.utcnow().isoformat() + "Z",
@@ -357,7 +381,7 @@ def _maybe_auto_scan(horizon: str) -> None:
                 "traceback": traceback.format_exc()[-1500:],
                 "agent": agent_name,
                 "trigger": "auto",
-            }
+            })
         finally:
             with _auto_scan_lock:
                 _auto_scan_running.discard(horizon)
@@ -858,43 +882,43 @@ def _start_research_scan_background(agent_name: str, label: str) -> dict:
     horizon = label.upper()
     started_at = datetime.utcnow().isoformat() + "Z"
 
-    _scan_history[horizon] = {
+    _scan_history_set(horizon, {
         "status": "running",
         "started_at": started_at,
         "finished_at": None,
         "error": None,
         "agent": agent_name,
         "trigger": "manual",
-    }
+    })
 
     def _job() -> None:
         try:
             out = run_agent_now(agent_name)
             if isinstance(out, dict) and out.get("error"):
                 log.error("[%s] background scan error: %s", agent_name, out["error"])
-                _scan_history[horizon] = {
+                _scan_history_set(horizon, {
                     "status": "error",
                     "started_at": started_at,
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "error": str(out["error"]),
                     "agent": agent_name,
                     "trigger": "manual",
-                }
+                })
             else:
                 summary = out.get("summary", str(out)) if isinstance(out, dict) else str(out)
                 log.info("[%s] background scan finished: %s", agent_name, summary)
-                _scan_history[horizon] = {
+                _scan_history_set(horizon, {
                     "status": "success",
                     "started_at": started_at,
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "summary": summary,
                     "agent": agent_name,
                     "trigger": "manual",
-                }
+                })
                 _notify_new_picks(horizon)
         except Exception as exc:
             log.exception("[%s] background scan failed", agent_name)
-            _scan_history[horizon] = {
+            _scan_history_set(horizon, {
                 "status": "exception",
                 "started_at": started_at,
                 "finished_at": datetime.utcnow().isoformat() + "Z",
@@ -902,7 +926,7 @@ def _start_research_scan_background(agent_name: str, label: str) -> dict:
                 "traceback": traceback.format_exc()[-1500:],
                 "agent": agent_name,
                 "trigger": "manual",
-            }
+            })
 
     threading.Thread(target=_job, daemon=True, name=f"research_{label}").start()
     return {
@@ -1088,15 +1112,16 @@ def get_scan_status():
     """
     with _auto_scan_lock:
         in_flight = sorted(_auto_scan_running)
+    all_history = _scan_history_all()
     return {
         "in_flight": in_flight,
         "horizons": {
             h: {k: v for k, v in info.items() if k != "traceback"}
-            for h, info in _scan_history.items()
+            for h, info in all_history.items()
         },
         "debug": {
             h: info.get("traceback")
-            for h, info in _scan_history.items()
+            for h, info in all_history.items()
             if info.get("traceback")
         },
     }
@@ -1119,21 +1144,20 @@ async def get_discovery(
     from services.validation_engine import run_validation_scan
 
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
-    cache_key = (top_k, float(min_turnover_cr), src)
-    now = time.monotonic()
-    with _decision_cache_lock:
-        cached = _decision_cache.get(cache_key)
-        if cached and now - cached[0] < DECISION_CACHE_SECONDS:
-            payload = dict(cached[1])
+    cached = _decision_cache_get(top_k, float(min_turnover_cr), src)
+    if cached:
+        ts, cached_payload = cached
+        age = time.time() - ts
+        if age < DECISION_CACHE_SECONDS:
+            payload = dict(cached_payload)
             payload["cache_hit"] = True
-            payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - (now - cached[0])))
+            payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - age))
             return payload
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
         if logged_payload:
-            with _decision_cache_lock:
-                _decision_cache[cache_key] = (time.monotonic(), logged_payload)
+            _decision_cache_set(top_k, float(min_turnover_cr), src, logged_payload)
             return logged_payload
 
     import asyncio
@@ -1187,8 +1211,7 @@ async def get_discovery(
         "cache_hit": False,
         "cache_ttl_sec": DECISION_CACHE_SECONDS,
     }
-    with _decision_cache_lock:
-        _decision_cache[cache_key] = (time.monotonic(), payload)
+    _decision_cache_set(top_k, float(min_turnover_cr), src, payload)
     return payload
 
 
@@ -1311,7 +1334,7 @@ def get_scan_debug(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):
             "available": bool(logged.get("available")),
             "message": "No cached in-memory ranking result; returning latest signals_log report when available.",
             "signals_log": logged,
-            "scan_history": _scan_history.get(horizon.lower(), {}),
+            "scan_history": _scan_history_get(horizon.lower()),
         }
 
     rejections = getattr(result, "rejections", None) or []
@@ -1336,7 +1359,7 @@ def get_scan_debug(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):
             {"symbol": getattr(r, "symbol", ""), "stage": getattr(r, "stage", ""), "reason": getattr(r, "reason", "")}
             for r in rejections[:50]
         ],
-        "scan_history": _scan_history.get(horizon.lower(), {}),
+        "scan_history": _scan_history_get(horizon.lower()),
     }
 
 

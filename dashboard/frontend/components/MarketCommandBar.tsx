@@ -61,7 +61,7 @@ export default function MarketCommandBar() {
     const base = API_BASE || "";
     const fetchSnap = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      fetch(`${base}/api/snapshot`)
+      fetch(`${base}/api/snapshot`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (d && typeof d.signals_today === "number") setSignalCount(d.signals_today);

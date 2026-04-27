@@ -171,7 +171,7 @@ export default function TradeReplay({
     setLoading(true);
     setError(null);
 
-    fetch(`${apiBase}/api/trades/${encodeURIComponent(graphId)}/graph/website`)
+    fetch(`${apiBase}/api/trades/${encodeURIComponent(graphId)}/graph/website`, { cache: "no-store" })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

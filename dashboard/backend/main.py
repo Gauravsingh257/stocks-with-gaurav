@@ -14,10 +14,24 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from dashboard.backend.rate_limit import RateLimitMiddleware
+
+
+class NoCacheAPIMiddleware(BaseHTTPMiddleware):
+    """Prevent CDN/browser heuristic caching of API JSON responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/api/") or path.startswith("/research/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
 
 # Load .env file (OPENAI_API_KEY etc.)
 _env_path = Path(__file__).resolve().parent / ".env"
@@ -129,6 +143,22 @@ async def lifespan(app: FastAPI):
         log.info("Portfolio tracker started")
     except Exception as exc:
         log.warning("Portfolio tracker not started: %s", exc)
+    # ── Pre-warm discovery cache in background ─────────────────────────────
+    def _prewarm_discovery():
+        try:
+            import asyncio
+            from dashboard.backend.routes.research import get_discovery
+            log.info("[PREWARM] Starting discovery cache warm-up…")
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(get_discovery(top_k=20, min_turnover_cr=1.0))
+            items = result.get("returned", 0) if isinstance(result, dict) else 0
+            log.info("[PREWARM] Discovery cache warm — %d items ready", items)
+        except Exception as exc:
+            log.warning("[PREWARM] Discovery warm-up failed (non-fatal): %s", exc)
+
+    import threading as _th
+    _th.Thread(target=_prewarm_discovery, daemon=True, name="discovery-prewarm").start()
+
     log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
@@ -165,6 +195,7 @@ _extra_origins = [
 ]
 
 app.add_middleware(RateLimitMiddleware)  # 60 req/min per IP — add first so it runs outermost
+app.add_middleware(NoCacheAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

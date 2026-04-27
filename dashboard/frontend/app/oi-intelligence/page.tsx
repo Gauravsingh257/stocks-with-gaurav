@@ -41,7 +41,7 @@ export default function OIIntelligencePage() {
   /* ── Fetch via REST ─────────────────────────────────────── */
   const fetchSnapshot = useCallback(async () => {
     try {
-      const r = await fetch(`${BASE}/api/agents/oi-intelligence`);
+      const r = await fetch(`${BASE}/api/agents/oi-intelligence`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setSnapshot(data);

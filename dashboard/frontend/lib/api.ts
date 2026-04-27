@@ -1100,7 +1100,7 @@ export const api = {
 
   // ── Watchlist ──────────────────────────────────────────────────────────────
   getWatchlist: (token: string) =>
-    fetch(`${BASE}/api/watchlist`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE}/api/watchlist`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.ok ? r.json() as Promise<{ items: { symbol: string; added_at: string }[] }> : Promise.reject()),
   addToWatchlist: (token: string, symbol: string) =>
     fetch(`${BASE}/api/watchlist`, {
