@@ -17,8 +17,9 @@ from services.price_resolver import resolve_cmp
 from dashboard.backend.redis_endpoint_cache import (
     commit_watchlist_final_independent,
     finalize_endpoint,
+    serve_cached_endpoint,
     valid_coverage_payload,
-    valid_discovery_user_visible,
+    valid_discovery_redis_write,
     valid_layer_report_payload,
     valid_performance_payload,
     valid_research_list_payload,
@@ -794,14 +795,22 @@ def _notify_new_picks(horizon: str) -> None:
 @router.get("/research/swing")
 def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("SWING")
-    result = _swing_payload(limit)
+    full = _swing_payload(limit)
+    snap = serve_cached_endpoint("swing")
     is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
-    if not is_premium and len(result["items"]) > FREE_TIER_LIMIT:
-        result["items"] = result["items"][:FREE_TIER_LIMIT]
+    if snap is not None:
+        result = dict(snap)
+    else:
+        result = dict(full)
+    if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+        result = dict(result)
+        result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
         result["gated"] = True
-        result["total_available"] = result["count"]
+        result["total_available"] = full.get("count", len(full.get("items", [])))
         result["count"] = FREE_TIER_LIMIT
-    return finalize_endpoint("swing", result, valid_research_list_payload)
+    if snap is not None:
+        return result
+    return finalize_endpoint("swing", full, valid_research_list_payload)
 
 
 @router.get("/api/search-stock/suggestions")
@@ -837,14 +846,22 @@ def search_stock(symbol: str = Query(..., min_length=1, max_length=32)):
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("LONGTERM")
-    result = _longterm_payload(limit)
+    full = _longterm_payload(limit)
+    snap = serve_cached_endpoint("longterm")
     is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
-    if not is_premium and len(result["items"]) > FREE_TIER_LIMIT:
-        result["items"] = result["items"][:FREE_TIER_LIMIT]
+    if snap is not None:
+        result = dict(snap)
+    else:
+        result = dict(full)
+    if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+        result = dict(result)
+        result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
         result["gated"] = True
-        result["total_available"] = result["count"]
+        result["total_available"] = full.get("count", len(full.get("items", [])))
         result["count"] = FREE_TIER_LIMIT
-    return finalize_endpoint("longterm", result, valid_research_list_payload)
+    if snap is not None:
+        return result
+    return finalize_endpoint("longterm", full, valid_research_list_payload)
 
 
 @router.get("/api/research/running-trades")
@@ -1229,9 +1246,17 @@ async def get_discovery(
             return finalize_endpoint(
                 "discovery",
                 payload,
-                valid_discovery_user_visible,
+                valid_discovery_redis_write,
                 discovery_atomic=True,
             )
+
+    if not refresh:
+        rsnap = serve_cached_endpoint("discovery")
+        if rsnap:
+            out = dict(rsnap)
+            out.setdefault("snapshot_source", "redis")
+            out.setdefault("cache_hit", False)
+            return out
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
@@ -1240,7 +1265,7 @@ async def get_discovery(
             return finalize_endpoint(
                 "discovery",
                 logged_payload,
-                valid_discovery_user_visible,
+                valid_discovery_redis_write,
                 discovery_atomic=True,
             )
 
@@ -1271,7 +1296,7 @@ async def get_discovery(
         return finalize_endpoint(
             "discovery",
             bad,
-            valid_discovery_user_visible,
+            valid_discovery_redis_write,
             discovery_atomic=True,
         )
     except Exception as exc:
@@ -1310,7 +1335,7 @@ async def get_discovery(
     return finalize_endpoint(
         "discovery",
         payload,
-        valid_discovery_user_visible,
+        valid_discovery_redis_write,
         discovery_atomic=True,
     )
 

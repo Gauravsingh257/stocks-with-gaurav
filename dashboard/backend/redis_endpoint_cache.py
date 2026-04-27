@@ -3,7 +3,7 @@ dashboard/backend/redis_endpoint_cache.py
 
 Canonical Redis snapshots per API surface (no parameterized key fragmentation).
 Atomic discovery bundle + snapshot:global_version; aligned secondary endpoints;
-strict user-visible validation; consistency guard + bundle fallback; debug metrics.
+non-empty write gate for discovery; consistency guard + bundle fallback; reliability metrics.
 """
 
 from __future__ import annotations
@@ -36,8 +36,15 @@ META_PREFIX = "snapshot:endpoint_meta:"
 STATUS_PREFIX = "snapshot:endpoint_status:"
 SIZE_PREFIX = "snapshot:endpoint_size:"
 
+# Reliability observability (sidecar keys; does not change core snapshot key layout)
+KEY_REL_ENGINE_OUTPUT_COUNT = "snapshot:reliability:discovery:engine_output_count"
+KEY_REL_SNAPSHOT_WRITTEN_COUNT = "snapshot:reliability:discovery:snapshot_written_count"
+KEY_REL_SKIP_REASON = "snapshot:reliability:discovery:snapshot_skipped_reason"
+KEY_REL_SKIP_TS = "snapshot:reliability:discovery:snapshot_skipped_ts"
+
 LIVE_TTL_SEC = int(os.getenv("ENDPOINT_SNAPSHOT_LIVE_TTL_SEC", "600"))
 LKG_TTL_SEC = int(os.getenv("ENDPOINT_SNAPSHOT_LKG_TTL_SEC", "86400"))
+REL_SKIP_REASON_TTL_SEC = int(os.getenv("SNAPSHOT_SKIP_REASON_TTL_SEC", "86400"))
 
 
 def _get_redis():
@@ -69,6 +76,28 @@ def _read_global_version(r) -> int:
         return int(raw) if raw is not None else 0
     except Exception:
         return 0
+
+
+def load_live_snapshot(canonical: str) -> dict | None:
+    """Read live snapshot:{canonical} JSON (no LKG fallback)."""
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(canonical_live_key(canonical))
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def serve_cached_endpoint(canonical: str) -> dict | None:
+    """Prefer live Redis snapshot, else last_known_good for this canonical."""
+    live = load_live_snapshot(canonical)
+    if isinstance(live, dict) and live:
+        return live
+    return load_last_known_good(canonical)
 
 
 def load_last_known_good(canonical: str) -> dict | None:
@@ -134,7 +163,7 @@ def store_endpoint_snapshot(canonical: str, payload: dict) -> None:
 def commit_discovery_bundle(payload: dict) -> bool:
     """
     Atomic: INCR global_version; write discovery, watchlist, final slices + bundle + LKG.
-    Call only after valid_discovery_user_visible(payload).
+    Call only after normalize_discovery_payload_for_storage + nonempty bucket check.
     """
     r = _get_redis()
     if r is None:
@@ -282,6 +311,66 @@ def commit_watchlist_final_independent(watchlist: list[Any], final_trades: list[
         return False
 
 
+def discovery_bucket_total_items(p: dict) -> int:
+    """Stocks counted across watchlist + final_trades + discovery (engine-visible buckets)."""
+    if not isinstance(p, dict):
+        return 0
+    wt = p.get("watchlist") if isinstance(p.get("watchlist"), list) else []
+    fn = p.get("final_trades") if isinstance(p.get("final_trades"), list) else []
+    disc = p.get("discovery") if isinstance(p.get("discovery"), list) else []
+    return len(wt) + len(fn) + len(disc)
+
+
+def normalize_discovery_payload_for_storage(p: dict) -> dict:
+    """Ensure list keys exist so partial engine output can be stored safely."""
+    out = dict(p)
+    for k in ("watchlist", "final_trades", "discovery"):
+        v = out.get(k)
+        out[k] = list(v) if isinstance(v, list) else []
+    ft = out["final_trades"]
+    if not isinstance(out.get("items"), list):
+        out["items"] = list(ft)
+    else:
+        out["items"] = list(out["items"])
+    return out
+
+
+def record_discovery_reliability_metrics(
+    *,
+    items_total: int = 0,
+    written: bool = False,
+    skip_reason: str | None = None,
+) -> None:
+    """Increment counters and store last skip reason (does not alter snapshot key schema)."""
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        pipe = r.pipeline(transaction=True)
+        if items_total > 0:
+            pipe.incrby(KEY_REL_ENGINE_OUTPUT_COUNT, items_total)
+        if written:
+            pipe.incr(KEY_REL_SNAPSHOT_WRITTEN_COUNT)
+        if skip_reason:
+            ts = time.time()
+            pipe.setex(KEY_REL_SKIP_REASON, REL_SKIP_REASON_TTL_SEC, skip_reason[:1024])
+            pipe.setex(KEY_REL_SKIP_TS, REL_SKIP_REASON_TTL_SEC, str(ts))
+        pipe.execute()
+    except Exception as e:
+        log.debug("record_discovery_reliability_metrics failed: %s", e)
+
+
+def valid_discovery_redis_write(p: dict) -> bool:
+    """Write snapshot only when engine produced ≥1 stock in wl/final/discovery; never on timeout/error."""
+    if not isinstance(p, dict):
+        return False
+    if p.get("scan_id") == "timeout":
+        return False
+    if p.get("error"):
+        return False
+    return discovery_bucket_total_items(p) > 0
+
+
 def _apply_bundle_guard(canonical: str, out: dict) -> dict:
     """If discovery trio versions disagree with global_version, serve bundle slice."""
     r = _get_redis()
@@ -369,17 +458,23 @@ def finalize_endpoint(
 ) -> dict:
     """
     If payload is valid → store (discovery uses atomic trio when discovery_atomic=True).
-    Else → LKG for that canonical.
+    Else → prefer LKG (never replace good Redis with empty discovery output).
     Applies bundle consistency guard for discovery/watchlist/final.
     """
     if payload is None:
         payload = {}
 
+    disc_mode = discovery_atomic and canonical == CANONICAL_DISCOVERY
+    if disc_mode:
+        payload = normalize_discovery_payload_for_storage(dict(payload))
+
     out = dict(payload)
 
     if isinstance(payload, dict) and is_valid(payload):
-        if discovery_atomic and canonical == CANONICAL_DISCOVERY:
+        if disc_mode:
+            items_n = discovery_bucket_total_items(payload)
             if commit_discovery_bundle(payload):
+                record_discovery_reliability_metrics(items_total=items_n, written=True)
                 r2 = _get_redis()
                 v = _read_global_version(r2) if r2 else 0
                 out = dict(payload)
@@ -390,6 +485,7 @@ def finalize_endpoint(
                 out.pop("snapshot_stale_reason", None)
                 return _apply_bundle_guard(canonical, out)
             log.warning("commit_discovery_bundle failed; refusing partial live write")
+            record_discovery_reliability_metrics(skip_reason="discovery_commit_pipeline_failed")
             fb = load_last_known_good(canonical)
             if fb is not None:
                 merged = dict(fb)
@@ -405,6 +501,18 @@ def finalize_endpoint(
             empty["_requested_canonical"] = canonical
             return _apply_bundle_guard(canonical, empty)
 
+        if canonical in ("swing", "longterm"):
+            items_list = payload.get("items") if isinstance(payload.get("items"), list) else []
+            if len(items_list) == 0:
+                fb = load_last_known_good(canonical)
+                if fb is not None:
+                    merged = dict(fb)
+                    merged["snapshot_stale"] = True
+                    merged["snapshot_source"] = "last_known_good"
+                    merged["snapshot_stale_reason"] = "empty_research_list_preserves_previous_snapshot"
+                    merged["_requested_canonical"] = canonical
+                    return _apply_bundle_guard(canonical, merged)
+
         store_endpoint_snapshot(canonical, payload)
         out = _stamp_aligned_version(dict(payload))
         out["snapshot_stale"] = False
@@ -412,12 +520,24 @@ def finalize_endpoint(
         out.pop("snapshot_stale_reason", None)
         return _apply_bundle_guard(canonical, out)
 
+    if disc_mode:
+        sr = "empty_discovery_buckets_skip_write"
+        if isinstance(payload, dict):
+            if payload.get("scan_id") == "timeout":
+                sr = "timeout_skip_write"
+            elif payload.get("error"):
+                sr = "error_skip_write"
+        record_discovery_reliability_metrics(skip_reason=sr)
+
     fallback = load_last_known_good(canonical)
     if fallback is not None:
         fb = dict(fallback)
         fb["snapshot_stale"] = True
         fb["snapshot_source"] = "last_known_good"
-        fb["snapshot_stale_reason"] = "invalid_or_empty_live_payload"
+        if disc_mode and isinstance(payload, dict) and discovery_bucket_total_items(payload) == 0:
+            fb["snapshot_stale_reason"] = "empty_discovery_buckets_preserving_last_snapshot"
+        else:
+            fb["snapshot_stale_reason"] = "invalid_or_empty_live_payload"
         fb["_requested_canonical"] = canonical
         return _apply_bundle_guard(canonical, fb)
 
@@ -605,5 +725,24 @@ def endpoint_debug_inventory() -> dict[str, Any]:
             "mismatch_with_global_version": mismatched,
             "has_mismatch": len(mismatched) > 0,
         }
+
+    try:
+        eng = r.get(KEY_REL_ENGINE_OUTPUT_COUNT)
+        wr = r.get(KEY_REL_SNAPSHOT_WRITTEN_COUNT)
+        sk = r.get(KEY_REL_SKIP_REASON)
+        sk_ts = r.get(KEY_REL_SKIP_TS)
+        out["reliability_discovery"] = {
+            "engine_output_count": int(eng) if eng is not None else 0,
+            "snapshot_written_count": int(wr) if wr is not None else 0,
+            "snapshot_skipped_reason": sk.decode() if isinstance(sk, bytes) else (sk or None),
+            "snapshot_skipped_ts": sk_ts.decode() if isinstance(sk_ts, bytes) else sk_ts,
+            "keys": {
+                "engine_output_count": KEY_REL_ENGINE_OUTPUT_COUNT,
+                "snapshot_written_count": KEY_REL_SNAPSHOT_WRITTEN_COUNT,
+                "snapshot_skipped_reason": KEY_REL_SKIP_REASON,
+            },
+        }
+    except Exception:
+        out["reliability_discovery"] = {"error": True}
 
     return out
