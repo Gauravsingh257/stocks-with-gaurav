@@ -454,3 +454,60 @@ def kite_status():
     if token_expires_in_hours is not None:
         out["token_expires_in_hours"] = token_expires_in_hours
     return out
+
+
+@router.get("/health/full")
+def health_full():
+    """Comprehensive health: engine + Redis + snapshot freshness + Kite."""
+    result = {"status": "ok", "service": "smc-dashboard"}
+
+    try:
+        from dashboard.backend.cache import get_redis_status, is_redis_available
+        result["redis"] = get_redis_status()
+        result["redis"]["connected"] = is_redis_available()
+    except Exception as e:
+        result["redis"] = {"connected": False, "error": str(e)}
+
+    try:
+        from dashboard.backend.cache import get_engine_heartbeat_ts, get_engine_version, get_engine_started_at
+        hb = get_engine_heartbeat_ts()
+        started = get_engine_started_at()
+        result["engine"] = {
+            "heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
+            "running": hb is not None and (time.time() - hb) < 60,
+            "version": get_engine_version(),
+            "uptime_sec": round(time.time() - started, 1) if started else None,
+        }
+    except Exception as e:
+        result["engine"] = {"running": False, "error": str(e)}
+
+    try:
+        from dashboard.backend.state_bridge import get_snapshot_debug
+        debug = get_snapshot_debug()
+        result["snapshot"] = {
+            "live_exists": debug.get("engine_snapshot_exists", False),
+            "live_ttl_sec": debug.get("engine_snapshot_ttl_sec"),
+            "fallback_exists": debug.get("last_known_good_exists", False),
+            "fallback_ttl_sec": debug.get("last_known_good_ttl_sec"),
+            "timestamp": debug.get("snapshot_timestamp"),
+        }
+    except Exception as e:
+        result["snapshot"] = {"error": str(e)}
+
+    try:
+        from config.kite_auth import is_kite_available
+        result["kite"] = {"connected": is_kite_available()}
+    except Exception:
+        result["kite"] = {"connected": False}
+
+    return result
+
+
+@router.get("/debug/cache")
+def debug_cache():
+    """Observability: Redis key inventory, TTLs, snapshot timestamps."""
+    try:
+        from dashboard.backend.state_bridge import get_snapshot_debug
+        return get_snapshot_debug()
+    except Exception as e:
+        return {"error": str(e)}
