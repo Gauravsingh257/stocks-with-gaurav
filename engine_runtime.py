@@ -28,6 +28,15 @@ ENGINE_VERSION_KEY = "engine_version"
 ENGINE_LAST_CYCLE_KEY = "engine_last_cycle"
 ENGINE_SNAPSHOT_KEY = "engine:snapshot"
 ENGINE_SNAPSHOT_TTL_SEC = 600  # 10 min — gives engine ample time between cycles
+ENGINE_LAST_WRITE_TS_KEY = "engine:last_write_ts"
+SNAPSHOT_VERSION_KEY = "snapshot:version"
+SNAPSHOT_META_KEY = "snapshot:meta"
+SNAPSHOT_WRITE_STATUS_KEY = "snapshot:write_status"
+SNAPSHOT_SIZE_KEY = "snapshot:size_bytes"
+SNAPSHOT_SYMBOL_COUNT_KEY = "snapshot:symbol_count"
+
+SNAPSHOT_REFRESH_INTERVAL_SEC = int(os.getenv("SNAPSHOT_REFRESH_INTERVAL_SEC", "15"))
+SNAPSHOT_WRITE_STALE_SEC = int(os.getenv("SNAPSHOT_WRITE_STALE_SEC", "120"))
 LTP_KEY_NIFTY = "ltp:NIFTY"
 LTP_KEY_BANKNIFTY = "ltp:BANKNIFTY"
 LTP_TTL_SEC = 300
@@ -47,6 +56,8 @@ _shutdown_registered = False
 _heartbeat_thread_started = False
 _watchdog_thread_started = False
 _last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watchdog
+
+_snapshot_refresher_started = False
 
 # Watchdog: if main loop doesn't update in this many seconds → force exit (Railway restarts)
 # TRADE_MONITOR inner loop pings write_last_cycle() every 10s, so 180s gives ample margin.
@@ -199,16 +210,144 @@ def write_engine_snapshot(snapshot: dict) -> None:
     r = _get_redis()
     if r is None:
         return
+
+    def _snapshot_symbol_count(snap: dict) -> int:
+        """Best-effort count of unique symbols represented in the snapshot."""
+        syms: set[str] = set()
+        try:
+            for t in (snap.get("active_trades") or []):
+                if isinstance(t, dict):
+                    s = str(t.get("symbol") or "").strip()
+                    if s:
+                        syms.add(s.upper())
+        except Exception:
+            pass
+        for k in ("zone_state", "setup_d_state", "setup_e_state"):
+            try:
+                d = snap.get(k)
+                if isinstance(d, dict):
+                    for s in d.keys():
+                        if s:
+                            syms.add(str(s).upper())
+            except Exception:
+                pass
+        return len(syms)
+
+    def _snapshot_has_any_payload(snap: dict) -> bool:
+        """Return True if the snapshot has non-empty payload (prevents bad empty overwrites)."""
+        if not isinstance(snap, dict) or not snap:
+            return False
+        # Consider index_ltp as a critical non-empty signal that the snapshot isn't blank.
+        idx = snap.get("index_ltp")
+        if isinstance(idx, dict) and any(isinstance(v, (int, float)) for v in idx.values()):
+            return True
+        # Any of these being non-empty counts as "payload".
+        for k in ("active_trades", "zone_state", "setup_d_state", "setup_e_state"):
+            v = snap.get(k)
+            if isinstance(v, list) and len(v) > 0:
+                return True
+            if isinstance(v, dict) and len(v) > 0:
+                return True
+        # Fallback: signals_today > 0 implies something happened today (avoid overriding with 0-only blanks)
+        try:
+            if int(snap.get("signals_today") or 0) > 0:
+                return True
+        except Exception:
+            pass
+        return False
+
+    # Start refresh-ahead thread (keeps TTL alive without rewriting data)
+    _ensure_snapshot_refresher()
+
     try:
         import json
-        snapshot["_written_at"] = time.time()
+        now = time.time()
+        symbol_count = _snapshot_symbol_count(snapshot)
+        is_valid = _snapshot_has_any_payload(snapshot)
+
+        # Minimum threshold protection (only applies to symbol-bearing payload; avoid blocking market-close snapshots)
+        min_symbols = int(os.getenv("SNAPSHOT_MIN_SYMBOLS", "5"))
+        if is_valid and symbol_count > 0 and symbol_count < min_symbols:
+            is_valid = False
+
+        if not is_valid:
+            meta = {
+                "ts": now,
+                "ok": False,
+                "reason": "invalid_or_empty_snapshot",
+                "symbol_count": symbol_count,
+            }
+            try:
+                pipe = r.pipeline(transaction=True)
+                pipe.setex(SNAPSHOT_META_KEY, 600, json.dumps(meta, default=str))
+                pipe.setex(SNAPSHOT_WRITE_STATUS_KEY, 600, "skipped_invalid")
+                pipe.execute()
+            except Exception:
+                pass
+            return  # CRITICAL: do not overwrite engine:snapshot nor last_known_good
+
+        # Versioning for readers/debug: monotonic-ish via ms timestamp
+        version = int(now * 1000)
+        snapshot["_written_at"] = now
+        snapshot["_version"] = version
+
         payload = json.dumps(snapshot, default=str)
+        size_bytes = len(payload.encode("utf-8"))
+
+        meta = {
+            "ts": now,
+            "ok": True,
+            "version": version,
+            "size_bytes": size_bytes,
+            "symbol_count": symbol_count,
+        }
+
         pipe = r.pipeline(transaction=True)
+        # Main + fallback snapshot keys
         pipe.setex(ENGINE_SNAPSHOT_KEY, ENGINE_SNAPSHOT_TTL_SEC, payload)
         pipe.setex("snapshot:last_known_good", 86400, payload)
+
+        # Write watchdog + debug/meta keys
+        pipe.setex(ENGINE_LAST_WRITE_TS_KEY, 600, str(now))
+        pipe.setex(SNAPSHOT_VERSION_KEY, 86400, str(version))
+        pipe.setex(SNAPSHOT_META_KEY, 600, json.dumps(meta, default=str))
+        pipe.setex(SNAPSHOT_WRITE_STATUS_KEY, 600, "success")
+        pipe.setex(SNAPSHOT_SIZE_KEY, 600, str(size_bytes))
+        pipe.setex(SNAPSHOT_SYMBOL_COUNT_KEY, 600, str(symbol_count))
         pipe.execute()
     except Exception as e:
+        try:
+            r.setex(SNAPSHOT_WRITE_STATUS_KEY, 600, "failed")
+        except Exception:
+            pass
         log.debug("write_engine_snapshot failed: %s", e)
+
+
+def _snapshot_refresher_loop() -> None:
+    """Refresh-ahead: keep snapshot TTL alive without rewriting the payload."""
+    while True:
+        try:
+            r = _get_redis()
+            if r is not None:
+                ttl = r.ttl(ENGINE_SNAPSHOT_KEY)
+                # If key exists and TTL is getting low, extend it. Do NOT overwrite value.
+                if isinstance(ttl, int) and ttl > 0 and ttl < (ENGINE_SNAPSHOT_TTL_SEC // 2):
+                    pipe = r.pipeline(transaction=True)
+                    pipe.expire(ENGINE_SNAPSHOT_KEY, ENGINE_SNAPSHOT_TTL_SEC)
+                    pipe.execute()
+        except Exception:
+            pass
+        time.sleep(max(5, SNAPSHOT_REFRESH_INTERVAL_SEC))
+
+
+def _ensure_snapshot_refresher() -> None:
+    """Start refresher thread once. Safe to call repeatedly."""
+    global _snapshot_refresher_started
+    if _snapshot_refresher_started:
+        return
+    _snapshot_refresher_started = True
+    t = threading.Thread(target=_snapshot_refresher_loop, daemon=True, name="snapshot-refresher")
+    t.start()
 
 
 def set_index_ltp(nifty: Optional[float] = None, banknifty: Optional[float] = None) -> None:

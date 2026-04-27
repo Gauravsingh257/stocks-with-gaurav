@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 _SNAPSHOT_KEY = "engine:snapshot"
 _LAST_KNOWN_GOOD_KEY = "snapshot:last_known_good"
 _LAST_KNOWN_GOOD_TTL = 86400  # 24h — survive overnight, full market close
+_ENGINE_LAST_WRITE_TS_KEY = "engine:last_write_ts"
+_SNAPSHOT_META_KEY = "snapshot:meta"
+_SNAPSHOT_WRITE_STATUS_KEY = "snapshot:write_status"
+_SNAPSHOT_VERSION_KEY = "snapshot:version"
+
+_WRITE_STALE_THRESHOLD_SEC = int(__import__("os").getenv("SNAPSHOT_WRITE_STALE_SEC", "120"))
 
 # Empty scaffold — returned only if NO snapshot has EVER been written
 _EMPTY_SNAPSHOT: Dict[str, Any] = {
@@ -108,6 +114,38 @@ def _read_last_known_good(r) -> Optional[Dict]:
     except Exception as e:
         logger.debug("Failed to read last_known_good snapshot: %s", e)
         return None
+
+
+def _snapshot_is_valid(snap: Dict) -> bool:
+    """Strict but safe: reject clearly bad snapshots (empty dict, wrong types)."""
+    if not isinstance(snap, dict) or not snap:
+        return False
+    # Must at least have expected core keys with correct container types.
+    if "active_trades" in snap and not isinstance(snap.get("active_trades"), list):
+        return False
+    if "index_ltp" in snap and snap.get("index_ltp") is not None and not isinstance(snap.get("index_ltp"), dict):
+        return False
+    # Reject fully empty payloads (prevents poisoning the UI with blanks)
+    idx = snap.get("index_ltp") or {}
+    has_index = isinstance(idx, dict) and len(idx) > 0
+    has_trades = isinstance(snap.get("active_trades"), list) and len(snap.get("active_trades")) > 0
+    has_zone = isinstance(snap.get("zone_state"), dict) and len(snap.get("zone_state")) > 0
+    has_setups = any(isinstance(snap.get(k), dict) and len(snap.get(k)) > 0 for k in ("setup_d_state", "setup_e_state"))
+    if not (has_index or has_trades or has_zone or has_setups):
+        return False
+    return True
+
+
+def _engine_write_is_stale(r) -> bool:
+    """Write watchdog: if engine hasn't written recently, treat snapshot as stale."""
+    try:
+        raw = r.get(_ENGINE_LAST_WRITE_TS_KEY)
+        if raw is None:
+            return True
+        ts = float(raw)
+        return (_time_mod.time() - ts) > _WRITE_STALE_THRESHOLD_SEC
+    except Exception:
+        return True
 
 
 def _write_last_known_good(r, snapshot: Dict) -> None:
@@ -205,9 +243,36 @@ def get_engine_snapshot() -> Dict:
     r = _get_redis()
 
     if r is not None:
-        # Try fresh snapshot first
+        # Try fresh snapshot first (but protect against invalid/corrupt snapshots)
         snap = _read_snapshot_from_redis(r)
         if snap is not None:
+            # Data integrity check: reject invalid snapshots and fall back
+            if not _snapshot_is_valid(snap):
+                fallback = _read_last_known_good(r)
+                if fallback is not None:
+                    return _enrich_snapshot(
+                        fallback,
+                        source="last_known_good",
+                        stale=True,
+                        stale_reason="invalid_snapshot",
+                    )
+                # No fallback available — return empty scaffold
+                empty = dict(_EMPTY_SNAPSHOT)
+                empty["snapshot_time"] = datetime.now(_IST).isoformat()
+                empty["stale_reason"] = "invalid_snapshot_no_fallback"
+                return empty
+
+            # Write watchdog: if engine hasn't written recently, force fallback even if key exists
+            if _engine_write_is_stale(r):
+                fallback = _read_last_known_good(r)
+                if fallback is not None:
+                    return _enrich_snapshot(
+                        fallback,
+                        source="last_known_good",
+                        stale=True,
+                        stale_reason="engine_write_stale",
+                    )
+
             _write_last_known_good(r, snap)
             return _enrich_snapshot(snap, source="redis", stale=False)
 
@@ -243,6 +308,34 @@ def get_snapshot_debug() -> Dict:
         result["last_known_good_key"] = _LAST_KNOWN_GOOD_KEY
         result["last_known_good_ttl_sec"] = lkg_ttl if lkg_ttl >= 0 else None
         result["last_known_good_exists"] = lkg_ttl != -2
+
+        # Engine write watchdog
+        try:
+            raw = r.get(_ENGINE_LAST_WRITE_TS_KEY)
+            if raw is not None:
+                ts = float(raw)
+                result["engine_last_write_ts"] = ts
+                result["engine_last_write_age_sec"] = round(_time_mod.time() - ts, 2)
+                result["engine_write_stale_threshold_sec"] = _WRITE_STALE_THRESHOLD_SEC
+        except Exception:
+            pass
+
+        # Snapshot meta/debug keys
+        for k, outk in (
+            (_SNAPSHOT_META_KEY, "snapshot_meta"),
+            (_SNAPSHOT_WRITE_STATUS_KEY, "snapshot_write_status"),
+            (_SNAPSHOT_VERSION_KEY, "snapshot_version"),
+        ):
+            try:
+                v = r.get(k)
+                if v is not None:
+                    # meta is json; others are strings
+                    if k == _SNAPSHOT_META_KEY:
+                        result[outk] = json.loads(v)
+                    else:
+                        result[outk] = v
+            except Exception:
+                pass
 
         # Snapshot age
         snap = _read_snapshot_from_redis(r)
