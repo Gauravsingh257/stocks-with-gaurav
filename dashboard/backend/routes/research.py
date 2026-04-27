@@ -1136,14 +1136,30 @@ async def get_discovery(
                 _decision_cache[cache_key] = (time.monotonic(), logged_payload)
             return logged_payload
 
+    import asyncio
+    _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "45"))
     try:
-        result = await run_validation_scan(
-            "SWING",
-            top_k=top_k,
-            target_universe=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "2200")),
-            min_turnover_cr=min_turnover_cr,
-            source=src,
+        result = await asyncio.wait_for(
+            run_validation_scan(
+                "SWING",
+                top_k=top_k,
+                target_universe=int(os.getenv("RESEARCH_DISCOVERY_UNIVERSE", "2200")),
+                min_turnover_cr=min_turnover_cr,
+                source=src,
+            ),
+            timeout=_scan_timeout,
         )
+    except asyncio.TimeoutError:
+        log.warning("validation discovery scan timed out after %ds", _scan_timeout)
+        return {
+            "data_source": src, "universe_size": 0, "scanned": 0,
+            "returned": 0, "watchlist_returned": 0, "discovery_returned": 0,
+            "fallback_returned": 0, "generated_at": datetime.now().isoformat(),
+            "scan_id": "timeout", "coverage": {}, "funnel": {},
+            "items": [], "final_trades": [], "watchlist": [], "discovery": [],
+            "fallback_items": [], "cache_hit": False, "cache_ttl_sec": 60,
+            "error": f"Scan timed out after {_scan_timeout}s — try again or run a manual scan first.",
+        }
     except Exception as exc:
         log.exception("validation discovery scan failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}") from exc
@@ -1188,15 +1204,24 @@ async def run_layer_validation(
     """Run full 3-layer validation and log every stock to signals_log."""
     from services.validation_engine import run_validation_scan
 
+    import asyncio
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
-    result = await run_validation_scan(
-        horizon.upper(),
-        top_k=top_k,
-        target_universe=target_universe,
-        min_turnover_cr=min_turnover_cr,
-        source=src,
-        log_scan=True,
-    )
+    _scan_timeout = int(os.getenv("RESEARCH_VALIDATION_TIMEOUT", "90"))
+    try:
+        result = await asyncio.wait_for(
+            run_validation_scan(
+                horizon.upper(),
+                top_k=top_k,
+                target_universe=target_universe,
+                min_turnover_cr=min_turnover_cr,
+                source=src,
+                log_scan=True,
+            ),
+            timeout=_scan_timeout,
+        )
+    except asyncio.TimeoutError:
+        log.warning("validation scan timed out after %ds", _scan_timeout)
+        raise HTTPException(status_code=504, detail=f"Validation scan timed out after {_scan_timeout}s")
     return {
         "scan_id": result.scan_id,
         "horizon": result.horizon,
