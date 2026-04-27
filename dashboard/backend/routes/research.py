@@ -14,6 +14,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
 from services.price_resolver import resolve_cmp
+from dashboard.backend.redis_endpoint_cache import (
+    finalize_endpoint,
+    slug_from_params,
+    valid_coverage_payload,
+    valid_discovery_payload,
+    valid_layer_report_payload,
+    valid_performance_payload,
+    valid_research_list_payload,
+    valid_running_trades_payload,
+    valid_scan_status_payload,
+    valid_validation_payload,
+)
 try:
     from dashboard.backend.routes.auth import get_optional_user
 except ImportError:
@@ -738,7 +750,7 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
         result["gated"] = True
         result["total_available"] = result["count"]
         result["count"] = FREE_TIER_LIMIT
-    return result
+    return finalize_endpoint(f"research:swing:{limit}", result, valid_research_list_payload)
 
 
 @router.get("/api/search-stock/suggestions")
@@ -781,13 +793,17 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
         result["gated"] = True
         result["total_available"] = result["count"]
         result["count"] = FREE_TIER_LIMIT
-    return result
+    return finalize_endpoint(f"research:longterm:{limit}", result, valid_research_list_payload)
 
 
 @router.get("/api/research/running-trades")
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
-    return _running_trades_payload(limit)
+    return finalize_endpoint(
+        f"research:running_trades:{limit}",
+        _running_trades_payload(limit),
+        valid_running_trades_payload,
+    )
 
 
 @router.get("/api/research/coverage")
@@ -813,7 +829,7 @@ def get_research_coverage(target_universe: int = Query(2200, ge=100, le=5000)):
             "coverage_pct": coverage_pct,
         }
 
-    return {
+    payload = {
         "target_universe": target_universe,
         "available_universe": universe.total_size or universe.actual_size,
         "returned_universe": universe.actual_size,
@@ -826,6 +842,7 @@ def get_research_coverage(target_universe: int = Query(2200, ge=100, le=5000)):
             "LONGTERM": _shape(long_latest[0] if long_latest else None),
         },
     }
+    return finalize_endpoint(f"research:coverage:u{target_universe}", payload, valid_coverage_payload)
 
 
 @router.get("/api/research/ranking-runs")
@@ -1113,7 +1130,7 @@ def get_scan_status():
     with _auto_scan_lock:
         in_flight = sorted(_auto_scan_running)
     all_history = _scan_history_all()
-    return {
+    payload = {
         "in_flight": in_flight,
         "horizons": {
             h: {k: v for k, v in info.items() if k != "traceback"}
@@ -1125,6 +1142,7 @@ def get_scan_status():
             if info.get("traceback")
         },
     }
+    return finalize_endpoint("research:scan_status", payload, valid_scan_status_payload)
 
 
 @router.get("/api/research/discovery")
@@ -1144,6 +1162,12 @@ async def get_discovery(
     from services.validation_engine import run_validation_scan
 
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    disc_slug = slug_from_params(
+        "discovery",
+        top_k=top_k,
+        min_turnover_cr=float(min_turnover_cr),
+        source=src,
+    )
     cached = _decision_cache_get(top_k, float(min_turnover_cr), src)
     if cached:
         ts, cached_payload = cached
@@ -1152,13 +1176,13 @@ async def get_discovery(
             payload = dict(cached_payload)
             payload["cache_hit"] = True
             payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - age))
-            return payload
+            return finalize_endpoint(disc_slug, payload, valid_discovery_payload, mirror_discovery=True)
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
         if logged_payload:
             _decision_cache_set(top_k, float(min_turnover_cr), src, logged_payload)
-            return logged_payload
+            return finalize_endpoint(disc_slug, logged_payload, valid_discovery_payload, mirror_discovery=True)
 
     import asyncio
     _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "45"))
@@ -1175,7 +1199,7 @@ async def get_discovery(
         )
     except asyncio.TimeoutError:
         log.warning("validation discovery scan timed out after %ds", _scan_timeout)
-        return {
+        bad = {
             "data_source": src, "universe_size": 0, "scanned": 0,
             "returned": 0, "watchlist_returned": 0, "discovery_returned": 0,
             "fallback_returned": 0, "generated_at": datetime.now().isoformat(),
@@ -1184,6 +1208,7 @@ async def get_discovery(
             "fallback_items": [], "cache_hit": False, "cache_ttl_sec": 60,
             "error": f"Scan timed out after {_scan_timeout}s — try again or run a manual scan first.",
         }
+        return finalize_endpoint(disc_slug, bad, valid_discovery_payload, mirror_discovery=True)
     except Exception as exc:
         log.exception("validation discovery scan failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}") from exc
@@ -1212,7 +1237,7 @@ async def get_discovery(
         "cache_ttl_sec": DECISION_CACHE_SECONDS,
     }
     _decision_cache_set(top_k, float(min_turnover_cr), src, payload)
-    return payload
+    return finalize_endpoint(disc_slug, payload, valid_discovery_payload, mirror_discovery=True)
 
 
 @router.get("/api/research/validation")
@@ -1229,6 +1254,14 @@ async def run_layer_validation(
 
     import asyncio
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    val_slug = slug_from_params(
+        "validation",
+        horizon=horizon.upper(),
+        top_k=top_k,
+        target_universe=target_universe,
+        min_turnover_cr=float(min_turnover_cr),
+        source=src,
+    )
     _scan_timeout = int(os.getenv("RESEARCH_VALIDATION_TIMEOUT", "90"))
     try:
         result = await asyncio.wait_for(
@@ -1244,8 +1277,22 @@ async def run_layer_validation(
         )
     except asyncio.TimeoutError:
         log.warning("validation scan timed out after %ds", _scan_timeout)
-        raise HTTPException(status_code=504, detail=f"Validation scan timed out after {_scan_timeout}s")
-    return {
+        bad = {
+            "scan_id": "",
+            "horizon": horizon.upper(),
+            "coverage": {},
+            "funnel": {},
+            "logged_rows": 0,
+            "items": [],
+            "final_trades": [],
+            "watchlist": [],
+            "discovery": [],
+            "fallback_items": [],
+            "records_sample": [],
+            "error": f"Validation scan timed out after {_scan_timeout}s",
+        }
+        return finalize_endpoint(val_slug, bad, valid_validation_payload)
+    payload = {
         "scan_id": result.scan_id,
         "horizon": result.horizon,
         "coverage": result.coverage.to_dict(),
@@ -1258,6 +1305,7 @@ async def run_layer_validation(
         "fallback_items": [record.to_trade_card() for record in result.discovery],
         "records_sample": [record.to_dict() for record in result.records[:100]],
     }
+    return finalize_endpoint(val_slug, payload, valid_validation_payload)
 
 
 @router.get("/api/research/layer-report")
@@ -1269,7 +1317,9 @@ def get_layer_report(
     """Return latest logged validation scan with layer funnel and rejection reasons."""
     from dashboard.backend.db import get_latest_signals_scan_report
 
-    return get_latest_signals_scan_report(horizon=horizon, limit=limit)
+    rep = get_latest_signals_scan_report(horizon=horizon, limit=limit)
+    slug = f"research:layer:{horizon or 'all'}:l{limit}"
+    return finalize_endpoint(slug, rep, valid_layer_report_payload)
 
 
 @router.get("/api/research/backtest")
@@ -1449,7 +1499,7 @@ def get_research_performance():
         ).fetchall()
         scan_counts = {r["horizon"]: r["cnt"] for r in scan_rows}
 
-        return {
+        payload = {
             "total_recommendations": total,
             "active": rows["active"] or 0,
             "target_hit": target_hit,
@@ -1466,6 +1516,7 @@ def get_research_performance():
             "swing_scans": scan_counts.get("SWING", 0),
             "longterm_scans": scan_counts.get("LONGTERM", 0),
         }
+        return finalize_endpoint("research:performance", payload, valid_performance_payload)
     finally:
         conn.close()
 

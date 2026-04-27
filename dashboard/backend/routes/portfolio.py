@@ -8,6 +8,8 @@ Read-only + management endpoints for the research page.
 import logging
 import threading
 from fastapi import APIRouter, HTTPException, Query
+
+from dashboard.backend.redis_endpoint_cache import finalize_endpoint, valid_portfolio_summary_payload
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -39,7 +41,7 @@ class ClosePositionRequest(BaseModel):
 def portfolio_summary():
     """Full portfolio with swing + longterm positions, counts, and journal stats."""
     from services.portfolio_manager import get_portfolio_summary
-    return get_portfolio_summary()
+    return finalize_endpoint("portfolio:summary", get_portfolio_summary(), valid_portfolio_summary_payload)
 
 
 @router.get("/swing")

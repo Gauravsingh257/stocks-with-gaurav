@@ -362,6 +362,12 @@ def get_snapshot_debug() -> Dict:
     except Exception as e:
         result["error"] = str(e)
 
+    try:
+        from dashboard.backend.redis_endpoint_cache import endpoint_debug_inventory
+        result["api_endpoint_snapshots"] = endpoint_debug_inventory()
+    except Exception as e:
+        result["api_endpoint_snapshots"] = {"error": str(e)}
+
     result["checked_at"] = datetime.now(_IST).isoformat()
     return result
 

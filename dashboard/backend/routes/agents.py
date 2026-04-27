@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from dashboard.backend.db import get_connection
+from dashboard.backend.redis_endpoint_cache import finalize_endpoint, valid_agents_status_payload
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -36,7 +37,9 @@ def agent_statuses():
     """Return last-run info + next scheduled run for all 4 agents."""
     try:
         from agents.runner import get_agent_statuses
-        return get_agent_statuses()
+        raw = get_agent_statuses()
+        payload = {"agents": raw} if isinstance(raw, list) else (raw if isinstance(raw, dict) else {"agents": []})
+        return finalize_endpoint("agents:status", payload, valid_agents_status_payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
