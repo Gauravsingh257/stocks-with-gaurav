@@ -28,13 +28,14 @@ _MAX_ENTRIES = 50
 # ---------------------------------------------------------------------------
 
 def _safe_engine_read(attr: str, default: Any) -> Any:
-    """Read an attribute from the live engine module without mutation."""
+    """Read an attribute from the live engine module without mutation.
+    On Railway (standalone mode), engine is not co-located — always returns default."""
     try:
-        from dashboard.backend.state_bridge import _ENGINE, _ENGINE_AVAILABLE
-        if _ENGINE_AVAILABLE and _ENGINE is not None:
-            return copy.deepcopy(getattr(_ENGINE, attr, default))
-    except Exception as e:
-        log.warning(f"[engine_router] Could not read '{attr}' from engine: {e}")
+        import importlib
+        engine = importlib.import_module("smc_mtf_engine_v4")
+        return copy.deepcopy(getattr(engine, attr, default))
+    except Exception:
+        pass
     return default
 
 

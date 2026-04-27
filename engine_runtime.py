@@ -27,7 +27,7 @@ ENGINE_STARTED_AT_KEY = "engine_started_at"
 ENGINE_VERSION_KEY = "engine_version"
 ENGINE_LAST_CYCLE_KEY = "engine_last_cycle"
 ENGINE_SNAPSHOT_KEY = "engine:snapshot"
-ENGINE_SNAPSHOT_TTL_SEC = 120
+ENGINE_SNAPSHOT_TTL_SEC = 600  # 10 min — gives engine ample time between cycles
 LTP_KEY_NIFTY = "ltp:NIFTY"
 LTP_KEY_BANKNIFTY = "ltp:BANKNIFTY"
 LTP_TTL_SEC = 300
@@ -187,17 +187,26 @@ def write_heartbeat() -> None:
 
 def write_engine_snapshot(snapshot: dict) -> None:
     """
-    Write dashboard snapshot to Redis so the Web service (standalone mode) can show
-    real-time data. Keys: active_trades, signals_today, daily_pnl_r, traded_today,
-    index_ltp, timestamp. Call from engine after each cycle.
+    Atomically write dashboard snapshot to Redis using a pipeline.
+
+    Writes:
+      engine:snapshot (TTL 600s) — primary live data
+      snapshot:last_known_good (TTL 24h) — fallback for when engine is down
+
+    Uses Redis MULTI/EXEC pipeline so both keys update atomically —
+    no partial state visible to readers.
     """
     r = _get_redis()
     if r is None:
         return
     try:
         import json
+        snapshot["_written_at"] = time.time()
         payload = json.dumps(snapshot, default=str)
-        r.setex(ENGINE_SNAPSHOT_KEY, ENGINE_SNAPSHOT_TTL_SEC, payload)
+        pipe = r.pipeline(transaction=True)
+        pipe.setex(ENGINE_SNAPSHOT_KEY, ENGINE_SNAPSHOT_TTL_SEC, payload)
+        pipe.setex("snapshot:last_known_good", 86400, payload)
+        pipe.execute()
     except Exception as e:
         log.debug("write_engine_snapshot failed: %s", e)
 

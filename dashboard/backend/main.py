@@ -259,6 +259,68 @@ def health_kite():
     except Exception as e:
         return {"error": str(e), "kite_ready": False}
 
+
+@app.get("/health/full")
+def health_full():
+    """Comprehensive health check: engine + Redis + snapshot age."""
+    import time as _t
+    result = {"status": "ok", "service": "smc-dashboard"}
+
+    # Redis status
+    try:
+        from dashboard.backend.cache import get_redis_status, is_redis_available
+        result["redis"] = get_redis_status()
+        result["redis"]["connected"] = is_redis_available()
+    except Exception as e:
+        result["redis"] = {"connected": False, "error": str(e)}
+
+    # Engine status from Redis heartbeat
+    try:
+        from dashboard.backend.cache import get_engine_heartbeat_ts, get_engine_version, get_engine_started_at
+        hb = get_engine_heartbeat_ts()
+        result["engine"] = {
+            "heartbeat_age_sec": round(_t.time() - hb, 1) if hb else None,
+            "running": hb is not None and (_t.time() - hb) < 60,
+            "version": get_engine_version(),
+            "uptime_sec": round(_t.time() - get_engine_started_at(), 1) if get_engine_started_at() else None,
+        }
+    except Exception as e:
+        result["engine"] = {"running": False, "error": str(e)}
+
+    # Snapshot freshness
+    try:
+        from dashboard.backend.state_bridge import get_snapshot_debug
+        debug = get_snapshot_debug()
+        result["snapshot"] = {
+            "live_exists": debug.get("engine_snapshot_exists", False),
+            "live_ttl_sec": debug.get("engine_snapshot_ttl_sec"),
+            "fallback_exists": debug.get("last_known_good_exists", False),
+            "fallback_ttl_sec": debug.get("last_known_good_ttl_sec"),
+            "timestamp": debug.get("snapshot_timestamp"),
+        }
+    except Exception as e:
+        result["snapshot"] = {"error": str(e)}
+
+    # Kite status
+    try:
+        from config.kite_auth import is_kite_available
+        result["kite"] = {"connected": is_kite_available()}
+    except Exception:
+        result["kite"] = {"connected": False}
+
+    return result
+
+
+@app.get("/debug/cache")
+def debug_cache():
+    """Observability: Redis key inventory, TTLs, and snapshot timestamps."""
+    try:
+        from dashboard.backend.state_bridge import get_snapshot_debug
+        return get_snapshot_debug()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/")
 def root():
     return {
@@ -266,5 +328,7 @@ def root():
         "version":  "1.0.0",
         "docs":     "/docs",
         "health":   "/health",
+        "health_full": "/health/full",
+        "debug_cache": "/debug/cache",
         "status":   "/api/system/health",
     }
