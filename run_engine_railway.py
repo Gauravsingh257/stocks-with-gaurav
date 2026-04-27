@@ -21,6 +21,16 @@ def _run_server():
     uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
 
 
+def _run_trade_executor():
+    """Start trade_executor_bot polling loop for 1-click Telegram execution."""
+    try:
+        from trade_executor_bot import poll_updates
+        print("[BOOT] Trade executor bot started — listening for button clicks")
+        poll_updates()
+    except Exception as e:
+        print(f"[BOOT] Trade executor bot failed: {e}")
+
+
 def main():
     thread = threading.Thread(target=_run_server, daemon=True)
     thread.start()
@@ -36,6 +46,10 @@ def main():
     else:
         print("[BOOT] Health server did not respond in 30s")
         sys.exit(1)
+
+    executor_thread = threading.Thread(target=_run_trade_executor, daemon=True)
+    executor_thread.start()
+
     os.environ["SKIP_ENGINE_HTTP"] = "1"
     import smc_mtf_engine_v4
     smc_mtf_engine_v4.run_engine_main()

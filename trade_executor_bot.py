@@ -60,11 +60,35 @@ logging.basicConfig(
 logger = logging.getLogger("TradeBot")
 
 # ─── Kite connection ─────────────────────────────────────────
-def connect_kite():
+def _resolve_access_token() -> str:
+    """Resolve access token: Redis → env → file (same priority as config/kite_auth.py)."""
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            import redis as _redis
+            r = _redis.from_url(redis_url, decode_responses=True, socket_timeout=5)
+            tok = r.get("kite:access_token")
+            if tok and tok.strip():
+                return tok.strip()
+        except Exception:
+            pass
+    tok = os.getenv("KITE_ACCESS_TOKEN", "").strip()
+    if tok:
+        return tok
     token_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access_token.txt")
+    if os.path.exists(token_path):
+        return open(token_path).read().strip()
+    return ""
+
+
+def connect_kite():
     k = KiteConnect(api_key=API_KEY)
-    k.set_access_token(open(token_path).read().strip())
-    logger.info("Kite connected for trade execution")
+    token = _resolve_access_token()
+    if not token:
+        logger.warning("No Kite access token found — trade execution will fail until token is available")
+    else:
+        k.set_access_token(token)
+        logger.info("Kite connected for trade execution")
     return k
 
 kite = connect_kite()
@@ -658,13 +682,31 @@ def handle_callback(callback_query):
 # POLLING LOOP — listens for button clicks
 # ═══════════════════════════════════════════════════════════════
 
+def _refresh_kite_token():
+    """Re-resolve the access token from Redis/env/file and update the global kite instance."""
+    global kite
+    try:
+        token = _resolve_access_token()
+        if token:
+            kite.set_access_token(token)
+            logger.info("Kite token refreshed for trade executor")
+    except Exception as e:
+        logger.warning(f"Kite token refresh failed: {e}")
+
+
 def poll_updates():
     """Long-poll Telegram for callback_query updates from inline buttons."""
     offset = None
+    _last_token_refresh = time.time()
+    _TOKEN_REFRESH_INTERVAL = 300  # re-check token every 5 minutes
     logger.info("Trade Executor Bot started — polling for button clicks...")
 
     while True:
         try:
+            now = time.time()
+            if now - _last_token_refresh > _TOKEN_REFRESH_INTERVAL:
+                _refresh_kite_token()
+                _last_token_refresh = now
             params = {"timeout": 30, "allowed_updates": ["callback_query"]}
             if offset:
                 params["offset"] = offset
