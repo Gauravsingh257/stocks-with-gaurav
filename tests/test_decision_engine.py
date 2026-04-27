@@ -32,7 +32,7 @@ def test_decision_output_falls_back_when_strict_smc_is_empty():
     output = build_decision_output(records, limit=3)
 
     assert output.final_trades == []
-    assert [record.symbol for record in output.watchlist] == ["NSE:BBB"]
+    assert [record.symbol for record in output.watchlist] == ["NSE:BBB", "NSE:CCC"]
     assert output.discovery
     all_symbols = [record.symbol for bucket in (output.final_trades, output.watchlist, output.discovery) for record in bucket]
     assert len(all_symbols) == len(set(all_symbols))
@@ -65,7 +65,7 @@ def test_decision_output_prioritizes_final_over_duplicate_watchlist():
 def test_decision_output_uses_soft_score_bands_and_near_setup_flag():
     records = [
         DummyDecisionRecord("NSE:FINAL", 0.70, smc={"score": 6.0}),
-        DummyDecisionRecord("NSE:NEAR", 0.95, smc={"score": 5.0}),
+        DummyDecisionRecord("NSE:NEAR", 0.95, smc={"score": 4.5}),
         DummyDecisionRecord("NSE:WATCH", 0.90, smc={"score": 4.0}),
         DummyDecisionRecord("NSE:DISC", 0.85, smc={"score": 2.0}),
         DummyDecisionRecord("NSE:EARLY", 0.80, smc={"score": 1.0}),

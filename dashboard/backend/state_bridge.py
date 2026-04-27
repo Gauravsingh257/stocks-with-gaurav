@@ -359,6 +359,12 @@ def get_snapshot_debug() -> Dict:
                 key_status[k] = {"exists": False, "ttl": None}
         result["redis_keys"] = key_status
 
+        try:
+            gv = r.get("snapshot:global_version")
+            result["api_snapshot_global_version"] = int(gv) if gv is not None else 0
+        except Exception:
+            pass
+
     except Exception as e:
         result["error"] = str(e)
 

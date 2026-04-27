@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
+
+log = logging.getLogger("services.decision_engine")
 
 
 class DecisionRecord(Protocol):
@@ -62,7 +65,7 @@ def _smc_score_value(record: DecisionRecord) -> float:
 
 
 def _mark_near_setup(record: DecisionRecord, smc_score: float) -> None:
-    near_setup = 5.0 <= smc_score < 6.0
+    near_setup = 4.0 <= smc_score < 5.0
     try:
         record.near_setup = near_setup
     except (AttributeError, TypeError):
@@ -76,9 +79,9 @@ def _mark_near_setup(record: DecisionRecord, smc_score: float) -> None:
 
 def _band_rank(record: DecisionRecord) -> tuple[int, float, float]:
     smc_score = _smc_score_value(record)
-    if smc_score >= 6.0:
+    if smc_score >= 5.0:
         band = 3
-    elif smc_score >= 4.0:
+    elif smc_score >= 3.5:
         band = 2
     else:
         band = 1
@@ -110,7 +113,7 @@ def near_valid_setups(signals: list[DecisionRecord], limit: int = 3, excluded: s
     candidates = [
         record
         for record in sorted(signals, key=_band_rank, reverse=True)
-        if _smc_score_value(record) >= 4.0
+        if _smc_score_value(record) >= 3.5
     ]
     return _unique(candidates, limit, excluded)
 
@@ -123,18 +126,19 @@ def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[De
     for record in records:
         _mark_near_setup(record, _smc_score_value(record))
 
-    final_trades = _unique([record for record in records if _smc_score_value(record) >= 6.0], limit)
+    # Relaxed bands: 2–3 SMC conditions can land in 3.5–5.0 (MEDIUM) without full 6.0 confluence.
+    final_trades = _unique([record for record in records if _smc_score_value(record) >= 5.0], limit)
     used = {_symbol_key(record) for record in final_trades}
 
     watchlist = _unique(
-        [record for record in records if 4.0 <= _smc_score_value(record) < 6.0],
+        [record for record in records if 3.5 <= _smc_score_value(record) < 5.0],
         limit,
         excluded=used,
     )
     used.update(_symbol_key(record) for record in watchlist)
 
     discovery = _unique(
-        [record for record in records if 2.0 <= _smc_score_value(record) < 4.0],
+        [record for record in records if 2.0 <= _smc_score_value(record) < 3.5],
         limit,
         excluded=used,
     )
@@ -158,10 +162,11 @@ def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> Dec
     if len(discovery) == 0:
         discovery = relaxed_filter(ordered, limit=limit, excluded=used)
 
-    print({
-        "final": len(final_trades),
-        "watchlist": len(watchlist),
-        "discovery": len(discovery),
-    })
+    log.debug(
+        "decision_buckets final=%s watchlist=%s discovery=%s",
+        len(final_trades),
+        len(watchlist),
+        len(discovery),
+    )
 
     return DecisionOutput(final_trades=final_trades, watchlist=watchlist, discovery=discovery)

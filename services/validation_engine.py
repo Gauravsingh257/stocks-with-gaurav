@@ -86,9 +86,9 @@ class LayerValidationRecord:
     @property
     def section(self) -> str:
         smc_score = _smc_score(self.smc, self.horizon) / 10.0
-        if smc_score >= 6.0:
+        if smc_score >= 5.5:
             return "final"
-        if smc_score >= 4.0:
+        if smc_score >= 3.5:
             return "watchlist"
         return "discovery"
 
@@ -126,6 +126,7 @@ class LayerValidationRecord:
         if self.entry and self.stop_loss and target:
             risk = abs(self.entry - self.stop_loss)
             rr = round(abs(target - self.entry) / max(risk, 0.01), 2)
+        tier = _signal_tier_label(self)
         return {
             "symbol": self.symbol,
             "setup": self.setup,
@@ -142,6 +143,8 @@ class LayerValidationRecord:
             "layer3_pass": self.layer3_pass,
             "final_selected": self.final_selected,
             "near_setup": self.near_setup,
+            "signal_tier": tier,
+            "potential_setup": tier == "WATCHLIST",
             "section": self.section,
             "rejection_reason": self.rejection_reason,
             "layer_details": self.to_dict()["layer_details"],
@@ -162,6 +165,7 @@ class ValidationScanResult:
     coverage: CoverageReport
     funnel: FunnelMetrics
     logged_rows: int = 0
+    diagnostics: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -176,6 +180,7 @@ class ValidationScanResult:
             "fallback": [r.to_trade_card() for r in self.discovery],
             "records": [r.to_dict() for r in self.records],
             "logged_rows": self.logged_rows,
+            "diagnostics": dict(self.diagnostics),
         }
 
 
@@ -271,6 +276,7 @@ def _smc_confirmation(df: pd.DataFrame | None) -> dict:
             "tier": "REJECTED",
             "reason": "insufficient_history",
             "missing": ["insufficient_history"],
+            "partial_hits": 0,
         }
     order_block = detect_daily_ob(candles, "LONG")
     liquidity = detect_daily_fvg(candles, "LONG")
@@ -290,17 +296,28 @@ def _smc_confirmation(df: pd.DataFrame | None) -> dict:
         score += 30.0
     else:
         missing.append("no_liquidity_sweep")
-    if score > 70:
+
+    partial_hits = sum([bool(order_block), bool(liquidity), has_bos])
+    # Allow 2-of-3 SMC legs to qualify as meaningful partial confluence (not all-or-nothing).
+    if partial_hits >= 2 and score < 55.0:
+        score = max(score, 48.0)
+    elif partial_hits == 1 and score < 35.0:
+        score = max(score, 30.0)
+
+    if score >= 70:
         tier = "HIGH_CONVICTION"
-    elif score >= 60:
+    elif score >= 55:
         tier = "CONFIRMED"
-    elif score >= 40:
+    elif score >= 40 or partial_hits >= 2:
         tier = "NEAR_SETUP"
+    elif score >= 28:
+        tier = "PARTIAL"
     else:
         tier = "REJECTED"
     return {
         "confirmation_score": score,
         "tier": tier,
+        "partial_hits": partial_hits,
         "order_block": [round(float(order_block[0]), 2), round(float(order_block[1]), 2)] if order_block else None,
         "liquidity_zone": [round(float(liquidity[0]), 2), round(float(liquidity[1]), 2)] if liquidity else None,
         "structure": structure,
@@ -313,7 +330,9 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     candles = df_to_candles(df)
     confirmation_score = float(confirmation.get("confirmation_score", 0.0) or 0.0)
     has_partial_zone = bool(confirmation.get("order_block") or confirmation.get("liquidity_zone"))
-    if len(candles) < 30 or confirmation_score < 20.0 or not has_partial_zone:
+    partial_hits = int(confirmation.get("partial_hits") or 0)
+    relaxed_entry = confirmation_score >= 15.0 or partial_hits >= 2 or (partial_hits >= 1 and has_partial_zone)
+    if len(candles) < 30 or not relaxed_entry or not has_partial_zone:
         return None
     close = float(candles[-1]["close"])
     atr = float(calculate_atr(candles, 14) or 0.0)
@@ -391,6 +410,77 @@ def _record_technical_signals(record: LayerValidationRecord) -> dict[str, str]:
     }
 
 
+def _confirmation_smc_band(record: LayerValidationRecord) -> float:
+    return _smc_score(record.smc, record.horizon) / 10.0
+
+
+def _signal_tier_label(record: LayerValidationRecord) -> str:
+    band = _confirmation_smc_band(record)
+    if record.final_selected or band >= 5.5:
+        return "STRONG_SETUP"
+    if band >= 3.5 or getattr(record, "near_setup", False):
+        return "MEDIUM_SETUP"
+    return "WATCHLIST"
+
+
+def _movement_fallback_score(record: LayerValidationRecord) -> float:
+    """Rank stocks by liquidity + volatility/momentum when SMC is thin."""
+    d = record.discovery or {}
+    if not d:
+        return float(record.confidence_score or 0)
+    turn = float(d.get("avg_turnover_cr", 0) or 0)
+    vol = float(d.get("volume_score", 0) or 0)
+    mom = float(d.get("momentum_score", 0) or 0)
+    br = float(d.get("breakout_score", 0) or 0)
+    return min(turn, 40.0) * 1.25 + vol * 0.35 + mom * 0.35 + br * 0.25
+
+
+def _unique_symbols_from_lists(*lists: list) -> set[str]:
+    seen: set[str] = set()
+    for lst in lists:
+        for r in lst:
+            sym = str(getattr(r, "symbol", "")).replace("NSE:", "").replace(".NS", "").upper()
+            if sym:
+                seen.add(sym)
+    return seen
+
+
+def ensure_minimum_discovery_outputs(
+    records: list[LayerValidationRecord],
+    selected: list[LayerValidationRecord],
+    watchlist: list[LayerValidationRecord],
+    discovery: list[LayerValidationRecord],
+    *,
+    min_unique: int = 5,
+) -> tuple[list[LayerValidationRecord], list[LayerValidationRecord], list[LayerValidationRecord]]:
+    """Guarantee at least ``min_unique`` symbols across final + watchlist + discovery (momentum fallback)."""
+    sel = list(selected)
+    wl = list(watchlist)
+    disc = list(discovery)
+
+    def count_unique() -> int:
+        return len(_unique_symbols_from_lists(sel, wl, disc))
+
+    if count_unique() >= min_unique:
+        return sel, wl, disc
+
+    used = _unique_symbols_from_lists(sel, wl, disc)
+    ranked = sorted(
+        [r for r in records if r.discovery],
+        key=_movement_fallback_score,
+        reverse=True,
+    )
+    for r in ranked:
+        if count_unique() >= min_unique:
+            break
+        sym = str(r.symbol).replace("NSE:", "").replace(".NS", "").upper()
+        if not sym or sym in used:
+            continue
+        disc.append(r)
+        used.add(sym)
+    return sel, wl, disc
+
+
 async def _fetch_frames(symbols: list[str], source: str, days: int, as_of: str | date | datetime | None) -> dict[str, pd.DataFrame | None]:
     ingestion = DataIngestion(source=source)
     concurrency = max(1, int(os.getenv("VALIDATION_FETCH_CONCURRENCY", "8")))
@@ -458,7 +548,7 @@ async def run_validation_scan(
     fundamental_map = await analyze_fundamentals(scan_symbols)
     sentiment_map = await analyze_news_sentiment(scan_symbols)
 
-    layer1_min_score = float(os.getenv("VALIDATION_LAYER1_MIN_SCORE", "35"))
+    layer1_min_score = float(os.getenv("VALIDATION_LAYER1_MIN_SCORE", "30"))
     records: list[LayerValidationRecord] = []
     no_data_symbols: list[str] = []
 
@@ -543,11 +633,11 @@ async def run_validation_scan(
                     record.smc = dict(meta)
 
         smc_band_score = _smc_score(record.smc, horizon) / 10.0
-        record.layer3_pass = smc_band_score >= 6.0
-        record.near_setup = 5.0 <= smc_band_score < 6.0
+        record.layer3_pass = smc_band_score >= 5.0
+        record.near_setup = 4.0 <= smc_band_score < 5.0
         if record.smc is not None:
             record.smc["near_setup"] = record.near_setup
-        if smc_band_score >= 4.0:
+        if smc_band_score >= 3.5:
             record.layer2_pass = True
         if not record.layer3_pass:
             for reason in (record.smc or {}).get("missing", []) or _smc_failure_reasons(df):
@@ -576,6 +666,14 @@ async def run_validation_scan(
     selected = list(decisions.final_trades)
     watchlist = list(decisions.watchlist)
     discovery = list(decisions.discovery)
+    min_unique_out = max(5, min(int(os.getenv("DISCOVERY_MIN_UNIQUE_SYMBOLS", "5")), top_k))
+    selected, watchlist, discovery = ensure_minimum_discovery_outputs(
+        records,
+        selected,
+        watchlist,
+        discovery,
+        min_unique=min_unique_out,
+    )
 
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
@@ -611,8 +709,23 @@ async def run_validation_scan(
         except Exception as exc:
             log.warning("signals_log write failed for %s: %s", scan_id, exc)
 
+    sig_total = len(selected) + len(watchlist) + len(discovery)
+    reason_empty = ""
+    if sig_total == 0:
+        reason_empty = "no_discoverable_symbols_after_layer1_and_momentum_fallback"
+
+    diagnostics = {
+        "total_stocks_scanned": len(scan_symbols),
+        "total_filtered": funnel.layer1_pass,
+        "layer2_survivors": funnel.layer2_pass,
+        "layer3_survivors": funnel.layer3_pass,
+        "strict_final_signals": funnel.final_selected,
+        "signals_generated": sig_total,
+        "reason_for_zero_signals": reason_empty if sig_total == 0 else "",
+    }
+
     log.info(
-        "[%s] validation scan %s: total=%d l1=%d l2=%d l3=%d selected=%d logged=%d",
+        "[%s] validation scan %s: total=%d l1=%d l2=%d l3=%d selected=%d logged=%d sig_out=%d",
         horizon,
         scan_id,
         funnel.total,
@@ -621,6 +734,7 @@ async def run_validation_scan(
         funnel.layer3_pass,
         funnel.final_selected,
         logged_rows,
+        sig_total,
     )
     return ValidationScanResult(
         scan_id=scan_id,
@@ -633,6 +747,7 @@ async def run_validation_scan(
         coverage=coverage,
         funnel=funnel,
         logged_rows=logged_rows,
+        diagnostics=diagnostics,
     )
 
 

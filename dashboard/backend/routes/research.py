@@ -15,10 +15,10 @@ from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_rec
 from services.universe_manager import load_nse_universe
 from services.price_resolver import resolve_cmp
 from dashboard.backend.redis_endpoint_cache import (
+    commit_watchlist_final_independent,
     finalize_endpoint,
-    slug_from_params,
     valid_coverage_payload,
-    valid_discovery_payload,
+    valid_discovery_user_visible,
     valid_layer_report_payload,
     valid_performance_payload,
     valid_research_list_payload,
@@ -37,6 +37,57 @@ log = logging.getLogger("dashboard.research")
 
 
 # ── Telegram alert helper ─────────────────────────────────────────────────────
+
+# MEDIUM-tier Telegram batching (in-process; multi-instance may duplicate occasionally)
+_MEDIUM_TG_BUFFER: list[str] = []
+_MEDIUM_BATCH_START: float = 0.0
+_MEDIUM_TG_LOCK = threading.Lock()
+_MEDIUM_TG_INTERVAL_SEC = float(os.getenv("TELEGRAM_MEDIUM_BATCH_SEC", "1800"))
+
+
+def _telegram_flush_medium_buffer(force: bool = False) -> None:
+    """Send buffered MEDIUM_SETUP lines once per TELEGRAM_MEDIUM_BATCH_SEC window."""
+    global _MEDIUM_BATCH_START
+    now = time.time()
+    with _MEDIUM_TG_LOCK:
+        if not _MEDIUM_TG_BUFFER:
+            return
+        if not force:
+            start = _MEDIUM_BATCH_START or now
+            if now - start < _MEDIUM_TG_INTERVAL_SEC:
+                return
+        body = "\n".join(_MEDIUM_TG_BUFFER[:40])
+        _MEDIUM_TG_BUFFER.clear()
+        _MEDIUM_BATCH_START = 0.0
+    _telegram_notify(f"<b>📎 Medium setups (batch)</b>\n{body}\n<i>Research Center</i>")
+
+
+def _telegram_discovery_tiers(payload: dict) -> None:
+    """Send STRONG setups immediately; queue MEDIUM for periodic batch."""
+    lines_strong: list[str] = []
+    lines_med: list[str] = []
+    for bucket in ("final_trades", "watchlist", "discovery"):
+        for c in payload.get(bucket) or []:
+            if not isinstance(c, dict):
+                continue
+            tier = str(c.get("signal_tier") or "").upper()
+            sym = str(c.get("symbol", "?")).replace("NSE:", "")
+            conf = float(c.get("confidence_score") or 0)
+            line = f"  {sym} — {tier} — conf {conf:.0f}%"
+            if tier == "STRONG_SETUP":
+                lines_strong.append(line)
+            elif tier == "MEDIUM_SETUP":
+                lines_med.append(line)
+    if lines_strong:
+        _telegram_notify("<b>🔥 Strong setups</b>\n" + "\n".join(lines_strong[:20]))
+    if lines_med:
+        global _MEDIUM_BATCH_START
+        with _MEDIUM_TG_LOCK:
+            _MEDIUM_TG_BUFFER.extend(lines_med)
+            if _MEDIUM_BATCH_START == 0.0:
+                _MEDIUM_BATCH_START = time.time()
+        _telegram_flush_medium_buffer(force=False)
+
 
 def _telegram_notify(message: str) -> bool:
     """Send a Telegram message using the configured bot. Non-blocking, best-effort."""
@@ -750,7 +801,7 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
         result["gated"] = True
         result["total_available"] = result["count"]
         result["count"] = FREE_TIER_LIMIT
-    return finalize_endpoint(f"research:swing:{limit}", result, valid_research_list_payload)
+    return finalize_endpoint("swing", result, valid_research_list_payload)
 
 
 @router.get("/api/search-stock/suggestions")
@@ -793,14 +844,14 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
         result["gated"] = True
         result["total_available"] = result["count"]
         result["count"] = FREE_TIER_LIMIT
-    return finalize_endpoint(f"research:longterm:{limit}", result, valid_research_list_payload)
+    return finalize_endpoint("longterm", result, valid_research_list_payload)
 
 
 @router.get("/api/research/running-trades")
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
     return finalize_endpoint(
-        f"research:running_trades:{limit}",
+        "running_trades",
         _running_trades_payload(limit),
         valid_running_trades_payload,
     )
@@ -842,7 +893,7 @@ def get_research_coverage(target_universe: int = Query(2200, ge=100, le=5000)):
             "LONGTERM": _shape(long_latest[0] if long_latest else None),
         },
     }
-    return finalize_endpoint(f"research:coverage:u{target_universe}", payload, valid_coverage_payload)
+    return finalize_endpoint("coverage", payload, valid_coverage_payload)
 
 
 @router.get("/api/research/ranking-runs")
@@ -1142,7 +1193,7 @@ def get_scan_status():
             if info.get("traceback")
         },
     }
-    return finalize_endpoint("research:scan_status", payload, valid_scan_status_payload)
+    return finalize_endpoint("scan_status", payload, valid_scan_status_payload)
 
 
 @router.get("/api/research/discovery")
@@ -1161,13 +1212,12 @@ async def get_discovery(
     """
     from services.validation_engine import run_validation_scan
 
+    try:
+        _telegram_flush_medium_buffer(force=False)
+    except Exception:
+        pass
+
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
-    disc_slug = slug_from_params(
-        "discovery",
-        top_k=top_k,
-        min_turnover_cr=float(min_turnover_cr),
-        source=src,
-    )
     cached = _decision_cache_get(top_k, float(min_turnover_cr), src)
     if cached:
         ts, cached_payload = cached
@@ -1176,13 +1226,23 @@ async def get_discovery(
             payload = dict(cached_payload)
             payload["cache_hit"] = True
             payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - age))
-            return finalize_endpoint(disc_slug, payload, valid_discovery_payload, mirror_discovery=True)
+            return finalize_endpoint(
+                "discovery",
+                payload,
+                valid_discovery_user_visible,
+                discovery_atomic=True,
+            )
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
         if logged_payload:
             _decision_cache_set(top_k, float(min_turnover_cr), src, logged_payload)
-            return finalize_endpoint(disc_slug, logged_payload, valid_discovery_payload, mirror_discovery=True)
+            return finalize_endpoint(
+                "discovery",
+                logged_payload,
+                valid_discovery_user_visible,
+                discovery_atomic=True,
+            )
 
     import asyncio
     _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "45"))
@@ -1208,7 +1268,12 @@ async def get_discovery(
             "fallback_items": [], "cache_hit": False, "cache_ttl_sec": 60,
             "error": f"Scan timed out after {_scan_timeout}s — try again or run a manual scan first.",
         }
-        return finalize_endpoint(disc_slug, bad, valid_discovery_payload, mirror_discovery=True)
+        return finalize_endpoint(
+            "discovery",
+            bad,
+            valid_discovery_user_visible,
+            discovery_atomic=True,
+        )
     except Exception as exc:
         log.exception("validation discovery scan failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"validation_discovery_failed: {exc}") from exc
@@ -1235,9 +1300,19 @@ async def get_discovery(
         "fallback_items": discovery,
         "cache_hit": False,
         "cache_ttl_sec": DECISION_CACHE_SECONDS,
+        "scan_diagnostics": getattr(result, "diagnostics", {}),
     }
+    try:
+        _telegram_discovery_tiers(payload)
+    except Exception as exc:
+        log.debug("telegram discovery tiers skipped: %s", exc)
     _decision_cache_set(top_k, float(min_turnover_cr), src, payload)
-    return finalize_endpoint(disc_slug, payload, valid_discovery_payload, mirror_discovery=True)
+    return finalize_endpoint(
+        "discovery",
+        payload,
+        valid_discovery_user_visible,
+        discovery_atomic=True,
+    )
 
 
 @router.get("/api/research/validation")
@@ -1254,14 +1329,6 @@ async def run_layer_validation(
 
     import asyncio
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
-    val_slug = slug_from_params(
-        "validation",
-        horizon=horizon.upper(),
-        top_k=top_k,
-        target_universe=target_universe,
-        min_turnover_cr=float(min_turnover_cr),
-        source=src,
-    )
     _scan_timeout = int(os.getenv("RESEARCH_VALIDATION_TIMEOUT", "90"))
     try:
         result = await asyncio.wait_for(
@@ -1291,7 +1358,7 @@ async def run_layer_validation(
             "records_sample": [],
             "error": f"Validation scan timed out after {_scan_timeout}s",
         }
-        return finalize_endpoint(val_slug, bad, valid_validation_payload)
+        return finalize_endpoint("validation", bad, valid_validation_payload)
     payload = {
         "scan_id": result.scan_id,
         "horizon": result.horizon,
@@ -1304,8 +1371,16 @@ async def run_layer_validation(
         "discovery": [record.to_trade_card() for record in result.discovery],
         "fallback_items": [record.to_trade_card() for record in result.discovery],
         "records_sample": [record.to_dict() for record in result.records[:100]],
+        "scan_diagnostics": getattr(result, "diagnostics", {}),
     }
-    return finalize_endpoint(val_slug, payload, valid_validation_payload)
+    try:
+        commit_watchlist_final_independent(
+            list(payload.get("watchlist") or []),
+            list(payload.get("final_trades") or []),
+        )
+    except Exception as exc:
+        log.debug("watchlist/final independent commit failed: %s", exc)
+    return finalize_endpoint("validation", payload, valid_validation_payload)
 
 
 @router.get("/api/research/layer-report")
@@ -1318,8 +1393,7 @@ def get_layer_report(
     from dashboard.backend.db import get_latest_signals_scan_report
 
     rep = get_latest_signals_scan_report(horizon=horizon, limit=limit)
-    slug = f"research:layer:{horizon or 'all'}:l{limit}"
-    return finalize_endpoint(slug, rep, valid_layer_report_payload)
+    return finalize_endpoint("layer_report", rep, valid_layer_report_payload)
 
 
 @router.get("/api/research/backtest")
@@ -1516,7 +1590,7 @@ def get_research_performance():
             "swing_scans": scan_counts.get("SWING", 0),
             "longterm_scans": scan_counts.get("LONGTERM", 0),
         }
-        return finalize_endpoint("research:performance", payload, valid_performance_payload)
+        return finalize_endpoint("performance", payload, valid_performance_payload)
     finally:
         conn.close()
 

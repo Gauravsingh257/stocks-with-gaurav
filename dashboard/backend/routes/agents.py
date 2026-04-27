@@ -39,7 +39,7 @@ def agent_statuses():
         from agents.runner import get_agent_statuses
         raw = get_agent_statuses()
         payload = {"agents": raw} if isinstance(raw, list) else (raw if isinstance(raw, dict) else {"agents": []})
-        return finalize_endpoint("agents:status", payload, valid_agents_status_payload)
+        return finalize_endpoint("agents_status", payload, valid_agents_status_payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

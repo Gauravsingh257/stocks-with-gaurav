@@ -3668,8 +3668,8 @@ def scan_symbol(symbol: str):
                 if len(SETUP_D_STRUCTURE_TRACE[_sym]) > 50:
                     SETUP_D_STRUCTURE_TRACE[_sym] = SETUP_D_STRUCTURE_TRACE[_sym][-50:]
 
-            # P0 FIX: If HTF bias was None, require score >= 7
-            min_score_for_signal = 5  # Default
+            # Default minimum confluence (env override). Lower = more signals.
+            min_score_for_signal = int(os.getenv("SMC_MIN_SCORE_FOR_SIGNAL", "4"))
 
             # INDEX RELAXATION: Indices (NIFTY/BANKNIFTY) have inherent liquidity
             # and reliability — lower min score to 3 so trending days aren't missed.
@@ -3679,15 +3679,14 @@ def scan_symbol(symbol: str):
             if _is_pure_index:
                 min_score_for_signal = 3
 
-            # SETUP-D QUALITY FILTER: Phase 6 scorer, approval threshold = 6
-            # sweep(2)+choch(1)+bos(2)+ob(2) = 7 when all present; require 6 to allow partial
+            # SETUP-D: allow 2–3 legs to pass (see Phase 6 breakdown); default threshold 4
             if setup_name == "SETUP-D":
-                min_score_for_signal = 6
+                min_score_for_signal = int(os.getenv("SETUP_D_MIN_CONFLUENCE_SCORE", "4"))
 
             # SETUP-E QUALITY FILTER: reaction entry has better win rate, threshold = 5
             # choch_2tier(2)+bos(2)+ob(2)+reaction(1) = 7 max; allow 5 to pass OB-only setups
             if setup_name == "SETUP-E":
-                min_score_for_signal = 5
+                min_score_for_signal = int(os.getenv("SETUP_E_MIN_CONFLUENCE_SCORE", "5"))
 
             # SETUP-A QUALITY FILTER: Backtest shows Score 5-6 has negative expectancy
             # Score 5: WR=14.3%, E=-0.450R  |  Score 6: WR=38.1%, E=-0.143R
@@ -3699,8 +3698,10 @@ def scan_symbol(symbol: str):
                     min_score_for_signal = 5  # Relaxed for indices
                     logging.info(f"📊 Setup A INDEX filter: requiring score >= 5 for {sig['symbol']}")
                 else:
-                    min_score_for_signal = 7
-                    logging.info(f"📊 Setup A quality filter: requiring score >= 7 for {sig['symbol']}")
+                    min_score_for_signal = int(os.getenv("SETUP_A_MIN_CONFLUENCE_SCORE", "6"))
+                    logging.info(
+                        f"📊 Setup A quality filter: requiring score >= {min_score_for_signal} for {sig['symbol']}"
+                    )
 
             if sig.get("_require_high_confluence"):
                 if _is_pure_index:

@@ -41,7 +41,7 @@ class ClosePositionRequest(BaseModel):
 def portfolio_summary():
     """Full portfolio with swing + longterm positions, counts, and journal stats."""
     from services.portfolio_manager import get_portfolio_summary
-    return finalize_endpoint("portfolio:summary", get_portfolio_summary(), valid_portfolio_summary_payload)
+    return finalize_endpoint("portfolio_summary", get_portfolio_summary(), valid_portfolio_summary_payload)
 
 
 @router.get("/swing")
