@@ -118,21 +118,102 @@ def _utc_iso(s: str | None) -> str | None:
     without a timezone marker, the browser would mis-interpret it as local time.
     """
     if not s:
-        return s
+        return None
+    value = str(s).strip()
+    if not value:
+        return None
+    if value.endswith("Z") or "+" in value[10:]:
+        return value
+    return value.replace(" ", "T") + "Z"
+
+
+def _signals_log_row_to_decision_card(row: dict) -> dict:
+    """Convert a persisted validation row into the public decision-feed shape."""
+    confidence = float(row.get("confidence") or 0)
+    final_selected = bool(row.get("final_selected"))
+    layer1 = bool(row.get("layer1_pass"))
+    layer2 = bool(row.get("layer2_pass"))
+    layer3 = bool(row.get("layer3_pass"))
+    section = "final" if final_selected else "watchlist" if layer1 and layer2 else "discovery"
+    target = row.get("target")
+    entry = row.get("entry")
+    stop = row.get("stop_loss")
+    risk_reward = None
     try:
-        s = str(s).strip()
-        if not s:
-            return None
-        # already has timezone info
-        if s.endswith("Z") or "+" in s[10:] or s.endswith("+00:00"):
-            return s
-        # SQLite uses space separator; normalize to ISO 'T'
-        s = s.replace(" ", "T", 1)
-        return s + "Z"
+        if entry is not None and stop is not None and target is not None:
+            risk = abs(float(entry) - float(stop))
+            reward = abs(float(target) - float(entry))
+            risk_reward = round(reward / risk, 2) if risk > 0 else None
     except Exception:
-        return s
+        risk_reward = None
+    return {
+        "id": row.get("id"),
+        "symbol": row.get("symbol"),
+        "setup": "SMC_VALIDATION",
+        "section": section,
+        "entry_price": entry,
+        "stop_loss": stop,
+        "target_1": target,
+        "target_2": target,
+        "targets": [target] if target is not None else [],
+        "risk_reward": risk_reward,
+        "confidence_score": confidence,
+        "scan_cmp": row.get("cmp"),
+        "entry_type": "validation_scan",
+        "expected_holding_period": "Swing",
+        "layer1_pass": layer1,
+        "layer2_pass": layer2,
+        "layer3_pass": layer3,
+        "final_selected": final_selected,
+        "near_setup": section == "watchlist",
+        "rejection_reason": row.get("rejection_reason") or [],
+        "layer_details": row.get("layer_details") or {},
+        "reasoning": "Latest persisted SMC validation scan.",
+        "reasoning_summary": "Latest persisted SMC validation scan.",
+        "technical_signals": {},
+        "action_tag": "final_review" if section == "final" else section,
+    }
 
 
+def _latest_logged_decision_payload(top_k: int, min_turnover_cr: float, src: str) -> dict | None:
+    """Return a fast public decision payload from the latest persisted scan, if available."""
+    try:
+        from dashboard.backend.db import get_latest_signals_scan_report
+
+        report = get_latest_signals_scan_report(horizon="SWING", limit=max(top_k * 8, 80))
+    except Exception as exc:
+        log.warning("latest logged decision feed unavailable: %s", exc)
+        return None
+    if not report.get("available"):
+        return None
+
+    sample = report.get("sample") or []
+    cards = [_signals_log_row_to_decision_card(row) for row in sample if row.get("symbol")]
+    final = [card for card in cards if card.get("section") == "final"][:top_k]
+    watchlist = [card for card in cards if card.get("section") == "watchlist"][:top_k]
+    discovery = [card for card in cards if card.get("section") == "discovery"][:top_k]
+    return {
+        "data_source": src,
+        "universe_size": (report.get("coverage") or {}).get("total_universe") or report.get("funnel", {}).get("total") or len(cards),
+        "scanned": (report.get("coverage") or {}).get("scanned") or report.get("funnel", {}).get("total") or len(cards),
+        "returned": len(final),
+        "watchlist_returned": len(watchlist),
+        "discovery_returned": len(discovery),
+        "fallback_returned": len(discovery),
+        "generated_at": report.get("created_at") or datetime.now().isoformat(),
+        "scan_id": report.get("scan_id") or "latest-signals-log",
+        "coverage": report.get("coverage") or {},
+        "funnel": report.get("funnel") or {},
+        "items": final,
+        "final_trades": final,
+        "watchlist": watchlist,
+        "discovery": discovery,
+        "fallback_items": discovery,
+        "cache_hit": True,
+        "cache_source": "signals_log",
+        "cache_ttl_sec": DECISION_CACHE_SECONDS,
+        "min_turnover_cr": min_turnover_cr,
+    }
 def _extract_fundamentals(row: dict) -> dict:
     """Pull structured fundamental metrics from fundamental_factors or parse from
     fundamental_signals text as a fallback for older DB records.
@@ -1027,6 +1108,7 @@ async def get_discovery(
     top_k: int = Query(20, ge=1, le=100),
     min_turnover_cr: float = Query(1.0, ge=0.0),
     source: str = Query(None),
+    refresh: bool = Query(False),
 ):
     """Strict validation feed across Discovery → Quality → SMC.
 
@@ -1046,6 +1128,13 @@ async def get_discovery(
             payload["cache_hit"] = True
             payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - (now - cached[0])))
             return payload
+
+    if not refresh:
+        logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
+        if logged_payload:
+            with _decision_cache_lock:
+                _decision_cache[cache_key] = (time.monotonic(), logged_payload)
+            return logged_payload
 
     try:
         result = await run_validation_scan(
