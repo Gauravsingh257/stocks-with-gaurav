@@ -1,14 +1,19 @@
 name: Kite Daily Auto-Login
 
-# Fully automated Kite login — runs DAILY (incl. weekends) with THREE cron
+# Fully automated Kite login — runs DAILY (incl. weekends) with TWO cron
 # triggers. No laptop dependency whatsoever.
 #
 # Schedule (all times IST):
 #   08:15 IST (02:45 UTC) — Primary morning login before market open
 #   09:00 IST (03:30 UTC) — Fallback if primary was delayed past market open
-#   23:45 IST (18:15 UTC) — Pre-midnight refresh: Zerodha kills tokens at 00:00 IST,
-#                           so we refresh 15 min early so the engine never gaps at midnight.
-# Each run skips if token was already refreshed today (dedup via Redis kite:token_ts).
+#
+# Pre-midnight cron removed: GitHub Actions cron delays often push it past
+# midnight IST, creating a "today" token that blocks morning re-login even
+# though Zerodha invalidates all tokens at 00:00 IST.
+#
+# Dedup: skips only if token_ts matches today AND the token is validated
+# against Kite API (k.profile()). A date match with an invalid token
+# triggers a fresh login.
 
 on:
   schedule:
@@ -16,8 +21,6 @@ on:
     - cron: "45 2 * * *"
     # Morning fallback:  03:30 UTC = 09:00 IST
     - cron: "30 3 * * *"
-    # Pre-midnight:      18:15 UTC = 23:45 IST — refresh before Zerodha midnight expiry
-    - cron: "15 18 * * *"
   workflow_dispatch: {}  # allow manual trigger from the Actions tab
 
 concurrency:
@@ -45,43 +48,57 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pyotp redis kiteconnect
 
-      - name: Check if token is already fresh today
+      - name: Check if token is already fresh and valid today
         id: token_check
         env:
           REDIS_URL: ${{ secrets.REDIS_URL }}
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
         run: |
-          pip install redis -q
           python -c "
-          import os, redis, sys
+          import os, sys
           from datetime import datetime, timezone, timedelta
-          IST = timezone(timedelta(hours=5, minutes=30))
-          url = os.getenv('REDIS_URL','')
-          if not url:
-              print('skip=false'); sys.exit(0)
-          now = datetime.now(IST)
-          # Pre-midnight run (23:30-23:59 IST): always refresh — Zerodha expires at 00:00 IST
-          if now.hour >= 23 and now.minute >= 30:
-              print('Pre-midnight run — always refreshing token before Zerodha midnight expiry')
+
+          def write_output(skip):
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write('skip=false\n')
-              sys.exit(0)
+                  f.write(f'skip={\"true\" if skip else \"false\"}\n')
+
+          IST = timezone(timedelta(hours=5, minutes=30))
+          url = os.getenv('REDIS_URL', '')
+          api_key = os.getenv('KITE_API_KEY', '')
+          if not url:
+              print('No REDIS_URL — proceeding with login')
+              write_output(False); sys.exit(0)
+
+          now = datetime.now(IST)
           try:
+              import redis
               r = redis.from_url(url, decode_responses=True, socket_timeout=10)
               ts = r.get('kite:token_ts')
               tok = r.get('kite:access_token')
-              if ts and tok:
-                  token_dt = datetime.fromisoformat(ts)
-                  if token_dt.date() == now.date():
-                      print('Token already refreshed today — skipping login')
-                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                          f.write('skip=true\n')
-                      sys.exit(0)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write('skip=false\n')
+              if not (ts and tok):
+                  print('No token in Redis — proceeding with login')
+                  write_output(False); sys.exit(0)
+
+              token_dt = datetime.fromisoformat(ts)
+              if token_dt.date() != now.date():
+                  print(f'Token date {token_dt.date()} != today {now.date()} — proceeding with login')
+                  write_output(False); sys.exit(0)
+
+              # Date matches today — but is the token actually valid?
+              if not api_key:
+                  print('No KITE_API_KEY to validate — proceeding with login')
+                  write_output(False); sys.exit(0)
+
+              from kiteconnect import KiteConnect
+              k = KiteConnect(api_key=api_key)
+              k.set_access_token(tok)
+              profile = k.profile()
+              name = profile.get('user_name', '?')
+              print(f'Token valid today for {name} — skipping login')
+              write_output(True)
           except Exception as e:
-              print(f'Check failed ({e}), proceeding with login')
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write('skip=false\n')
+              print(f'Token date is today but INVALID ({e}) — proceeding with fresh login')
+              write_output(False)
           "
 
       - name: Run Kite auto-login
