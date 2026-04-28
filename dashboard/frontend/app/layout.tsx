@@ -7,6 +7,7 @@ import ThemeProvider from "@/components/ThemeProvider";
 import { AuthProvider } from "@/lib/auth";
 import { site } from "@/lib/site";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
@@ -60,6 +61,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </AuthProvider>
         </ErrorBoundary>
         <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
