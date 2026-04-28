@@ -6,6 +6,7 @@ import LayoutClient from "@/components/LayoutClient";
 import ThemeProvider from "@/components/ThemeProvider";
 import { AuthProvider } from "@/lib/auth";
 import { site } from "@/lib/site";
+import { Analytics } from "@vercel/analytics/react";
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
@@ -58,6 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </ThemeProvider>
           </AuthProvider>
         </ErrorBoundary>
+        <Analytics />
       </body>
     </html>
   );
