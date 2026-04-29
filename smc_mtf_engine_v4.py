@@ -5783,8 +5783,9 @@ def reinitialize_engine(reason: str) -> None:
     _reinit_kite()
 
     # 2) Reload instruments + universe
+    _inst_count = 0
     try:
-        _load_kite_instruments_cache(force=True)
+        _inst_count = _load_kite_instruments_cache(force=True)
     except Exception as e:
         logging.warning("[reinit_engine] instruments reload failed: %s", e)
 
@@ -5793,6 +5794,18 @@ def reinitialize_engine(reason: str) -> None:
             STOCK_UNIVERSE = load_stock_universe(kite)
     except Exception as e:
         logging.warning("[reinit_engine] universe rebuild failed: %s", e)
+
+    # Verify: instrument map must cover at least the index symbols
+    _missing_idx = [s for s in INDEX_SYMBOLS if s not in INSTRUMENT_TOKEN_MAP]
+    if _missing_idx:
+        logging.error("[reinit_engine] CRITICAL: index symbols missing from instrument map: %s — retrying", _missing_idx)
+        try:
+            _load_kite_instruments_cache(force=True)
+        except Exception:
+            pass
+    _eff_universe = len(INDEX_SYMBOLS) + len(STOCK_UNIVERSE)
+    logging.warning("[reinit_engine] effective_scan_pool=%d (indexes=%d stocks=%d instruments=%d)",
+                    _eff_universe, len(INDEX_SYMBOLS), len(STOCK_UNIVERSE), len(INSTRUMENT_TOKEN_MAP))
 
     # 3) Reset caches/state (non-strategy; purely lifecycle hygiene)
     try:
@@ -5830,13 +5843,31 @@ def reinitialize_engine(reason: str) -> None:
     except Exception as e:
         logging.warning("[reinit_engine] bn_signal_engine init failed: %s", e)
 
-    # 5) Force full scan next loop
+    # 5) Data warmup: pre-fetch OHLC for index symbols so first scan is not "NO DATA"
+    _warmup_ok = 0
+    _warmup_fail = 0
+    for _ws in INDEX_SYMBOLS:
+        for _wi in ("5minute", "15minute", "60minute", "day"):
+            try:
+                _wd = fetch_ohlc(_ws, _wi, 200)
+                if _wd and len(_wd) > 0:
+                    _warmup_ok += 1
+                else:
+                    _warmup_fail += 1
+            except Exception:
+                _warmup_fail += 1
+    logging.warning("[reinit_engine] data_warmup: ok=%d fail=%d (index symbols × 4 intervals)", _warmup_ok, _warmup_fail)
+    if _warmup_fail > 0 and _warmup_ok == 0:
+        logging.error("[reinit_engine] ALL warmup fetches failed — Kite data may still be unavailable")
+
+    # 6) Force full scan next loop
     _FORCE_FULL_SCAN_ONCE = True
     logging.warning(
-        "[reinit_engine] Done. kite=%s instruments=%d universe=%d force_full_scan=%s",
+        "[reinit_engine] COMPLETE. kite=%s instruments=%d eff_universe=%d warmup_ok=%d force_full_scan=%s",
         "ok" if kite is not None else "none",
         len(INSTRUMENT_TOKEN_MAP),
-        len(STOCK_UNIVERSE),
+        _eff_universe,
+        _warmup_ok,
         _FORCE_FULL_SCAN_ONCE,
     )
 
@@ -6356,13 +6387,46 @@ def run_live_mode():
             global _FORCE_FULL_SCAN_ONCE
             if _FORCE_FULL_SCAN_ONCE:
                 _FORCE_FULL_SCAN_ONCE = False
-                # Full scan = indices + full stock universe (if enabled) regardless of minute gating
                 scan_universe = INDEX_SYMBOLS.copy()
                 if not INDEX_ONLY:
                     scan_universe.extend(get_stock_universe())
-                logging.warning("[recovery] Forcing FULL scan: %d symbols", len(scan_universe))
+                logging.warning("[recovery] FULL SCAN forced: %d symbols (bypassing all gating)", len(scan_universe))
             else:
                 scan_universe = build_scan_universe(get_stock_universe())
+
+            # ── Data readiness gate ──────────────────────────────────────
+            # Before scanning, verify we can actually fetch data for at least
+            # one index symbol. If OHLC fetch fails for ALL index symbols,
+            # skip the entire scan cycle (prevents "NO DATA" / empty results).
+            _preflight_ok = 0
+            for _pf_sym in INDEX_SYMBOLS:
+                try:
+                    _pf_data = fetch_ohlc(_pf_sym, "5minute", 10)
+                    if _pf_data and len(_pf_data) > 0:
+                        _preflight_ok += 1
+                except Exception:
+                    pass
+            if _preflight_ok == 0:
+                logging.error(
+                    "[scan_gate] OHLC preflight FAILED for all %d index symbols — skipping scan cycle. "
+                    "kite=%s token=%s",
+                    len(INDEX_SYMBOLS),
+                    "ok" if kite else "none",
+                    (_current_kite_token[:8] + "...") if _current_kite_token else "NONE",
+                )
+                try:
+                    import engine_runtime
+                    engine_runtime.set_engine_stage("DATA_UNAVAILABLE")
+                    engine_runtime.safe_sleep(10)
+                except Exception:
+                    t.sleep(10)
+                continue
+
+            _eff_universe_size = len(INDEX_SYMBOLS) + len(get_stock_universe())
+            logging.info(
+                "[cycle] kite_connected=True preflight_ok=%d/%d scan_universe=%d eff_universe=%d instruments=%d",
+                _preflight_ok, len(INDEX_SYMBOLS), len(scan_universe), _eff_universe_size, len(INSTRUMENT_TOKEN_MAP),
+            )
             print(f"[{now.strftime('%H:%M:%S')}] 📡 Scanning {len(scan_universe)} symbols...")
     
             # ==================================
@@ -6568,6 +6632,20 @@ def run_live_mode():
                     if DEBUG_MODE:
                         logging.error(f"Scan Exception {symbol}: {e}")
                         print(f"Scan Exception {symbol}: {e}")
+
+            # ── Per-cycle critical log (always, not just first cycle) ─────
+            _ohlc_total = _scan_data_ok + _scan_data_empty
+            _ohlc_rate = f"{_scan_data_ok}/{_ohlc_total}" if _ohlc_total else "0/0"
+            logging.info(
+                "[scan_result] symbols_scanned=%d ohlc_success=%s signals=%d errors=%d kite=%s",
+                len(scan_universe), _ohlc_rate, _scan_raw_signals, len(_scan_errors),
+                "ok" if kite else "none",
+            )
+            if _scan_data_empty > 0 and _scan_data_ok == 0:
+                logging.error(
+                    "[scan_result] ALL symbols returned NO DATA (ohlc_ok=0 empty=%d) — data connection may be broken",
+                    _scan_data_empty,
+                )
 
             # Periodic diagnostic telegram (first cycle only + on errors)
             if not hasattr(run_live_mode, '_diag_count'):
