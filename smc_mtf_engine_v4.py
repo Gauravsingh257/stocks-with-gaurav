@@ -897,11 +897,20 @@ def get_daily_trade_count(symbol: str) -> int:
 # TOKEN CACHE (500 STOCK SAFE)
 # =====================================================
 
+INSTRUMENT_TOKEN_MAP: dict[str, int] = {}
+_INSTRUMENTS_LOADED_AT: datetime | None = None
+
 def get_token(symbol: str):
     if symbol in TOKEN_CACHE:
         return TOKEN_CACHE[symbol]
 
     try:
+        # Prefer instrument cache (fast, avoids ltp() dependency during recovery)
+        tok = INSTRUMENT_TOKEN_MAP.get(symbol)
+        if tok:
+            TOKEN_CACHE[symbol] = tok
+            return tok
+
         result = _kite_call(kite.ltp, symbol)
         token = list(result.values())[0]["instrument_token"]
         TOKEN_CACHE[symbol] = token
@@ -981,31 +990,76 @@ INDEX_ONLY = True  # Only NIFTY 50 and BANKNIFTY — stock signals disabled
 # Phase 1: SETUP-D removed from disabled set — re-enabled for index instruments only (gated in scan_symbol)
 _DISABLED_SETUPS = {"B", "SETUP-D-V2"}
 
-def load_stock_universe():
+def load_stock_universe(kite_client=None) -> list:
+    """
+    Cloud-safe stock universe loader.
+
+    Order:
+    1) Optional curated JSON in repo root (stock_universe_fno.json / stock_universe_500.json)
+    2) Fallback: derive NSE equity universe from Kite instruments (no local files)
+
+    NOTE: This does not change strategy logic — it only ensures the universe exists on Railway.
+    """
     if INDEX_ONLY:
-        print("ℹ️ INDEX_ONLY mode — stock universe disabled")
+        logging.info("INDEX_ONLY mode — stock universe disabled")
         return []
     try:
-        # Prefer curated FNO file over the legacy 500-symbol file
-        fno_path = os.path.join(os.getcwd(), "stock_universe_fno.json")
-        legacy_path = os.path.join(os.getcwd(), "stock_universe_500.json")
-        path = fno_path if os.path.exists(fno_path) else legacy_path
-        with open(path, "r") as f:
-            symbols = json.load(f)
+        # Prefer curated files if present (supports legacy workflows)
+        base = Path(__file__).resolve().parent
+        fno_path = base / "stock_universe_fno.json"
+        legacy_path = base / "stock_universe_500.json"
+        path = fno_path if fno_path.exists() else legacy_path
+        if path.exists():
+            symbols = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(symbols, list):
+                raise ValueError("Stock universe JSON is not a list")
+            symbols = [s for s in symbols if not any(x in s for x in ("-SG", "-GB", "-GS", "-YI", "-YL", "-N", "-BE", "-BZ", "-ST", "-SM"))]
+            logging.info("Stock universe loaded from %s (%d symbols)", path.name, len(symbols))
+            return symbols
 
-        if not isinstance(symbols, list):
-            raise ValueError("Stock universe JSON is not a list")
-
-        # Strip any bonds/ETFs that slipped in
-        symbols = [s for s in symbols if not any(x in s for x in ("-SG", "-GB", "-GS", "-YI", "-YL", "-N", "-BE", "-BZ", "-ST", "-SM"))]
-        print(f"📋 Stock universe loaded from: {os.path.basename(path)} ({len(symbols)} symbols)")
-        return symbols
-
+        # Fallback: build from Kite instruments (NSE EQ)
+        if kite_client is None:
+            logging.warning("Stock universe JSON missing and kite client not available — universe empty")
+            return []
+        instruments = _kite_call(kite_client.instruments, "NSE", timeout=_KITE_TIMEOUT_SEC)
+        out: list[str] = []
+        for ins in instruments or []:
+            try:
+                if ins.get("exchange") != "NSE":
+                    continue
+                if ins.get("segment") not in ("NSE", "NSE_EQ", None):
+                    # Kite sometimes varies; we accept NSE-ish segments
+                    continue
+                if (ins.get("instrument_type") or "").upper() != "EQ":
+                    continue
+                tsym = ins.get("tradingsymbol") or ""
+                if not tsym:
+                    continue
+                out.append(f"NSE:{tsym}")
+            except Exception:
+                continue
+        # Keep a stable order to reduce churn
+        out = sorted(set(out))
+        logging.info("Stock universe derived from Kite instruments (%d symbols)", len(out))
+        return out
     except Exception as e:
-        print("⚠️ Stock universe load failed:", e)
+        logging.warning("Stock universe load failed: %s", e)
         return []
-STOCK_UNIVERSE = load_stock_universe()
-def get_stock_universe():
+
+
+STOCK_UNIVERSE: list[str] = []
+
+
+def get_stock_universe() -> list:
+    global STOCK_UNIVERSE
+    if STOCK_UNIVERSE:
+        return STOCK_UNIVERSE
+    # Lazy-load when Kite is available (Railway-safe)
+    try:
+        if not INDEX_ONLY and kite is not None:
+            STOCK_UNIVERSE = load_stock_universe(kite)
+    except Exception:
+        pass
     return STOCK_UNIVERSE
 
 if DEBUG_MODE:
@@ -5655,10 +5709,136 @@ def _reinit_kite():
             bn_signal_engine.initialize()
         except Exception:
             pass
+        # Refresh instruments cache opportunistically so token→data recovery is complete.
+        try:
+            _load_kite_instruments_cache(force=True)
+        except Exception:
+            pass
         return True
     except Exception as e:
         logging.warning("[reinit_kite] Failed: %s", e)
         return False
+
+
+def _kite_health_check() -> tuple[bool, str]:
+    """
+    Strict Kite health probe.
+    Returns (connected, reason). Uses profile() every check (as requested).
+    """
+    if kite is None:
+        return False, "kite_not_initialized"
+    try:
+        _kite_call(kite.profile, timeout=_KITE_TIMEOUT_SEC)
+        return True, ""
+    except Exception as e:
+        return False, f"profile_failed: {e}"
+
+
+def _load_kite_instruments_cache(force: bool = False) -> int:
+    """
+    Load NSE instruments into INSTRUMENT_TOKEN_MAP.
+    This removes dependency on per-symbol ltp() for instrument_token resolution,
+    which is fragile during/after token refresh.
+    """
+    global INSTRUMENT_TOKEN_MAP, _INSTRUMENTS_LOADED_AT
+    if kite is None:
+        return 0
+    now = now_ist()
+    if not force and _INSTRUMENTS_LOADED_AT and (now - _INSTRUMENTS_LOADED_AT).total_seconds() < 3600:
+        return len(INSTRUMENT_TOKEN_MAP)
+    instruments = _kite_call(kite.instruments, "NSE", timeout=_KITE_TIMEOUT_SEC)
+    token_map: dict[str, int] = {}
+    for ins in instruments or []:
+        try:
+            exch = ins.get("exchange")
+            tsym = ins.get("tradingsymbol")
+            tok = ins.get("instrument_token")
+            if not (exch and tsym and tok):
+                continue
+            # Canonical map key used across this engine: "NSE:FOO"
+            token_map[f"{exch}:{tsym}"] = int(tok)
+        except Exception:
+            continue
+    INSTRUMENT_TOKEN_MAP = token_map
+    _INSTRUMENTS_LOADED_AT = now
+    logging.info("[instruments] Loaded %d NSE instruments into token map", len(INSTRUMENT_TOKEN_MAP))
+    return len(INSTRUMENT_TOKEN_MAP)
+
+
+_FORCE_FULL_SCAN_ONCE = False
+
+
+def reinitialize_engine(reason: str) -> None:
+    """
+    FULL engine reinitialization after token refresh / recovery.
+    - reconnect kite (via _reinit_kite)
+    - reload instruments cache
+    - rebuild stock universe (cloud-safe)
+    - reset internal caches/state that can preserve a failed scan state
+    """
+    global _FORCE_FULL_SCAN_ONCE, STOCK_UNIVERSE
+    logging.warning("[reinit_engine] Starting full reinitialization (%s)", reason)
+
+    # 1) Ensure Kite session is fresh (token may have changed)
+    _reinit_kite()
+
+    # 2) Reload instruments + universe
+    try:
+        _load_kite_instruments_cache(force=True)
+    except Exception as e:
+        logging.warning("[reinit_engine] instruments reload failed: %s", e)
+
+    try:
+        if not INDEX_ONLY and kite is not None:
+            STOCK_UNIVERSE = load_stock_universe(kite)
+    except Exception as e:
+        logging.warning("[reinit_engine] universe rebuild failed: %s", e)
+
+    # 3) Reset caches/state (non-strategy; purely lifecycle hygiene)
+    try:
+        TOKEN_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        with OHLC_CACHE_LOCK:
+            OHLC_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        HTF_CACHE.clear()
+        HTF_CACHE_TIME.clear()
+    except Exception:
+        pass
+    try:
+        EARLY_WARNING_STATE.clear()
+    except Exception:
+        pass
+    try:
+        reset_oi_state()
+    except Exception:
+        pass
+
+    # 4) Re-init dependent sub-engines (connection state)
+    try:
+        if option_monitor:
+            option_monitor.initialize()
+    except Exception as e:
+        logging.warning("[reinit_engine] option_monitor init failed: %s", e)
+    try:
+        if bn_signal_engine:
+            bn_signal_engine.initialize()
+    except Exception as e:
+        logging.warning("[reinit_engine] bn_signal_engine init failed: %s", e)
+
+    # 5) Force full scan next loop
+    _FORCE_FULL_SCAN_ONCE = True
+    logging.warning(
+        "[reinit_engine] Done. kite=%s instruments=%d universe=%d force_full_scan=%s",
+        "ok" if kite is not None else "none",
+        len(INSTRUMENT_TOKEN_MAP),
+        len(STOCK_UNIVERSE),
+        _FORCE_FULL_SCAN_ONCE,
+    )
 
 
 def run_live_mode():
@@ -5693,19 +5873,22 @@ def run_live_mode():
     # 💾 LOAD PERSISTED MEMORY
     load_engine_states()
 
-    # Re-init Kite from latest token (Redis/env/file) — critical for Railway restart loops
+    # Strict bootstrap: do not proceed unless Kite is healthy.
     if not _reinit_kite():
-        logging.warning("Kite init failed — token may not be set yet. Will retry on next cycle.")
+        logging.warning("Kite init failed — token may not be set yet. Will retry via Railway recovery loop.")
         return
 
-    # F4.4: Check token freshness BEFORE data connection test
     if not check_token_age(max_hours=20):
-        print("\n🛑 TOKEN TOO OLD — waiting for refresh via morning_login")
+        logging.critical("TOKEN TOO OLD — awaiting refresh")
         return
 
-    # 🛑 RUN HEALTH CHECK
+    ok, reason = _kite_health_check()
+    if not ok:
+        logging.critical("Kite unhealthy at startup (%s) — awaiting refresh", reason)
+        return
+
     if not test_data_connection():
-        print("\n🛑 DATA CONNECTION FAILED — token may be expired or invalid")
+        logging.critical("DATA CONNECTION FAILED at startup — token may be expired or invalid")
         return
 
     # Phase 6: Paper mode banner
@@ -5736,6 +5919,54 @@ def run_live_mode():
             cleanup_structure_state()
             now = now_ist().time()
 
+            # ── Kite health gate (every cycle) ───────────────────────────────
+            # Prevent silent failure: if Kite is not connected, do NOT scan.
+            _kite_ok, _kite_reason = _kite_health_check()
+            logging.info(
+                "[kite] connected=%s reason=%s token_map=%d universe=%d",
+                _kite_ok,
+                _kite_reason or "-",
+                len(INSTRUMENT_TOKEN_MAP),
+                len(get_stock_universe()),
+            )
+            if not _kite_ok:
+                logging.error("[kite] DISCONNECTED — pausing scans and attempting recovery (%s)", _kite_reason)
+                try:
+                    import engine_runtime
+                    engine_runtime.set_engine_stage("KITE_DISCONNECTED")
+                except Exception:
+                    pass
+
+                # Trigger token refresh (cloud automation) then wait until Kite is valid.
+                _attempt_auto_login()
+                _recovered = False
+                for _i in range(12):  # up to ~60s (12 * 5s)
+                    try:
+                        _reinit_kite()
+                        _ok2, _r2 = _kite_health_check()
+                        if _ok2 and check_token_age(max_hours=20):
+                            _recovered = True
+                            break
+                        logging.warning("[kite] still unhealthy (%s) — retrying...", _r2 or "unknown")
+                    except Exception:
+                        pass
+                    try:
+                        import engine_runtime
+                        engine_runtime.safe_sleep(5)
+                    except Exception:
+                        t.sleep(5)
+
+                if not _recovered:
+                    logging.error("[kite] Recovery failed — skipping this cycle")
+                    continue
+
+                # Full reinit after recovery, then force a full scan next cycle
+                reinitialize_engine(reason="kite_recovered")
+                telegram_send("✅ <b>KITE RECOVERED</b>\nReinitialized engine state. Forcing a full scan now.")
+                # Do not run partial scanning in the same cycle; start clean next loop
+                continue
+            # ─────────────────────────────────────────────────────────────────
+
             # Railway 24/7: lock refresh every 2 min (heartbeat runs in dedicated thread)
             try:
                 import engine_runtime
@@ -5749,40 +5980,9 @@ def run_live_mode():
             except Exception as _e:
                 logging.debug("Engine runtime lock refresh: %s", _e)
 
-            # ── Proactive pre-midnight Kite token refresh ────────────────────
-            # Zerodha tokens die at 00:00 IST. Refresh proactively at 23:45 IST
-            # so the engine never hits a gap at midnight.
-            try:
-                _now_ist = now_ist()
-                _now_time = _now_ist.time()
-                if time(23, 45) <= _now_time <= time(23, 59):
-                    _redis_url_pm = os.getenv("REDIS_URL", "").strip()
-                    _already_refreshed = False
-                    if _redis_url_pm:
-                        try:
-                            import redis as _r_pm
-                            _rr = _r_pm.from_url(_redis_url_pm, decode_responses=True)
-                            _pm_ts = _rr.get("kite:midnight_refresh_done")
-                            if _pm_ts == _now_ist.strftime("%Y-%m-%d"):
-                                _already_refreshed = True
-                        except Exception:
-                            pass
-                    if not _already_refreshed:
-                        logging.info("[midnight-refresh] 23:45 IST — proactive token refresh before midnight expiry")
-                        _pmr_ok = _attempt_auto_login()
-                        if _pmr_ok and _redis_url_pm:
-                            try:
-                                import redis as _r_pm2
-                                _rr2 = _r_pm2.from_url(_redis_url_pm, decode_responses=True)
-                                _rr2.set("kite:midnight_refresh_done", _now_ist.strftime("%Y-%m-%d"), ex=7200)
-                                logging.info("[midnight-refresh] ✅ Pre-midnight token refreshed successfully")
-                            except Exception:
-                                pass
-                        elif not _pmr_ok:
-                            logging.warning("[midnight-refresh] ❌ Pre-midnight refresh failed — will retry at next loop")
-            except Exception as _pm_e:
-                logging.debug("Pre-midnight refresh check: %s", _pm_e)
-            # ─────────────────────────────────────────────────────────────────
+            # NOTE: Pre-midnight token refresh is handled by GitHub Actions now.
+            # Keeping a second independent re-login path here causes race conditions
+            # (cron delays, token_ts/date dedup, partial engine state) and is disabled.
 
             # Kite token refresh: re-read from Redis/env/file so morning_login.bat takes effect without restart
             global _current_kite_token
@@ -5813,12 +6013,16 @@ def run_live_mode():
                                     if _ts_obj.date() == _today and _in_day:
                                         _last_known_token_ts = _tok_ts
                                         _fresh_token_today = True
-                                        _catch_up_scan_done = False
+                                        # After token refresh we force a FULL reinit + FULL scan,
+                                        # so we explicitly skip the catch-up scan path.
+                                        _catch_up_scan_done = True
                                         _token_activated_at = now_ist().strftime("%H:%M")
                                         logging.info(
                                             "Fresh token detected (ts=%s) — signal window unlocked at %s IST",
                                             _tok_ts, _token_activated_at,
                                         )
+                                        # Full lifecycle recovery: reset engine state + force full scan.
+                                        reinitialize_engine(reason="token_refreshed_in_loop")
                         except Exception as _ts_e:
                             logging.debug("Token-ts Redis check failed: %s", _ts_e)
                         # ────────────────────────────────────────────────────────
@@ -6149,7 +6353,16 @@ def run_live_mode():
             # 0. Sync Manual Trades (Once per cycle)
             fetch_manual_orders()
             
-            scan_universe = build_scan_universe(get_stock_universe())
+            global _FORCE_FULL_SCAN_ONCE
+            if _FORCE_FULL_SCAN_ONCE:
+                _FORCE_FULL_SCAN_ONCE = False
+                # Full scan = indices + full stock universe (if enabled) regardless of minute gating
+                scan_universe = INDEX_SYMBOLS.copy()
+                if not INDEX_ONLY:
+                    scan_universe.extend(get_stock_universe())
+                logging.warning("[recovery] Forcing FULL scan: %d symbols", len(scan_universe))
+            else:
+                scan_universe = build_scan_universe(get_stock_universe())
             print(f"[{now.strftime('%H:%M:%S')}] 📡 Scanning {len(scan_universe)} symbols...")
     
             # ==================================
