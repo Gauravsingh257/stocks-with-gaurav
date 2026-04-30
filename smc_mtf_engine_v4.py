@@ -728,6 +728,12 @@ def telegram_send_image(
                     persist_telegram_signal(caption, signal_id, m)
                 except Exception as _log_exc:
                     logging.warning("[Telegram] signal_log persist (photo) failed: %s", _log_exc)
+                try:
+                    from services.signal_delivery import record_delivery_success
+
+                    record_delivery_success(signal_id, caption)
+                except Exception:
+                    pass
                 return
             last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
             logging.warning("[Telegram] sendPhoto attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
@@ -4685,6 +4691,12 @@ def telegram_send_with_buttons(message: str, buttons: list, signal_id: str = Non
                     persist_telegram_signal(message, signal_id, m)
                 except Exception as _log_exc:
                     logging.warning("[Telegram] signal_log persist (buttons) failed: %s", _log_exc)
+                try:
+                    from services.signal_delivery import record_delivery_success
+
+                    record_delivery_success(signal_id, message)
+                except Exception:
+                    pass
                 return
             last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
             logging.warning("[Telegram] sendMessage(buttons) attempt %d/%d failed: %s", attempt + 1, 3, last_exc)
@@ -6673,8 +6685,13 @@ def run_live_mode():
             # --- Signal delivery: cycle diagnostics + heartbeat + queue start ---
             try:
                 from services.signal_delivery import (
-                    record_cycle_diagnostics,
+                    drain_signal_queue_cycle,
+                    ensure_delivery_worker_alive,
+                    maybe_send_daily_pipeline_check,
                     maybe_send_heartbeat,
+                    maybe_send_no_setup_report,
+                    record_cycle_diagnostics,
+                    start_delivery_watchdog,
                     start_delivery_worker,
                 )
                 _sig_details = []
@@ -6702,8 +6719,19 @@ def run_live_mode():
                     rejection_reasons=_rej_reasons,
                     zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
                 )
+                maybe_send_daily_pipeline_check(telegram_send)
+                maybe_send_no_setup_report(
+                    telegram_send,
+                    signals_generated=_scan_raw_signals,
+                    scanned_count=len(scan_universe),
+                    data_ok_count=_scan_data_ok,
+                    zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
+                )
                 maybe_send_heartbeat(telegram_send)
+                start_delivery_watchdog(telegram_send_signal)
+                ensure_delivery_worker_alive(telegram_send_signal)
                 start_delivery_worker(telegram_send_signal)
+                drain_signal_queue_cycle(telegram_send_signal)
             except Exception as _sd_exc:
                 logging.debug("signal_delivery integration error (non-blocking): %s", _sd_exc)
 
@@ -7157,8 +7185,14 @@ def run_live_mode():
                     telegram_send_with_buttons(text, buttons, signal_id=_entry_sid, signal_meta=_entry_meta)
 
                 try:
-                    from services.signal_delivery import enqueue_signal
-                    enqueue_signal(text, signal_id=_entry_sid, signal_meta=_entry_meta)
+                    from services.signal_delivery import enqueue_signal_verified
+
+                    enqueue_signal_verified(
+                        text,
+                        telegram_send_signal,
+                        signal_id=_entry_sid,
+                        signal_meta=_entry_meta,
+                    )
                 except Exception:
                     pass
     
