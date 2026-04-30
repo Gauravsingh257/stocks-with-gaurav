@@ -478,7 +478,8 @@ def telegram_send_signal(
     Use this for all actual trade signals — never for status/diagnostic messages.
     This ensures signals are NEVER silently lost.
 
-    On successful delivery, appends to ai_learning signal_log (for dashboard/journal/analytics).
+    On successful delivery, appends to ai_learning signal_log (for dashboard/journal/analytics)
+    and records delivery confirmation in Redis.
     """
     if not BOT_TOKEN or not (chat_id or CHAT_ID):
         logging.critical(
@@ -486,23 +487,45 @@ def telegram_send_signal(
             "Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID. Signal: %s",
             message[:200],
         )
-        return
+        try:
+            from services.signal_delivery import record_delivery_failure
+            record_delivery_failure(signal_id, "telegram_credentials_missing", message)
+        except Exception:
+            pass
+        return False
 
+    sent = False
     try:
         sent = telegram_send(message, chat_id=chat_id, signal_id=signal_id, _max_retries=3)
         if sent:
             try:
                 from utils.telegram_signal_log import persist_telegram_signal
-
                 persist_telegram_signal(message, signal_id, signal_meta)
             except Exception as _log_exc:
                 logging.warning("[Telegram] signal_log persist failed: %s", _log_exc)
+            try:
+                from services.signal_delivery import record_delivery_success
+                record_delivery_success(signal_id, message)
+            except Exception:
+                pass
+        else:
+            try:
+                from services.signal_delivery import record_delivery_failure
+                record_delivery_failure(signal_id, "telegram_send_returned_false_after_retries", message)
+            except Exception:
+                pass
     except Exception as exc:
         logging.critical(
             "[SIGNAL LOST] telegram_send raised after 3 retries (%s). "
             "Signal text (first 300 chars): %s",
             exc, message[:300],
         )
+        try:
+            from services.signal_delivery import record_delivery_failure
+            record_delivery_failure(signal_id, str(exc)[:500], message)
+        except Exception:
+            pass
+    return sent
 
 # Current token in use (for refresh comparison). Set after successful set_access_token.
 _current_kite_token = None
@@ -6647,6 +6670,43 @@ def run_live_mode():
                     _scan_data_empty,
                 )
 
+            # --- Signal delivery: cycle diagnostics + heartbeat + queue start ---
+            try:
+                from services.signal_delivery import (
+                    record_cycle_diagnostics,
+                    maybe_send_heartbeat,
+                    start_delivery_worker,
+                )
+                _sig_details = []
+                for _sd_sig in all_signals[:20]:
+                    _sig_details.append({
+                        "symbol": _sd_sig.get("symbol"),
+                        "setup": _sd_sig.get("setup"),
+                        "direction": _sd_sig.get("direction"),
+                        "score": _sd_sig.get("smc_score"),
+                        "ai_score": _sd_sig.get("ai_score"),
+                    })
+                _rej_reasons = []
+                if _scan_raw_signals == 0:
+                    if _scan_data_ok == 0:
+                        _rej_reasons.append("no_ohlc_data")
+                    if len(_scan_errors) > 0:
+                        _rej_reasons.append(f"scan_errors:{len(_scan_errors)}")
+                    if CIRCUIT_BREAKER_ACTIVE:
+                        _rej_reasons.append("circuit_breaker_active")
+                    if not _rej_reasons:
+                        _rej_reasons.append("no_setup_condition_met")
+                record_cycle_diagnostics(
+                    signals_generated=_scan_raw_signals,
+                    signal_details=_sig_details,
+                    rejection_reasons=_rej_reasons,
+                    zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
+                )
+                maybe_send_heartbeat(telegram_send)
+                start_delivery_worker(telegram_send_signal)
+            except Exception as _sd_exc:
+                logging.debug("signal_delivery integration error (non-blocking): %s", _sd_exc)
+
             # Periodic diagnostic telegram (first cycle only + on errors)
             if not hasattr(run_live_mode, '_diag_count'):
                 run_live_mode._diag_count = 0
@@ -7095,6 +7155,12 @@ def run_live_mode():
                         os.remove(chart)
                 else:
                     telegram_send_with_buttons(text, buttons, signal_id=_entry_sid, signal_meta=_entry_meta)
+
+                try:
+                    from services.signal_delivery import enqueue_signal
+                    enqueue_signal(text, signal_id=_entry_sid, signal_meta=_entry_meta)
+                except Exception:
+                    pass
     
             # -----------------------------
             # SMART WAIT (ZERO LATENCY MONITOR)

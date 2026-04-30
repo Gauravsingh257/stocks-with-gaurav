@@ -511,3 +511,13 @@ def debug_cache():
         return get_snapshot_debug()
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/debug/signals")
+def debug_signals():
+    """Signal delivery pipeline diagnostics: queue, last sends, failures, heartbeat."""
+    try:
+        from services.signal_delivery import get_signal_debug
+        return get_signal_debug()
+    except Exception as e:
+        return {"error": str(e), "redis_available": False}
