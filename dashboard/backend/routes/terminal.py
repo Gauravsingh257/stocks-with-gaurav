@@ -417,3 +417,64 @@ def get_daily_pnl(
         "streak": streak,
         "trades": trades_today,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Mini-chart OHLC — used by OpportunityCard
+# ─────────────────────────────────────────────────────────────────────────
+
+@router.get("/chart/{symbol}", dependencies=[Depends(_require_api_key)])
+def get_chart(
+    symbol: str,
+    interval: str = Query(default="5m", description="1m | 5m | 15m | 1h | 1D"),
+    days: int = Query(default=0, ge=0, le=30, description="Override fetch window (0 = auto)"),
+):
+    """
+    OHLC candles for the OpportunityCard mini-chart.
+
+    Returns ``{ symbol, interval, bars: [{time, open, high, low, close}], count }``.
+    Delegates to the existing charts._fetch_ohlc() which uses Kite historical_data
+    with a 60-second in-process cache so per-card fetches are cheap.
+    Falls back to an empty bars list (not 5xx) when Kite is unavailable so cards
+    degrade gracefully during non-market hours or before login.
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol_required")
+
+    try:
+        from dashboard.backend.routes.charts import (
+            INTERVAL_MAP,
+            DAYS_FOR_INTERVAL,
+            _fetch_ohlc,
+            _kite_symbol,
+        )
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=f"charts_module_unavailable: {exc}")
+
+    kite_interval = INTERVAL_MAP.get(interval)
+    if not kite_interval:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown interval '{interval}'. Use: 1m, 5m, 15m, 1h, 1D",
+        )
+
+    fetch_days = days or DAYS_FOR_INTERVAL.get(kite_interval, 3)
+    kite_sym = _kite_symbol(sym)
+
+    try:
+        raw_candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
+    except RuntimeError as exc:
+        err = str(exc)
+        # Kite not configured / token expired → return empty bars (graceful degradation)
+        if any(kw in err for kw in ("unavailable", "KITE_ACCESS_TOKEN", "invalid", "token")):
+            return {"symbol": sym, "interval": interval, "bars": [], "count": 0, "kite_error": err}
+        raise HTTPException(status_code=502, detail=err)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    bars = [
+        {"time": c["time"], "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"]}
+        for c in raw_candles
+    ]
+    return {"symbol": sym, "interval": interval, "bars": bars, "count": len(bars)}

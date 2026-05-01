@@ -162,9 +162,9 @@ function ChartBlock({ opp }: { opp: Opportunity }) {
         position: "relative",
       }}
     >
-      <MiniChart data={opp.spark} direction={opp.direction} height={120} />
+      <MiniChart symbol={opp.symbol} direction={opp.direction} height={120} entry={opp.entry} stop={opp.stop} target={opp.target} />
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: "0.66rem", color: "var(--text-dim)" }}>
-        <span>Preview · 24 ticks</span>
+        <span>5-min OHLC · live</span>
         {opp.cmp != null && <span>CMP {priceLabel(opp.cmp)}</span>}
       </div>
     </div>

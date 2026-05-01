@@ -55,7 +55,6 @@ export interface Opportunity {
   };
   sector: string | null;
   raw: ResearchDecisionCard;
-  spark: number[];
   /** Phase 3 intelligence enrichment (present when from /api/trades or /ws/trades) */
   intelligence?: TradeIntelligence;
   /** Whether the user has marked this trade as taken */
@@ -111,33 +110,10 @@ function deriveStatus(card: ResearchDecisionCard): WatchStatus {
   return "Waiting";
 }
 
-function buildSpark(card: ResearchDecisionCard, direction: Direction): number[] {
-  // Synthesize a deterministic preview line from key levels so cards always
-  // show motion even before live tick streaming is wired in. The real chart
-  // appears in the explanation drawer.
-  const entry = toNumber(card.entry_price) ?? toNumber(card.scan_cmp) ?? 100;
-  const cmp = toNumber(card.scan_cmp) ?? entry;
-  const target = toNumber(card.target_1) ?? entry * (direction === "BUY" ? 1.05 : 0.95);
-  const stop = toNumber(card.stop_loss) ?? entry * (direction === "BUY" ? 0.97 : 1.03);
-  const start = direction === "BUY" ? Math.min(stop, cmp * 0.985) : Math.max(stop, cmp * 1.015);
-  const end = cmp;
-  const peak = direction === "BUY" ? Math.min(target, end * 1.01) : Math.max(target, end * 0.99);
-  const seed = (card.symbol?.charCodeAt(0) ?? 65) % 7;
-  const points: number[] = [];
-  for (let i = 0; i < 24; i++) {
-    const t = i / 23;
-    const wobble = Math.sin(t * Math.PI * (1.6 + seed * 0.1)) * (Math.abs(end - start) * 0.18);
-    const base = start + (end - start) * t;
-    const climb = (peak - end) * Math.pow(t, 2) * 0.25;
-    points.push(base + wobble + climb);
-  }
-  return points;
-}
-
 export function toOpportunity(card: ResearchDecisionCard): Opportunity {
   const direction = deriveDirection(card);
   const entry = toNumber(card.entry_price);
-  const stop = toNumber(card.stop_loss);
+  const stop  = toNumber(card.stop_loss);
   const target = toNumber(card.target_1) ?? toNumber(card.target_2);
   let rr = toNumber(card.risk_reward);
   if (rr == null && entry != null && stop != null && target != null) {
@@ -186,7 +162,6 @@ export function toOpportunity(card: ResearchDecisionCard): Opportunity {
     signals,
     sector: card.sector ?? null,
     raw: card,
-    spark: buildSpark(card, direction),
   };
 }
 
@@ -220,25 +195,6 @@ const LIVE_STATUS_MAP: Record<LiveTrade["status"], WatchStatus> = {
   TARGET_HIT: "TargetHit",
   STOP_HIT: "StopHit",
 };
-
-function liveSpark(entry: number | null, stop: number | null, target: number | null, direction: Direction, seedKey: string): number[] {
-  const e = entry ?? 100;
-  const s = stop ?? e * (direction === "BUY" ? 0.97 : 1.03);
-  const t = target ?? e * (direction === "BUY" ? 1.05 : 0.95);
-  const seed = (seedKey.charCodeAt(0) ?? 65) % 7;
-  const points: number[] = [];
-  const start = direction === "BUY" ? Math.min(s, e * 0.985) : Math.max(s, e * 1.015);
-  const end = e;
-  const peak = direction === "BUY" ? Math.min(t, end * 1.01) : Math.max(t, end * 0.99);
-  for (let i = 0; i < 24; i++) {
-    const u = i / 23;
-    const wobble = Math.sin(u * Math.PI * (1.6 + seed * 0.1)) * (Math.abs(end - start) * 0.18);
-    const base = start + (end - start) * u;
-    const climb = (peak - end) * Math.pow(u, 2) * 0.25;
-    points.push(base + wobble + climb);
-  }
-  return points;
-}
 
 export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
   const direction: Direction = t.direction === "LONG" ? "BUY" : "SELL";
@@ -286,7 +242,6 @@ export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
       layer2_pass: Boolean(t.analysis?.structure),
       layer3_pass: Boolean(t.analysis?.htf_bias),
     } as unknown as ResearchDecisionCard,
-    spark: liveSpark(t.entry, t.sl, t.target, direction, t.symbol),
     intelligence: t.intelligence
       ? {
           probability: t.intelligence.probability,

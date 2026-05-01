@@ -153,9 +153,16 @@ export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, wat
         </div>
       </header>
 
-      {/* Mini Chart */}
+      {/* Mini Chart — real OHLC via /api/chart/{symbol} */}
       <div style={{ position: "relative" }}>
-        <MiniChart data={opp.spark} direction={opp.direction} height={70} />
+        <MiniChart
+          symbol={opp.symbol}
+          direction={opp.direction}
+          height={70}
+          entry={opp.entry}
+          stop={opp.stop}
+          target={opp.target}
+        />
         {opp.cmp != null && (
           <div
             style={{
