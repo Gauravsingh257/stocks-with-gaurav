@@ -17,6 +17,7 @@ from .kite              import router as kite_router
 from .market_intelligence import router as market_intelligence_router
 from .portfolio          import router as portfolio_router
 from .content            import router as content_router
+from .terminal           import router as terminal_router  # Phase 2: AI Trade Opportunity Terminal
 
 try:
     from .auth import router as auth_router

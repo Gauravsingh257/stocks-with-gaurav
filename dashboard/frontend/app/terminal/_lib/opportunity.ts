@@ -185,3 +185,87 @@ export function priceLabel(value: number | null): string {
   if (value == null) return "—";
   return value >= 1000 ? value.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : value.toFixed(2);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Live-API adapter (Phase 2 — /api/trades + /ws/trades)
+// ─────────────────────────────────────────────────────────────────────────
+
+import type { LiveTrade } from "./useLiveTrades";
+
+const LIVE_STATUS_MAP: Record<LiveTrade["status"], WatchStatus> = {
+  WAITING: "Waiting",
+  TAPPED: "Tapped",
+  TRIGGERED: "Triggered",
+  TARGET_HIT: "Triggered",
+  STOP_HIT: "Triggered",
+};
+
+function liveSpark(entry: number | null, stop: number | null, target: number | null, direction: Direction, seedKey: string): number[] {
+  const e = entry ?? 100;
+  const s = stop ?? e * (direction === "BUY" ? 0.97 : 1.03);
+  const t = target ?? e * (direction === "BUY" ? 1.05 : 0.95);
+  const seed = (seedKey.charCodeAt(0) ?? 65) % 7;
+  const points: number[] = [];
+  const start = direction === "BUY" ? Math.min(s, e * 0.985) : Math.max(s, e * 1.015);
+  const end = e;
+  const peak = direction === "BUY" ? Math.min(t, end * 1.01) : Math.max(t, end * 0.99);
+  for (let i = 0; i < 24; i++) {
+    const u = i / 23;
+    const wobble = Math.sin(u * Math.PI * (1.6 + seed * 0.1)) * (Math.abs(end - start) * 0.18);
+    const base = start + (end - start) * u;
+    const climb = (peak - end) * Math.pow(u, 2) * 0.25;
+    points.push(base + wobble + climb);
+  }
+  return points;
+}
+
+export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
+  const direction: Direction = t.direction === "LONG" ? "BUY" : "SELL";
+  const setup = (t.setup ?? "A") as SetupType;
+  const grade = (t.confidence ?? "B") as SetupGrade;
+  const status = LIVE_STATUS_MAP[t.status] ?? "Waiting";
+  return {
+    id: t.id || `${t.symbol}-${t.timestamp ?? "live"}`,
+    symbol: t.symbol,
+    direction,
+    setup,
+    grade,
+    entry: t.entry,
+    stop: t.sl,
+    target: t.target,
+    rr: t.rr,
+    cmp: t.entry,
+    reasoning: t.analysis?.reason ?? "Live setup detected.",
+    status,
+    scores: {
+      liquidity: Boolean(t.analysis?.liquidity),
+      structure: Boolean(t.analysis?.structure),
+      htf: Boolean(t.analysis?.htf_bias),
+      entryQuality: grade === "A+" || grade === "A" ? "ok" : grade === "B" ? "warn" : "fail",
+    },
+    signals: {
+      htfBias: t.analysis?.htf_bias ?? (direction === "BUY" ? "Bullish" : "Bearish"),
+      orderBlock: t.analysis?.ob ? "Detected" : "Pending",
+      fvg: t.analysis?.fvg ? "Imbalance present" : "Not detected",
+      sweep: t.analysis?.liquidity ? "Confirmed" : "Awaiting",
+      structure: t.analysis?.structure ?? "—",
+    },
+    sector: null,
+    raw: {
+      symbol: t.symbol,
+      confidence_score: typeof t.score === "number" ? t.score : 0,
+      setup: setup,
+      entry_price: t.entry,
+      stop_loss: t.sl,
+      target_1: t.target,
+      risk_reward: t.rr,
+      reasoning: t.analysis?.reason,
+      reasoning_summary: t.analysis?.reason,
+      layer1_pass: Boolean(t.analysis?.liquidity),
+      layer2_pass: Boolean(t.analysis?.structure),
+      layer3_pass: Boolean(t.analysis?.htf_bias),
+    } as unknown as ResearchDecisionCard,
+    spark: liveSpark(t.entry, t.sl, t.target, direction, t.symbol),
+  };
+}
+

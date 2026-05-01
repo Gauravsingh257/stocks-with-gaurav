@@ -150,6 +150,12 @@ def push_signal_to_redis(signal_record: dict[str, Any]) -> None:
         r = redis_lib.from_url(url, decode_responses=True)
         r.rpush(key, json.dumps(payload, default=str))
         r.expire(key, 2592000)  # 30 days — allows historical queries up to a month back
+        # Phase 2 — instant fan-out to /ws/trades subscribers.
+        try:
+            from dashboard.backend.terminal_events import publish_signal
+            publish_signal(payload)
+        except Exception as pub_exc:
+            logger.debug("terminal publish_signal failed: %s", pub_exc)
     except Exception as exc:
         logger.debug("push_signal_to_redis failed: %s", exc)
 
