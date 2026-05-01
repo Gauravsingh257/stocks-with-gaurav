@@ -11,6 +11,8 @@ import SmartWatchlistPanel from "./_components/SmartWatchlistPanel";
 import AdvancedFilterBar, { DEFAULT_FILTERS, type FilterState } from "./_components/AdvancedFilterBar";
 import DiscoveryFeed from "./_components/DiscoveryFeed";
 import AISummaryPanel from "./_components/AISummaryPanel";
+import PnLTracker from "./_components/PnLTracker";
+import AlertsBell from "./_components/AlertsBell";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
 import { useLiveTrades } from "./_lib/useLiveTrades";
 import { useTerminalSummary } from "./_lib/useTerminalSummary";
@@ -70,8 +72,15 @@ export default function TerminalPage() {
   // Phase 2 — live trades from /ws/trades (with /api/trades fallback)
   const live = useLiveTrades();
   const liveOpps = useMemo(() => live.trades.map(liveTradeToOpportunity), [live.trades]);
-  // Phase 3 — AI summary panel data
-  const { summary } = useTerminalSummary();
+  // Phase 3+4 — AI summary + daily PnL + markTaken
+  const { summary, dailyPnl, markTaken } = useTerminalSummary();
+
+  const handleMarkTaken = useCallback(
+    async (opp: Opportunity) => {
+      await markTaken(opp.symbol);
+    },
+    [markTaken],
+  );
 
   const allOpps = useMemo(() => {
     const final = feed ? toOpportunities(feed.final_trades) : [];
@@ -140,7 +149,16 @@ export default function TerminalPage() {
 
   return (
     <div style={{ minHeight: "100vh", padding: "28px 24px 56px", maxWidth: 1640, margin: "0 auto" }}>
-      <Hero stats={stats} loading={loading} refreshing={refreshing} onRefresh={load} generatedAt={feed?.generated_at} liveStatus={live.status} />
+      <Hero
+        stats={stats}
+        loading={loading}
+        refreshing={refreshing}
+        onRefresh={load}
+        generatedAt={feed?.generated_at}
+        liveStatus={live.status}
+        pnlTracker={<PnLTracker data={dailyPnl} />}
+        alertsBell={<AlertsBell />}
+      />
 
       <AISummaryPanel
         data={summary}
@@ -212,6 +230,7 @@ export default function TerminalPage() {
                     index={idx}
                     onView={setActiveOpp}
                     onWatch={toggleWatch}
+                    onMarkTaken={handleMarkTaken}
                     watched={watchedIds.includes(opp.id)}
                   />
                 ))}
@@ -281,6 +300,8 @@ function Hero({
   onRefresh,
   generatedAt,
   liveStatus,
+  pnlTracker,
+  alertsBell,
 }: {
   stats: { total: number; bullish: number; bearish: number; apex: number };
   loading: boolean;
@@ -288,6 +309,8 @@ function Hero({
   onRefresh: () => void;
   generatedAt?: string;
   liveStatus?: "connecting" | "live" | "polling" | "offline";
+  pnlTracker?: React.ReactNode;
+  alertsBell?: React.ReactNode;
 }) {
   const updated = generatedAt ? new Date(generatedAt) : null;
   const updatedLabel = updated ? updated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : loading ? "Syncing…" : "—";
@@ -319,31 +342,35 @@ function Hero({
           </p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12 }}>
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={refreshing}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "8px 14px",
-              borderRadius: 10,
-              border: "1px solid var(--accent)",
-              background: "linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,212,255,0.05))",
-              color: "var(--accent)",
-              fontSize: "0.74rem",
-              fontWeight: 700,
-              cursor: refreshing ? "wait" : "pointer",
-              opacity: refreshing ? 0.6 : 1,
-            }}
-          >
-            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} /> Refresh
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {alertsBell}
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 14px",
+                borderRadius: 10,
+                border: "1px solid var(--accent)",
+                background: "linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,212,255,0.05))",
+                color: "var(--accent)",
+                fontSize: "0.74rem",
+                fontWeight: 700,
+                cursor: refreshing ? "wait" : "pointer",
+                opacity: refreshing ? 0.6 : 1,
+              }}
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} /> Refresh
+            </button>
+          </div>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.66rem", color: "var(--text-dim)" }}>
             <Radio size={11} color="#00e096" /> Updated {updatedLabel}
           </div>
           {liveStatus && <LivePill status={liveStatus} />}
+          {pnlTracker}
         </div>
       </div>
 

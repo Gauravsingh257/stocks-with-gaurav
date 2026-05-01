@@ -1,8 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowDownRight, ArrowUpRight, Bookmark, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Bookmark, Check, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import MiniChart from "./MiniChart";
+import DecisionBadge from "./DecisionBadge";
+import LifecycleBar from "./LifecycleBar";
 import type { Opportunity } from "../_lib/opportunity";
 import { priceLabel, rrLabel } from "../_lib/opportunity";
 
@@ -10,6 +13,7 @@ interface Props {
   opp: Opportunity;
   onView: (opp: Opportunity) => void;
   onWatch: (opp: Opportunity) => void;
+  onMarkTaken?: (opp: Opportunity) => Promise<void>;
   watched?: boolean;
   index?: number;
 }
@@ -31,11 +35,22 @@ const STATUS_DOT: Record<string, string> = {
   StopHit: "#ff4757",
 };
 
-export default function OpportunityCard({ opp, onView, onWatch, watched, index = 0 }: Props) {
+export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, watched, index = 0 }: Props) {
   const isBuy = opp.direction === "BUY";
   const grade = GRADE_STYLES[opp.grade] ?? GRADE_STYLES.B;
   const dirColor = isBuy ? "#00e096" : "#ff4757";
   const DirIcon = isBuy ? ArrowUpRight : ArrowDownRight;
+  const [taken, setTaken] = useState(opp.taken ?? false);
+  const [takingLoading, setTakingLoading] = useState(false);
+
+  async function handleMarkTaken(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (taken || takingLoading || !onMarkTaken) return;
+    setTakingLoading(true);
+    await onMarkTaken(opp);
+    setTaken(true);
+    setTakingLoading(false);
+  }
 
   return (
     <motion.article
@@ -184,21 +199,29 @@ export default function OpportunityCard({ opp, onView, onWatch, watched, index =
       {/* Phase 3 — Intelligence strip */}
       {opp.intelligence && <IntelStrip intel={opp.intelligence} />}
 
-      {/* Reasoning preview */}
-      <p
-        style={{
-          fontSize: "0.74rem",
-          color: "var(--text-secondary)",
-          lineHeight: 1.5,
-          margin: 0,
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-        }}
-      >
-        {opp.reasoning}
-      </p>
+      {/* Lifecycle bar */}
+      <LifecycleBar status={opp.status} />
+
+      {/* Decision + Reasoning */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {opp.intelligence?.action && (
+          <DecisionBadge action={opp.intelligence.action} conviction={opp.intelligence.conviction ?? "MEDIUM"} size="sm" />
+        )}
+        <p
+          style={{
+            fontSize: "0.74rem",
+            color: "var(--text-secondary)",
+            lineHeight: 1.5,
+            margin: 0,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {opp.intelligence?.narrative || opp.reasoning}
+        </p>
+      </div>
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
@@ -224,6 +247,33 @@ export default function OpportunityCard({ opp, onView, onWatch, watched, index =
         >
           <Zap size={13} /> View Setup
         </button>
+        {/* Mark Taken button — only shown when engine recommends BUY/STRONG BUY and handler provided */}
+        {onMarkTaken && (opp.intelligence?.action === "BUY" || opp.intelligence?.action === "STRONG BUY") && (
+          <button
+            type="button"
+            onClick={handleMarkTaken}
+            disabled={taken || takingLoading}
+            title={taken ? "Trade recorded" : "Mark as taken"}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "9px 12px",
+              borderRadius: 10,
+              border: `1px solid ${taken ? "rgba(0,224,150,0.5)" : "rgba(0,224,150,0.3)"}`,
+              background: taken ? "rgba(0,224,150,0.18)" : "rgba(0,224,150,0.07)",
+              color: taken ? "#00e096" : "rgba(0,224,150,0.7)",
+              fontSize: "0.72rem",
+              fontWeight: 700,
+              cursor: taken ? "default" : "pointer",
+              opacity: takingLoading ? 0.6 : 1,
+              transition: "all 0.2s",
+            }}
+          >
+            <Check size={13} />
+            {taken ? "Taken" : "Take"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onWatch(opp)}

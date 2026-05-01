@@ -36,6 +36,8 @@ export interface SummaryCard {
   risk_level: string;
   expected_outcome: string;
   expected_move_time: string;
+  action?: string;
+  conviction?: string;
   narrative?: string;
 }
 
@@ -72,13 +74,27 @@ export interface PerformanceStats {
   worst_setup?: string | null;
 }
 
+export interface DailyPnL {
+  date: string;
+  realized_r: number;
+  total_pnl: number;
+  wins: number;
+  losses: number;
+  total: number;
+  win_rate: number;
+  streak: number;
+  trades: Array<{ symbol: string; direction: string; pnl: number; rr?: number | null; setup?: string }>;
+}
+
 const SUMMARY_REFRESH_MS = 45_000;
+const PNL_REFRESH_MS = 60_000;
 
 export function useTerminalSummary() {
   const base = getBackendBase();
   const [summary, setSummary] = useState<AISummaryPayload | null>(null);
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [perf, setPerf] = useState<PerformanceStats | null>(null);
+  const [dailyPnl, setDailyPnl] = useState<DailyPnL | null>(null);
 
   const fetchSummary = useCallback(async () => {
     try {
@@ -123,13 +139,49 @@ export function useTerminalSummary() {
     }
   }, [base]);
 
+  const fetchDailyPnl = useCallback(async () => {
+    try {
+      const res = await fetch(`${base}/api/pnl/daily`, { cache: "no-store" });
+      if (res.ok) setDailyPnl(await res.json());
+    } catch {
+      /* ignore */
+    }
+  }, [base]);
+
+  const markTaken = useCallback(
+    async (symbol: string, opts?: { qty?: number; notes?: string; confidence?: number }) => {
+      try {
+        const res = await fetch(`${base}/api/trades/${encodeURIComponent(symbol)}/taken`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(opts ?? {}),
+        });
+        if (res.ok) {
+          // Refresh perf + pnl after marking
+          fetchPerf();
+          fetchDailyPnl();
+          return (await res.json()) as { ok: boolean; duplicate: boolean; entry: Record<string, unknown> };
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    [base, fetchPerf, fetchDailyPnl],
+  );
+
   useEffect(() => {
     fetchSummary();
     fetchPrefs();
     fetchPerf();
-    const id = setInterval(fetchSummary, SUMMARY_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [fetchSummary, fetchPrefs, fetchPerf]);
+    fetchDailyPnl();
+    const id1 = setInterval(fetchSummary, SUMMARY_REFRESH_MS);
+    const id2 = setInterval(fetchDailyPnl, PNL_REFRESH_MS);
+    return () => {
+      clearInterval(id1);
+      clearInterval(id2);
+    };
+  }, [fetchSummary, fetchPrefs, fetchPerf, fetchDailyPnl]);
 
-  return { summary, prefs, perf, refreshSummary: fetchSummary, refreshPerf: fetchPerf, savePrefs };
+  return { summary, prefs, perf, dailyPnl, refreshSummary: fetchSummary, refreshPerf: fetchPerf, savePrefs, markTaken };
 }

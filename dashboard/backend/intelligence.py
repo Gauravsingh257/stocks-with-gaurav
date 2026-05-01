@@ -149,6 +149,51 @@ def _expected_outcome(probability: int, status: str) -> str:
     return "RISKY"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Decision Engine
+# ─────────────────────────────────────────────────────────────────────────
+
+# Action hierarchy: STRONG BUY > BUY > WATCH > AVOID
+_DECISION_LABELS = ("STRONG BUY", "BUY", "WATCH", "AVOID")
+_CONVICTION_LABELS = ("HIGH", "MEDIUM", "LOW")
+
+
+def _action(quality: float, probability: int, rr: Optional[float], risk: str, status: str) -> str:
+    """
+    Deterministic trade action from intelligence outputs.
+
+    STRONG BUY — setup is exceptional: quality ≥ 8.5, prob ≥ 75, RR ≥ 2.0, LOW risk.
+    BUY        — solid setup worth entering: quality ≥ 7.0, prob ≥ 60, RR ≥ 1.5.
+    WATCH      — marginal: worth monitoring, not immediately executable.
+    AVOID      — setup is too weak or the RR doesn't justify the risk.
+    """
+    st = (status or "").upper()
+    # Already closed positions are neutral
+    if st in ("TARGET_HIT", "STOP_HIT"):
+        return "WATCH"
+    rr_val = rr or 0.0
+    if quality >= 8.5 and probability >= 75 and rr_val >= 2.0 and risk == "LOW":
+        return "STRONG BUY"
+    if quality >= 7.0 and probability >= 60 and rr_val >= 1.5:
+        return "BUY"
+    if quality < 5.5 or probability < 42 or rr_val < 1.0:
+        return "AVOID"
+    return "WATCH"
+
+
+def _conviction(quality: float, probability: int, risk: str) -> str:
+    """
+    HIGH   — quality ≥ 8.0, prob ≥ 70, LOW risk.
+    MEDIUM — quality ≥ 6.5, prob ≥ 55.
+    LOW    — everything else.
+    """
+    if quality >= 8.0 and probability >= 70 and risk == "LOW":
+        return "HIGH"
+    if quality >= 6.5 and probability >= 55:
+        return "MEDIUM"
+    return "LOW"
+
+
 def enrich_with_intelligence(rec: Dict[str, Any]) -> Dict[str, Any]:
     """Mutates `rec` in place with intelligence fields and returns it."""
     if not isinstance(rec, dict) or not rec:
@@ -175,6 +220,8 @@ def enrich_with_intelligence(rec: Dict[str, Any]) -> Dict[str, Any]:
         "risk_level": risk,
         "expected_move_time": expected_time,
         "expected_outcome": expected,
+        "action": _action(quality, probability, rec.get("rr"), risk, rec.get("status", "")),
+        "conviction": _conviction(quality, probability, risk),
         "components": {k: round(v, 3) for k, v in components.items()},
     }
     rec["ranking_score"] = ranking
@@ -184,6 +231,8 @@ def enrich_with_intelligence(rec: Dict[str, Any]) -> Dict[str, Any]:
     rec["risk_level"] = risk
     rec["expected_move_time"] = expected_time
     rec["expected_outcome"] = expected
+    rec["action"] = rec["intelligence"]["action"]
+    rec["conviction"] = rec["intelligence"]["conviction"]
     if "narrative" not in rec:
         rec["narrative"] = build_narrative(rec)
     return rec
@@ -366,6 +415,8 @@ def _summary_card(r: Dict[str, Any]) -> Dict[str, Any]:
         "risk_level": r.get("risk_level"),
         "expected_outcome": r.get("expected_outcome"),
         "expected_move_time": r.get("expected_move_time"),
+        "action": r.get("action"),
+        "conviction": r.get("conviction"),
         "narrative": r.get("narrative"),
     }
 

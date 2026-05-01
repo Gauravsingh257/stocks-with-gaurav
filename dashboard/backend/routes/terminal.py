@@ -269,3 +269,151 @@ def get_user_alerts(limit: int = Query(default=50, ge=1, le=200)):
     from dashboard.backend.alerts import get_recent_alerts
     alerts = get_recent_alerts(limit=limit)
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Decision Engine — user feedback loop
+# ─────────────────────────────────────────────────────────────────────────
+
+@router.post("/trades/{symbol}/taken", dependencies=[Depends(_require_api_key)])
+def mark_trade_taken(
+    symbol: str,
+    payload: dict = Body(default={}),
+    user_id: str = Query(default="default"),
+):
+    """
+    Mark a signal as 'trade taken' — creates a OPEN journal entry.
+
+    Accepts optional overrides in the request body:
+      qty, notes, confidence (1-10 personal conviction)
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol_required")
+    record = get_signal_by_symbol(sym)
+    if not record:
+        # Allow user to mark without a live signal (manual entry).
+        record = {"symbol": sym}
+    try:
+        from dashboard.backend.user_store import add_journal_entry, list_journal
+        # Check if already open to avoid duplicate.
+        existing = [e for e in list_journal(user_id=user_id, limit=50) if e.get("symbol") == sym and e.get("status") == "OPEN"]
+        if existing:
+            return {"ok": True, "duplicate": True, "entry": existing[0]}
+        entry_payload = {
+            "symbol": sym,
+            "direction": record.get("direction", "LONG"),
+            "entry": record.get("entry"),
+            "stop": record.get("sl") or record.get("stop"),
+            "target": record.get("target"),
+            "rr": record.get("rr"),
+            "setup": record.get("setup"),
+            "status": "OPEN",
+            "source": "terminal",
+            "notes": payload.get("notes", ""),
+            "qty": payload.get("qty"),
+            "confidence": payload.get("confidence"),
+        }
+        rec = add_journal_entry(user_id, entry_payload)
+        if not rec:
+            raise HTTPException(status_code=400, detail="journal_create_failed")
+        return {"ok": True, "duplicate": False, "entry": rec}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"mark_taken_failed: {exc}")
+
+
+@router.get("/pnl/daily", dependencies=[Depends(_require_api_key)])
+def get_daily_pnl(
+    user_id: str = Query(default="default"),
+    date: Optional[str] = Query(default=None, description="YYYY-MM-DD, defaults to today IST"),
+):
+    """
+    Daily PnL summary for the user loop.
+
+    Returns:
+      date, realized_r, total_pnl, wins, losses, win_rate,
+      streak (consecutive wins +ve / losses -ve), trades[]
+    """
+    import csv
+    import os
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    # IST = UTC+5:30
+    IST = timezone(timedelta(hours=5, minutes=30))
+    today_str = date or datetime.now(IST).strftime("%Y-%m-%d")
+
+    trades_today: list[dict] = []
+
+    # ── Source 1: journal closed today (reliable, authoritative) ────────
+    try:
+        from dashboard.backend.user_store import list_journal
+        entries = list_journal(user_id=user_id, status="CLOSED", limit=500)
+        for e in entries:
+            closed_at = e.get("closed_at")
+            if isinstance(closed_at, (int, float)):
+                day = datetime.fromtimestamp(closed_at, tz=IST).strftime("%Y-%m-%d")
+                if day == today_str:
+                    trades_today.append({
+                        "symbol": e.get("symbol"),
+                        "direction": e.get("direction"),
+                        "pnl": e.get("pnl") or 0.0,
+                        "rr": e.get("rr"),
+                        "setup": e.get("setup"),
+                        "source": "journal",
+                    })
+    except Exception:
+        pass
+
+    # ── Source 2: daily_pnl_log.csv (engine-written) ────────────────────
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "daily_pnl_log.csv")
+    csv_path = os.path.normpath(csv_path)
+    if not trades_today and os.path.exists(csv_path):
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    row_date = (row.get("date") or row.get("Date") or "").strip()[:10]
+                    if row_date == today_str:
+                        trades_today.append({
+                            "symbol": row.get("symbol") or row.get("Symbol", "—"),
+                            "direction": row.get("direction", "—"),
+                            "pnl": float(row.get("pnl") or row.get("PnL") or 0),
+                            "rr": float(row.get("rr") or row.get("R") or 0) if (row.get("rr") or row.get("R")) else None,
+                            "setup": row.get("setup") or row.get("Setup"),
+                            "source": "csv",
+                        })
+        except Exception:
+            pass
+
+    wins = [t for t in trades_today if (t.get("pnl") or 0) > 0]
+    losses = [t for t in trades_today if (t.get("pnl") or 0) < 0]
+    total_pnl = round(sum(t.get("pnl") or 0 for t in trades_today), 2)
+    realized_r = round(sum(t.get("rr") or 0 for t in trades_today if (t.get("pnl") or 0) > 0)
+                       - sum(abs(t.get("rr") or 0) for t in trades_today if (t.get("pnl") or 0) <= 0), 2)
+    win_rate = round(len(wins) / len(trades_today) * 100, 1) if trades_today else 0.0
+
+    # Streak: +N = consecutive wins, -N = consecutive losses
+    streak = 0
+    if trades_today:
+        last_sign = 1 if (trades_today[-1].get("pnl") or 0) > 0 else -1
+        for t in reversed(trades_today):
+            sign = 1 if (t.get("pnl") or 0) > 0 else -1
+            if sign == last_sign:
+                streak += last_sign
+            else:
+                break
+
+    return {
+        "date": today_str,
+        "realized_r": realized_r,
+        "total_pnl": total_pnl,
+        "wins": len(wins),
+        "losses": len(losses),
+        "total": len(trades_today),
+        "win_rate": win_rate,
+        "streak": streak,
+        "trades": trades_today,
+    }

@@ -13,12 +13,17 @@ export type RiskMode = "conservative" | "aggressive";
 export type WatchStatus = "Waiting" | "Approaching" | "Tapped" | "Triggered" | "Running" | "TargetHit" | "StopHit";
 export type RiskLevel = "LOW" | "MED" | "HIGH";
 
+export type ActionLabel = "STRONG BUY" | "BUY" | "WATCH" | "AVOID";
+export type ConvictionLevel = "HIGH" | "MEDIUM" | "LOW";
+
 export interface TradeIntelligence {
   probability: number;          // 0-100
   qualityScore: number;         // 0-10
   riskLevel: RiskLevel;
   expectedMoveTime: string;     // "45 min"
   expectedOutcome: string;      // "TARGET LIKELY"
+  action: ActionLabel;          // Decision engine output
+  conviction: ConvictionLevel;  // Conviction level
   narrative?: string;
 }
 
@@ -53,6 +58,8 @@ export interface Opportunity {
   spark: number[];
   /** Phase 3 intelligence enrichment (present when from /api/trades or /ws/trades) */
   intelligence?: TradeIntelligence;
+  /** Whether the user has marked this trade as taken */
+  taken?: boolean;
 }
 
 const DEFAULT_SETUP: SetupType = "A";
@@ -287,6 +294,8 @@ export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
           riskLevel: t.intelligence.risk_level,
           expectedMoveTime: t.intelligence.expected_move_time,
           expectedOutcome: t.intelligence.expected_outcome,
+          action: (t.intelligence.action ?? t.action ?? "WATCH") as ActionLabel,
+          conviction: (t.intelligence.conviction ?? t.conviction ?? "MEDIUM") as ConvictionLevel,
           narrative: t.narrative,
         }
       : t.probability != null
@@ -296,6 +305,8 @@ export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
             riskLevel: (t.risk_level ?? "MED") as RiskLevel,
             expectedMoveTime: t.expected_move_time ?? "—",
             expectedOutcome: t.expected_outcome ?? "—",
+            action: ((t.action) ?? "WATCH") as ActionLabel,
+            conviction: ((t.conviction) ?? "MEDIUM") as ConvictionLevel,
             narrative: t.narrative,
           }
         : undefined,

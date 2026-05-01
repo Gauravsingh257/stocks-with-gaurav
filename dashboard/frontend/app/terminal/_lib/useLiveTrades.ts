@@ -21,6 +21,8 @@ export interface LiveTradeIntelligence {
   risk_level: "LOW" | "MED" | "HIGH";
   expected_move_time: string;
   expected_outcome: string;
+  action: "STRONG BUY" | "BUY" | "WATCH" | "AVOID";
+  conviction: "HIGH" | "MEDIUM" | "LOW";
   components?: Record<string, number>;
 }
 
@@ -46,6 +48,8 @@ export interface LiveTrade {
   risk_level?: "LOW" | "MED" | "HIGH";
   expected_move_time?: string;
   expected_outcome?: string;
+  action?: "STRONG BUY" | "BUY" | "WATCH" | "AVOID";
+  conviction?: "HIGH" | "MEDIUM" | "LOW";
   narrative?: string;
   ranking_score?: number;
   analysis: {
