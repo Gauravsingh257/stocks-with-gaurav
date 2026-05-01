@@ -15,6 +15,14 @@
 import { useEffect, useRef, useState } from "react";
 import { getBackendBase } from "@/lib/api";
 
+/** Subset of FilterState that maps 1-to-1 to backend query params. */
+export interface TradeFilters {
+  direction?: "all" | "BUY" | "SELL";
+  setups?: string[]; // e.g. ["A", "B"]
+  strategy?: "all" | "intraday" | "swing";
+  risk?: "conservative" | "aggressive";
+}
+
 export interface LiveTradeIntelligence {
   probability: number;
   quality_score: number;
@@ -92,7 +100,7 @@ interface UseLiveTradesResult {
   refresh: () => Promise<void>;
 }
 
-export function useLiveTrades(apiKey?: string): UseLiveTradesResult {
+export function useLiveTrades(apiKey?: string, filters?: TradeFilters): UseLiveTradesResult {
   const [trades, setTrades] = useState<LiveTrade[]>([]);
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [status, setStatus] = useState<LiveStatus>("connecting");
@@ -105,6 +113,27 @@ export function useLiveTrades(apiKey?: string): UseLiveTradesResult {
 
   const base = getBackendBase();
   const headers: Record<string, string> = apiKey ? { "X-API-Key": apiKey } : {};
+
+  /** Build the /api/trades query string from current filters. */
+  const buildTradesUrl = (): string => {
+    const params = new URLSearchParams();
+    if (apiKey) params.set("api_key", apiKey);
+    if (filters?.direction && filters.direction !== "all") {
+      params.set("direction", filters.direction);
+    }
+    if (filters?.setups && filters.setups.length > 0) {
+      params.set("setups", filters.setups.join(","));
+    }
+    if (filters?.strategy && filters.strategy !== "all") {
+      params.set("strategy", filters.strategy);
+    }
+    if (filters?.risk) {
+      params.set("risk", filters.risk);
+    }
+    const qs = params.toString();
+    return `${base}/api/trades${qs ? `?${qs}` : ""}`;
+  };
+
   const apiKeyQuery = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "";
 
   const upsertTrade = (next: LiveTrade) => {
@@ -123,7 +152,7 @@ export function useLiveTrades(apiKey?: string): UseLiveTradesResult {
 
   const fetchInitial = async () => {
     try {
-      const res = await fetch(`${base}/api/trades${apiKeyQuery}`, {
+      const res = await fetch(buildTradesUrl(), {
         headers,
         cache: "no-store",
       });
@@ -220,6 +249,14 @@ export function useLiveTrades(apiKey?: string): UseLiveTradesResult {
     };
   };
 
+  // Stable filter key for comparison (avoids JSON.stringify on every render)
+  const filterKey = [
+    filters?.direction ?? "",
+    (filters?.setups ?? []).slice().sort().join(","),
+    filters?.strategy ?? "",
+    filters?.risk ?? "",
+  ].join("|");
+
   useEffect(() => {
     mountedRef.current = true;
     fetchInitial();
@@ -237,6 +274,18 @@ export function useLiveTrades(apiKey?: string): UseLiveTradesResult {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, apiKey]);
+
+  // Re-fetch from REST when filter params change (WS stays open for live updates).
+  useEffect(() => {
+    if (!mountedRef.current) return;
+    fetchInitial();
+    // Reset polling timer so new filter is used on next interval tick.
+    if (pollRef.current) {
+      stopPolling();
+      startPolling();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
 
   return { trades, events, status, error, refresh: fetchInitial };
 }

@@ -66,9 +66,12 @@ def _require_api_key(
 @router.get("/trades", dependencies=[Depends(_require_api_key)])
 def list_trades(
     limit: int = Query(default=50, ge=1, le=200),
-    direction: Optional[str] = Query(default=None, pattern="^(LONG|SHORT|long|short)$"),
+    direction: Optional[str] = Query(default=None, pattern="^(LONG|SHORT|long|short|BUY|SELL|buy|sell)$"),
     setup: Optional[str] = Query(default=None, pattern="^[A-Da-d]$"),
+    setups: Optional[str] = Query(default=None, description="Comma-separated setup letters, e.g. A,B,C"),
     status: Optional[str] = Query(default=None, pattern="^(WAITING|APPROACHING|TAPPED|TRIGGERED|RUNNING|TARGET_HIT|STOP_HIT)$"),
+    strategy: Optional[str] = Query(default=None, description="intraday | swing | all"),
+    risk: Optional[str] = Query(default=None, description="conservative | aggressive"),
     user_id: str = Query(default="default"),
     apply_prefs: bool = Query(default=True),
 ):
@@ -118,14 +121,51 @@ def list_trades(
         pass
 
     if direction:
+        # Normalise BUY→LONG, SELL→SHORT so both naming conventions work
         d = direction.upper()
+        if d == "BUY":
+            d = "LONG"
+        elif d == "SELL":
+            d = "SHORT"
         merged = [m for m in merged if m.get("direction") == d]
     if setup:
         s = setup.upper()
         merged = [m for m in merged if m.get("setup") == s]
+    if setups:
+        # Comma-separated multi-setup filter, e.g. setups=A,B
+        setup_set = {s.strip().upper() for s in setups.split(",") if s.strip()}
+        if setup_set:
+            merged = [m for m in merged if m.get("setup") in setup_set]
     if status:
         st = status.upper()
         merged = [m for m in merged if m.get("status") == st]
+    if strategy and strategy.lower() not in ("all", ""):
+        # Best-effort: map signal fields → intraday / swing bucket
+        strat = strategy.lower()
+        def _match_strategy(item: dict) -> bool:
+            horizon = (
+                (item.get("intelligence") or {}).get("expected_move_time", "")
+                or item.get("expected_move_time", "")
+                or item.get("strategy", "")
+                or ""
+            ).lower()
+            setup_name = (item.get("setup") or "").upper()
+            if strat == "intraday":
+                # Setup A/C/D are intraday-biased; also check horizon keyword
+                return setup_name in ("A", "C", "D") or bool(horizon and any(k in horizon for k in ("intraday", "day", "hour", "1-2h", "few hours")))
+            if strat == "swing":
+                return setup_name == "B" or bool(horizon and any(k in horizon for k in ("swing", "week", "day", "2-3 day")))
+            return True
+        merged = [m for m in merged if _match_strategy(m)]
+    if risk and risk.lower() not in ("all", ""):
+        rk = risk.lower()
+        if rk == "conservative":
+            # Drop grade-C signals in conservative mode
+            merged = [m for m in merged if (m.get("confidence") or "") != "C"]
+        elif rk == "aggressive":
+            # Aggressive: keep everything, but surface higher-RR trades first
+            # (no filtering — ordering already done by rank_signals)
+            pass
 
     return {
         "trades": merged[:limit],

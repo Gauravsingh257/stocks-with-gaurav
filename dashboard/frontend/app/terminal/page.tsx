@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, Sparkles, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { api, type ResearchDecisionFeedResponse } from "@/lib/api";
@@ -13,7 +13,7 @@ import DiscoveryFeed from "./_components/DiscoveryFeed";
 import AISummaryPanel from "./_components/AISummaryPanel";
 import AlertsBell from "./_components/AlertsBell";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
-import { useLiveTrades } from "./_lib/useLiveTrades";
+import { useLiveTrades, type TradeFilters } from "./_lib/useLiveTrades";
 import { useTerminalSummary } from "./_lib/useTerminalSummary";
 
 const REFRESH_MS = 60_000;
@@ -24,6 +24,25 @@ export default function TerminalPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  // Debounced filters sent to the API (300 ms delay)
+  const [apiFilters, setApiFilters] = useState<TradeFilters>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleFilterChange = useCallback((next: FilterState) => {
+    setFilters(next);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setApiFilters({
+        direction: next.direction,
+        setups: next.setups.length > 0 ? next.setups : undefined,
+        strategy: next.strategy,
+        risk: next.risk,
+      });
+    }, 300);
+  }, []);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
   const [activeOpp, setActiveOpp] = useState<Opportunity | null>(null);
   const [watchedIds, setWatchedIds] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -69,7 +88,8 @@ export default function TerminalPage() {
   }, [load]);
 
   // Phase 2 — live trades from /ws/trades (with /api/trades fallback)
-  const live = useLiveTrades();
+  // Filters are sent as query params so the backend does the actual filtering.
+  const live = useLiveTrades(undefined, apiFilters);
   const liveOpps = useMemo(() => live.trades.map(liveTradeToOpportunity), [live.trades]);
   // Phase 3+4 — AI summary + daily PnL + markTaken
   const { summary, dailyPnl, markTaken } = useTerminalSummary();
@@ -115,6 +135,8 @@ export default function TerminalPage() {
   const discoveryOpps = useMemo(() => toOpportunities(feed?.discovery), [feed]);
 
   const filteredHero = useMemo(() => {
+    // Server-side filters (direction, setup, strategy, risk) are already applied.
+    // Only text-search is client-side to avoid round-trips on every keystroke.
     return finalOpps.filter((o) => matchFilter(o, filters));
   }, [finalOpps, filters]);
 
@@ -170,7 +192,7 @@ export default function TerminalPage() {
       />
 
       <div style={{ marginTop: 18, marginBottom: 18 }}>
-        <AdvancedFilterBar value={filters} onChange={setFilters} total={finalOpps.length} visible={filteredHero.length} />
+        <AdvancedFilterBar value={filters} onChange={handleFilterChange} total={finalOpps.length} visible={filteredHero.length} />
       </div>
 
       {error && (
@@ -277,18 +299,11 @@ export default function TerminalPage() {
 }
 
 function matchFilter(o: Opportunity, f: FilterState): boolean {
-  if (f.setups.length > 0 && !f.setups.includes(o.setup)) return false;
-  if (f.direction !== "all" && o.direction !== f.direction) return false;
+  // Server-side params (direction, setup, strategy, risk) are handled by the API.
+  // Only the text-search query is client-side so we avoid debounce delay on typing.
   if (f.query.trim()) {
     const q = f.query.trim().toLowerCase();
     if (!o.symbol.toLowerCase().includes(q)) return false;
-  }
-  if (f.risk === "conservative" && o.grade === "C") return false;
-  // Strategy mode: best-effort using expected_holding_period
-  if (f.strategy !== "all") {
-    const horizon = (o.raw.expected_holding_period ?? "").toLowerCase();
-    if (f.strategy === "intraday" && horizon && !/intraday|day|hour/.test(horizon)) return false;
-    if (f.strategy === "swing" && horizon && !/swing|day|week/.test(horizon)) return false;
   }
   return true;
 }
