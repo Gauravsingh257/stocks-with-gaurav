@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, BookOpen, Bot, Eye, Globe } from "lucide-react";
+import { BarChart2, BookOpen, Bot, Eye, Globe, Sparkles } from "lucide-react";
 
 const ITEMS = [
+  { href: "/terminal", label: "Terminal", icon: Sparkles },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/journal", label: "Journal", icon: BookOpen },
   { href: "/research", label: "Research", icon: Bot },

@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
+  { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
   { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
   { href: "/journal",         label: "Journal",         icon: BookOpen      },
   { href: "/research",        label: "AI Research Center", icon: Bot        },
