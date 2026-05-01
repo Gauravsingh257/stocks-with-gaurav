@@ -10,8 +10,10 @@ import TradeExplanationDrawer from "./_components/TradeExplanationDrawer";
 import SmartWatchlistPanel from "./_components/SmartWatchlistPanel";
 import AdvancedFilterBar, { DEFAULT_FILTERS, type FilterState } from "./_components/AdvancedFilterBar";
 import DiscoveryFeed from "./_components/DiscoveryFeed";
+import AISummaryPanel from "./_components/AISummaryPanel";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
 import { useLiveTrades } from "./_lib/useLiveTrades";
+import { useTerminalSummary } from "./_lib/useTerminalSummary";
 
 const REFRESH_MS = 60_000;
 const STORAGE_KEY = "terminal:watchlist:v1";
@@ -68,6 +70,8 @@ export default function TerminalPage() {
   // Phase 2 — live trades from /ws/trades (with /api/trades fallback)
   const live = useLiveTrades();
   const liveOpps = useMemo(() => live.trades.map(liveTradeToOpportunity), [live.trades]);
+  // Phase 3 — AI summary panel data
+  const { summary } = useTerminalSummary();
 
   const allOpps = useMemo(() => {
     const final = feed ? toOpportunities(feed.final_trades) : [];
@@ -137,6 +141,15 @@ export default function TerminalPage() {
   return (
     <div style={{ minHeight: "100vh", padding: "28px 24px 56px", maxWidth: 1640, margin: "0 auto" }}>
       <Hero stats={stats} loading={loading} refreshing={refreshing} onRefresh={load} generatedAt={feed?.generated_at} liveStatus={live.status} />
+
+      <AISummaryPanel
+        data={summary}
+        loading={loading}
+        onPickSymbol={(sym) => {
+          const match = allOpps.find((o) => o.symbol === sym);
+          if (match) setActiveOpp(match);
+        }}
+      />
 
       <div style={{ marginTop: 18, marginBottom: 18 }}>
         <AdvancedFilterBar value={filters} onChange={setFilters} total={finalOpps.length} visible={filteredHero.length} />

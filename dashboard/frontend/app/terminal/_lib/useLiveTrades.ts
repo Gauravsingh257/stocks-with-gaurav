@@ -15,6 +15,15 @@
 import { useEffect, useRef, useState } from "react";
 import { getBackendBase } from "@/lib/api";
 
+export interface LiveTradeIntelligence {
+  probability: number;
+  quality_score: number;
+  risk_level: "LOW" | "MED" | "HIGH";
+  expected_move_time: string;
+  expected_outcome: string;
+  components?: Record<string, number>;
+}
+
 export interface LiveTrade {
   id?: string;
   symbol: string;
@@ -26,10 +35,19 @@ export interface LiveTrade {
   rr: number | null;
   setup: "A" | "B" | "C" | "D";
   confidence: "A+" | "A" | "B" | "C";
-  status: "WAITING" | "TAPPED" | "TRIGGERED" | "TARGET_HIT" | "STOP_HIT";
+  status: "WAITING" | "APPROACHING" | "TAPPED" | "TRIGGERED" | "RUNNING" | "TARGET_HIT" | "STOP_HIT";
   score?: number | null;
   strategy?: string | null;
   timestamp?: string;
+  // Phase 3 — intelligence fields (always present from /api/trades + /ws/trades)
+  intelligence?: LiveTradeIntelligence;
+  probability?: number;
+  quality_score?: number;
+  risk_level?: "LOW" | "MED" | "HIGH";
+  expected_move_time?: string;
+  expected_outcome?: string;
+  narrative?: string;
+  ranking_score?: number;
   analysis: {
     htf_bias: string;
     structure: string;

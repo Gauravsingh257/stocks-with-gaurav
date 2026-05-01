@@ -100,6 +100,12 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("/ws/trades start failed (non-fatal): %s", exc)
     try:
+        from dashboard.backend.lifecycle import start_lifecycle_watcher
+        start_lifecycle_watcher()
+        log.info("lifecycle watcher started (Phase 3)")
+    except Exception as exc:
+        log.warning("lifecycle watcher start failed (non-fatal): %s", exc)
+    try:
         from dashboard.backend.realtime import start_realtime_service
         start_realtime_service()
     except Exception as exc:
@@ -176,6 +182,11 @@ async def lifespan(app: FastAPI):
     stop_broadcast_loop()
     try:
         stop_terminal_ws()
+    except Exception:
+        pass
+    try:
+        from dashboard.backend.lifecycle import stop_lifecycle_watcher
+        stop_lifecycle_watcher()
     except Exception:
         pass
     try:

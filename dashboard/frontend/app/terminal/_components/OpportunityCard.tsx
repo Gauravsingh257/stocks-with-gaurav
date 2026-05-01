@@ -23,8 +23,12 @@ const GRADE_STYLES: Record<string, { bg: string; color: string; border: string }
 
 const STATUS_DOT: Record<string, string> = {
   Waiting: "#ffa502",
+  Approaching: "#00d4ff",
   Tapped: "#00d4ff",
   Triggered: "#00e096",
+  Running: "#00e096",
+  TargetHit: "#00e096",
+  StopHit: "#ff4757",
 };
 
 export default function OpportunityCard({ opp, onView, onWatch, watched, index = 0 }: Props) {
@@ -177,6 +181,9 @@ export default function OpportunityCard({ opp, onView, onWatch, watched, index =
         />
       </div>
 
+      {/* Phase 3 — Intelligence strip */}
+      {opp.intelligence && <IntelStrip intel={opp.intelligence} />}
+
       {/* Reasoning preview */}
       <p
         style={{
@@ -281,6 +288,53 @@ function Level({
     >
       <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: "0.82rem", fontWeight: 700, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
+    </div>
+  );
+}
+
+function IntelStrip({ intel }: { intel: NonNullable<Opportunity["intelligence"]> }) {
+  const riskColor =
+    intel.riskLevel === "LOW" ? "#00e096" : intel.riskLevel === "MED" ? "#ffa502" : "#ff4757";
+  const probColor = intel.probability >= 75 ? "#00e096" : intel.probability >= 60 ? "#ffa502" : "#8899bb";
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gap: 6,
+        padding: 8,
+        borderRadius: 10,
+        background: "linear-gradient(135deg, rgba(0,212,255,0.06), rgba(0,212,255,0.01))",
+        border: "1px solid rgba(0,212,255,0.18)",
+      }}
+    >
+      <IntelCell label="Probability" value={`${intel.probability}%`} color={probColor} />
+      <IntelCell label="Quality" value={`${intel.qualityScore.toFixed(1)}/10`} color="#00d4ff" />
+      <IntelCell label="Risk" value={intel.riskLevel} color={riskColor} />
+      <div
+        style={{
+          gridColumn: "1 / -1",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          fontSize: "0.62rem",
+          color: "var(--text-secondary)",
+          marginTop: 2,
+        }}
+      >
+        <span style={{ color: "var(--text-dim)" }}>≈ {intel.expectedMoveTime}</span>
+        <span style={{ fontWeight: 700, letterSpacing: 0.5, color: probColor }}>{intel.expectedOutcome}</span>
+      </div>
+    </div>
+  );
+}
+
+function IntelCell({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontSize: "0.55rem", color: "var(--text-dim)", letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: "0.78rem", fontWeight: 800, color, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
     </div>
   );
 }

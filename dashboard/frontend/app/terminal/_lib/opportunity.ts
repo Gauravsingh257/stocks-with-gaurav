@@ -10,7 +10,17 @@ export type SetupGrade = "A+" | "A" | "B" | "C";
 export type SetupType = "A" | "B" | "C" | "D";
 export type StrategyMode = "intraday" | "swing";
 export type RiskMode = "conservative" | "aggressive";
-export type WatchStatus = "Waiting" | "Tapped" | "Triggered";
+export type WatchStatus = "Waiting" | "Approaching" | "Tapped" | "Triggered" | "Running" | "TargetHit" | "StopHit";
+export type RiskLevel = "LOW" | "MED" | "HIGH";
+
+export interface TradeIntelligence {
+  probability: number;          // 0-100
+  qualityScore: number;         // 0-10
+  riskLevel: RiskLevel;
+  expectedMoveTime: string;     // "45 min"
+  expectedOutcome: string;      // "TARGET LIKELY"
+  narrative?: string;
+}
 
 export interface Opportunity {
   id: string;
@@ -41,6 +51,8 @@ export interface Opportunity {
   sector: string | null;
   raw: ResearchDecisionCard;
   spark: number[];
+  /** Phase 3 intelligence enrichment (present when from /api/trades or /ws/trades) */
+  intelligence?: TradeIntelligence;
 }
 
 const DEFAULT_SETUP: SetupType = "A";
@@ -194,10 +206,12 @@ import type { LiveTrade } from "./useLiveTrades";
 
 const LIVE_STATUS_MAP: Record<LiveTrade["status"], WatchStatus> = {
   WAITING: "Waiting",
+  APPROACHING: "Approaching",
   TAPPED: "Tapped",
   TRIGGERED: "Triggered",
-  TARGET_HIT: "Triggered",
-  STOP_HIT: "Triggered",
+  RUNNING: "Running",
+  TARGET_HIT: "TargetHit",
+  STOP_HIT: "StopHit",
 };
 
 function liveSpark(entry: number | null, stop: number | null, target: number | null, direction: Direction, seedKey: string): number[] {
@@ -266,6 +280,25 @@ export function liveTradeToOpportunity(t: LiveTrade): Opportunity {
       layer3_pass: Boolean(t.analysis?.htf_bias),
     } as unknown as ResearchDecisionCard,
     spark: liveSpark(t.entry, t.sl, t.target, direction, t.symbol),
+    intelligence: t.intelligence
+      ? {
+          probability: t.intelligence.probability,
+          qualityScore: t.intelligence.quality_score,
+          riskLevel: t.intelligence.risk_level,
+          expectedMoveTime: t.intelligence.expected_move_time,
+          expectedOutcome: t.intelligence.expected_outcome,
+          narrative: t.narrative,
+        }
+      : t.probability != null
+        ? {
+            probability: t.probability,
+            qualityScore: t.quality_score ?? 0,
+            riskLevel: (t.risk_level ?? "MED") as RiskLevel,
+            expectedMoveTime: t.expected_move_time ?? "—",
+            expectedOutcome: t.expected_outcome ?? "—",
+            narrative: t.narrative,
+          }
+        : undefined,
   };
 }
 

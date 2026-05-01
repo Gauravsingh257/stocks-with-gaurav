@@ -197,7 +197,7 @@ def normalize_signal(raw: Dict[str, Any]) -> Dict[str, Any]:
     rr_value = _to_float(raw.get("risk_reward")) or _rr(entry, stop, target)
     status = _status_from_signal(raw)
     analysis = _build_analysis(raw, direction, setup)
-    return {
+    record = {
         "id": raw.get("signal_id") or raw.get("id") or f"{symbol}-{raw.get('timestamp', '')}",
         "symbol": str(symbol).upper(),
         "direction": direction,
@@ -214,6 +214,13 @@ def normalize_signal(raw: Dict[str, Any]) -> Dict[str, Any]:
         "timestamp": raw.get("timestamp") or datetime.now(_IST).isoformat(timespec="seconds"),
         "analysis": analysis,
     }
+    # Phase 3 — enrich with intelligence + narrative (non-fatal if anything missing).
+    try:
+        from dashboard.backend.intelligence import enrich_with_intelligence
+        enrich_with_intelligence(record)
+    except Exception as exc:  # pragma: no cover
+        log.debug("intelligence enrich failed for %s: %s", symbol, exc)
+    return record
 
 
 # ─────────────────────────────────────────────────────────────────────────
