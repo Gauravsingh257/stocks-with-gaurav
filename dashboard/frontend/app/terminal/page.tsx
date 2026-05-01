@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { RefreshCw, Radio, Sparkles, AlertTriangle } from "lucide-react";
+import { RefreshCw, Sparkles, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { api, type ResearchDecisionFeedResponse } from "@/lib/api";
 
 import OpportunityCard from "./_components/OpportunityCard";
@@ -11,7 +11,6 @@ import SmartWatchlistPanel from "./_components/SmartWatchlistPanel";
 import AdvancedFilterBar, { DEFAULT_FILTERS, type FilterState } from "./_components/AdvancedFilterBar";
 import DiscoveryFeed from "./_components/DiscoveryFeed";
 import AISummaryPanel from "./_components/AISummaryPanel";
-import PnLTracker from "./_components/PnLTracker";
 import AlertsBell from "./_components/AlertsBell";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
 import { useLiveTrades } from "./_lib/useLiveTrades";
@@ -156,7 +155,8 @@ export default function TerminalPage() {
         onRefresh={load}
         generatedAt={feed?.generated_at}
         liveStatus={live.status}
-        pnlTracker={<PnLTracker data={dailyPnl} />}
+        bestTrade={summary?.best_opportunity ?? null}
+        dailyPnl={dailyPnl}
         alertsBell={<AlertsBell />}
       />
 
@@ -293,6 +293,11 @@ function matchFilter(o: Opportunity, f: FilterState): boolean {
   return true;
 }
 
+// ─── Compact sticky Hero ─────────────────────────────────────────────────────
+
+type BestTrade = { symbol: string; direction: string; probability: number; action?: string | null; rr?: number | null };
+type DailyPnLData = { realized_r: number; wins: number; losses: number; win_rate: number; streak: number; total: number };
+
 function Hero({
   stats,
   loading,
@@ -300,7 +305,8 @@ function Hero({
   onRefresh,
   generatedAt,
   liveStatus,
-  pnlTracker,
+  bestTrade,
+  dailyPnl,
   alertsBell,
 }: {
   stats: { total: number; bullish: number; bearish: number; apex: number };
@@ -309,132 +315,218 @@ function Hero({
   onRefresh: () => void;
   generatedAt?: string;
   liveStatus?: "connecting" | "live" | "polling" | "offline";
-  pnlTracker?: React.ReactNode;
+  bestTrade?: BestTrade | null;
+  dailyPnl?: DailyPnLData | null;
   alertsBell?: React.ReactNode;
 }) {
   const updated = generatedAt ? new Date(generatedAt) : null;
-  const updatedLabel = updated ? updated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : loading ? "Syncing…" : "—";
+  const updatedLabel = updated
+    ? updated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : loading ? "…" : "—";
+
+  const LIVE_CFG = {
+    live:       { color: "#00e096", label: "LIVE",       glow: true  },
+    polling:    { color: "#ffa502", label: "POLLING",    glow: false },
+    connecting: { color: "#00d4ff", label: "SYNCING",   glow: false },
+    offline:    { color: "#ff4757", label: "OFFLINE",   glow: false },
+  } as const;
+  const lc = liveStatus ? LIVE_CFG[liveStatus] : null;
 
   return (
     <header
       style={{
-        position: "relative",
-        padding: "26px 28px",
-        borderRadius: 22,
-        background:
-          "radial-gradient(circle at 12% 0%, rgba(0,212,255,0.18), transparent 60%), radial-gradient(circle at 88% 100%, rgba(0,224,150,0.12), transparent 55%), linear-gradient(160deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        background: "linear-gradient(135deg, rgba(8,13,26,0.93) 0%, rgba(12,20,40,0.90) 100%)",
         border: "1px solid var(--border)",
+        borderRadius: 14,
+        marginBottom: 16,
         overflow: "hidden",
       }}
     >
-      <div aria-hidden style={{ position: "absolute", inset: 0, background: "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><path d=%22M0 39.5H40M39.5 0V40%22 stroke=%22rgba(255,255,255,0.025)%22 stroke-width=%221%22 fill=%22none%22/></svg>')", opacity: 0.6, pointerEvents: "none" }} />
-      <div style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, flexWrap: "wrap" }}>
-        <div style={{ maxWidth: 720 }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.62rem", fontWeight: 700, letterSpacing: 1.2, color: "var(--accent)", background: "rgba(0,212,255,0.12)", padding: "4px 10px", border: "1px solid var(--accent-dim)", borderRadius: 999 }}>
-            <Sparkles size={12} /> AI TRADE OPPORTUNITY TERMINAL
-          </div>
-          <h1 style={{ margin: "12px 0 6px", fontSize: "clamp(1.6rem, 2.6vw, 2.2rem)", fontWeight: 850, color: "var(--text-primary)", letterSpacing: -0.4 }}>
-            Live Trade Opportunities
-          </h1>
-          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.92rem", lineHeight: 1.55, maxWidth: 640 }}>
-            Not a screener. A decision engine. Every card is a complete plan — order block, fair value gap, liquidity sweep,
-            and structural confirmation, scored and ready for action.
-          </p>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {alertsBell}
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={refreshing}
+      {/* Left accent bar */}
+      <div
+        aria-hidden
+        style={{
+          position: "absolute", left: 0, top: 0, bottom: 0, width: 3,
+          background: "linear-gradient(180deg, #00d4ff 0%, #00e096 100%)",
+          borderRadius: "14px 0 0 14px",
+        }}
+      />
+
+      {/* Single scrollable row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          height: 56,
+          padding: "0 14px 0 18px",
+          gap: 0,
+          overflowX: "auto",
+          overflowY: "hidden",
+          scrollbarWidth: "none",
+          msOverflowStyle: "none" as React.CSSProperties["msOverflowStyle"],
+        }}
+      >
+        {/* Brand + live status */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <Sparkles size={13} color="#00d4ff" />
+          <span style={{ fontSize: "0.68rem", fontWeight: 800, letterSpacing: 1.1, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+            TERMINAL
+          </span>
+          {lc && (
+            <div
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "8px 14px",
-                borderRadius: 10,
-                border: "1px solid var(--accent)",
-                background: "linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,212,255,0.05))",
-                color: "var(--accent)",
-                fontSize: "0.74rem",
-                fontWeight: 700,
-                cursor: refreshing ? "wait" : "pointer",
-                opacity: refreshing ? 0.6 : 1,
+                display: "inline-flex", alignItems: "center", gap: 4,
+                padding: "2px 7px", borderRadius: 999,
+                background: `${lc.color}18`, border: `1px solid ${lc.color}50`,
+                flexShrink: 0,
               }}
             >
-              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} /> Refresh
-            </button>
-          </div>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.66rem", color: "var(--text-dim)" }}>
-            <Radio size={11} color="#00e096" /> Updated {updatedLabel}
-          </div>
-          {liveStatus && <LivePill status={liveStatus} />}
-          {pnlTracker}
+              <span
+                style={{
+                  width: 5, height: 5, borderRadius: "50%", display: "block",
+                  background: lc.color,
+                  boxShadow: lc.glow ? `0 0 6px ${lc.color}` : "none",
+                  animation: lc.glow ? "pulse 1.6s infinite" : undefined,
+                }}
+              />
+              <span style={{ fontSize: "0.52rem", fontWeight: 800, letterSpacing: 0.8, color: lc.color }}>{lc.label}</span>
+            </div>
+          )}
         </div>
-      </div>
 
-      <div style={{ position: "relative", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 22 }}>
-        <Stat label="Total Setups" value={stats.total} accent="var(--accent)" />
-        <Stat label="Bullish" value={stats.bullish} accent="#00e096" />
-        <Stat label="Bearish" value={stats.bearish} accent="#ff4757" />
-        <Stat label="A+ Grade" value={stats.apex} accent="#ffa502" />
+        <HeroDivider />
+
+        {/* Best trade highlight */}
+        {bestTrade ? (
+          <BestTradeChip trade={bestTrade} />
+        ) : (
+          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {loading ? "Scanning…" : "No top trade yet"}
+          </span>
+        )}
+
+        <HeroDivider />
+
+        {/* Daily PnL strip */}
+        {dailyPnl && dailyPnl.total > 0 ? (
+          <DailyPnLStrip data={dailyPnl} />
+        ) : (
+          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>No trades today</span>
+        )}
+
+        <HeroDivider />
+
+        {/* Setups count */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap" }}>{stats.total} setups</span>
+          {stats.apex > 0 && (
+            <span
+              style={{
+                fontSize: "0.55rem", fontWeight: 700, padding: "1px 6px", borderRadius: 999,
+                background: "rgba(255,165,2,0.15)", color: "#ffa502",
+                border: "1px solid rgba(255,165,2,0.35)", whiteSpace: "nowrap",
+              }}
+            >
+              {stats.apex} A+
+            </span>
+          )}
+        </div>
+
+        {/* Push actions to far right */}
+        <div style={{ flex: 1, minWidth: 12 }} />
+
+        {/* Right actions */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span style={{ fontSize: "0.58rem", color: "var(--text-dim)", whiteSpace: "nowrap" }}>{updatedLabel}</span>
+          {alertsBell}
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            aria-label="Refresh"
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 32, height: 32, borderRadius: 8,
+              border: "1px solid var(--border)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--accent)",
+              cursor: refreshing ? "wait" : "pointer",
+              opacity: refreshing ? 0.5 : 1,
+              flexShrink: 0,
+            }}
+          >
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
     </header>
   );
 }
 
-function LivePill({ status }: { status: "connecting" | "live" | "polling" | "offline" }) {
-  const map = {
-    live: { color: "#00e096", label: "LIVE", dot: true },
-    polling: { color: "#ffa502", label: "POLLING", dot: false },
-    connecting: { color: "#00d4ff", label: "CONNECTING", dot: false },
-    offline: { color: "#ff4757", label: "OFFLINE", dot: false },
-  } as const;
-  const m = map[status];
+function HeroDivider() {
+  return <div style={{ width: 1, height: 28, background: "var(--border)", opacity: 0.6, flexShrink: 0, margin: "0 14px" }} />;
+}
+
+function BestTradeChip({ trade }: { trade: BestTrade }) {
+  const isLong = (trade.direction ?? "").toUpperCase() === "LONG";
+  const dirColor = isLong ? "#00e096" : "#ff4757";
+  const DirIcon = isLong ? TrendingUp : TrendingDown;
+  const actionColors: Record<string, string> = {
+    "STRONG BUY": "#00e096",
+    BUY: "#00d4ff",
+    WATCH: "#ffa502",
+    AVOID: "#ff4757",
+  };
+  const aColor = trade.action ? (actionColors[trade.action] ?? "#8899bb") : null;
+
   return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: "0.6rem",
-        fontWeight: 700,
-        letterSpacing: 1,
-        color: m.color,
-        background: `${m.color}1f`,
-        border: `1px solid ${m.color}66`,
-        padding: "3px 8px",
-        borderRadius: 999,
-      }}
-    >
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: m.color,
-          boxShadow: m.dot ? `0 0 8px ${m.color}` : "none",
-          animation: m.dot ? "pulse 1.6s infinite" : undefined,
-        }}
-      />
-      {m.label}
+    <div style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+      <span style={{ fontSize: "0.52rem", fontWeight: 700, letterSpacing: 0.8, color: "var(--text-dim)", textTransform: "uppercase", whiteSpace: "nowrap" }}>Best</span>
+      <span style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{trade.symbol}</span>
+      <DirIcon size={12} color={dirColor} />
+      <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--text-secondary)", fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>{trade.probability}%</span>
+      {aColor && trade.action && (
+        <span
+          style={{
+            fontSize: "0.55rem", fontWeight: 800, letterSpacing: 0.6,
+            padding: "2px 7px", borderRadius: 999,
+            background: `${aColor}18`, color: aColor, border: `1px solid ${aColor}55`,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {trade.action}
+        </span>
+      )}
+      {trade.rr != null && (
+        <span style={{ fontSize: "0.6rem", color: "var(--text-dim)", fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>
+          {Number(trade.rr).toFixed(1)}R
+        </span>
+      )}
     </div>
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: number; accent: string }) {
+function DailyPnLStrip({ data }: { data: DailyPnLData }) {
+  const rColor = data.realized_r > 0 ? "#00e096" : data.realized_r < 0 ? "#ff4757" : "#8899bb";
+  const wrColor = data.win_rate >= 60 ? "#00e096" : data.win_rate >= 40 ? "#ffa502" : "#ff4757";
+  const streak = data.streak;
+  const streakLabel = streak > 1 ? `🔥${streak}` : streak < -1 ? `${Math.abs(streak)}↓` : null;
+
   return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.03)",
-        border: "1px solid var(--border)",
-        borderRadius: 12,
-        padding: "10px 14px",
-      }}
-    >
-      <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: "1.4rem", fontWeight: 800, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+      <span style={{ fontSize: "0.72rem", fontWeight: 800, color: rColor, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>
+        {data.realized_r > 0 ? "+" : ""}{data.realized_r.toFixed(1)}R
+      </span>
+      <span style={{ fontSize: "0.62rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{data.wins}W/{data.losses}L</span>
+      <span style={{ fontSize: "0.62rem", fontWeight: 700, color: wrColor, whiteSpace: "nowrap" }}>{data.win_rate.toFixed(0)}%</span>
+      {streakLabel && (
+        <span style={{ fontSize: "0.62rem", color: streak > 0 ? "#ffa502" : "#ff4757", whiteSpace: "nowrap" }}>{streakLabel}</span>
+      )}
     </div>
   );
 }
