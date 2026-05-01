@@ -333,6 +333,7 @@ function Level({
   accent: string;
   highlight?: boolean;
 }) {
+  const isEmpty = value === "—";
   return (
     <div
       style={{
@@ -344,7 +345,20 @@ function Level({
       }}
     >
       <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: "0.82rem", fontWeight: 700, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
+      {isEmpty ? (
+        <div
+          style={{
+            height: 14,
+            borderRadius: 4,
+            background: "linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.05) 75%)",
+            backgroundSize: "200% 100%",
+            animation: "shimmer 1.5s linear infinite",
+            margin: "3px 4px 1px",
+          }}
+        />
+      ) : (
+        <div style={{ fontSize: "0.82rem", fontWeight: 700, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
+      )}
     </div>
   );
 }

@@ -194,9 +194,16 @@ def normalize_signal(raw: Dict[str, Any]) -> Dict[str, Any]:
     target2 = _to_float(raw.get("target2") or raw.get("target_2"))
     setup = _derive_setup(raw.get("strategy_name"), raw.get("setup"))
     confidence = _grade_from_score(raw.get("score") or raw.get("confidence_score") or raw.get("confidence"))
-    rr_value = _to_float(raw.get("risk_reward")) or _rr(entry, stop, target)
+    rr_value = _to_float(raw.get("risk_reward") or raw.get("rr")) or _rr(entry, stop, target)
     status = _status_from_signal(raw)
     analysis = _build_analysis(raw, direction, setup)
+    # Skip signals that have no trade levels at all (pre-entry / informational alerts
+    # like "A-STRUCTURE" or "A-FVG-TAP" that the engine sends before an actual entry
+    # point is determined).  A signal with all three levels missing has no actionable
+    # data and would only show "—" on every card.
+    if entry is None and stop is None and target is None:
+        return {}
+
     record = {
         "id": raw.get("signal_id") or raw.get("id") or f"{symbol}-{raw.get('timestamp', '')}",
         "symbol": str(symbol).upper(),
