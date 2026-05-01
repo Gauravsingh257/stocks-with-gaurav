@@ -1,62 +1,70 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Activity, Eye, Sparkles, Waves } from "lucide-react";
-import type { Opportunity } from "../_lib/opportunity";
+import { AnimatePresence, motion } from "framer-motion";
+import { Activity, CheckCircle, Sparkles, TrendingUp, Waves, XCircle, Zap } from "lucide-react";
+import type { LiveEvent } from "../_lib/useLiveTrades";
 
 interface Props {
-  items: Opportunity[];
-  onSelect: (opp: Opportunity) => void;
+  events: LiveEvent[];
+  onSelectSymbol: (symbol: string) => void;
 }
 
-interface FeedItem {
-  id: string;
-  kind: "new" | "sweep" | "approaching";
-  opp: Opportunity;
+// ─── Event-type catalogue ─────────────────────────────────────────────────
+
+interface EventMeta {
+  title: string;
+  color: string;
+  icon: React.ReactNode;
+  isNew?: boolean;
 }
 
-function classify(opp: Opportunity): FeedItem["kind"] {
-  if (opp.status === "Triggered") return "new";
-  if (opp.scores.liquidity && opp.scores.structure) return "sweep";
-  return "approaching";
+function getEventMeta(type: string): EventMeta {
+  const t = type.toUpperCase();
+  if (t === "NEW_SETUP")
+    return { title: "New Setup Detected", color: "#00e096", icon: <Sparkles size={13} />, isNew: true };
+  if (t === "ENTRY_TRIGGER")
+    return { title: "Entry Triggered", color: "#00d4ff", icon: <Zap size={13} />, isNew: true };
+  if (t === "LIQUIDITY_SWEEP" || t === "SWEEP")
+    return { title: "Liquidity Sweep", color: "#a78bfa", icon: <Waves size={13} /> };
+  if (t === "TARGET_HIT")
+    return { title: "Target Hit ✓", color: "#00e096", icon: <CheckCircle size={13} /> };
+  if (t === "STOP_HIT")
+    return { title: "Stop Hit", color: "#ff4757", icon: <XCircle size={13} /> };
+  if (t === "APPROACHING")
+    return { title: "Approaching Zone", color: "#ffa502", icon: <Activity size={13} /> };
+  return { title: type.replace(/_/g, " "), color: "#8899bb", icon: <TrendingUp size={13} /> };
 }
 
-const META: Record<FeedItem["kind"], { title: string; subtitle: string; color: string; icon: React.ReactNode }> = {
-  new: {
-    title: "New Setup Detected",
-    subtitle: "All SMC layers passed — fresh trade idea on the tape.",
-    color: "#00e096",
-    icon: <Sparkles size={14} />,
-  },
-  sweep: {
-    title: "Liquidity Sweep Confirmed",
-    subtitle: "Price swept resting liquidity and shifted structure.",
-    color: "#00d4ff",
-    icon: <Waves size={14} />,
-  },
-  approaching: {
-    title: "Entry Zone Approaching",
-    subtitle: "CMP is gravitating toward the order block.",
-    color: "#ffa502",
-    icon: <Activity size={14} />,
-  },
-};
+function relativeTime(isoOrSecs: string | number): string {
+  try {
+    const ts = typeof isoOrSecs === "number" ? isoOrSecs * 1000 : new Date(isoOrSecs).getTime();
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 5) return "just now";
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    return `${Math.floor(diff / 3600)}h ago`;
+  } catch {
+    return "";
+  }
+}
 
-export default function DiscoveryFeed({ items, onSelect }: Props) {
-  const feed: FeedItem[] = items.slice(0, 12).map((opp) => ({
-    id: opp.id,
-    kind: classify(opp),
-    opp,
-  }));
+export default function DiscoveryFeed({ events, onSelectSymbol }: Props) {
+  const feed = events.slice(0, 20);
 
   return (
     <div>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: "0.62rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 1.1 }}>Live Feed</div>
-          <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 800, color: "var(--text-primary)" }}>Discovery Stream</h2>
+          <div style={{ fontSize: "0.62rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 1.1 }}>
+            Live Feed
+          </div>
+          <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 800, color: "var(--text-primary)" }}>
+            Discovery Stream
+          </h2>
         </div>
-        <span style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>Auto-curated · realtime</span>
+        <span style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>
+          {feed.length > 0 ? `${feed.length} events` : "Awaiting events…"}
+        </span>
       </header>
 
       {feed.length === 0 ? (
@@ -71,90 +79,133 @@ export default function DiscoveryFeed({ items, onSelect }: Props) {
             color: "var(--text-dim)",
           }}
         >
-          No fresh signals yet — engine is scanning.
+          No events yet — engine is scanning. New setups, sweeps, and triggers will appear here in real-time.
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {feed.map((item, i) => {
-            const meta = META[item.kind];
-            const isBuy = item.opp.direction === "BUY";
-            return (
-              <motion.button
-                key={item.id}
-                type="button"
-                onClick={() => onSelect(item.opp)}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25, delay: Math.min(i, 8) * 0.04 }}
-                whileHover={{ x: 2 }}
-                style={{
-                  textAlign: "left",
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr auto",
-                  gap: 12,
-                  alignItems: "center",
-                  padding: 12,
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 12,
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  position: "relative",
-                  overflow: "hidden",
-                }}
-              >
-                <span
-                  aria-hidden
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <AnimatePresence initial={false}>
+            {feed.map((event) => {
+              const meta = getEventMeta(event.type);
+              const p = event.payload ?? {};
+              const direction = String(p.direction ?? "").toUpperCase();
+              const isBuy = direction === "LONG" || direction === "BUY";
+              const dirColor = direction ? (isBuy ? "#00e096" : "#ff4757") : undefined;
+              const rr = p.rr != null ? Number(p.rr) : null;
+
+              return (
+                <motion.button
+                  key={`${event.type}-${event.symbol}-${event.ts}`}
+                  type="button"
+                  layout
+                  initial={{ opacity: 0, y: -12, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0, overflow: "hidden" }}
+                  transition={{ duration: 0.28, ease: [0.21, 0.5, 0.3, 1] }}
+                  whileHover={{ x: 2 }}
+                  onClick={() => onSelectSymbol(event.symbol)}
                   style={{
-                    position: "absolute",
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 3,
-                    background: meta.color,
-                    boxShadow: `0 0 12px ${meta.color}`,
-                  }}
-                />
-                <div
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 10,
-                    background: `${meta.color}1f`,
-                    border: `1px solid ${meta.color}55`,
-                    color: meta.color,
-                    display: "inline-flex",
+                    textAlign: "left",
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr auto",
+                    gap: 10,
                     alignItems: "center",
-                    justifyContent: "center",
+                    padding: "10px 12px",
+                    background: meta.isNew ? `${meta.color}0a` : "rgba(255,255,255,0.025)",
+                    border: `1px solid ${meta.isNew ? `${meta.color}30` : "var(--border)"}`,
+                    borderRadius: 11,
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    position: "relative",
+                    overflow: "hidden",
                   }}
                 >
-                  {meta.icon}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                    <span style={{ fontWeight: 700, fontSize: "0.78rem" }}>{meta.title}</span>
-                    <span style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>·</span>
-                    <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)", fontWeight: 600 }}>{item.opp.symbol}</span>
+                  {/* Left accent */}
+                  <span
+                    aria-hidden
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 3,
+                      background: meta.color,
+                      boxShadow: meta.isNew ? `0 0 10px ${meta.color}` : "none",
+                    }}
+                  />
+
+                  {/* Icon */}
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 9,
+                      background: `${meta.color}1a`,
+                      border: `1px solid ${meta.color}44`,
+                      color: meta.color,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {meta.icon}
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: "0.76rem", color: meta.color }}>{meta.title}</span>
+                      <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                        {event.symbol}
+                      </span>
+                      {direction && (
+                        <span
+                          style={{
+                            fontSize: "0.58rem",
+                            padding: "1px 6px",
+                            borderRadius: 4,
+                            fontWeight: 700,
+                            background: dirColor ? `${dirColor}20` : "rgba(255,255,255,0.08)",
+                            color: dirColor ?? "var(--text-dim)",
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          {isBuy ? "LONG" : "SHORT"}
+                        </span>
+                      )}
+                      {rr != null && (
+                        <span style={{ fontSize: "0.58rem", color: "var(--text-dim)" }}>
+                          {rr.toFixed(1)}R
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: "0.63rem", color: "var(--text-dim)", marginTop: 2 }}>
+                      {relativeTime(event.ts || event.time)}
+                    </div>
+                  </div>
+
+                  {/* Setup badge if present */}
+                  {p.setup && (
                     <span
                       style={{
-                        fontSize: "0.58rem",
-                        padding: "1px 6px",
-                        borderRadius: 4,
-                        fontWeight: 700,
-                        background: isBuy ? "rgba(0,224,150,0.15)" : "rgba(255,71,87,0.15)",
-                        color: isBuy ? "#00e096" : "#ff4757",
-                        letterSpacing: 0.5,
+                        fontSize: "0.6rem",
+                        fontWeight: 800,
+                        padding: "2px 7px",
+                        borderRadius: 6,
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px solid var(--border)",
+                        color: "var(--text-secondary)",
+                        letterSpacing: 0.4,
+                        flexShrink: 0,
                       }}
                     >
-                      {item.opp.direction}
+                      {String(p.setup)}
                     </span>
-                  </div>
-                  <div style={{ fontSize: "0.68rem", color: "var(--text-dim)", marginTop: 2 }}>{meta.subtitle}</div>
-                </div>
-                <Eye size={14} color="var(--text-dim)" />
-              </motion.button>
-            );
-          })}
+                  )}
+                </motion.button>
+              );
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>

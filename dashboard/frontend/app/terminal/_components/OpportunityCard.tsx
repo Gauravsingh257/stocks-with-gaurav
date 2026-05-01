@@ -16,6 +16,32 @@ interface Props {
   onMarkTaken?: (opp: Opportunity) => Promise<void>;
   watched?: boolean;
   index?: number;
+  searchQuery?: string;
+}
+
+/** Inline highlight for the matching portion of a ticker. */
+function HighlightText({ text, query }: { text: string; query?: string }) {
+  if (!query?.trim()) return <>{text}</>;
+  const q = query.trim().toUpperCase();
+  const idx = text.toUpperCase().indexOf(q);
+  if (idx === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark
+        style={{
+          background: "rgba(0,212,255,0.32)",
+          color: "#fff",
+          borderRadius: 3,
+          padding: "0 2px",
+          boxShadow: "0 0 6px rgba(0,212,255,0.4)",
+        }}
+      >
+        {text.slice(idx, idx + q.length)}
+      </mark>
+      {text.slice(idx + q.length)}
+    </>
+  );
 }
 
 const GRADE_STYLES: Record<string, { bg: string; color: string; border: string }> = {
@@ -35,7 +61,7 @@ const STATUS_DOT: Record<string, string> = {
   StopHit: "#ff4757",
 };
 
-export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, watched, index = 0 }: Props) {
+export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, watched, index = 0, searchQuery }: Props) {
   const isBuy = opp.direction === "BUY";
   const grade = GRADE_STYLES[opp.grade] ?? GRADE_STYLES.B;
   const dirColor = isBuy ? "#00e096" : "#ff4757";
@@ -90,7 +116,9 @@ export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, wat
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, position: "relative" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: "1.05rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: 0.3 }}>{opp.symbol}</span>
+            <span style={{ fontSize: "1.05rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: 0.3 }}>
+                <HighlightText text={opp.symbol} query={searchQuery} />
+              </span>
             <span
               style={{
                 display: "inline-flex",

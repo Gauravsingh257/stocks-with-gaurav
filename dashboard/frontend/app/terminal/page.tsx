@@ -37,6 +37,7 @@ export default function TerminalPage() {
         setups: next.setups.length > 0 ? next.setups : undefined,
         strategy: next.strategy,
         risk: next.risk,
+        symbol: next.query.trim() || undefined,
       });
     }, 300);
   }, []);
@@ -234,7 +235,7 @@ export default function TerminalPage() {
           {loading && finalOpps.length === 0 ? (
             <CardSkeletonGrid />
           ) : filteredHero.length === 0 ? (
-            <EmptyHero />
+            <NoResults query={filters.query} hasSetups={finalOpps.length > 0} onClear={() => handleFilterChange(DEFAULT_FILTERS)} />
           ) : (
             <motion.div
               layout
@@ -254,6 +255,7 @@ export default function TerminalPage() {
                     onWatch={toggleWatch}
                     onMarkTaken={handleMarkTaken}
                     watched={watchedIds.includes(opp.id)}
+                    searchQuery={filters.query}
                   />
                 ))}
               </AnimatePresence>
@@ -266,7 +268,10 @@ export default function TerminalPage() {
               title="What just happened on the tape"
               subtitle="Realtime signals: new setups, sweeps, and approaching entry zones."
             />
-            <DiscoveryFeed items={smartZones} onSelect={setActiveOpp} />
+            <DiscoveryFeed events={live.events} onSelectSymbol={(sym) => {
+              const match = allOpps.find((o) => o.symbol === sym);
+              if (match) setActiveOpp(match);
+            }} />
           </div>
         </main>
 
@@ -597,6 +602,58 @@ function EmptyHero() {
       <Sparkles size={22} color="var(--accent)" />
       <div style={{ marginTop: 10, fontSize: "0.92rem", fontWeight: 700, color: "var(--text-primary)" }}>No final-grade setups match your filters</div>
       <div style={{ marginTop: 4, fontSize: "0.78rem" }}>Loosen the strategy or setup filter, or check back as the next scan completes.</div>
+    </div>
+  );
+}
+
+function NoResults({ query, hasSetups, onClear }: { query: string; hasSetups: boolean; onClear: () => void }) {
+  const isSearch = query.trim().length > 0;
+  return (
+    <div
+      style={{
+        padding: "40px 24px",
+        textAlign: "center",
+        borderRadius: 18,
+        background: isSearch ? "rgba(0,212,255,0.04)" : "rgba(255,255,255,0.025)",
+        border: `1px dashed ${isSearch ? "rgba(0,212,255,0.35)" : "var(--border)"}`,
+        color: "var(--text-secondary)",
+      }}
+    >
+      {isSearch ? (
+        <>
+          <div style={{ fontSize: "1.8rem", marginBottom: 8 }}>🔍</div>
+          <div style={{ fontSize: "0.92rem", fontWeight: 700, color: "var(--text-primary)" }}>
+            No results for &ldquo;<span style={{ color: "var(--accent)" }}>{query.toUpperCase()}</span>&rdquo;
+          </div>
+          <div style={{ marginTop: 4, fontSize: "0.78rem" }}>
+            {hasSetups ? "This ticker has no active setup today." : "No setups are loaded yet — engine is scanning."}
+          </div>
+        </>
+      ) : (
+        <>
+          <Sparkles size={22} color="var(--accent)" />
+          <div style={{ marginTop: 10, fontSize: "0.92rem", fontWeight: 700, color: "var(--text-primary)" }}>No setups match your filters</div>
+          <div style={{ marginTop: 4, fontSize: "0.78rem" }}>Loosen the strategy or setup filter, or check back as the next scan completes.</div>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          marginTop: 14,
+          padding: "7px 18px",
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+          background: "rgba(255,255,255,0.05)",
+          color: "var(--accent)",
+          fontSize: "0.72rem",
+          fontWeight: 700,
+          cursor: "pointer",
+          letterSpacing: 0.4,
+        }}
+      >
+        Clear filters
+      </button>
     </div>
   );
 }

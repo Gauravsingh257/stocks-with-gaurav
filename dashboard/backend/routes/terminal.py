@@ -72,6 +72,7 @@ def list_trades(
     status: Optional[str] = Query(default=None, pattern="^(WAITING|APPROACHING|TAPPED|TRIGGERED|RUNNING|TARGET_HIT|STOP_HIT)$"),
     strategy: Optional[str] = Query(default=None, description="intraday | swing | all"),
     risk: Optional[str] = Query(default=None, description="conservative | aggressive"),
+    symbol: Optional[str] = Query(default=None, description="Case-insensitive partial ticker match, e.g. REL or RELIANCE"),
     user_id: str = Query(default="default"),
     apply_prefs: bool = Query(default=True),
 ):
@@ -166,6 +167,9 @@ def list_trades(
             # Aggressive: keep everything, but surface higher-RR trades first
             # (no filtering — ordering already done by rank_signals)
             pass
+    if symbol:
+        sym_q = symbol.strip().upper()
+        merged = [m for m in merged if sym_q in (m.get("symbol") or "").upper()]
 
     return {
         "trades": merged[:limit],

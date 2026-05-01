@@ -29,6 +29,13 @@ _pending_ltp: dict | None = None
 _pending_ltp_lock = threading.Lock()
 _ltp_subscriber_stop = threading.Event()
 
+# Async queue for forwarding terminal events from the Redis pubsub thread
+_event_queue: asyncio.Queue | None = None
+
+# Previous active-trade states for state-transition event detection
+_prev_trade_states: dict[str, str] = {}
+_prev_trade_states_lock = threading.Lock()
+
 MAX_WS_CONNECTIONS_PER_IP = 5
 
 
@@ -119,7 +126,9 @@ manager = _ConnectionManager()
 # ---------------------------------------------------------------------------
 _broadcast_task: asyncio.Task | None = None
 _ltp_broadcast_task: asyncio.Task | None = None
+_event_broadcast_task: asyncio.Task | None = None
 _ltp_subscriber_thread: threading.Thread | None = None
+_events_subscriber_thread: threading.Thread | None = None
 
 
 def _ltp_subscriber_thread_fn() -> None:
@@ -145,6 +154,48 @@ def _ltp_subscriber_thread_fn() -> None:
                     pass
     except Exception as e:
         log.debug("LTP subscriber thread exited: %s", e)
+
+
+def _events_subscriber_thread_fn(loop: asyncio.AbstractEventLoop) -> None:
+    """Subscribe to terminal:events:pub and forward events to the async event queue."""
+    try:
+        from dashboard.backend.cache import _get_redis
+        from dashboard.backend.terminal_events import EVENTS_PUB_CHANNEL
+        r = _get_redis()
+        if r is None:
+            return
+        pub = r.pubsub()
+        pub.subscribe(EVENTS_PUB_CHANNEL)
+        for msg in pub.listen():
+            if _ltp_subscriber_stop.is_set():
+                break
+            if msg and msg.get("type") == "message" and msg.get("data"):
+                try:
+                    data = json.loads(msg["data"])
+                    if isinstance(data, dict) and _event_queue is not None:
+                        loop.call_soon_threadsafe(_event_queue.put_nowait, data)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+    except Exception as e:
+        log.debug("Events subscriber thread exited: %s", e)
+
+
+async def _event_forward_loop() -> None:
+    """Drain the Redis-event queue and broadcast each event to all WS clients."""
+    if _event_queue is None:
+        return
+    while True:
+        try:
+            event = await asyncio.wait_for(_event_queue.get(), timeout=5.0)
+            if manager.client_count > 0:
+                msg = json.dumps({"type": "event", "data": event})
+                await manager.broadcast(msg)
+        except asyncio.TimeoutError:
+            continue
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            log.debug("Event forward error: %s", exc)
 
 
 async def _ltp_broadcast_loop() -> None:
@@ -189,6 +240,35 @@ async def _broadcast_loop() -> None:
                 process_recommendation_triggers(snapshot)
             except Exception as exc:
                 log.debug("Research runtime update skipped: %s", exc)
+            # ── State-transition event detection ────────────────────────────
+            try:
+                from dashboard.backend.terminal_events import publish_event as _pub_event
+                current_states: dict[str, dict] = {
+                    t.get("symbol", ""): t
+                    for t in (snapshot.get("active_trades") or [])
+                    if t.get("symbol")
+                }
+                with _prev_trade_states_lock:
+                    prev = dict(_prev_trade_states)
+                    _prev_trade_states.clear()
+                    _prev_trade_states.update({k: v.get("status", "") for k, v in current_states.items()})
+                for sym, trade in current_states.items():
+                    cur_st = (trade.get("status") or "").upper()
+                    prev_st = (prev.get(sym) or "").upper()
+                    evt_payload = {
+                        "direction": trade.get("direction"),
+                        "setup": trade.get("setup"),
+                        "entry": trade.get("entry"),
+                        "rr": trade.get("rr"),
+                    }
+                    if cur_st in ("TRIGGERED", "RUNNING") and prev_st not in ("TRIGGERED", "RUNNING", "TARGET_HIT", "STOP_HIT"):
+                        _pub_event("ENTRY_TRIGGER", sym, evt_payload)
+                    elif cur_st == "TARGET_HIT" and prev_st != "TARGET_HIT":
+                        _pub_event("TARGET_HIT", sym, {**evt_payload, "result": "WIN"})
+                    elif cur_st == "STOP_HIT" and prev_st != "STOP_HIT":
+                        _pub_event("STOP_HIT", sym, {**evt_payload, "result": "LOSS"})
+            except Exception as exc:
+                log.debug("State-transition event detection failed: %s", exc)
             payload  = json.dumps({"type": "snapshot", "data": snapshot})
         except Exception as exc:
             log.error("Snapshot error: %s", exc)
@@ -214,10 +294,13 @@ async def _broadcast_loop() -> None:
 
 def start_broadcast_loop() -> None:
     """Called from FastAPI lifespan to start the loop."""
-    global _broadcast_task, _ltp_broadcast_task, _ltp_subscriber_thread
+    global _broadcast_task, _ltp_broadcast_task, _event_broadcast_task
+    global _ltp_subscriber_thread, _events_subscriber_thread, _event_queue
     loop = asyncio.get_event_loop()
+    _event_queue = asyncio.Queue()
     _broadcast_task = loop.create_task(_broadcast_loop())
     _ltp_broadcast_task = loop.create_task(_ltp_broadcast_loop())
+    _event_broadcast_task = loop.create_task(_event_forward_loop())
     try:
         from dashboard.backend.cache import _get_redis, LTP_UPDATES_CHANNEL
         if _get_redis() is not None:
@@ -225,14 +308,20 @@ def start_broadcast_loop() -> None:
             _ltp_subscriber_thread = threading.Thread(target=_ltp_subscriber_thread_fn, daemon=True)
             _ltp_subscriber_thread.start()
             log.info("LTP Redis subscriber started")
+            _events_subscriber_thread = threading.Thread(
+                target=_events_subscriber_thread_fn, args=(loop,), daemon=True
+            )
+            _events_subscriber_thread.start()
+            log.info("Events Redis subscriber started")
     except Exception as e:
-        log.debug("LTP subscriber not started: %s", e)
+        log.debug("Subscribers not started: %s", e)
     log.info("WebSocket broadcast loop started")
 
 
 def stop_broadcast_loop() -> None:
     """Called from FastAPI lifespan on shutdown."""
-    global _broadcast_task, _ltp_broadcast_task, _ltp_subscriber_thread
+    global _broadcast_task, _ltp_broadcast_task, _event_broadcast_task
+    global _ltp_subscriber_thread, _events_subscriber_thread
     _ltp_subscriber_stop.set()
     if _ltp_subscriber_thread is not None:
         try:
@@ -243,6 +332,9 @@ def stop_broadcast_loop() -> None:
         except Exception:
             pass
         _ltp_subscriber_thread = None
+    _events_subscriber_thread = None
+    if _event_broadcast_task and not _event_broadcast_task.done():
+        _event_broadcast_task.cancel()
     if _ltp_broadcast_task and not _ltp_broadcast_task.done():
         _ltp_broadcast_task.cancel()
     if _broadcast_task and not _broadcast_task.done():

@@ -21,6 +21,7 @@ export interface TradeFilters {
   setups?: string[]; // e.g. ["A", "B"]
   strategy?: "all" | "intraday" | "swing";
   risk?: "conservative" | "aggressive";
+  symbol?: string; // partial ticker search, forwarded to backend ?symbol=
 }
 
 export interface LiveTradeIntelligence {
@@ -129,6 +130,9 @@ export function useLiveTrades(apiKey?: string, filters?: TradeFilters): UseLiveT
     }
     if (filters?.risk) {
       params.set("risk", filters.risk);
+    }
+    if (filters?.symbol && filters.symbol.trim()) {
+      params.set("symbol", filters.symbol.trim());
     }
     const qs = params.toString();
     return `${base}/api/trades${qs ? `?${qs}` : ""}`;
@@ -255,6 +259,7 @@ export function useLiveTrades(apiKey?: string, filters?: TradeFilters): UseLiveT
     (filters?.setups ?? []).slice().sort().join(","),
     filters?.strategy ?? "",
     filters?.risk ?? "",
+    filters?.symbol ?? "",
   ].join("|");
 
   useEffect(() => {
