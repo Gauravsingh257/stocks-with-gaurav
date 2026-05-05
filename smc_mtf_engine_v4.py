@@ -130,6 +130,15 @@ import logging
 _STARTUP_TELEGRAM_SENT_THIS_PROCESS: bool = False
 _STARTUP_TELEGRAM_COOLDOWN_KEY = "engine:startup_telegram_cooldown"
 _STARTUP_TELEGRAM_COOLDOWN_SEC = 600  # 10 minutes
+_RUN_LIVE_EXIT_REASON: str | None = None
+
+
+def _set_run_live_exit_reason(reason: str) -> str:
+    """Record why run_live_mode returned so outer recovery chooses the right action."""
+    global _RUN_LIVE_EXIT_REASON
+    _RUN_LIVE_EXIT_REASON = reason
+    logging.warning("run_live_mode exit reason set: %s", reason)
+    return reason
 
 # =====================================================
 # EMA CROSSOVER SCANNER (MERGED)
@@ -5908,6 +5917,8 @@ def reinitialize_engine(reason: str) -> None:
 
 
 def run_live_mode():
+    global _RUN_LIVE_EXIT_REASON
+    _RUN_LIVE_EXIT_REASON = None
     global EOD_SENT
     global DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE
     global DAILY_SIGNAL_COUNT
@@ -5942,20 +5953,20 @@ def run_live_mode():
     # Strict bootstrap: do not proceed unless Kite is healthy.
     if not _reinit_kite():
         logging.warning("Kite init failed — token may not be set yet. Will retry via Railway recovery loop.")
-        return
+        return _set_run_live_exit_reason("kite_init_failed")
 
     if not check_token_age(max_hours=20):
         logging.critical("TOKEN TOO OLD — awaiting refresh")
-        return
+        return _set_run_live_exit_reason("token_stale")
 
     ok, reason = _kite_health_check()
     if not ok:
         logging.critical("Kite unhealthy at startup (%s) — awaiting refresh", reason)
-        return
+        return _set_run_live_exit_reason("kite_unhealthy")
 
     if not test_data_connection():
         logging.critical("DATA CONNECTION FAILED at startup — token may be expired or invalid")
-        return
+        return _set_run_live_exit_reason("data_connection_failed")
 
     # Phase 6: Paper mode banner
     if PAPER_MODE:
@@ -6033,15 +6044,16 @@ def run_live_mode():
                 continue
             # ─────────────────────────────────────────────────────────────────
 
-            # Railway 24/7: lock refresh every 2 min (heartbeat runs in dedicated thread)
+            # Railway 24/7: lock refresh every 10s (dedicated renewer also runs in engine_runtime)
             try:
                 import engine_runtime
                 if t.time() - _last_lock_refresh >= engine_runtime.ENGINE_LOCK_REFRESH_INTERVAL_SEC:
                     if not engine_runtime.refresh_engine_lock():
-                        logging.warning("Lost engine lock; another instance may have taken over. Exiting.")
-                        print("🛑 Engine exiting: Redis lock lost (another instance may be running). Check Railway or other running engine.")
-                        _shutdown_handler("redis_lock_lost")
-                        return
+                        logging.warning("Lock lost -> attempting recovery (entering standby; no process exit)")
+                        print("Lock lost -> attempting recovery (standby; no process exit).")
+                        save_engine_states()
+                        persist_active_trades()
+                        return _set_run_live_exit_reason("redis_lock_lost")
                     _last_lock_refresh = t.time()
             except Exception as _e:
                 logging.debug("Engine runtime lock refresh: %s", _e)
@@ -7560,15 +7572,41 @@ def run_engine_main():
     _railway = bool(os.getenv("RAILWAY_ENVIRONMENT", ""))
     _auto_login_backoff = 120  # seconds — doubles on repeated failure, max 600s
     while True:
-        run_live_mode()
+        exit_reason = run_live_mode() or _RUN_LIVE_EXIT_REASON or "unknown"
         if not _railway:
-            logging.info("run_live_mode returned (token/data failure or redis_lock_lost). Exiting.")
+            logging.info("run_live_mode returned (%s). Exiting local run.", exit_reason)
             break
+
+        if exit_reason == "redis_lock_lost":
+            logging.warning(
+                "Lock lost -> attempting recovery. Skipping auto-login and entering "
+                "lock-standby/reacquire loop."
+            )
+            try:
+                import engine_runtime
+                engine_runtime.set_engine_stage("LOCK_STANDBY")
+            except Exception:
+                pass
+            while True:
+                try:
+                    if _acquire_process_lock():
+                        logging.info("Lock recovered -> Redis lock reacquired after standby. Resuming trading loop.")
+                        update_engine_state(engine="ON")
+                        break
+                except Exception as _lock_e:
+                    logging.warning("Lock reacquire attempt failed: %s", _lock_e)
+                try:
+                    import engine_runtime
+                    engine_runtime.safe_sleep(5)
+                except Exception:
+                    t.sleep(5)
+            continue
+
         # ── Cloud auto-refresh: attempt Kite re-login before waiting ──────────
         # This loop fires whenever run_live_mode() exits (token expired / invalid
-        # data connection / Redis lock lost). If KITE_PASSWORD + KITE_TOTP_SECRET
-        # are set in Railway env, a fresh token is obtained automatically with no
-        # laptop or manual intervention required.
+        # data connection). Redis lock exits are handled above and must NOT
+        # invoke auto-login, otherwise a transient lease issue causes repeated
+        # Zerodha logins during the same trading day.
         try:
             import engine_runtime
             engine_runtime.set_engine_stage("TOKEN_REFRESH")

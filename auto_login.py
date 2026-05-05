@@ -31,6 +31,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -75,6 +76,9 @@ KITE_TWOFA_URL = "https://kite.zerodha.com/api/twofa"
 KITE_CONNECT_LOGIN = "https://kite.zerodha.com/connect/login"
 MAX_RETRIES = 3
 RETRY_DELAY = 10  # seconds
+_IST = timezone(timedelta(hours=5, minutes=30))
+_AUTO_LOGIN_DONE_PREFIX = "kite:login:done"
+_AUTO_LOGIN_IN_PROGRESS_KEY = "kite:auto_login:in_progress"
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -330,6 +334,65 @@ def _verify_token(access_token: str) -> bool:
         return False
 
 
+def _redis_client():
+    if not REDIS_URL:
+        return None
+    try:
+        import redis as _redis
+        return _redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=10,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
+    except Exception as e:
+        log.warning("Redis client init failed: %s", e)
+        return None
+
+
+def _today_ist() -> str:
+    return datetime.now(_IST).date().isoformat()
+
+
+def _login_done_key(date_str: str | None = None) -> str:
+    return f"{_AUTO_LOGIN_DONE_PREFIX}:{date_str or _today_ist()}"
+
+
+def _existing_session_active() -> bool:
+    """Return True when today's Redis Kite token exists and verifies successfully."""
+    r = _redis_client()
+    if r is None:
+        return False
+    try:
+        today = _today_ist()
+        token = (r.get("kite:access_token") or "").strip()
+        ts_raw = (r.get("kite:token_ts") or "").strip()
+        if not token or not ts_raw:
+            return False
+        token_ts = datetime.fromisoformat(ts_raw)
+        if token_ts.date().isoformat() != today:
+            return False
+        if _verify_token(token):
+            r.set(_login_done_key(today), "1", ex=100800)
+            log.info("Login skipped (already logged in today; key=%s)", _login_done_key(today))
+            return True
+    except Exception as e:
+        log.warning("Existing session check failed: %s", e)
+    return False
+
+
+def _mark_auto_login_success() -> None:
+    r = _redis_client()
+    if r is None:
+        return
+    try:
+        r.set(_login_done_key(), "1", ex=100800)
+    except Exception as e:
+        log.debug("Could not mark auto-login success date: %s", e)
+
+
 def _send_telegram(message: str) -> None:
     """Send Telegram notification (best-effort, never throws)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -353,45 +416,68 @@ def auto_login() -> bool:
     Full automated login with retries.
     Returns True on success, False on failure.
     """
-    missing = _validate_config()
-    if missing:
-        msg = f"Missing config: {', '.join(missing)}"
-        log.error(msg)
-        _send_telegram(f"❌ <b>Auto-Login FAILED</b>\n{msg}")
-        return False
+    if os.getenv("FORCE_AUTO_LOGIN", "").strip().lower() not in {"1", "true", "yes"}:
+        if _existing_session_active():
+            return True
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    r = _redis_client()
+    lock_acquired = True
+    if r is not None:
         try:
-            log.info("═══ Login attempt %d/%d ═══", attempt, MAX_RETRIES)
-
-            # Step 1-3: Get request_token
-            request_token = _get_request_token()
-
-            # Step 4: Exchange for access_token
-            access_token = _exchange_token(request_token)
-
-            # Step 5: Store everywhere
-            _store_token(access_token)
-
-            # Step 6: Verify it works
-            if _verify_token(access_token):
-                log.info("✅ AUTO-LOGIN SUCCESSFUL (attempt %d)", attempt)
-                _send_telegram(
-                    f"✅ <b>Auto-Login OK</b>\n"
-                    f"User: {USER_ID}\n"
-                    f"Attempt: {attempt}/{MAX_RETRIES}\n"
-                    f"Token: {access_token[:6]}...{access_token[-4:]}"
-                )
-                return True
-            else:
-                log.warning("Token verification failed, retrying...")
-
+            lock_acquired = bool(r.set(_AUTO_LOGIN_IN_PROGRESS_KEY, str(time.time()), nx=True, ex=300))
+            if not lock_acquired:
+                log.warning("Another auto-login is already in progress; skipping duplicate attempt")
+                return _existing_session_active()
         except Exception as e:
-            log.error("Attempt %d failed: %s", attempt, e)
+            log.warning("Auto-login in-progress lock skipped: %s", e)
 
-        if attempt < MAX_RETRIES:
-            log.info("Waiting %ds before retry...", RETRY_DELAY)
-            time.sleep(RETRY_DELAY)
+    try:
+        missing = _validate_config()
+        if missing:
+            msg = f"Missing config: {', '.join(missing)}"
+            log.error(msg)
+            _send_telegram(f"❌ <b>Auto-Login FAILED</b>\n{msg}")
+            return False
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                log.info("═══ Login attempt %d/%d ═══", attempt, MAX_RETRIES)
+
+                # Step 1-3: Get request_token
+                request_token = _get_request_token()
+
+                # Step 4: Exchange for access_token
+                access_token = _exchange_token(request_token)
+
+                # Step 5: Store everywhere
+                _store_token(access_token)
+
+                # Step 6: Verify it works
+                if _verify_token(access_token):
+                    _mark_auto_login_success()
+                    log.info("✅ AUTO-LOGIN SUCCESSFUL (attempt %d)", attempt)
+                    _send_telegram(
+                        f"✅ <b>Auto-Login OK</b>\n"
+                        f"User: {USER_ID}\n"
+                        f"Attempt: {attempt}/{MAX_RETRIES}\n"
+                        f"Token: {access_token[:6]}...{access_token[-4:]}"
+                    )
+                    return True
+                else:
+                    log.warning("Token verification failed, retrying...")
+
+            except Exception as e:
+                log.error("Attempt %d failed: %s", attempt, e)
+
+            if attempt < MAX_RETRIES:
+                log.info("Waiting %ds before retry...", RETRY_DELAY)
+                time.sleep(RETRY_DELAY)
+    finally:
+        if r is not None and lock_acquired:
+            try:
+                r.delete(_AUTO_LOGIN_IN_PROGRESS_KEY)
+            except Exception:
+                pass
 
     # All retries exhausted
     log.error("❌ ALL %d LOGIN ATTEMPTS FAILED", MAX_RETRIES)

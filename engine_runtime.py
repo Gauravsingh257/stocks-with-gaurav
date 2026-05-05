@@ -13,9 +13,11 @@ All keys use constants shared with dashboard.backend.cache for heartbeat/status.
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
+import uuid
 from typing import Callable, Optional
 
 log = logging.getLogger("engine_runtime")
@@ -41,21 +43,31 @@ LTP_KEY_NIFTY = "ltp:NIFTY"
 LTP_KEY_BANKNIFTY = "ltp:BANKNIFTY"
 LTP_TTL_SEC = 300
 
-# Lock: shorter TTL so a frozen (non-crashing) engine doesn't block restarts for long
-LOCK_TTL = 600
-LOCK_REFRESH_INTERVAL = 120
-ENGINE_LOCK_TTL_SEC = LOCK_TTL
-ENGINE_LOCK_REFRESH_INTERVAL_SEC = LOCK_REFRESH_INTERVAL
+# Lock: single active engine lease. Use a short PX lease and renew from a
+# dedicated thread so the lock survives long scans but expires quickly if the
+# process dies. Env vars are intentionally ms/sec to match Redis SET PX usage.
+ENGINE_LOCK_TTL_MS = int(os.getenv("ENGINE_LOCK_TTL_MS", "30000"))
+ENGINE_LOCK_TTL_SEC = max(1, int(ENGINE_LOCK_TTL_MS / 1000))
+ENGINE_LOCK_REFRESH_INTERVAL_SEC = int(os.getenv("ENGINE_LOCK_REFRESH_INTERVAL_SEC", "10"))
 ENGINE_HEARTBEAT_INTERVAL_SEC = 30
 SIGNAL_DEDUPE_TTL_SEC = 3600
 
 _redis_client = None
+_redis_client_lock = threading.RLock()
 _lock_holder = False
+_lock_lost = False
 _lock_refresh_at = 0.0
+_lock_renewer_thread_started = False
 _shutdown_registered = False
 _heartbeat_thread_started = False
 _watchdog_thread_started = False
 _last_cycle_local: float = 0.0  # Updated by write_last_cycle(); watched by watchdog
+_engine_instance_id = os.getenv(
+    "ENGINE_INSTANCE_ID",
+    f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:12]}",
+)
+_last_redis_ok = False
+_last_redis_alert_at = 0.0
 
 _snapshot_refresher_started = False
 
@@ -75,21 +87,41 @@ engine_stage: str = "INIT"
 def _get_redis():
     """Lazy-init Redis client from REDIS_URL. Returns None if not set or connection fails."""
     global _redis_client
-    if _redis_client is not None:
-        return _redis_client
-    url = os.getenv("REDIS_URL", "").strip()
-    if not url:
-        log.debug("REDIS_URL not set — Redis lock/heartbeat disabled")
-        return None
-    try:
-        import redis
-        _redis_client = redis.from_url(url, decode_responses=True)
-        _redis_client.ping()
-        log.info("Engine runtime: Redis connected")
-        return _redis_client
-    except Exception as e:
-        log.warning("Engine runtime: Redis unavailable — %s", e)
-        return None
+    global _last_redis_ok
+    with _redis_client_lock:
+        if _redis_client is not None:
+            return _redis_client
+        url = os.getenv("REDIS_URL", "").strip()
+        if not url:
+            log.debug("REDIS_URL not set — Redis lock/heartbeat disabled")
+            return None
+        try:
+            import redis
+            _redis_client = redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                health_check_interval=30,
+                retry_on_timeout=True,
+            )
+            _redis_client.ping()
+            if not _last_redis_ok:
+                log.info("Engine runtime: Redis connected/reconnected")
+            _last_redis_ok = True
+            return _redis_client
+        except Exception as e:
+            _last_redis_ok = False
+            log.warning("Engine runtime: Redis unavailable — %s", e)
+            return None
+
+
+def _reset_redis_client() -> None:
+    """Drop cached Redis connection so the next operation creates a fresh client."""
+    global _redis_client, _last_redis_ok
+    with _redis_client_lock:
+        _redis_client = None
+        _last_redis_ok = False
 
 
 def acquire_engine_lock() -> bool:
@@ -110,13 +142,28 @@ def acquire_engine_lock() -> bool:
         log.warning("No Redis — running without lock (local dev mode)")
         return True  # Local dev: allow run without Redis
     try:
-        acquired = r.set(ENGINE_LOCK_KEY, str(os.getpid()), nx=True, ex=ENGINE_LOCK_TTL_SEC)
+        acquired = r.set(ENGINE_LOCK_KEY, _engine_instance_id, nx=True, px=ENGINE_LOCK_TTL_MS)
         if acquired:
-            global _lock_holder, _lock_refresh_at
+            global _lock_holder, _lock_lost, _lock_refresh_at
             _lock_holder = True
+            _lock_lost = False
             _lock_refresh_at = time.time()
             r.set(ENGINE_STARTED_AT_KEY, str(time.time()), ex=86400)  # 24h TTL for uptime display
-            log.info("Engine lock acquired (Redis). PID=%s", os.getpid())
+            r.hset("engine:lock:meta", mapping={
+                "instance_id": _engine_instance_id,
+                "pid": str(os.getpid()),
+                "host": socket.gethostname(),
+                "acquired_at": str(time.time()),
+                "ttl_ms": str(ENGINE_LOCK_TTL_MS),
+            })
+            r.expire("engine:lock:meta", 86400)
+            start_lock_renewer_thread()
+            log.info(
+                "Engine lock acquired (Redis). instance_id=%s ttl_ms=%s refresh_sec=%s",
+                _engine_instance_id,
+                ENGINE_LOCK_TTL_MS,
+                ENGINE_LOCK_REFRESH_INTERVAL_SEC,
+            )
             return True
         log.warning("Another engine instance holds the lock. Exiting.")
         return False
@@ -142,7 +189,7 @@ def set_engine_version(version: str) -> None:
 
 def refresh_engine_lock() -> bool:
     """Refresh lock TTL if we hold it. Call periodically from main loop."""
-    global _lock_holder, _lock_refresh_at
+    global _lock_holder, _lock_lost, _lock_refresh_at
     if not _lock_holder:
         return False
     r = _get_redis()
@@ -152,18 +199,74 @@ def refresh_engine_lock() -> bool:
     if now - _lock_refresh_at < ENGINE_LOCK_REFRESH_INTERVAL_SEC:
         return True
     try:
-        # Only refresh if we still own the lock (value matches our PID)
-        current = r.get(ENGINE_LOCK_KEY)
-        if current == str(os.getpid()):
-            r.expire(ENGINE_LOCK_KEY, ENGINE_LOCK_TTL_SEC)
+        # Atomic compare-and-renew: never extend another process' lease.
+        renewed = r.eval(
+            """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+            end
+            return 0
+            """,
+            1,
+            ENGINE_LOCK_KEY,
+            _engine_instance_id,
+            str(ENGINE_LOCK_TTL_MS),
+        )
+        if int(renewed or 0) == 1:
             _lock_refresh_at = now
             log.debug("Engine lock TTL refreshed")
             return True
+
+        current = r.get(ENGINE_LOCK_KEY)
+        if current is None:
+            reacquired = r.set(ENGINE_LOCK_KEY, _engine_instance_id, nx=True, px=ENGINE_LOCK_TTL_MS)
+            if reacquired:
+                _lock_refresh_at = now
+                log.warning(
+                    "Engine lock key had expired but no competing owner existed; reacquired lease. instance_id=%s",
+                    _engine_instance_id,
+                )
+                return True
+
         _lock_holder = False
+        _lock_lost = True
+        log.critical(
+            "Engine lock ownership lost. ours=%s current_owner=%s. Trading loop must stop/standby.",
+            _engine_instance_id,
+            current,
+        )
         return False
     except Exception as e:
+        _reset_redis_client()
         log.warning("Failed to refresh engine lock (Redis error — keeping run): %s", e)
         return True  # Don't exit on transient Redis errors; assume we still hold the lock
+
+
+def _lock_renewer_loop() -> None:
+    """Renew Redis lock independently of scan-loop timing."""
+    while True:
+        try:
+            if _lock_holder and not refresh_engine_lock():
+                log.critical("Engine lock renewer detected lost ownership; main loop will enter standby")
+        except Exception as e:
+            log.warning("Engine lock renewer error: %s", e)
+        time.sleep(max(1, ENGINE_LOCK_REFRESH_INTERVAL_SEC))
+
+
+def start_lock_renewer_thread() -> None:
+    """Start lock renewer once. Safe to call repeatedly after acquiring lock."""
+    global _lock_renewer_thread_started
+    if _lock_renewer_thread_started:
+        return
+    _lock_renewer_thread_started = True
+    t = threading.Thread(target=_lock_renewer_loop, daemon=True, name="engine-lock-renewer")
+    t.start()
+    log.info("Engine Redis lock renewer started (interval=%ss)", ENGINE_LOCK_REFRESH_INTERVAL_SEC)
+
+
+def lock_lost() -> bool:
+    """Return True once this process has observed a competing lock owner."""
+    return _lock_lost
 
 
 def release_engine_lock() -> None:
@@ -175,12 +278,22 @@ def release_engine_lock() -> None:
     if r is None:
         return
     try:
-        current = r.get(ENGINE_LOCK_KEY)
-        if current == str(os.getpid()):
-            r.delete(ENGINE_LOCK_KEY)
+        deleted = r.eval(
+            """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """,
+            1,
+            ENGINE_LOCK_KEY,
+            _engine_instance_id,
+        )
+        if int(deleted or 0) == 1:
             log.info("Engine lock released (Redis)")
         _lock_holder = False
     except Exception as e:
+        _reset_redis_client()
         log.error("Failed to release engine lock: %s", e)
     _lock_holder = False
 
@@ -374,45 +487,47 @@ _redis_consecutive_failures: int = 0
 
 def _heartbeat_loop() -> None:
     """Dedicated loop: write heartbeat every 30s. Runs in daemon thread so engine stall doesn't stop heartbeat.
-    P0-R2: Also monitors Redis connectivity — if lost on Railway for too long, force shutdown."""
-    global _redis_consecutive_failures
+    P0-R2: Also monitors Redis connectivity without killing the process on transient outages."""
+    global _redis_consecutive_failures, _last_redis_alert_at
     while True:
         write_heartbeat()
-        # P0-R2: Explicit Redis health probe (write_heartbeat swallows errors)
+        # Explicit Redis health probe (write_heartbeat swallows errors)
         if os.getenv("RAILWAY_ENVIRONMENT"):
             try:
                 r = _get_redis()
                 if r is not None:
                     r.ping()
+                    if _redis_consecutive_failures > 0:
+                        log.info("Redis health recovered after %d failed checks", _redis_consecutive_failures)
                     _redis_consecutive_failures = 0
                 else:
                     raise ConnectionError("Redis client is None")
             except Exception:
-                # Force client re-creation on next call
-                global _redis_client
-                _redis_client = None
+                _reset_redis_client()
                 _redis_consecutive_failures += 1
                 log.warning("Redis health check failed (%d/%d)",
                             _redis_consecutive_failures, _REDIS_HEALTH_MAX_FAILURES)
                 if _redis_consecutive_failures >= _REDIS_HEALTH_MAX_FAILURES:
                     log.critical("Redis unreachable for %d consecutive heartbeats on Railway — "
-                                 "forcing shutdown (risk: duplicate instances without lock)",
+                                 "continuing in degraded mode and retrying reconnect",
                                  _redis_consecutive_failures)
-                    try:
-                        import requests as _req
-                        _bot = os.getenv("TELEGRAM_BOT_TOKEN", "")
-                        _cid = os.getenv("TELEGRAM_CHAT_ID", "")
-                        if _bot and _cid:
-                            _req.post(
-                                f"https://api.telegram.org/bot{_bot}/sendMessage",
-                                data={"chat_id": _cid,
-                                      "text": "🚨 ENGINE SHUTDOWN: Redis lost for >2.5 min on Railway. "
-                                              "Lock integrity at risk. Forcing restart."},
-                                timeout=5,
-                            )
-                    except Exception:
-                        pass
-                    os._exit(1)
+                    now = time.time()
+                    if now - _last_redis_alert_at > 300:
+                        _last_redis_alert_at = now
+                        try:
+                            import requests as _req
+                            _bot = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                            _cid = os.getenv("TELEGRAM_CHAT_ID", "")
+                            if _bot and _cid:
+                                _req.post(
+                                    f"https://api.telegram.org/bot{_bot}/sendMessage",
+                                    data={"chat_id": _cid,
+                                          "text": "⚠️ ENGINE DEGRADED: Redis unreachable. "
+                                                  "Holding local execution and retrying reconnect; no forced restart."},
+                                    timeout=5,
+                                )
+                        except Exception:
+                            pass
         time.sleep(ENGINE_HEARTBEAT_INTERVAL_SEC)
 
 
