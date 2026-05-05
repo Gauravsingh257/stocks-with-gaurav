@@ -185,7 +185,7 @@ export default function DiscoveryFeed({ events, onSelectSymbol }: Props) {
                   </div>
 
                   {/* Setup badge if present */}
-                  {p.setup && (
+                  {p.setup != null && (
                     <span
                       style={{
                         fontSize: "0.6rem",
