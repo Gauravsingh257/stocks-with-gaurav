@@ -22,7 +22,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from dashboard.backend.snapshot_consistency import build_engine_digest
 from dashboard.backend.state_bridge import get_engine_snapshot
-from dashboard.backend.ws_telemetry import record_broadcast
+from dashboard.backend.ws_telemetry import record_broadcast, record_ws_connection_accepted
 from dashboard.backend.services import process_recommendation_triggers
 
 log = logging.getLogger("dashboard.ws")
@@ -89,6 +89,7 @@ class _ConnectionManager:
                 return False
             self._active.add(ws)
             self._ip_for_ws[ws] = ip
+        record_ws_connection_accepted()
         log.info("WS client connected — total: %d", len(self._active))
         return True
 

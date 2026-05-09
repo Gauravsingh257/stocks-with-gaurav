@@ -100,6 +100,30 @@ def serve_cached_endpoint(canonical: str) -> dict | None:
     return load_last_known_good(canonical)
 
 
+def serve_cached_research_list(canonical: str) -> dict | None:
+    """
+    Swing/longterm GET path: never serve an empty live payload when LKG still has ideas.
+
+    Prevents transient empty Redis live rows from wiping the UI while the writer catches up.
+    """
+    if canonical not in ("swing", "longterm"):
+        return serve_cached_endpoint(canonical)
+    live = load_live_snapshot(canonical)
+    lkg = load_last_known_good(canonical)
+    live_n = len(live.get("items") or []) if isinstance(live, dict) else 0
+    lkg_n = len(lkg.get("items") or []) if isinstance(lkg, dict) else 0
+    if isinstance(live, dict) and live:
+        if live_n == 0 and lkg_n > 0:
+            merged = dict(lkg)
+            merged["snapshot_stale"] = True
+            merged["snapshot_source"] = "last_known_good"
+            merged["snapshot_stale_reason"] = "empty_live_guard_preferred_lkg"
+            merged["_served_canonical"] = canonical
+            return merged
+        return live
+    return lkg if isinstance(lkg, dict) and lkg else None
+
+
 def load_last_known_good(canonical: str) -> dict | None:
     r = _get_redis()
     if r is None:

@@ -4,8 +4,8 @@ import { useEngineSocket } from "@/lib/useWebSocket";
 import { getMarketSession } from "@/lib/marketSession";
 
 /**
- * One-line context when the live stream or engine snapshot is unavailable,
- * so the UI does not read as a hard failure (especially after hours).
+ * Stream / snapshot context: prefer verified snapshot language over “degraded” jargon.
+ * Suppresses banners during brief WS reconnect when a prior snapshot is still in memory.
  */
 export default function BackendStatusNotice() {
   const { snapshot, status } = useEngineSocket();
@@ -13,6 +13,11 @@ export default function BackendStatusNotice() {
   const hasFreshPath = status === "connected" || status === "polling";
   const engineHint = snapshot?.engine_running === true || snapshot?.engine_live === true;
   const staleData = snapshot?.stale === true;
+
+  // Silent recovery: do not flash yellow bars while the socket cycle runs but data is still on screen
+  if (snapshot && (status === "connecting" || status === "disconnected")) {
+    return null;
+  }
 
   if (hasFreshPath && engineHint && !staleData) return null;
 
@@ -27,7 +32,7 @@ export default function BackendStatusNotice() {
         }}
         role="status"
       >
-        <strong style={{ color: "var(--warning)" }}>Degraded mode</strong> — showing last known engine snapshot (Redis fallback).
+        <strong style={{ color: "var(--warning)" }}>Realtime feed reconnecting</strong> — showing latest verified market snapshot
         {snapshot.snapshot_time ? ` · ${snapshot.snapshot_time}` : ""}
       </div>
     );

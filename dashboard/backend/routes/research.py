@@ -17,7 +17,9 @@ from services.price_resolver import resolve_cmp
 from dashboard.backend.redis_endpoint_cache import (
     commit_watchlist_final_independent,
     finalize_endpoint,
+    load_last_known_good,
     serve_cached_endpoint,
+    serve_cached_research_list,
     valid_coverage_payload,
     valid_discovery_redis_write,
     valid_layer_report_payload,
@@ -27,6 +29,8 @@ from dashboard.backend.redis_endpoint_cache import (
     valid_scan_status_payload,
     valid_validation_payload,
 )
+from dashboard.backend.snapshot_consistency import validate_research_list_snapshot
+
 try:
     from dashboard.backend.routes.auth import get_optional_user
 except ImportError:
@@ -794,6 +798,21 @@ def _notify_new_picks(horizon: str) -> None:
         log.warning("Telegram new-pick notification failed: %s", exc)
 
 
+def _finalize_research_snapshot(canonical: str, merged: dict) -> dict:
+    """Apply structural validation; fall back to LKG when live payload is corrupt."""
+    ok, issues = validate_research_list_snapshot(merged)
+    if ok:
+        return merged
+    fb = load_last_known_good(canonical)
+    if fb is not None:
+        out = dict(fb)
+        out["snapshot_stale"] = True
+        out["snapshot_source"] = "last_known_good"
+        out["snapshot_stale_reason"] = "snapshot_structure_invalid:" + ",".join(issues)
+        return out
+    return merged
+
+
 def _gate_research_items(result: dict, is_premium: bool) -> dict:
     """Apply free-tier item cap without building a live DB payload."""
     if is_premium:
@@ -813,13 +832,14 @@ def _gate_research_items(result: dict, is_premium: bool) -> dict:
 @router.get("/api/research/swing")
 @router.get("/research/swing")
 def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
-    _maybe_auto_scan("SWING")
+    if not RESEARCH_SNAPSHOT_ONLY:
+        _maybe_auto_scan("SWING")
     is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
 
     if RESEARCH_SNAPSHOT_ONLY:
-        snap = serve_cached_endpoint("swing")
+        snap = serve_cached_research_list("swing")
         if snap is not None:
-            return _gate_research_items(dict(snap), is_premium)
+            return _gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium)
         merged = finalize_endpoint("swing", {}, valid_research_list_payload)
         return _gate_research_items(dict(merged), is_premium)
 
@@ -872,13 +892,14 @@ def search_stock(symbol: str = Query(..., min_length=1, max_length=32)):
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
-    _maybe_auto_scan("LONGTERM")
+    if not RESEARCH_SNAPSHOT_ONLY:
+        _maybe_auto_scan("LONGTERM")
     is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
 
     if RESEARCH_SNAPSHOT_ONLY:
-        snap = serve_cached_endpoint("longterm")
+        snap = serve_cached_research_list("longterm")
         if snap is not None:
-            return _gate_research_items(dict(snap), is_premium)
+            return _gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium)
         merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
         return _gate_research_items(dict(merged), is_premium)
 

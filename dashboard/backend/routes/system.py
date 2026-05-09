@@ -22,7 +22,7 @@ from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-BACKEND_VERSION = "1.1.2"
+BACKEND_VERSION = "1.1.3"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
 
@@ -737,6 +737,65 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
     except Exception as e:
         diag["websocket_telemetry"] = {"error": str(e)}
 
+    # ── WebSocket operational health (server-side; reconnect storms are client-driven) ──
+    try:
+        from dashboard.backend.websocket import manager
+        from dashboard.backend.ws_telemetry import get_ws_telemetry
+
+        _wt = get_ws_telemetry()
+        _eng_stale = False
+        _eng_reason = None
+        try:
+            from dashboard.backend.state_bridge import get_engine_snapshot
+
+            _es = get_engine_snapshot()
+            if isinstance(_es, dict):
+                _eng_stale = bool(_es.get("stale"))
+                _eng_reason = _es.get("stale_reason") or _es.get("snapshot_stale_reason")
+        except Exception:
+            pass
+        diag["websocket_health"] = {
+            "active_clients": manager.client_count,
+            "connections_accepted_since_boot": _wt.get("connections_accepted_since_boot"),
+            "avg_broadcast_bytes": _wt.get("avg_broadcast_bytes"),
+            "last_broadcast_bytes": _wt.get("last_broadcast_bytes"),
+            "last_broadcast_type": _wt.get("last_broadcast_type"),
+            "last_broadcast_age_ms": _wt.get("last_broadcast_age_ms"),
+            "total_broadcasts_since_boot": _wt.get("total_broadcasts_since_boot"),
+            "degraded_stream_reason_engine_snapshot": _eng_reason if _eng_stale else None,
+            "note": "Client reconnect counts live in the browser only; server tracks accepts + broadcast telemetry.",
+        }
+    except Exception as e:
+        diag["websocket_health"] = {"error": str(e)}
+
+    # ── Snapshot route health (research swing/longterm meta ages) ────────────
+    try:
+        from dashboard.backend.cache import _get_redis
+        from dashboard.backend.redis_endpoint_cache import META_PREFIX
+
+        r_meta = _get_redis()
+        snap_h: dict = {}
+        if r_meta is not None:
+            for name in ("swing", "longterm", "discovery"):
+                try:
+                    raw = r_meta.get(f"{META_PREFIX}{name}")
+                    if raw:
+                        import json as _json
+
+                        m = _json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+                        snap_h[name] = {
+                            "size_bytes": m.get("size_bytes"),
+                            "written_at": m.get("ts"),
+                            "ok": m.get("ok"),
+                        }
+                    else:
+                        snap_h[name] = {"available": False}
+                except Exception:
+                    snap_h[name] = {"error": True}
+        diag["snapshot_route_health"] = snap_h
+    except Exception as e:
+        diag["snapshot_route_health"] = {"error": str(e)}
+
     try:
         from dashboard.backend.cache import _get_redis
 
@@ -757,10 +816,41 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
                 if _cur == 0:
                     break
             diag["redis_snapshot_keys_scan_approx"] = _n
+
+            _candidates: list[tuple[int, str]] = []
+            _scan_cur = 0
+            for _ in range(100):
+                _scan_cur, batch = r.scan(_scan_cur, match="snapshot:*", count=56)
+                for bk in batch:
+                    ks = bk.decode("utf-8", errors="replace") if isinstance(bk, bytes) else str(bk)
+                    try:
+                        ln = int(r.strlen(ks))
+                    except Exception:
+                        continue
+                    _candidates.append((ln, ks))
+                if _scan_cur == 0:
+                    break
+            _candidates.sort(key=lambda x: -x[0])
+            _largest: list[dict] = []
+            for sz, k in _candidates[:12]:
+                try:
+                    tt = r.ttl(k)
+                    ttl_out = int(tt) if tt is not None and int(tt) >= 0 else None
+                except Exception:
+                    ttl_out = None
+                _largest.append({"key": k, "value_strlen": sz, "ttl_sec": ttl_out})
+            diag["redis_largest_snapshot_string_keys"] = _largest
         else:
             diag["redis_memory"] = {"note": "redis_unavailable"}
     except Exception as e:
         diag["redis_memory"] = {"error": str(e)}
+
+    try:
+        from services.signal_delivery import get_signal_debug
+
+        diag["signal_health"] = get_signal_debug()
+    except Exception as e:
+        diag["signal_health"] = {"error": str(e)}
 
     diag["total_latency_ms"] = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
     return diag

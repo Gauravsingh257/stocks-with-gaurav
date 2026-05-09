@@ -99,7 +99,18 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
 
 
 def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
+    from dashboard.backend.cache import get as cache_get
     from dashboard.backend.cache import set as cache_set
+
+    items = body.get("items") if isinstance(body.get("items"), list) else []
+    if len(items) == 0:
+        prev = cache_get(_lkg_key(uid))
+        if prev and isinstance(prev, dict) and len(prev.get("items") or []) > 0:
+            logger.warning(
+                "watchlist_os: skip persist empty snapshot (preserve LKG) uid=%s",
+                uid,
+            )
+            return
 
     cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
     cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)

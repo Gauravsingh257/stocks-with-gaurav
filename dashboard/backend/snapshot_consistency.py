@@ -45,6 +45,26 @@ def estimate_json_bytes(obj: Any) -> int:
         return 0
 
 
+def validate_research_list_snapshot(p: Any) -> Tuple[bool, List[str]]:
+    """
+    Structural validation for Redis-backed swing/longterm payloads (GET serve path).
+
+    Does not enforce business rules; rejects obvious corrupt/partial writes.
+    """
+    issues: List[str] = []
+    if not isinstance(p, dict):
+        return False, ["not_a_dict"]
+    if "items" not in p:
+        issues.append("missing_items")
+    elif not isinstance(p.get("items"), list):
+        issues.append("items_not_list")
+    c = p.get("count")
+    if c is not None and not isinstance(c, (int, float)):
+        issues.append("count_not_numeric")
+    ok = len(issues) == 0
+    return ok, issues
+
+
 def read_global_snapshot_version() -> int:
     """Redis snapshot:global_version (best-effort, 0 if unavailable)."""
     try:
