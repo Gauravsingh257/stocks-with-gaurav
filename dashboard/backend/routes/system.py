@@ -523,6 +523,25 @@ def debug_cache():
             out["oi_interpretation"] = {"error": str(e)}
         else:
             out = {"oi_interpretation": {"error": str(e)}}
+    try:
+        from dashboard.backend.services.watchlist_intel_service import (
+            FEED_PREFIX,
+            FEED_TTL_SEC,
+            LAST_PREFIX,
+            MAX_FEED_EVENTS,
+        )
+
+        if isinstance(out, dict):
+            out["watchlist_os"] = {
+                "feed_key_pattern": FEED_PREFIX + "{user_id}",
+                "last_intel_key_pattern": LAST_PREFIX + "{user_id}",
+                "max_feed_events": MAX_FEED_EVENTS,
+                "feed_ttl_sec": FEED_TTL_SEC,
+                "api": ["/api/watchlist/operating", "/api/watchlist/feed"],
+            }
+    except Exception as e:
+        if isinstance(out, dict):
+            out["watchlist_os"] = {"error": str(e)}
     return out
 
 

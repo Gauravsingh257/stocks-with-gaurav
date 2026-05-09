@@ -462,6 +462,59 @@ export interface ResearchRunResponse {
   result: Record<string, unknown>;
 }
 
+// ── Watchlist OS (Phase 2) ─────────────────────────────────────────────────
+export interface WatchlistProgressionStep {
+  id?: string;
+  label?: string;
+  status?: "complete" | "pending" | "waiting";
+}
+
+export interface WatchlistIntelItem {
+  symbol: string;
+  horizon?: string | null;
+  trend_state?: string;
+  setup_status?: string;
+  progression?: WatchlistProgressionStep[];
+  readiness_pct?: number;
+  conviction_pct?: number;
+  ai_setup_score?: number;
+  risk?: { rr?: number | null; volatility_hint?: string; notes?: string[] };
+  recommendation?: {
+    show_trade_levels?: boolean;
+    entry?: number | null;
+    stop_loss?: number | null;
+    target?: number | null;
+    rationale?: string | null;
+    monitoring_message?: string | null;
+    nearest_trigger?: string | null;
+    invalidation_reason?: string | null;
+  };
+  meta?: { has_research_row?: boolean; in_active_trade?: boolean };
+}
+
+export interface WatchlistFeedEvent {
+  ts?: string;
+  symbol?: string;
+  type?: string;
+  headline?: string;
+  setup_status?: string;
+}
+
+export interface WatchlistOperatingResponse {
+  ok?: boolean;
+  engine_version?: string;
+  items: WatchlistIntelItem[];
+  feed: WatchlistFeedEvent[];
+  retention?: {
+    closest_to_trigger?: string[];
+    strongest_scores?: string[];
+    invalidated?: string[];
+    best_rr?: string[];
+  };
+  market_alignment?: Record<string, unknown>;
+  counts?: { symbols?: number; with_research?: number };
+}
+
 // ── Portfolio types ────────────────────────────────────────────────────────
 export interface PortfolioPosition {
   id: number;
@@ -1115,6 +1168,15 @@ export const api = {
     fetch(`${BASE}/api/watchlist/${encodeURIComponent(symbol)}`, {
       method: "DELETE", headers: { Authorization: `Bearer ${token}` },
     }).then((r) => r.json()),
+
+  /** Phase 2 — AI watchlist operating system (enriched items + feed + retention). */
+  getWatchlistOperating: (token: string) =>
+    get<WatchlistOperatingResponse>("/api/watchlist/operating", token),
+  getWatchlistFeed: (token: string, limit = 40) =>
+    get<{ ok: boolean; items: WatchlistFeedEvent[] }>(
+      `/api/watchlist/feed?limit=${encodeURIComponent(String(limit))}`,
+      token
+    ),
 
   // ── Market Intelligence ───────────────────────────────────────────────────
   marketIntelSnapshot: () => get<MISnapshot>("/api/market-intelligence/snapshot"),

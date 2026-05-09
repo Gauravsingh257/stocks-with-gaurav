@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import Link from "next/link";
 import { BookmarkPlus, Check } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
@@ -34,7 +35,17 @@ export default function AddToWatchlistButton({
     }
   }, [token, clean]);
 
-  if (!user || !token) return null;
+  if (!user || !token) {
+    return (
+      <Link
+        href="/login"
+        className="btn-accent"
+        style={{ textDecoration: "none", fontSize: compact ? "0.68rem" : "0.74rem", padding: compact ? "5px 10px" : "7px 12px", fontWeight: 800 }}
+      >
+        Sign in to save
+      </Link>
+    );
+  }
 
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>

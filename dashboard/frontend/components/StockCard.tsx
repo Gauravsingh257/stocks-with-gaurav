@@ -26,6 +26,15 @@ function setupLabel(horizon: string, setupType: string): string {
   return "Swing Watch";
 }
 
+/** Aligns with watchlist OS — hide discretionary levels until scan implies actionable readiness. */
+export function showTradeLevelsFromScan(a: StockAnalysis): boolean {
+  if (a.recommendation === "Avoid") return false;
+  if (a.criteria_not_met && a.criteria_not_met.length > 0) return false;
+  if (a.confidence_score < 62) return false;
+  if (!a.setup_type || a.setup_type === "No Valid SMC Setup") return false;
+  return true;
+}
+
 export default function StockCard({
   analysis,
   compact = false,
@@ -37,6 +46,7 @@ export default function StockCard({
 }) {
   const { badgeLabel, confluence } = useMemo(() => confidenceInsightsFromStockAnalysis(analysis), [analysis]);
   const colors = recommendationColors(badgeLabel);
+  const showTradeLevels = useMemo(() => showTradeLevelsFromScan(analysis), [analysis]);
   const entry =
     analysis.entry_zone && analysis.entry_zone.length >= 2
       ? `${money(analysis.entry_zone[0])}–${money(analysis.entry_zone[1])}`
@@ -80,10 +90,18 @@ export default function StockCard({
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
         <Metric label="CMP" value={money(analysis.cmp)} />
-        <Metric label="Entry Zone" value={entry} />
-        <Metric label="Stop Loss" value={money(analysis.stop_loss)} tone="danger" />
-        <Metric label="Target" value={money(analysis.target)} tone="success" />
-        <Metric label="R:R" value={analysis.risk_reward ? `1:${analysis.risk_reward.toFixed(1)}` : "-"} />
+        {showTradeLevels ? (
+          <>
+            <Metric label="Entry Zone" value={entry} />
+            <Metric label="Stop Loss" value={money(analysis.stop_loss)} tone="danger" />
+            <Metric label="Target" value={money(analysis.target)} tone="success" />
+            <Metric label="R:R" value={analysis.risk_reward ? `1:${analysis.risk_reward.toFixed(1)}` : "-"} />
+          </>
+        ) : (
+          <div style={{ gridColumn: "1 / -1", padding: "10px 12px", borderRadius: 10, border: "1px dashed rgba(245,158,11,0.35)", background: "rgba(245,158,11,0.06)", fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            <strong style={{ color: "var(--warning)" }}>Monitoring structure</strong> — entry criteria not confirmed yet. Review structure &amp; confluence; levels unlock when the scan grades the setup as actionable.
+          </div>
+        )}
         <Metric
           label="Confidence"
           value={pct(analysis.confidence_score)}
