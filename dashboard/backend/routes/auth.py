@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header
 from pydantic import BaseModel
 
 from dashboard.backend.db import get_connection
@@ -81,6 +81,17 @@ def _create_token(user_id: int, email: str, role: str) -> str:
         "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _bump_watchlist_os(uid: int) -> None:
+    """Invalidate live Redis slice and rebuild Watchlist OS after SQLite mutation."""
+    try:
+        from dashboard.backend.routes.watchlist_os import _refresh_watchlist_os, invalidate_watchlist_os_cache
+
+        invalidate_watchlist_os_cache(uid)
+        _refresh_watchlist_os(uid)
+    except Exception as exc:
+        log.warning("watchlist OS refresh after mutation failed uid=%s: %s", uid, exc)
 
 
 def decode_token(token: str) -> dict:
@@ -205,8 +216,13 @@ def get_watchlist(user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/watchlist")
-def add_to_watchlist(body: dict, user: dict = Depends(get_current_user)):
-    symbol = body.get("symbol", "").strip().upper()
+def add_to_watchlist(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    raw = str(body.get("symbol", "") or "").strip().upper().replace("NSE:", "").strip()
+    symbol = raw.replace(" ", "")
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol is required")
     conn = get_connection()
@@ -216,20 +232,28 @@ def add_to_watchlist(body: dict, user: dict = Depends(get_current_user)):
             (user["sub"], symbol),
         )
         conn.commit()
+        uid = int(user["sub"])
+        background_tasks.add_task(_bump_watchlist_os, uid)
         return {"ok": True, "symbol": symbol}
     finally:
         conn.close()
 
 
 @router.delete("/api/watchlist/{symbol}")
-def remove_from_watchlist(symbol: str, user: dict = Depends(get_current_user)):
+def remove_from_watchlist(
+    symbol: str,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
     conn = get_connection()
     try:
+        sym = symbol.upper().replace("NSE:", "").strip()
         conn.execute(
             "DELETE FROM user_watchlist WHERE user_id = ? AND symbol = ?",
-            (user["sub"], symbol.upper()),
+            (user["sub"], sym),
         )
         conn.commit()
-        return {"ok": True, "symbol": symbol.upper()}
+        background_tasks.add_task(_bump_watchlist_os, int(user["sub"]))
+        return {"ok": True, "symbol": sym}
     finally:
         conn.close()

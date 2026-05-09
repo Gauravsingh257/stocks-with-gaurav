@@ -124,6 +124,18 @@ def _progression(idea: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
     return steps, readiness_pct
 
 
+def lifecycle_stage_from_setup_status(setup_status: str) -> str:
+    """Trade-preparation lifecycle label (institutional OS vocabulary)."""
+    return {
+        "EARLY": "DISCOVERY",
+        "FORMING": "BUILDING",
+        "NEAR_ENTRY": "NEAR_ENTRY",
+        "READY": "ENTRY_READY",
+        "ACTIVE": "ACTIVE",
+        "INVALIDATED": "INVALIDATED",
+    }.get((setup_status or "").upper(), "MONITORING")
+
+
 def _derive_setup_status(
     idea: Optional[Dict[str, Any]],
     active_trade: Optional[Dict[str, Any]],
@@ -144,6 +156,42 @@ def _derive_setup_status(
     if confidence >= 48:
         return "FORMING"
     return "EARLY"
+
+
+def _blocking_reasons_summary(
+    idea: Optional[Dict[str, Any]],
+    steps: List[Dict[str, Any]],
+    readiness_pct: float,
+) -> str:
+    """Trust-first copy: explain what is missing before entry/SL/target are shown."""
+    if not idea:
+        return "No published research match yet — monitoring symbol until a setup is logged."
+    parts: List[str] = []
+    for st in steps:
+        if st.get("status") == "complete":
+            continue
+        lid = str(st.get("id") or "")
+        if lid == "bos":
+            parts.append("Awaiting BOS")
+        elif lid == "liquidity_sweep":
+            parts.append("Liquidity not swept")
+        elif lid == "ob_alignment":
+            parts.append("Demand/supply zone not confirmed")
+        elif lid == "htf":
+            parts.append("HTF not aligned")
+        elif lid == "entry_trigger":
+            parts.append("Executable trigger not active")
+    if readiness_pct < 45:
+        parts.append("Setup quality still building")
+    try:
+        rr = float((idea or {}).get("risk_reward") or 0)
+        if rr > 0 and rr < 1.2:
+            parts.append("R:R insufficient vs risk budget")
+    except (TypeError, ValueError):
+        pass
+    if not parts:
+        parts.append("Confirmation pending")
+    return " · ".join(parts[:6])
 
 
 def _composite_score(confidence: float, readiness_pct: float, rr: float, idea: Optional[Dict[str, Any]]) -> int:
@@ -192,6 +240,11 @@ def build_symbol_intel(
         elif at == "IN_MOTION":
             nearest_trigger = "Trade already in motion vs plan"
 
+    if show_levels:
+        monitoring_message = None
+    else:
+        monitoring_message = _blocking_reasons_summary(idea, steps, readiness_pct)
+
     risk_notes: List[str] = []
     if idea and str(idea.get("entry_type") or "") == "LIMIT":
         risk_notes.append("Limit entry — fill risk if spot overshoots.")
@@ -203,10 +256,13 @@ def build_symbol_intel(
         "horizon": horizon,
         "trend_state": trend,
         "setup_status": setup_status,
+        "lifecycle_stage": lifecycle_stage_from_setup_status(setup_status),
+        "current_stage": lifecycle_stage_from_setup_status(setup_status),
         "progression": steps,
         "readiness_pct": readiness_pct,
         "conviction_pct": round(confidence, 1),
         "ai_setup_score": ai_score,
+        "entry_ready": bool(show_levels),
         "risk": {
             "rr": round(rr, 2) if rr else None,
             "volatility_hint": "elevated" if confidence < 55 else "moderate",
@@ -215,13 +271,12 @@ def build_symbol_intel(
         },
         "recommendation": {
             "show_trade_levels": show_levels,
+            "entry_ready": bool(show_levels),
             "entry": entry,
             "stop_loss": sl,
             "target": tgt,
             "rationale": rationale,
-            "monitoring_message": None
-            if show_levels
-            else "Monitoring structure — entry criteria not confirmed yet.",
+            "monitoring_message": monitoring_message,
             "nearest_trigger": nearest_trigger,
             "invalidation_reason": "Research status closed or confidence collapsed."
             if setup_status == "INVALIDATED"

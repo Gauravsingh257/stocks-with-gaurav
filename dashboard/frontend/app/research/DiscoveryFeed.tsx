@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ExternalLink, Search } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
+import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
@@ -96,9 +97,12 @@ export function DiscoveryFeed({ items }: { items: ResearchDecisionCard[] }) {
                     <span style={{ color: "#bfdbfe" }}>{confidenceText(item)}</span>
                     <span style={{ color: "#fecaca" }}>{riskNote(item)}</span>
                   </div>
-                  <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#dbeafe", background: "rgba(91,156,246,0.16)", border: "1px solid rgba(91,156,246,0.34)", borderRadius: 7, padding: "6px 9px", textDecoration: "none", fontSize: "0.68rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-                    <Search size={12} /> Track
-                  </Link>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
+                    <AddToWatchlistButton symbol={symbol} compact />
+                    <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#dbeafe", background: "rgba(91,156,246,0.16)", border: "1px solid rgba(91,156,246,0.34)", borderRadius: 7, padding: "6px 9px", textDecoration: "none", fontSize: "0.68rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+                      <Search size={12} /> Track
+                    </Link>
+                  </div>
                 </article>
               );
             })}

@@ -22,7 +22,7 @@ from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-BACKEND_VERSION = "1.1.3"
+BACKEND_VERSION = "1.1.4"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
 
@@ -840,6 +840,19 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
                     ttl_out = None
                 _largest.append({"key": k, "value_strlen": sz, "ttl_sec": ttl_out})
             diag["redis_largest_snapshot_string_keys"] = _largest
+
+            _dw = 0
+            _scan_w = 0
+            for _ in range(60):
+                _scan_w, batch_w = r.scan(_scan_w, match="snapshot:watchlist_digest:*", count=48)
+                _dw += len(batch_w)
+                if _scan_w == 0:
+                    break
+            diag["watchlist_os_redis"] = {
+                "digest_keys_scan_approx": _dw,
+                "operating_live_key_pattern": "snapshot:watchlist_operating:{user_id}",
+                "digest_key_pattern": "snapshot:watchlist_digest:{user_id}",
+            }
         else:
             diag["redis_memory"] = {"note": "redis_unavailable"}
     except Exception as e:

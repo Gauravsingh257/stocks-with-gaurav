@@ -3,8 +3,9 @@ Watchlist Operating System API — snapshot-first per-user Redis payloads.
 
 Live key:   snapshot:watchlist_operating:{user_id}
 LKG key:    snapshot:last_known_good:watchlist_operating:{user_id}
+Digest key: snapshot:watchlist_digest:{user_id} (telemetry / observability)
 
-GET serves cache/LKG only; heavy merge runs in BackgroundTasks after response (or legacy sync if opted out).
+Cold GET never returns an empty items[] when SQLite still has symbols — fixes empty page after add.
 
 Does NOT replace SQLite watchlist storage or POST/DELETE /api/watchlist.
 """
@@ -13,12 +14,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 
 from dashboard.backend.routes.auth import get_current_user
-from dashboard.backend.routes.research import _longterm_payload, _swing_payload
 from dashboard.backend.services.watchlist_intel_service import (
     append_feed_diff,
     build_operating_payload,
@@ -37,6 +38,9 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist-os"])
 WL_OS_TTL = int(os.getenv("WATCHLIST_OS_SNAPSHOT_TTL_SEC", "45"))
 WL_OS_LKG_TTL = int(os.getenv("WATCHLIST_OS_LKG_TTL_SEC", "86400"))
 WATCHLIST_OS_SNAPSHOT_ONLY = os.getenv("WATCHLIST_OS_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes")
+RESEARCH_SNAPSHOT_ONLY = os.getenv("RESEARCH_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes")
+
+DIGEST_PREFIX = "snapshot:watchlist_digest:"
 
 
 def _live_key(uid: int) -> str:
@@ -45,6 +49,10 @@ def _live_key(uid: int) -> str:
 
 def _lkg_key(uid: int) -> str:
     return f"snapshot:last_known_good:watchlist_operating:{int(uid)}"
+
+
+def _digest_key(uid: int) -> str:
+    return f"{DIGEST_PREFIX}{int(uid)}"
 
 
 def _user_symbols(user_id: int) -> List[str]:
@@ -59,16 +67,28 @@ def _user_symbols(user_id: int) -> List[str]:
         conn.close()
 
 
-def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
-    """Full merge — runs in background refresh only when snapshot-only mode is on."""
-    symbols = _user_symbols(uid)
+def _research_idea_map() -> Dict[str, Any]:
+    """Prefer Redis swing/longterm snapshots when RESEARCH_SNAPSHOT_ONLY — avoids heavy CMP resolution here."""
     try:
+        if RESEARCH_SNAPSHOT_ONLY:
+            from dashboard.backend.redis_endpoint_cache import serve_cached_research_list
+
+            sw = serve_cached_research_list("swing") or {}
+            lt = serve_cached_research_list("longterm") or {}
+            return merge_idea_maps(list(sw.get("items") or []), list(lt.get("items") or []))
+        from dashboard.backend.routes.research import _longterm_payload, _swing_payload
+
         swing = _swing_payload(120)
         lt = _longterm_payload(120)
-        rmap = merge_idea_maps(list(swing.get("items") or []), list(lt.get("items") or []))
+        return merge_idea_maps(list(swing.get("items") or []), list(lt.get("items") or []))
     except Exception as exc:
-        logger.warning("research payload for watchlist OS failed: %s", exc)
-        rmap = {}
+        logger.warning("research map for watchlist OS failed: %s", exc)
+        return {}
+
+
+def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
+    symbols = _user_symbols(uid)
+    rmap = _research_idea_map()
 
     try:
         snap = get_engine_snapshot()
@@ -82,9 +102,10 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
         logger.debug("feed append skipped: %s", exc)
         feed_tail = load_feed_only(uid, 12)
 
-    return {
+    now = time.time()
+    body: Dict[str, Any] = {
         "ok": True,
-        "engine_version": "watchlist_os_v1",
+        "engine_version": "watchlist_os_v2",
         "items": enriched,
         "feed": feed_tail,
         "retention": retention_hints(enriched),
@@ -95,7 +116,10 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
         },
         "snapshot_stale": False,
         "snapshot_source": "live",
+        "_snapshot_written_at": now,
+        "_watchlist_os_schema": "v2",
     }
+    return body
 
 
 def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
@@ -115,6 +139,31 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
     cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
     cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)
 
+    try:
+        enriched = body.get("items") if isinstance(body.get("items"), list) else []
+        mx = 0.0
+        for x in enriched:
+            try:
+                mx = max(mx, float(x.get("readiness_pct") or 0))
+            except (TypeError, ValueError):
+                pass
+        digest = {
+            "user_id": uid,
+            "updated_at": body.get("_snapshot_written_at") or time.time(),
+            "symbol_count": len(enriched),
+            "max_readiness_pct": round(mx, 1),
+        }
+        cache_set(_digest_key(uid), digest, ttl_seconds=WL_OS_TTL)
+    except Exception as exc:
+        logger.debug("watchlist digest persist skipped: %s", exc)
+
+
+def invalidate_watchlist_os_cache(uid: int) -> None:
+    """Drop live snapshot so the next GET rebuilds or serves LKG."""
+    from dashboard.backend.cache import delete as cache_delete
+
+    cache_delete(_live_key(uid))
+
 
 def _refresh_watchlist_os(uid: int) -> None:
     try:
@@ -130,7 +179,7 @@ def watchlist_operating_system(
     user: dict = Depends(get_current_user),
 ):
     """
-    Snapshot-first: Redis live → LKG → warming shell; merge runs in BackgroundTasks.
+    Snapshot-first: Redis live → LKG → synchronous build if DB has symbols (no empty shell).
     """
     uid = int(user["sub"])
 
@@ -153,10 +202,16 @@ def watchlist_operating_system(
         background_tasks.add_task(_refresh_watchlist_os, uid)
         return out
 
+    symbols = _user_symbols(uid)
+    if symbols:
+        body = _build_watchlist_os_payload(uid)
+        _persist_watchlist_os(uid, body)
+        return body
+
     background_tasks.add_task(_refresh_watchlist_os, uid)
     return {
         "ok": True,
-        "engine_version": "watchlist_os_v1",
+        "engine_version": "watchlist_os_v2",
         "items": [],
         "feed": [],
         "retention": {},
@@ -164,7 +219,7 @@ def watchlist_operating_system(
         "counts": {"symbols": 0, "with_research": 0},
         "snapshot_stale": True,
         "snapshot_source": "warming",
-        "hint": "Watchlist intelligence snapshot is warming — retry shortly.",
+        "hint": "No symbols saved yet — add stocks from Research or stock pages.",
     }
 
 

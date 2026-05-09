@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Activity, ExternalLink, Flame, ShieldCheck, Target } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
 import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
+import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
@@ -118,9 +119,12 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <div style={{ color: "#fca5a5" }}>{riskNote(item, target)}</div>
                 </div>
 
-                <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <Target size={13} /> Study Chart
-                </Link>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <AddToWatchlistButton symbol={symbol} compact />
+                  <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <Target size={13} /> Study Chart
+                  </Link>
+                </div>
               </article>
             );
           })}

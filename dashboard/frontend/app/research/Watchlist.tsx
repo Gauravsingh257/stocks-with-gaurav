@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Bell, ExternalLink, Eye, Target, TimerReset } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
+import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
@@ -95,9 +96,12 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
                   <div style={{ color: "#fecaca" }}>{riskNote(item)}</div>
                 </div>
 
-                <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#1f1600", background: "#facc15", border: "1px solid rgba(250,204,21,0.65)", borderRadius: 7, padding: "7px 10px", textDecoration: "none", fontSize: "0.72rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <Bell size={13} /> Add Alert
-                </Link>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <AddToWatchlistButton symbol={symbol} compact />
+                  <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#1f1600", background: "#facc15", border: "1px solid rgba(250,204,21,0.65)", borderRadius: 7, padding: "7px 10px", textDecoration: "none", fontSize: "0.72rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <Bell size={13} /> Add Alert
+                  </Link>
+                </div>
               </article>
             );
           })}

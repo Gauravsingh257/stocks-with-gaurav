@@ -119,6 +119,19 @@ def set(key: str, value: Any, ttl_seconds: int = MARKET_DATA_TTL) -> None:
         _memory_cache[key] = (value, time.time() + ttl_seconds)
 
 
+def delete(key: str) -> None:
+    """Remove key from Redis or in-memory cache (invalidation)."""
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.delete(key)
+        except Exception as e:
+            log.debug("Redis delete error %s: %s", key, e)
+
+    with _memory_lock:
+        _memory_cache.pop(key, None)
+
+
 def ohlc_key(symbol: str, interval: str) -> str:
     return f"ohlc:{symbol}:{interval}"
 

@@ -10,9 +10,12 @@ import { api } from "@/lib/api";
 export default function AddToWatchlistButton({
   symbol,
   compact = false,
+  onAdded,
 }: {
   symbol: string;
   compact?: boolean;
+  /** Called after successful POST (e.g. router.refresh for /watchlist). */
+  onAdded?: () => void;
 }) {
   const { user, token } = useAuth();
   const [done, setDone] = useState(false);
@@ -28,6 +31,7 @@ export default function AddToWatchlistButton({
     try {
       await api.addToWatchlist(token, clean);
       setDone(true);
+      onAdded?.();
     } catch {
       setErr("Could not save");
     } finally {

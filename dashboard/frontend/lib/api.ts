@@ -474,6 +474,11 @@ export interface WatchlistIntelItem {
   horizon?: string | null;
   trend_state?: string;
   setup_status?: string;
+  /** Institutional lifecycle label (DISCOVERY → ENTRY_READY → ACTIVE …) */
+  lifecycle_stage?: string;
+  current_stage?: string;
+  /** True only when entry / SL / target may be shown as actionable */
+  entry_ready?: boolean;
   progression?: WatchlistProgressionStep[];
   readiness_pct?: number;
   conviction_pct?: number;
@@ -481,6 +486,7 @@ export interface WatchlistIntelItem {
   risk?: { rr?: number | null; volatility_hint?: string; notes?: string[] };
   recommendation?: {
     show_trade_levels?: boolean;
+    entry_ready?: boolean;
     entry?: number | null;
     stop_loss?: number | null;
     target?: number | null;
@@ -513,6 +519,9 @@ export interface WatchlistOperatingResponse {
   };
   market_alignment?: Record<string, unknown>;
   counts?: { symbols?: number; with_research?: number };
+  snapshot_stale?: boolean;
+  snapshot_source?: string;
+  hint?: string;
 }
 
 // ── Portfolio types ────────────────────────────────────────────────────────

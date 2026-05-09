@@ -18,6 +18,7 @@ import { useAuth } from "@/lib/auth";
 export default function WatchlistPage() {
   const { user, token } = useAuth();
   const [intel, setIntel] = useState<WatchlistIntelItem[]>([]);
+  const [savedSymbols, setSavedSymbols] = useState<{ symbol: string; added_at?: string }[]>([]);
   const [feed, setFeed] = useState<{ headline?: string; symbol?: string; ts?: string }[]>([]);
   const [retention, setRetention] = useState<Record<string, string[]> | null>(null);
   const [marketAlign, setMarketAlign] = useState<Record<string, unknown> | null>(null);
@@ -29,14 +30,19 @@ export default function WatchlistPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getWatchlistOperating(token);
+      const [data, wl] = await Promise.all([
+        api.getWatchlistOperating(token),
+        api.getWatchlist(token),
+      ]);
       setIntel(data.items || []);
+      setSavedSymbols(wl.items || []);
       setFeed(data.feed || []);
       setRetention(data.retention || null);
       setMarketAlign(data.market_alignment || null);
     } catch {
       setError("Could not load watchlist intelligence.");
       setIntel([]);
+      setSavedSymbols([]);
     } finally {
       setLoading(false);
     }
@@ -77,7 +83,7 @@ export default function WatchlistPage() {
           <div>
             <h1 style={{ margin: 0, fontSize: "1.35rem", fontWeight: 800 }}>AI Watchlist Terminal</h1>
             <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-              {intel.length} symbols · backend-driven setup states (no placeholder trades)
+              {Math.max(intel.length, savedSymbols.length)} saved · {intel.length} with live prep intelligence
             </p>
           </div>
         </div>
@@ -110,13 +116,18 @@ export default function WatchlistPage() {
 
       {loading ? (
         <div className="glass" style={{ padding: 24, textAlign: "center", color: "var(--text-secondary)" }}>Loading watchlist operating system…</div>
-      ) : intel.length === 0 ? (
+      ) : intel.length === 0 && savedSymbols.length === 0 ? (
         <div className="glass" style={{ padding: "32px 24px", textAlign: "center" }}>
           <Bookmark size={32} color="var(--text-dim)" style={{ margin: "0 auto 12px" }} />
           <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Your watchlist is empty.</p>
           <p style={{ color: "var(--text-dim)", fontSize: "0.82rem" }}>
             Add from <Link href="/research" style={{ color: "var(--accent)" }}>Research</Link>, stock pages, or the global search card.
           </p>
+        </div>
+      ) : intel.length === 0 && savedSymbols.length > 0 ? (
+        <div className="glass" style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
+          <p style={{ marginBottom: 12 }}>Saved symbols: {savedSymbols.map((s) => s.symbol).join(", ")}</p>
+          <p style={{ fontSize: "0.82rem", color: "var(--text-dim)" }}>Preparing intelligence… tap Sync or wait a moment.</p>
         </div>
       ) : (
         <>
@@ -151,7 +162,9 @@ export default function WatchlistPage() {
 
           <div style={{ fontSize: "0.58rem", fontWeight: 800, color: "var(--text-dim)", letterSpacing: 0.1 }}>SETUP GRID (ranked by AI score)</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {intel.map((row) => (
+            {intel.map((row) => {
+              const tradeLevelsOk = Boolean(row.recommendation?.entry_ready ?? row.recommendation?.show_trade_levels);
+              return (
               <div key={row.symbol} className="glass" style={{ padding: 14, border: "1px solid rgba(255,255,255,0.06)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
                   <div>
@@ -164,7 +177,8 @@ export default function WatchlistPage() {
                       {row.symbol} <ExternalLink size={12} />
                     </a>
                     <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", marginTop: 4 }}>
-                      {row.horizon || "—"} · <span style={{ color: "var(--text-secondary)" }}>{row.trend_state}</span> ·{" "}
+                      {row.lifecycle_stage || row.setup_status || "—"} · {row.horizon || "—"} ·{" "}
+                      <span style={{ color: "var(--text-secondary)" }}>{row.trend_state}</span> ·{" "}
                       <strong style={{ color: row.setup_status === "READY" ? "var(--success)" : "var(--warning)" }}>{row.setup_status}</strong>
                     </div>
                   </div>
@@ -206,7 +220,7 @@ export default function WatchlistPage() {
                     <strong>Setup invalidated</strong>
                     <p style={{ margin: "6px 0 0", lineHeight: 1.45 }}>{row.recommendation.invalidation_reason}</p>
                   </div>
-                ) : row.recommendation?.show_trade_levels ? (
+                ) : tradeLevelsOk ? (
                   <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "rgba(0,224,150,0.06)", border: "1px solid rgba(0,224,150,0.2)", fontSize: "0.78rem" }}>
                     <div style={{ fontWeight: 800, marginBottom: 6, color: "var(--success)" }}>Actionable levels (research + engine)</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
@@ -233,7 +247,8 @@ export default function WatchlistPage() {
                   Research context <ChevronRight size={12} />
                 </Link>
               </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
