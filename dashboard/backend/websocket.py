@@ -22,6 +22,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from dashboard.backend.snapshot_consistency import build_engine_digest
 from dashboard.backend.state_bridge import get_engine_snapshot
+from dashboard.backend.ws_telemetry import record_broadcast
 from dashboard.backend.services import process_recommendation_triggers
 
 log = logging.getLogger("dashboard.ws")
@@ -275,9 +276,11 @@ async def _broadcast_loop() -> None:
                 except Exception as exc:
                     log.debug("State-transition event detection failed: %s", exc)
                 payload = json.dumps({"type": "snapshot", "data": snapshot})
+                record_broadcast(len(payload.encode("utf-8")), "snapshot")
             else:
                 digest = build_engine_digest(snapshot)
                 payload = json.dumps({"type": "digest", "data": digest})
+                record_broadcast(len(payload.encode("utf-8")), "digest")
         except Exception as exc:
             log.error("Snapshot error: %s", exc)
             continue
@@ -289,12 +292,14 @@ async def _broadcast_loop() -> None:
             if oi_snap:
                 try:
                     oi_payload = json.dumps({"type": "oi_intelligence", "data": dict(oi_snap)})
+                    record_broadcast(len(oi_payload.encode("utf-8")), "oi_intelligence")
                     await manager.broadcast(oi_payload)
                 except Exception as exc:
                     log.error("OI Intelligence broadcast error: %s", exc)
 
         if tick % PING_EVERY == 0:
             ping = json.dumps({"type": "ping", "tick": tick})
+            record_broadcast(len(ping.encode("utf-8")), "ping")
             await manager.broadcast(ping)
 
 

@@ -180,6 +180,9 @@ MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
 FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
 DECISION_CACHE_SECONDS = int(os.getenv("RESEARCH_DECISION_CACHE_SECONDS", "600"))
 
+# GET /swing /longterm: Redis snapshot + LKG only (no DB assembly / resolve_cmp on request).
+RESEARCH_SNAPSHOT_ONLY = os.getenv("RESEARCH_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes")
+
 RESEARCH_LEADS_DDL = """
 CREATE TABLE IF NOT EXISTS research_email_leads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -791,13 +794,37 @@ def _notify_new_picks(horizon: str) -> None:
         log.warning("Telegram new-pick notification failed: %s", exc)
 
 
+def _gate_research_items(result: dict, is_premium: bool) -> dict:
+    """Apply free-tier item cap without building a live DB payload."""
+    if is_premium:
+        return result
+    items = list(result.get("items") or [])
+    if len(items) <= FREE_TIER_LIMIT:
+        return result
+    out = dict(result)
+    total_avail = len(items)
+    out["items"] = items[:FREE_TIER_LIMIT]
+    out["gated"] = True
+    out["total_available"] = total_avail
+    out["count"] = FREE_TIER_LIMIT
+    return out
+
+
 @router.get("/api/research/swing")
 @router.get("/research/swing")
 def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("SWING")
+    is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+
+    if RESEARCH_SNAPSHOT_ONLY:
+        snap = serve_cached_endpoint("swing")
+        if snap is not None:
+            return _gate_research_items(dict(snap), is_premium)
+        merged = finalize_endpoint("swing", {}, valid_research_list_payload)
+        return _gate_research_items(dict(merged), is_premium)
+
     full = _swing_payload(limit)
     snap = serve_cached_endpoint("swing")
-    is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
     if snap is not None:
         result = dict(snap)
     else:
@@ -846,9 +873,17 @@ def search_stock(symbol: str = Query(..., min_length=1, max_length=32)):
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
     _maybe_auto_scan("LONGTERM")
+    is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+
+    if RESEARCH_SNAPSHOT_ONLY:
+        snap = serve_cached_endpoint("longterm")
+        if snap is not None:
+            return _gate_research_items(dict(snap), is_premium)
+        merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
+        return _gate_research_items(dict(merged), is_premium)
+
     full = _longterm_payload(limit)
     snap = serve_cached_endpoint("longterm")
-    is_premium = user and user.get("role") in ("PREMIUM", "ADMIN")
     if snap is not None:
         result = dict(snap)
     else:

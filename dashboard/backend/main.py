@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from dashboard.backend.rate_limit import RateLimitMiddleware
+from dashboard.backend.request_metrics import ApiLatencyMiddleware
 
 
 class NoCacheAPIMiddleware(BaseHTTPMiddleware):
@@ -216,6 +217,8 @@ _extra_origins = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
 
+# ApiLatency first = closest to routes (Starlette executes middleware in reverse registration order)
+app.add_middleware(ApiLatencyMiddleware)
 app.add_middleware(RateLimitMiddleware)  # 60 req/min per IP — add first so it runs outermost
 app.add_middleware(NoCacheAPIMiddleware)
 app.add_middleware(

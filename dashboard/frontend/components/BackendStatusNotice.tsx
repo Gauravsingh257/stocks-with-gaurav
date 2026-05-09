@@ -12,8 +12,26 @@ export default function BackendStatusNotice() {
   const session = getMarketSession();
   const hasFreshPath = status === "connected" || status === "polling";
   const engineHint = snapshot?.engine_running === true || snapshot?.engine_live === true;
+  const staleData = snapshot?.stale === true;
 
-  if (hasFreshPath && engineHint) return null;
+  if (hasFreshPath && engineHint && !staleData) return null;
+
+  if (staleData && hasFreshPath && snapshot) {
+    return (
+      <div
+        className="px-3 py-2 text-center text-xs md:text-sm shrink-0"
+        style={{
+          background: "rgba(245,158,11,0.12)",
+          borderBottom: "1px solid rgba(245,158,11,0.28)",
+          color: "var(--text-secondary)",
+        }}
+        role="status"
+      >
+        <strong style={{ color: "var(--warning)" }}>Degraded mode</strong> — showing last known engine snapshot (Redis fallback).
+        {snapshot.snapshot_time ? ` · ${snapshot.snapshot_time}` : ""}
+      </div>
+    );
+  }
 
   const closed = session === "CLOSED";
   const message = !hasFreshPath

@@ -45,6 +45,20 @@ def estimate_json_bytes(obj: Any) -> int:
         return 0
 
 
+def read_global_snapshot_version() -> int:
+    """Redis snapshot:global_version (best-effort, 0 if unavailable)."""
+    try:
+        from dashboard.backend.cache import _get_redis
+
+        r = _get_redis()
+        if r is None:
+            return 0
+        raw = r.get("snapshot:global_version")
+        return int(raw) if raw is not None else 0
+    except Exception:
+        return 0
+
+
 def build_engine_digest(full_snap: Dict[str, Any]) -> Dict[str, Any]:
     """
     Lightweight digest for WebSocket streaming — avoid re-sending full snapshot every tick.

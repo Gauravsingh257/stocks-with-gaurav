@@ -22,7 +22,7 @@ from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-BACKEND_VERSION = "1.1.1"
+BACKEND_VERSION = "1.1.2"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
 
@@ -694,6 +694,7 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
     try:
         from dashboard.backend.snapshot_consistency import (
             estimate_json_bytes,
+            read_global_snapshot_version,
             validate_engine_snapshot_structure,
         )
         from dashboard.backend.state_bridge import get_engine_snapshot
@@ -704,6 +705,7 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
             "ok": ok,
             "issues": issues,
             "payload_estimate_bytes": estimate_json_bytes(es),
+            "snapshot_global_version": read_global_snapshot_version(),
         }
     except Exception as e:
         diag["engine_snapshot_consistency"] = {"error": str(e)}
@@ -716,7 +718,49 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
         "ws_full_snapshot_every_ticks": int(os.getenv("WS_FULL_SNAPSHOT_EVERY_TICKS", "6")),
         "ops_api_key_configured": bool(os.getenv("OPS_API_KEY", "").strip()),
         "debug_endpoints_require_ops_header": bool(os.getenv("OPS_API_KEY", "").strip()),
+        "research_snapshot_only": os.getenv("RESEARCH_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes"),
+        "watchlist_os_snapshot_only": os.getenv("WATCHLIST_OS_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes"),
     }
+
+    try:
+        from dashboard.backend.request_metrics import get_latency_summary, top_slow_paths
+
+        diag["api_latency"] = get_latency_summary()
+        diag["api_latency_slow_paths"] = top_slow_paths(15)
+    except Exception as e:
+        diag["api_latency"] = {"error": str(e)}
+
+    try:
+        from dashboard.backend.ws_telemetry import get_ws_telemetry
+
+        diag["websocket_telemetry"] = get_ws_telemetry()
+    except Exception as e:
+        diag["websocket_telemetry"] = {"error": str(e)}
+
+    try:
+        from dashboard.backend.cache import _get_redis
+
+        r = _get_redis()
+        if r is not None:
+            mem = r.info("memory")
+            diag["redis_memory"] = {
+                "used_memory": mem.get("used_memory"),
+                "used_memory_human": mem.get("used_memory_human"),
+                "used_memory_peak": mem.get("used_memory_peak"),
+            }
+            # Avoid Redis KEYS (blocking); approximate snapshot:* via bounded SCAN
+            _cur = 0
+            _n = 0
+            for _ in range(80):
+                _cur, batch = r.scan(_cur, match="snapshot:*", count=64)
+                _n += len(batch)
+                if _cur == 0:
+                    break
+            diag["redis_snapshot_keys_scan_approx"] = _n
+        else:
+            diag["redis_memory"] = {"note": "redis_unavailable"}
+    except Exception as e:
+        diag["redis_memory"] = {"error": str(e)}
 
     diag["total_latency_ms"] = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
     return diag
