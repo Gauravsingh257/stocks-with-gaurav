@@ -252,9 +252,9 @@ app.include_router(kite_router)
 app.include_router(market_intelligence_router)
 app.include_router(portfolio_router)
 app.include_router(content_router)
-    app.include_router(auth_router)
-    app.include_router(watchlist_os_router)
-    app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
+app.include_router(auth_router)
+app.include_router(watchlist_os_router)
+app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")

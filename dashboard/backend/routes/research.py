@@ -1250,13 +1250,12 @@ async def get_discovery(
                 discovery_atomic=True,
             )
 
-    if not refresh:
-        rsnap = serve_cached_endpoint("discovery")
-        if rsnap:
-            out = dict(rsnap)
-            out.setdefault("snapshot_source", "redis")
-            out.setdefault("cache_hit", False)
-            return out
+    rsnap = serve_cached_endpoint("discovery")
+    if rsnap:
+        out = dict(rsnap)
+        out.setdefault("snapshot_source", "redis")
+        out.setdefault("cache_hit", False)
+        return out
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
@@ -1270,7 +1269,7 @@ async def get_discovery(
             )
 
     import asyncio
-    _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "45"))
+    _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "25"))
     try:
         result = await asyncio.wait_for(
             run_validation_scan(

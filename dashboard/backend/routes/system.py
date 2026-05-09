@@ -553,3 +553,140 @@ def debug_signals():
         return get_signal_debug()
     except Exception as e:
         return {"error": str(e), "redis_available": False}
+
+
+@router.get("/debug/platform")
+def debug_platform():
+    """
+    Production diagnostics: route latencies, Redis health, snapshot ages,
+    WS clients, auth health, engine cycle, memory, stale detection.
+    """
+    import os
+    start_ns = time.perf_counter_ns()
+    diag: dict = {"checked_at": datetime.utcnow().isoformat() + "Z"}
+
+    # ── Redis health ──────────────────────────────────────────
+    redis_ok = False
+    redis_latency_ms = None
+    try:
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+        if r is not None:
+            t0 = time.perf_counter_ns()
+            r.ping()
+            redis_latency_ms = round((time.perf_counter_ns() - t0) / 1_000_000, 2)
+            redis_ok = True
+    except Exception as e:
+        diag["redis_error"] = str(e)
+    diag["redis"] = {"available": redis_ok, "latency_ms": redis_latency_ms}
+
+    # ── Snapshot ages ─────────────────────────────────────────
+    try:
+        from dashboard.backend.state_bridge import get_snapshot_debug
+        snap_debug = get_snapshot_debug()
+        diag["snapshots"] = {
+            "engine_snapshot_exists": snap_debug.get("engine_snapshot_exists"),
+            "engine_snapshot_ttl_sec": snap_debug.get("engine_snapshot_ttl_sec"),
+            "last_known_good_exists": snap_debug.get("last_known_good_exists"),
+            "last_known_good_ttl_sec": snap_debug.get("last_known_good_ttl_sec"),
+            "engine_last_write_age_sec": snap_debug.get("engine_last_write_age_sec"),
+            "snapshot_timestamp": snap_debug.get("snapshot_timestamp"),
+            "global_version": snap_debug.get("api_snapshot_global_version"),
+        }
+        api_snaps = snap_debug.get("api_endpoint_snapshots")
+        if isinstance(api_snaps, dict):
+            diag["endpoint_snapshots"] = api_snaps
+    except Exception as e:
+        diag["snapshots"] = {"error": str(e)}
+
+    # ── Engine health ─────────────────────────────────────────
+    try:
+        from dashboard.backend.cache import (
+            get_engine_heartbeat_ts,
+            get_engine_version,
+            get_engine_started_at,
+            get_engine_last_cycle,
+        )
+        hb = get_engine_heartbeat_ts()
+        started = get_engine_started_at()
+        cycle = get_engine_last_cycle()
+        diag["engine"] = {
+            "heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
+            "running": hb is not None and (time.time() - hb) < 60,
+            "version": get_engine_version(),
+            "uptime_sec": round(time.time() - started, 1) if started else None,
+            "last_cycle_age_sec": round(time.time() - cycle, 1) if cycle else None,
+        }
+    except Exception as e:
+        diag["engine"] = {"error": str(e)}
+
+    # ── Auth health (isolated check) ──────────────────────────
+    try:
+        from dashboard.backend.db import get_connection
+        conn = get_connection()
+        user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        conn.close()
+        diag["auth"] = {"healthy": True, "user_count": user_count}
+    except Exception as e:
+        diag["auth"] = {"healthy": False, "error": str(e)}
+
+    # ── WebSocket clients ─────────────────────────────────────
+    try:
+        from dashboard.backend.websocket import manager
+        diag["websocket"] = {"clients": manager.client_count}
+    except Exception:
+        diag["websocket"] = {"clients": 0}
+
+    # ── Discovery snapshot freshness ──────────────────────────
+    try:
+        from dashboard.backend.redis_endpoint_cache import serve_cached_endpoint
+        disc = serve_cached_endpoint("discovery")
+        if disc:
+            gen_at = disc.get("generated_at")
+            diag["discovery"] = {
+                "snapshot_available": True,
+                "generated_at": gen_at,
+                "items_count": len(disc.get("items") or disc.get("final_trades") or []),
+            }
+        else:
+            diag["discovery"] = {"snapshot_available": False}
+    except Exception as e:
+        diag["discovery"] = {"error": str(e)}
+
+    # ── Memory usage ──────────────────────────────────────────
+    try:
+        import psutil  # type: ignore[import-untyped]
+        proc = psutil.Process(os.getpid())
+        mem = proc.memory_info()
+        diag["memory"] = {
+            "rss_mb": round(mem.rss / 1_048_576, 1),
+            "vms_mb": round(mem.vms / 1_048_576, 1),
+        }
+    except ImportError:
+        diag["memory"] = {"note": "psutil not installed"}
+    except Exception:
+        diag["memory"] = {"rss_mb": None}
+
+    # ── Backend uptime ────────────────────────────────────────
+    uptime_s = int(time.time() - _start_time)
+    diag["backend_uptime_sec"] = uptime_s
+
+    # ── Stale subsystem detection ─────────────────────────────
+    stale_systems = []
+    eng = diag.get("engine", {})
+    if eng.get("heartbeat_age_sec") and eng["heartbeat_age_sec"] > 120:
+        stale_systems.append("engine_heartbeat")
+    if eng.get("last_cycle_age_sec") and eng["last_cycle_age_sec"] > 600:
+        stale_systems.append("engine_cycle")
+    snap_info = diag.get("snapshots", {})
+    if not snap_info.get("engine_snapshot_exists"):
+        stale_systems.append("engine_snapshot_missing")
+    if snap_info.get("engine_last_write_age_sec") and snap_info["engine_last_write_age_sec"] > 300:
+        stale_systems.append("engine_write_stale")
+    if not diag.get("discovery", {}).get("snapshot_available"):
+        stale_systems.append("discovery_snapshot_missing")
+    diag["stale_systems"] = stale_systems
+    diag["platform_healthy"] = len(stale_systems) == 0 and redis_ok and diag.get("auth", {}).get("healthy", False)
+
+    diag["total_latency_ms"] = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
+    return diag
