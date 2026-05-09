@@ -123,6 +123,21 @@ export function useEngineSocket() {
             setSnapshot(msg.data as EngineSnapshot);
             setSnapshotReceivedAt(Date.now());
           }
+          if (msg.type === "digest" && msg.data && typeof msg.data === "object") {
+            const raw = msg.data as Record<string, unknown>;
+            const {
+              digest: _dig,
+              active_symbols_sample: _sym,
+              _estimate_full_bytes: _est,
+              ...patch
+            } = raw;
+            setSnapshot((prev) =>
+              prev
+                ? ({ ...prev, ...patch } as EngineSnapshot)
+                : ({ ...patch } as unknown as EngineSnapshot)
+            );
+            setSnapshotReceivedAt(Date.now());
+          }
           if (msg.type === "ltp" && msg.data && typeof msg.data === "object") {
             setSnapshot((prev) =>
               prev ? { ...prev, index_ltp: msg.data as Record<string, number> } : prev
@@ -142,15 +157,7 @@ export function useEngineSocket() {
         if (typeof console !== "undefined") console.warn("WS FAILED (close)");
         setStatus("disconnected");
         failCount.current += 1;
-        // If the snapshot is very stale (> 30s), clear it so the UI shows "—" rather
-        // than confidently displaying old data as if it were current.
-        setSnapshotReceivedAt((prev) => {
-          if (prev > 0 && Date.now() - prev > 30_000) {
-            setSnapshot(null);
-            return 0;
-          }
-          return prev;
-        });
+        // Keep last snapshot during reconnect — REST polling / digest merge still valid as LKG.
         if (!deadRef.current) {
           const delay = Math.min(
             WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),

@@ -14,11 +14,13 @@ Safety guarantees:
 import asyncio
 import json
 import logging
+import os
 import threading
 from typing import Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from dashboard.backend.snapshot_consistency import build_engine_digest
 from dashboard.backend.state_bridge import get_engine_snapshot
 from dashboard.backend.services import process_recommendation_triggers
 
@@ -216,16 +218,16 @@ async def _ltp_broadcast_loop() -> None:
 
 
 async def _broadcast_loop() -> None:
-    """Push engine snapshot to all connected clients every 5 seconds.
+    """Digest-first streaming: lightweight digest every tick; full snapshot periodically.
 
-    5s interval keeps the UI feeling live while cutting Railway CPU/bandwidth
-    by 80% vs the original 1s loop. Engine state doesn't change faster than
-    the engine's own loop (typically 60–300s between signal evaluations).
+    Reduces WS bandwidth vs sending full engine JSON every 5s. Clients merge digest.
+    Env WS_FULL_SNAPSHOT_EVERY_TICKS (default 6) → full frame every ~30s at 5s interval.
     """
-    INTERVAL    = 5.0   # seconds between snapshots (was 1.0)
-    PING_EVERY  = 6     # send ping every N iterations → every 30s
-    OI_EVERY    = 6     # send OI snapshot every N iterations → every 30s
-    tick        = 0
+    INTERVAL = 5.0
+    PING_EVERY = 6
+    OI_EVERY = 6
+    FULL_EVERY = max(1, int(os.getenv("WS_FULL_SNAPSHOT_EVERY_TICKS", "6")))
+    tick = 0
 
     while True:
         await asyncio.sleep(INTERVAL)
@@ -236,61 +238,61 @@ async def _broadcast_loop() -> None:
 
         try:
             snapshot = get_engine_snapshot()
-            try:
-                process_recommendation_triggers(snapshot)
-            except Exception as exc:
-                log.debug("Research runtime update skipped: %s", exc)
-            # ── State-transition event detection ────────────────────────────
-            try:
-                from dashboard.backend.terminal_events import publish_event as _pub_event
-                current_states: dict[str, dict] = {
-                    t.get("symbol", ""): t
-                    for t in (snapshot.get("active_trades") or [])
-                    if t.get("symbol")
-                }
-                with _prev_trade_states_lock:
-                    prev = dict(_prev_trade_states)
-                    _prev_trade_states.clear()
-                    _prev_trade_states.update({k: v.get("status", "") for k, v in current_states.items()})
-                for sym, trade in current_states.items():
-                    cur_st = (trade.get("status") or "").upper()
-                    prev_st = (prev.get(sym) or "").upper()
-                    evt_payload = {
-                        "direction": trade.get("direction"),
-                        "setup": trade.get("setup"),
-                        "entry": trade.get("entry"),
-                        "rr": trade.get("rr"),
+            send_full = tick % FULL_EVERY == 0
+
+            if send_full:
+                try:
+                    process_recommendation_triggers(snapshot)
+                except Exception as exc:
+                    log.debug("Research runtime update skipped: %s", exc)
+                try:
+                    from dashboard.backend.terminal_events import publish_event as _pub_event
+
+                    current_states: dict[str, dict] = {
+                        t.get("symbol", ""): t
+                        for t in (snapshot.get("active_trades") or [])
+                        if t.get("symbol")
                     }
-                    if cur_st in ("TRIGGERED", "RUNNING") and prev_st not in ("TRIGGERED", "RUNNING", "TARGET_HIT", "STOP_HIT"):
-                        _pub_event("ENTRY_TRIGGER", sym, evt_payload)
-                    elif cur_st == "TARGET_HIT" and prev_st != "TARGET_HIT":
-                        _pub_event("TARGET_HIT", sym, {**evt_payload, "result": "WIN"})
-                    elif cur_st == "STOP_HIT" and prev_st != "STOP_HIT":
-                        _pub_event("STOP_HIT", sym, {**evt_payload, "result": "LOSS"})
-            except Exception as exc:
-                log.debug("State-transition event detection failed: %s", exc)
-            payload  = json.dumps({"type": "snapshot", "data": snapshot})
+                    with _prev_trade_states_lock:
+                        prev = dict(_prev_trade_states)
+                        _prev_trade_states.clear()
+                        _prev_trade_states.update({k: v.get("status", "") for k, v in current_states.items()})
+                    for sym, trade in current_states.items():
+                        cur_st = (trade.get("status") or "").upper()
+                        prev_st = (prev.get(sym) or "").upper()
+                        evt_payload = {
+                            "direction": trade.get("direction"),
+                            "setup": trade.get("setup"),
+                            "entry": trade.get("entry"),
+                            "rr": trade.get("rr"),
+                        }
+                        if cur_st in ("TRIGGERED", "RUNNING") and prev_st not in ("TRIGGERED", "RUNNING", "TARGET_HIT", "STOP_HIT"):
+                            _pub_event("ENTRY_TRIGGER", sym, evt_payload)
+                        elif cur_st == "TARGET_HIT" and prev_st != "TARGET_HIT":
+                            _pub_event("TARGET_HIT", sym, {**evt_payload, "result": "WIN"})
+                        elif cur_st == "STOP_HIT" and prev_st != "STOP_HIT":
+                            _pub_event("STOP_HIT", sym, {**evt_payload, "result": "LOSS"})
+                except Exception as exc:
+                    log.debug("State-transition event detection failed: %s", exc)
+                payload = json.dumps({"type": "snapshot", "data": snapshot})
+            else:
+                digest = build_engine_digest(snapshot)
+                payload = json.dumps({"type": "digest", "data": digest})
         except Exception as exc:
             log.error("Snapshot error: %s", exc)
             continue
 
         await manager.broadcast(payload)
 
-        # OI intelligence broadcast (every 10s — OI data changes slowly)
         if tick % OI_EVERY == 0:
             oi_snap = _get_oi_intelligence_snapshot()
             if oi_snap:
                 try:
-                    from dashboard.backend.services.oi_interpretation_engine import (
-                        enrich_oi_snapshot_with_interpretation,
-                    )
-                    oi_snap = enrich_oi_snapshot_with_interpretation(dict(oi_snap))
-                    oi_payload = json.dumps({"type": "oi_intelligence", "data": oi_snap})
+                    oi_payload = json.dumps({"type": "oi_intelligence", "data": dict(oi_snap)})
                     await manager.broadcast(oi_payload)
                 except Exception as exc:
                     log.error("OI Intelligence broadcast error: %s", exc)
 
-        # periodic ping
         if tick % PING_EVERY == 0:
             ping = json.dumps({"type": "ping", "tick": tick})
             await manager.broadcast(ping)

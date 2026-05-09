@@ -1229,12 +1229,12 @@ async def get_discovery(
     """
     from services.validation_engine import run_validation_scan
 
-    try:
-        _telegram_flush_medium_buffer(force=False)
-    except Exception:
-        pass
-
     src = source or os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
+    _allow_on_demand_scan = os.getenv("DISCOVERY_ALLOW_ON_DEMAND_SCAN", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     cached = _decision_cache_get(top_k, float(min_turnover_cr), src)
     if cached:
         ts, cached_payload = cached
@@ -1267,6 +1267,41 @@ async def get_discovery(
                 valid_discovery_redis_write,
                 discovery_atomic=True,
             )
+
+    if not (_allow_on_demand_scan and refresh):
+        stale_payload = {
+            "data_source": src,
+            "universe_size": 0,
+            "scanned": 0,
+            "returned": 0,
+            "watchlist_returned": 0,
+            "discovery_returned": 0,
+            "fallback_returned": 0,
+            "generated_at": datetime.now().isoformat(),
+            "scan_id": "snapshot_only",
+            "coverage": {},
+            "funnel": {},
+            "items": [],
+            "final_trades": [],
+            "watchlist": [],
+            "discovery": [],
+            "fallback_items": [],
+            "cache_hit": False,
+            "cache_ttl_sec": 0,
+            "snapshot_only_no_engine_scan": True,
+            "hint": "Discovery is snapshot-first. Populate via engine/scheduler or set DISCOVERY_ALLOW_ON_DEMAND_SCAN=true with refresh=true for admin rescans.",
+        }
+        return finalize_endpoint(
+            "discovery",
+            stale_payload,
+            valid_discovery_redis_write,
+            discovery_atomic=True,
+        )
+
+    try:
+        _telegram_flush_medium_buffer(force=False)
+    except Exception:
+        pass
 
     import asyncio
     _scan_timeout = int(os.getenv("RESEARCH_DISCOVERY_TIMEOUT", "25"))

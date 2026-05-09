@@ -14,11 +14,15 @@ import threading
 from datetime import datetime, time as dtime
 from pathlib import Path
 
-from fastapi import APIRouter
+import os
+
+from fastapi import APIRouter, Depends
+
+from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-BACKEND_VERSION = "1.1.0"
+BACKEND_VERSION = "1.1.1"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
 
@@ -504,7 +508,7 @@ def health_full():
 
 
 @router.get("/debug/cache")
-def debug_cache():
+def debug_cache(_unused: None = Depends(verify_ops_key)):
     """Observability: Redis key inventory, TTLs, snapshot timestamps, OI interpretation meta."""
     try:
         from dashboard.backend.state_bridge import get_snapshot_debug
@@ -546,7 +550,7 @@ def debug_cache():
 
 
 @router.get("/debug/signals")
-def debug_signals():
+def debug_signals(_unused: None = Depends(verify_ops_key)):
     """Signal delivery pipeline diagnostics: queue, last sends, failures, heartbeat."""
     try:
         from services.signal_delivery import get_signal_debug
@@ -556,12 +560,11 @@ def debug_signals():
 
 
 @router.get("/debug/platform")
-def debug_platform():
+def debug_platform(_unused: None = Depends(verify_ops_key)):
     """
     Production diagnostics: route latencies, Redis health, snapshot ages,
     WS clients, auth health, engine cycle, memory, stale detection.
     """
-    import os
     start_ns = time.perf_counter_ns()
     diag: dict = {"checked_at": datetime.utcnow().isoformat() + "Z"}
 
@@ -687,6 +690,33 @@ def debug_platform():
         stale_systems.append("discovery_snapshot_missing")
     diag["stale_systems"] = stale_systems
     diag["platform_healthy"] = len(stale_systems) == 0 and redis_ok and diag.get("auth", {}).get("healthy", False)
+
+    try:
+        from dashboard.backend.snapshot_consistency import (
+            estimate_json_bytes,
+            validate_engine_snapshot_structure,
+        )
+        from dashboard.backend.state_bridge import get_engine_snapshot
+
+        es = get_engine_snapshot()
+        ok, issues = validate_engine_snapshot_structure(es)
+        diag["engine_snapshot_consistency"] = {
+            "ok": ok,
+            "issues": issues,
+            "payload_estimate_bytes": estimate_json_bytes(es),
+        }
+    except Exception as e:
+        diag["engine_snapshot_consistency"] = {"error": str(e)}
+
+    diag["orchestration"] = {
+        "discovery_allow_on_demand_scan": os.getenv("DISCOVERY_ALLOW_ON_DEMAND_SCAN", "false").lower()
+        in ("1", "true", "yes"),
+        "oi_snapshot_request_generation": os.getenv("OI_SNAPSHOT_REQUEST_GENERATION", "false").lower()
+        in ("1", "true", "yes"),
+        "ws_full_snapshot_every_ticks": int(os.getenv("WS_FULL_SNAPSHOT_EVERY_TICKS", "6")),
+        "ops_api_key_configured": bool(os.getenv("OPS_API_KEY", "").strip()),
+        "debug_endpoints_require_ops_header": bool(os.getenv("OPS_API_KEY", "").strip()),
+    }
 
     diag["total_latency_ms"] = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
     return diag
