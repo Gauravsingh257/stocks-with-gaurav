@@ -505,12 +505,25 @@ def health_full():
 
 @router.get("/debug/cache")
 def debug_cache():
-    """Observability: Redis key inventory, TTLs, snapshot timestamps."""
+    """Observability: Redis key inventory, TTLs, snapshot timestamps, OI interpretation meta."""
     try:
         from dashboard.backend.state_bridge import get_snapshot_debug
-        return get_snapshot_debug()
+        out = get_snapshot_debug()
     except Exception as e:
-        return {"error": str(e)}
+        out = {"error": str(e)}
+    try:
+        from dashboard.backend.services.oi_interpretation_engine import get_oi_interpretation_debug
+
+        if isinstance(out, dict):
+            out["oi_interpretation"] = get_oi_interpretation_debug()
+        else:
+            out = {"snapshot_bridge_error": out, "oi_interpretation": get_oi_interpretation_debug()}
+    except Exception as e:
+        if isinstance(out, dict):
+            out["oi_interpretation"] = {"error": str(e)}
+        else:
+            out = {"oi_interpretation": {"error": str(e)}}
+    return out
 
 
 @router.get("/debug/signals")

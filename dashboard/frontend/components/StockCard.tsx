@@ -8,6 +8,7 @@ import {
   confidenceVisualTier,
   recommendationColors,
 } from "@/utils/calculateConfidence";
+import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 
 function money(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -136,6 +137,7 @@ export default function StockCard({
       </p>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", paddingTop: 2 }}>
+        <AddToWatchlistButton symbol={analysis.symbol} compact />
         <Link
           href={`/stock/${encodeURIComponent(analysis.symbol)}`}
           style={{

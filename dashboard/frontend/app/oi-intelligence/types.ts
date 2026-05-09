@@ -67,6 +67,207 @@ export interface BiasHistoryPoint {
   pcr: number;
 }
 
+export interface OIInterpretEvent {
+  type: string;
+  underlying: string;
+  strike: number | null;
+  confidence?: number;
+  text: string;
+}
+
+export interface OIStrikeNarrative {
+  underlying: string;
+  strike: number;
+  headline: string;
+  detail: string;
+  tone?: string;
+}
+
+export interface OIGuidanceUnderlying {
+  bullish_above?: number | null;
+  bearish_below?: number | null;
+  avoid_trade_zone?: number[] | null;
+  trap_zone?: number[] | null;
+  breakout_trigger?: number | null;
+  momentum_expansion_above?: number | null;
+  weak_structure_below?: number | null;
+  liquidity_sweep_risk?: "low" | "moderate" | "elevated" | string;
+  avoid_aggressive_shorts_above?: number | null;
+  high_volatility_zone?: boolean;
+  structure_note?: string | null;
+}
+
+export interface OIMarketRegime {
+  code?: string;
+  label?: string;
+  confidence?: number;
+  drivers?: string[];
+}
+
+export interface OIWhatChanged {
+  window_minutes?: number;
+  window_label?: string;
+  bullets?: { text: string; tone?: string }[];
+  immediate_vs_prior?: { text: string; tone?: string }[];
+  rolling_window?: { text: string; tone?: string }[];
+  persistence_note?: string | null;
+}
+
+export interface OIInstitutionalTag {
+  id?: string;
+  label?: string;
+  likelihood?: number;
+  note?: string;
+}
+
+export interface OIShiftEvent {
+  type?: string;
+  underlying?: string;
+  strike?: number | null;
+  confidence?: number;
+  text?: string;
+}
+
+export interface OIStrikeIntelCard {
+  underlying?: string;
+  strike?: number;
+  role?: string | null;
+  headline?: string;
+  detail?: string;
+  shift?: string | null;
+  tone?: string;
+  intensity?: number;
+}
+
+export interface OIFlowStrength {
+  pressure_strength?: string;
+  bullish_pressure_trend?: string;
+  flow_acceleration?: number;
+  flow_persistence?: number;
+  flow_decay?: number;
+  pressure_strength_score?: number;
+  scores?: { acceleration?: number; persistence?: number; decay_risk?: number };
+  narratives?: string[];
+}
+
+export interface OIStrikeEvolutionRow {
+  underlying?: string;
+  strike?: number | null;
+  evolution?: string;
+  arrow?: string;
+  label?: string;
+  short?: string;
+  strength_delta?: string;
+}
+
+export interface OIInstitutionalIntentV2 {
+  intents?: {
+    id?: string;
+    label?: string;
+    probability_pct?: number;
+    confidence_cap?: number;
+    note?: string;
+  }[];
+  disclaimer?: string;
+}
+
+export interface OISmartTradingActions {
+  preferred_strategy_lines?: string[];
+  avoid_lines?: string[];
+  risk_context_lines?: string[];
+  breakout_quality?: string;
+  momentum_quality?: string;
+  trap_probability_hint?: string;
+}
+
+export interface OICrossSessionCompare {
+  available?: boolean;
+  note?: string;
+  vs_session_date?: string;
+  bullets?: string[];
+  compared_at?: string;
+}
+
+export interface OIStoryTimelineEvent {
+  ts?: string;
+  ts_ist?: string;
+  regime?: string;
+  dominant_shift?: string | null;
+  support_migration?: string | null;
+  resistance_migration?: string | null;
+  institutional_hint?: string;
+  confidence_bull?: number | null;
+  headline?: string;
+}
+
+export interface OISessionEvolution {
+  cross_session?: OICrossSessionCompare;
+  story_timeline?: OIStoryTimelineEvent[];
+  session_date_ist?: string;
+}
+
+export interface OIInterpretationDigest {
+  regime?: string | null;
+  regime_label?: string | null;
+  bias?: string | null;
+  top_story?: string;
+  strongest_shift?: string;
+  strongest_shift_text?: string;
+  top_guidance_underlying?: string | null;
+  bullish_above?: number | null;
+  bearish_below?: number | null;
+  confidence_bullish_pct?: number | null;
+  confidence_bearish_pct?: number | null;
+  engine_version?: string;
+  generated_at?: string;
+}
+
+export interface OIPhase15Meta {
+  generation_latency_ms?: number;
+  digest_bytes_estimate?: number;
+  timeline_events_loaded?: number;
+  ws_full_interpretation_bytes_estimate?: number;
+}
+
+export interface OIInterpretation {
+  summary_lines: string[];
+  events: OIInterpretEvent[];
+  strike_narratives: OIStrikeNarrative[];
+  guidance: Record<string, OIGuidanceUnderlying>;
+  delta_vs_prior: {
+    has_prior?: boolean;
+    pcr_now?: number;
+    pcr_momentum?: string;
+    bias_snapshot?: string;
+    dominant_strike_stories?: OIStrikeNarrative[];
+    rolling_anchor_age_sec?: number | null;
+    error?: string;
+  };
+  engine_version?: string;
+  generated_at?: string;
+  market_regime?: OIMarketRegime;
+  market_story?: { headline?: string; paragraphs?: string[] };
+  what_changed?: OIWhatChanged;
+  institutional_positioning?: {
+    summary?: string;
+    tags?: OIInstitutionalTag[];
+  };
+  confidence?: {
+    bullish_pct?: number;
+    bearish_pct?: number;
+    regime_pct?: number;
+  };
+  oi_shifts?: OIShiftEvent[];
+  strike_intelligence?: OIStrikeIntelCard[];
+  flow_strength?: OIFlowStrength;
+  strike_evolution?: OIStrikeEvolutionRow[];
+  institutional_intent_v2?: OIInstitutionalIntentV2;
+  smart_trading_actions?: OISmartTradingActions;
+  session_evolution?: OISessionEvolution;
+  interpretation_digest?: OIInterpretationDigest;
+  phase15_meta?: OIPhase15Meta;
+}
+
 export interface OISnapshot {
   overall_bias: string;
   confidence: number;
@@ -88,6 +289,9 @@ export interface OISnapshot {
   last_update?: string;      // ISO timestamp of last snapshot generation
   oi_sentiment_update?: string | null;
   market_state?: MarketState;
+  interpretation?: OIInterpretation;
+  /** Shallow copy of interpretation_digest for fast WS / mobile clients */
+  interpretation_digest?: OIInterpretationDigest;
 }
 
 export interface ExecutionQuality {

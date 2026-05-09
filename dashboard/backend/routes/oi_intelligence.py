@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 
 from dashboard.backend.cache import OI_SNAPSHOT_KEY, get as cache_get, set as cache_set, MARKET_DATA_TTL
 from dashboard.backend.redis_endpoint_cache import finalize_endpoint, valid_oi_payload
+from dashboard.backend.services.oi_interpretation_engine import enrich_oi_snapshot_with_interpretation
 
 logger = logging.getLogger("dashboard.oi_intelligence")
 
@@ -21,12 +22,14 @@ def oi_intelligence_snapshot():
     """Return the unified OI intelligence snapshot (from cache or generate)."""
     cached = cache_get(OI_SNAPSHOT_KEY)
     if cached is not None:
-        return finalize_endpoint("oi_intelligence", cached, valid_oi_payload)
+        payload = enrich_oi_snapshot_with_interpretation(dict(cached))
+        return finalize_endpoint("oi_intelligence", payload, valid_oi_payload)
     try:
         from agents.oi_intelligence_agent import generate_snapshot
         snapshot = generate_snapshot()
         cache_set(OI_SNAPSHOT_KEY, snapshot, MARKET_DATA_TTL)
-        return finalize_endpoint("oi_intelligence", snapshot, valid_oi_payload)
+        payload = enrich_oi_snapshot_with_interpretation(snapshot)
+        return finalize_endpoint("oi_intelligence", payload, valid_oi_payload)
     except Exception as exc:
         logger.error("OI Intelligence error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))

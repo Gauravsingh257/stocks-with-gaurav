@@ -25,6 +25,7 @@ import { ShortCoveringPanel } from "./ShortCoveringPanel";
 import { ExecutionQualityPanel } from "./ExecutionQualityPanel";
 import { PCRSparkline, BiasTimeline } from "./HistoryCharts";
 import { MarketStatePanel } from "./MarketStatePanel";
+import { MarketIntelligenceSuite } from "./MarketIntelligenceSuite";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
@@ -142,7 +143,7 @@ export default function OIIntelligencePage() {
             Live OI Radar
           </h1>
           <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: "4px 0 0" }}>
-            Real-time Open Interest intelligence from PCR, Strike Activity &amp; execution quality
+            AI-style derivatives narrative — regime, flow shifts, and actionable levels (OI snapshot from Railway + Redis)
           </p>
           {snapshot?.last_update && (
             <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "2px 0 0" }}>
@@ -255,6 +256,8 @@ export default function OIIntelligencePage() {
               <BiasTimeline history={snapshot.bias_history} />
             </div>
           </div>
+
+          <MarketIntelligenceSuite data={snapshot.interpretation} />
 
           {/* Market State Engine */}
           <div>

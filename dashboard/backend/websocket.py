@@ -281,6 +281,10 @@ async def _broadcast_loop() -> None:
             oi_snap = _get_oi_intelligence_snapshot()
             if oi_snap:
                 try:
+                    from dashboard.backend.services.oi_interpretation_engine import (
+                        enrich_oi_snapshot_with_interpretation,
+                    )
+                    oi_snap = enrich_oi_snapshot_with_interpretation(dict(oi_snap))
                     oi_payload = json.dumps({"type": "oi_intelligence", "data": oi_snap})
                     await manager.broadcast(oi_payload)
                 except Exception as exc:
