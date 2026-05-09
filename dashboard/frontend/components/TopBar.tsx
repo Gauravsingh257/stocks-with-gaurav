@@ -28,9 +28,6 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   const paper = snapshot?.paper_mode ?? false;
   const sigToday = snapshot?.signals_today ?? 0;
   const maxSig   = snapshot?.max_daily_signals ?? 5;
-  const healthEngineRunning = health?.engine_status === "running" || health?.engine_live === true;
-  const engineRunning = snapshot?.engine_running ?? healthEngineRunning;
-  const hbAge = snapshot?.engine_heartbeat_age_sec;
   const hasData = snapshot != null;
   const transportLabel =
     status === "connected" ? "WS LIVE" : status === "polling" ? "POLLING" : hasData ? "RECONNECTING" : "STANDBY";
@@ -69,26 +66,8 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
 
       <div className="w-px h-5 bg-[var(--border)] shrink-0" />
 
-      {/* Badges row - scroll on small screens */}
+      {/* Badges row — engine heartbeat lives in LiveEngineRibbon */}
       <div className="flex items-center gap-2 md:gap-5 overflow-x-auto min-w-0 flex-1">
-      {/* Engine loop heartbeat status */}
-      <span
-        className={`badge shrink-0 ${engineRunning ? "badge-live" : "badge-neutral"}`}
-        title={!engineRunning ? "Engine loop publishes snapshots during market hours. Outside trading hours this is expected." : undefined}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: engineRunning ? "var(--success)" : "var(--text-dim)",
-            display: "inline-block",
-          }}
-        />
-        ENGINE {engineRunning ? "RUNNING" : "IDLE"}
-        {typeof hbAge === "number" && engineRunning ? ` · ${hbAge.toFixed(0)}s` : ""}
-      </span>
-
       {/* Engine mode */}
       <span className={`badge shrink-0 ${paper ? "badge-paper" : "badge-live"}`}>
         <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: paper ? "var(--warning)" : "var(--success)", display: "inline-block" }} />

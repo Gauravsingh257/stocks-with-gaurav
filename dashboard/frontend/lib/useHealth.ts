@@ -9,6 +9,13 @@ export interface HealthData {
   backend_version?: string;
   engine_version?: string;
   uptime_human?: string;
+  engine_uptime_human?: string | null;
+  engine_uptime_seconds?: number | null;
+  engine_last_cycle?: string | null;
+  engine_last_cycle_age_sec?: number | null;
+  last_snapshot?: string | null;
+  market_status?: string;
+  latency_ms?: number;
   kite_connected?: boolean;
   token_present?: boolean;
   token_expires_in_hours?: number | null;

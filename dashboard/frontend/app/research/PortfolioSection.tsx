@@ -199,8 +199,8 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
       </div>
 
       {activePositions.length === 0 && (
-        <div style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-          No active {horizon.toLowerCase()} positions. Run a scan to populate.
+        <div style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.55 }}>
+          Slots open · promote a name from the decision feed or run a scan — positions appear here automatically.
         </div>
       )}
 

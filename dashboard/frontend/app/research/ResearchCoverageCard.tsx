@@ -12,11 +12,7 @@ function pct(v: number) {
 
 export function ResearchCoverageCard({ coverage }: Props) {
   if (!coverage) {
-    return (
-      <div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>
-        Coverage metrics unavailable.
-      </div>
-    );
+    return null;
   }
 
   const swing = coverage.latest.SWING;

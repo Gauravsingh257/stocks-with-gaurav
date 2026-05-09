@@ -74,7 +74,7 @@ export function DiscoveryFeed({ items }: { items: ResearchDecisionCard[] }) {
       {open && (
         items.length === 0 ? (
           <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: "0.82rem", background: "rgba(255,255,255,0.02)" }}>
-            No early experimental signals in the latest scan.
+            Early lane is clear — scanner did not surface exploratory candidates on the last pass. That is normal when filters stay strict.
           </div>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>

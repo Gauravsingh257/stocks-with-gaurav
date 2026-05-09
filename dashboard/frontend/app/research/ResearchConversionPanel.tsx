@@ -25,8 +25,8 @@ export function ResearchConversionPanel({
   const available = coverage?.available_universe ?? 0;
   const trackRecordLabel =
     totalIdeas === 0
-      ? "No closed picks yet"
-      : `${totalIdeas} picks · ${fmtPct(hitRate)} hit rate`;
+      ? "Track record building as trades close"
+      : `${totalIdeas} closed ideas · ${fmtPct(hitRate)} hit rate`;
 
   return (
     <section

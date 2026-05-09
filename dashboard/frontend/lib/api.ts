@@ -132,7 +132,11 @@ export interface EngineSnapshot {
   engine_live:         boolean;
   engine_running?:     boolean;
   engine_heartbeat_age_sec?: number | null;
+  engine_last_cycle_age_sec?: number | null;
+  engine_started_at?:  number | null;
   snapshot_time:       string;
+  stale?:              boolean;
+  data_source?:        string;
   setup_d_state?:      Record<string, SetupDEntry>;
   adaptive_intel?:     AdaptiveIntel;
   /** Index LTP from cache (NIFTY 50, NIFTY BANK) for command bar / sparklines */

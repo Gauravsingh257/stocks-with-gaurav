@@ -12,6 +12,7 @@ import AdvancedFilterBar, { DEFAULT_FILTERS, type FilterState } from "./_compone
 import DiscoveryFeed from "./_components/DiscoveryFeed";
 import AISummaryPanel from "./_components/AISummaryPanel";
 import AlertsBell from "./_components/AlertsBell";
+import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
 import { useLiveTrades, type TradeFilters } from "./_lib/useLiveTrades";
 import { useTerminalSummary } from "./_lib/useTerminalSummary";
@@ -426,7 +427,7 @@ function Hero({
           <BestTradeChip trade={bestTrade} />
         ) : (
           <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>
-            {loading ? "Scanning…" : "No top trade yet"}
+            {loading ? "Scanning…" : "Leaderboard opens after scoring"}
           </span>
         )}
 
@@ -436,7 +437,7 @@ function Hero({
         {dailyPnl && dailyPnl.total > 0 ? (
           <DailyPnLStrip data={dailyPnl} />
         ) : (
-          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>No trades today</span>
+          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>Flat session · monitoring</span>
         )}
 
         <HeroDivider />
@@ -630,11 +631,10 @@ function NoResults({ query, hasSetups, onClear }: { query: string; hasSetups: bo
           </div>
         </>
       ) : (
-        <>
-          <Sparkles size={22} color="var(--accent)" />
-          <div style={{ marginTop: 10, fontSize: "0.92rem", fontWeight: 700, color: "var(--text-primary)" }}>No setups match your filters</div>
-          <div style={{ marginTop: 4, fontSize: "0.78rem" }}>Loosen the strategy or setup filter, or check back as the next scan completes.</div>
-        </>
+        <MarketMonitoringEmpty
+          title="Filters are strict — or the tape is quiet"
+          subtitle="Try clearing filters, or keep watching: Discovery and the activity feed stay live even when Final is empty."
+        />
       )}
       <button
         type="button"

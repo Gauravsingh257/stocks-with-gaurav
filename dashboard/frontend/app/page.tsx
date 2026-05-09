@@ -63,7 +63,9 @@ export default function Home() {
         <div className="public-nav-actions">
           <Link href="/research/track-record">Track Record</Link>
           <Link href="/login">Sign In</Link>
-          <Link href="/research" className="public-nav-primary">Open Dashboard</Link>
+          <Link href="/research#global-search" className="public-nav-primary">
+            Analyze Any NSE Stock
+          </Link>
         </div>
       </nav>
 
@@ -71,17 +73,20 @@ export default function Home() {
         <div className="public-hero-copy">
           <div className="public-eyebrow">
             <ShieldCheck size={16} />
-            Educational SMC research for Indian markets
+            Live SMC research terminal · NSE
           </div>
-          <h1>Study NSE setups with a transparent Smart Money Concepts dashboard.</h1>
+          <h1>Analyze any NSE stock with a transparent Smart Money Concepts workflow.</h1>
           <p>
-            Stocks With Gaurav turns market structure, liquidity zones, risk levels,
-            journal history, and research outcomes into one calm workflow for learning
-            and reviewing trade ideas.
+            Search a symbol, review structure and levels, and follow the same pipeline professionals use — discovery,
+            watchlist monitoring, and final risk-mapped ideas.
           </p>
           <div className="public-cta-row">
-            <Link href="/research" className="public-primary-cta">Explore Research</Link>
-            <Link href="/research/track-record" className="public-secondary-cta">View Track Record</Link>
+            <Link href="/research#global-search" className="public-primary-cta">
+              Analyze Any NSE Stock
+            </Link>
+            <Link href="/research" className="public-secondary-cta">
+              Open Live Dashboard
+            </Link>
           </div>
           <p className="public-risk-note">
             Educational and informational only. Not SEBI-registered. No buy, sell,
@@ -91,8 +96,8 @@ export default function Home() {
 
         <div className="public-product-visual" aria-label="Dashboard preview">
           <div className="preview-topline">
-            <span>SMC RESEARCH PIPELINE</span>
-            <span className="preview-live-dot">Engine connected</span>
+            <span>LIVE TERMINAL</span>
+            <span className="preview-live-dot">Engine-linked</span>
           </div>
           <div className="preview-chart">
             <div className="preview-zone zone-a" />
@@ -123,8 +128,8 @@ export default function Home() {
 
       <section className="public-section">
         <div className="public-section-heading">
-          <span>What the dashboard does</span>
-          <h2>Built for repeatable research, not random tips.</h2>
+          <span>Research workflow</span>
+          <h2>Built for repeatable review, not tips.</h2>
         </div>
         <div className="public-feature-grid">
           {features.map((feature) => {
@@ -153,8 +158,8 @@ export default function Home() {
             </div>
           ))}
         </div>
-        <Link href="/research" className="public-primary-cta public-section-cta">
-          Open Research Dashboard
+        <Link href="/research#global-search" className="public-primary-cta public-section-cta">
+          Analyze Any NSE Stock
         </Link>
       </section>
 

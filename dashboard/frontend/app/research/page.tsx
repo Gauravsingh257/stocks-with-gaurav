@@ -93,7 +93,7 @@ function SelectionCriteriaPanel({ items }: { items?: string[] }) {
           padding: 0,
         }}
       >
-        <span>Why no setups found (transparency)</span>
+        <span>Quality checklist (how names graduate)</span>
         <ChevronDown size={18} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s", color: "var(--text-dim)" }} />
       </button>
       {!open && (
@@ -749,15 +749,6 @@ export default function ResearchPage() {
       )}
 
       <StaggerItem>
-        <div className="mb-6 rounded-xl bg-gray-900 p-4" style={{ border: "1px solid rgba(148,163,184,0.18)", display: "grid", gap: 6 }}>
-          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.78rem", fontWeight: 700 }}>Discovery → Track early SMC evidence</p>
-          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 750 }}>Watchlist → Add alert near entry</p>
-          <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 850 }}>Final → Ready for manual review</p>
-          <p style={{ margin: "2px 0 0", color: "#34d399", fontSize: "0.76rem", fontWeight: 800 }}>Use Final ideas for structured review only. No random stock suggestions.</p>
-        </div>
-      </StaggerItem>
-
-      <StaggerItem>
         <FinalTrades items={filteredFinalTrades} />
       </StaggerItem>
 
@@ -792,10 +783,8 @@ export default function ResearchPage() {
             <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
               {scanButton("swing")}
               {scanButton("longterm", "warning")}
-              <a
-                href="/api/research/discovery?top_k=20"
-                target="_blank"
-                rel="noreferrer"
+              <Link
+                href="/research"
                 style={{
                   padding: "10px 18px",
                   borderRadius: 8,
@@ -807,8 +796,8 @@ export default function ResearchPage() {
                   textDecoration: "none",
                 }}
               >
-                Browse Decision Feed
-              </a>
+                Open live decision feed
+              </Link>
             </div>
           </div>
         </StaggerItem>
@@ -865,8 +854,11 @@ export default function ResearchPage() {
             />
           </>
         ) : (
-          <div className="glass" style={{ padding: 16, color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-            No portfolio data yet. Run a scan to populate.
+          <div className="glass" style={{ padding: 18, border: "1px solid rgba(0,212,255,0.14)", borderRadius: 12 }}>
+            <p style={{ margin: 0, fontSize: "0.88rem", fontWeight: 800, color: "var(--text-primary)" }}>Portfolio tracking starts after your first promoted position</p>
+            <p style={{ margin: "8px 0 0", fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.55 }}>
+              Run a research scan or promote from the decision feed — balances appear here automatically once positions are active.
+            </p>
           </div>
         )}
       </div>

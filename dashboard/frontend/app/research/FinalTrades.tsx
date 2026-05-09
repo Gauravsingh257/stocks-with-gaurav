@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Activity, ExternalLink, Flame, ShieldCheck, Target } from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
+import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
@@ -74,9 +75,10 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
       </div>
 
       {display.length === 0 ? (
-        <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: "0.82rem", background: "rgba(255,255,255,0.02)" }}>
-          No fully confirmed setup is ready right now.
-        </div>
+        <MarketMonitoringEmpty
+          title="Final book is intentionally selective"
+          subtitle="Nothing cleared the last quality gate yet — the engine is still monitoring structure and liquidity. Use Watchlist and Discovery for names approaching confirmation."
+        />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 14, padding: "4px 2px" }}>
           {display.map((item) => {

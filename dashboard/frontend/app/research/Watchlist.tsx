@@ -61,8 +61,8 @@ export function Watchlist({ items }: { items: ResearchDecisionCard[] }) {
       </div>
 
       {items.length === 0 ? (
-        <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: "0.82rem", background: "rgba(255,255,255,0.02)" }}>
-          No near setup is waiting for confirmation.
+        <div style={{ padding: 14, border: "1px solid rgba(250,204,21,0.2)", borderRadius: 8, color: "var(--text-secondary)", fontSize: "0.82rem", background: "rgba(234,179,8,0.04)" }}>
+          Nothing is parked at the entry zone yet — the desk will populate this lane when price approaches planned OB/FVG zones.
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10 }}>

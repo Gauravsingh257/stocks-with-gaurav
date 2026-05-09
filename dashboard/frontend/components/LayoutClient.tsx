@@ -6,6 +6,9 @@ import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import MobileNav from "@/components/MobileNav";
 import MarketCommandBar from "@/components/MarketCommandBar";
+import LiveEngineRibbon from "@/components/LiveEngineRibbon";
+import LiveActivityFeed from "@/components/LiveActivityFeed";
+import MarketIntelStrip from "@/components/MarketIntelStrip";
 import BackendStatusNotice from "@/components/BackendStatusNotice";
 import CommandPalette from "@/components/CommandPalette";
 import MultiPanelLayout from "@/components/MultiPanelLayout";
@@ -60,6 +63,15 @@ export default function LayoutClient({ children }: { children: React.ReactNode }
       />
       <div className="flex-1 flex flex-col min-w-0 relative z-[2] overflow-hidden">
         <MarketCommandBar />
+        <LiveEngineRibbon />
+        <div className="grid gap-2 lg:grid-cols-12 lg:gap-3 px-0 max-w-[1800px] mx-auto w-full">
+          <div className="lg:col-span-5 min-w-0">
+            <MarketIntelStrip />
+          </div>
+          <div className="lg:col-span-7 min-w-0">
+            <LiveActivityFeed maxHeight={104} />
+          </div>
+        </div>
         <BackendStatusNotice />
         <TopBar
           onMenuClick={() => setSidebarOpen((v) => !v)}
