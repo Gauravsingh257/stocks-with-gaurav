@@ -8,7 +8,7 @@ import { getMarketSession } from "@/lib/marketSession";
  * Suppresses banners during brief WS reconnect when a prior snapshot is still in memory.
  */
 export default function BackendStatusNotice() {
-  const { snapshot, status } = useEngineSocket();
+  const { snapshot, status, snapshotLikelyStale, globalStateVersion, forcedResyncs } = useEngineSocket();
   const session = getMarketSession();
   const hasFreshPath = status === "connected" || status === "polling";
   const engineHint = snapshot?.engine_running === true || snapshot?.engine_live === true;
@@ -20,6 +20,23 @@ export default function BackendStatusNotice() {
   }
 
   if (hasFreshPath && engineHint && !staleData) return null;
+
+  if (snapshotLikelyStale && hasFreshPath && snapshot) {
+    return (
+      <div
+        className="px-3 py-2 text-center text-xs md:text-sm shrink-0"
+        style={{
+          background: "rgba(245,158,11,0.14)",
+          borderBottom: "1px solid rgba(245,158,11,0.3)",
+          color: "var(--text-secondary)",
+        }}
+        role="status"
+      >
+        <strong style={{ color: "var(--warning)" }}>Snapshot age high</strong> — requesting resync
+        {snapshot._snapshot_age_ms != null ? ` · ~${Math.round(snapshot._snapshot_age_ms / 1000)}s behind clock` : ""}
+      </div>
+    );
+  }
 
   if (staleData && hasFreshPath && snapshot) {
     return (
@@ -56,6 +73,13 @@ export default function BackendStatusNotice() {
       role="status"
     >
       {message}
+      {hasFreshPath && globalStateVersion > 0 ? (
+        <span style={{ opacity: 0.75 }}>
+          {" "}
+          · unified state v{globalStateVersion}
+          {forcedResyncs > 0 ? ` · resyncs ${forcedResyncs}` : ""}
+        </span>
+      ) : null}
     </div>
   );
 }

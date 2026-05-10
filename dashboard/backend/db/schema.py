@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# Use DATA_DIR for persistent storage (Railway volume); else project root
+# Use DATA_DIR for persistent storage (Railway volume); else project root.
+# PostgreSQL prep (future): introduce DATABASE_URL + SQLAlchemy/asyncpg; migrate auth +
+# user_watchlist (+ sessions if any) first; keep Redis snapshot keys unchanged — orchestration
+# stays Redis-first. Railway: mount DATA_DIR volume for SQLite until cutover; plan dual-write
+# or maintenance window for PG primary then retire local dashboard.db on workers.
 _root = Path(__file__).resolve().parents[3]
 _data_dir = Path(os.getenv("DATA_DIR", _root))
 DB_PATH = _data_dir / "dashboard.db"

@@ -18,7 +18,7 @@ interface TopBarProps {
 
 export default function TopBar({ onMenuClick, terminalLayout = false, onTerminalLayoutToggle }: TopBarProps) {
   const { theme, toggle: toggleTheme } = useTheme();
-  const { snapshot, status } = useEngineSocket();
+  const { snapshot, status, globalStateVersion } = useEngineSocket();
   const health = useHealth();
 
   const regime = snapshot?.market_regime ?? "NEUTRAL";
@@ -61,6 +61,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
         }
         <span style={{ fontSize: "0.72rem", color: transportColor }}>
           {transportLabel}
+          {globalStateVersion > 0 ? ` · v${globalStateVersion}` : ""}
         </span>
       </div>
 

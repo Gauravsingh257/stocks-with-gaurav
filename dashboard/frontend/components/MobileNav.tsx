@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, BookOpen, Bot, Eye, Globe, Sparkles } from "lucide-react";
+import { BarChart2, Bot, Eye, Globe, Sparkles, LayoutDashboard } from "lucide-react";
 
 const ITEMS = [
+  { href: "/dashboard", label: "Desk", icon: LayoutDashboard },
   { href: "/terminal", label: "Terminal", icon: Sparkles },
-  { href: "/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/journal", label: "Journal", icon: BookOpen },
   { href: "/research", label: "Research", icon: Bot },
+  { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/oi-intelligence", label: "OI", icon: Eye },
   { href: "/market-intelligence", label: "Market", icon: Globe },
 ];

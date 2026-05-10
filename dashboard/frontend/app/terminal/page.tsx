@@ -588,25 +588,6 @@ function CardSkeletonGrid() {
   );
 }
 
-function EmptyHero() {
-  return (
-    <div
-      style={{
-        padding: "40px 24px",
-        textAlign: "center",
-        borderRadius: 18,
-        background: "rgba(255,255,255,0.025)",
-        border: "1px dashed var(--border)",
-        color: "var(--text-secondary)",
-      }}
-    >
-      <Sparkles size={22} color="var(--accent)" />
-      <div style={{ marginTop: 10, fontSize: "0.92rem", fontWeight: 700, color: "var(--text-primary)" }}>No final-grade setups match your filters</div>
-      <div style={{ marginTop: 4, fontSize: "0.78rem" }}>Loosen the strategy or setup filter, or check back as the next scan completes.</div>
-    </div>
-  );
-}
-
 function NoResults({ query, hasSetups, onClear }: { query: string; hasSetups: boolean; onClear: () => void }) {
   const isSearch = query.trim().length > 0;
   return (

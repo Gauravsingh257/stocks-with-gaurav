@@ -193,8 +193,10 @@ def commit_discovery_bundle(payload: dict) -> bool:
     if r is None:
         return False
     try:
+        from dashboard.backend.global_state_version import bump_unified_global_version
+
         now = time.time()
-        v = int(r.incr(KEY_GLOBAL_VERSION))
+        v = int(bump_unified_global_version(r, "commit_discovery_bundle"))
 
         disc = dict(payload)
         disc["_snapshot_version"] = v
@@ -272,8 +274,10 @@ def commit_watchlist_final_independent(watchlist: list[Any], final_trades: list[
     if r is None:
         return False
     try:
+        from dashboard.backend.global_state_version import bump_unified_global_version
+
         now = time.time()
-        v = int(r.incr(KEY_GLOBAL_VERSION))
+        v = int(bump_unified_global_version(r, "commit_watchlist_final_independent"))
 
         wl_payload = {
             "items": watchlist,

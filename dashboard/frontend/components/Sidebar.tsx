@@ -3,17 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
+  { href: "/dashboard",       label: "Command Center", icon: LayoutDashboard, auth: true },
   { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
-  { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
-  { href: "/journal",         label: "Journal",         icon: BookOpen      },
-  { href: "/research",        label: "AI Research Center", icon: Bot        },
+  { href: "/research",        label: "AI Research",     icon: Bot           },
   { href: "/watchlist",       label: "Watchlist",       icon: Bookmark, auth: true },
+  { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
   { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye           },
   { href: "/market-intelligence", label: "Market Intel", icon: Globe      },
 ];
@@ -131,9 +131,11 @@ export default function Sidebar({
               <LogIn size={14} /> Sign In
             </Link>
           )}
-          <div className="text-[0.65rem] text-center mt-2" style={{ color: "var(--text-dim)" }}>
-            AI Engine · Active
-          </div>
+          {!user && (
+            <div className="text-[0.65rem] text-center mt-2" style={{ color: "var(--text-dim)" }}>
+              Sign in to unlock Watchlist + Command Center
+            </div>
+          )}
         </div>
       </aside>
     </>

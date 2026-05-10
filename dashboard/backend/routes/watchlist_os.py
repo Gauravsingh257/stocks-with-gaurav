@@ -28,6 +28,11 @@ from dashboard.backend.services.watchlist_intel_service import (
     merge_idea_maps,
     retention_hints,
 )
+from dashboard.backend.services.decision_intelligence_engine import (
+    build_virtual_portfolios,
+    promotion_transition_touch,
+    rollup_touch,
+)
 from dashboard.backend.db import get_connection
 from dashboard.backend.state_bridge import get_engine_snapshot
 
@@ -95,7 +100,19 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
     except Exception:
         snap = {}
 
-    enriched = build_operating_payload(symbols, rmap, snap if isinstance(snap, dict) else {})
+    _t0 = time.perf_counter_ns()
+    enriched = build_operating_payload(
+        symbols,
+        rmap,
+        snap if isinstance(snap, dict) else {},
+        uid,
+    )
+    _build_ms = round((time.perf_counter_ns() - _t0) / 1_000_000, 2)
+    try:
+        promotion_transition_touch(uid, enriched)
+        rollup_touch(uid, enriched)
+    except Exception as exc:
+        logger.debug("decision rollup skipped: %s", exc)
     try:
         feed_tail = append_feed_diff(uid, enriched)
     except Exception as exc:
@@ -114,11 +131,20 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
             "symbols": len(symbols),
             "with_research": sum(1 for x in enriched if x.get("meta", {}).get("has_research_row")),
         },
+        "decision_portfolios": build_virtual_portfolios(enriched),
+        "decision_engine_version": "phase5_5_v1",
         "snapshot_stale": False,
         "snapshot_source": "live",
         "_snapshot_written_at": now,
         "_watchlist_os_schema": "v2",
+        "_watchlist_build_ms": _build_ms,
     }
+    try:
+        from dashboard.backend.global_state_version import attach_snapshot_meta
+
+        attach_snapshot_meta(body, origin="watchlist_operating")
+    except Exception:
+        pass
     return body
 
 
@@ -140,6 +166,20 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
     cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)
 
     try:
+        from dashboard.backend.watchlist_notify import publish_watchlist_os_refresh
+
+        publish_watchlist_os_refresh(uid, kind="hint")
+    except Exception:
+        pass
+
+    try:
+        from dashboard.backend.global_state_version import bump_global_state_version
+
+        bump_global_state_version("watchlist_operating_persist")
+    except Exception:
+        pass
+
+    try:
         enriched = body.get("items") if isinstance(body.get("items"), list) else []
         mx = 0.0
         for x in enriched:
@@ -152,6 +192,7 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
             "updated_at": body.get("_snapshot_written_at") or time.time(),
             "symbol_count": len(enriched),
             "max_readiness_pct": round(mx, 1),
+            "build_ms": body.get("_watchlist_build_ms"),
         }
         cache_set(_digest_key(uid), digest, ttl_seconds=WL_OS_TTL)
     except Exception as exc:
@@ -217,6 +258,15 @@ def watchlist_operating_system(
         "retention": {},
         "market_alignment": {},
         "counts": {"symbols": 0, "with_research": 0},
+        "decision_portfolios": {
+            "intraday_momentum": [],
+            "mtf_swing": [],
+            "short_term_growth": [],
+            "long_term_compounders": [],
+            "slot_cap": 30,
+            "note": "Virtual ranking — not an executed portfolio allocation.",
+        },
+        "decision_engine_version": "phase5_5_v1",
         "snapshot_stale": True,
         "snapshot_source": "warming",
         "hint": "No symbols saved yet — add stocks from Research or stock pages.",

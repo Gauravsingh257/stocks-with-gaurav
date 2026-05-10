@@ -135,6 +135,11 @@ export interface EngineSnapshot {
   engine_last_cycle_age_sec?: number | null;
   engine_started_at?:  number | null;
   snapshot_time:       string;
+  /** Unified orchestration version from Redis (additive envelope). */
+  _global_state_version?: number;
+  _snapshot_ts?:       string;
+  _snapshot_age_ms?:   number | null;
+  _snapshot_origin?:   string;
   stale?:              boolean;
   data_source?:        string;
   setup_d_state?:      Record<string, SetupDEntry>;
@@ -469,8 +474,114 @@ export interface WatchlistProgressionStep {
   status?: "complete" | "pending" | "waiting";
 }
 
+/** Weighted pillar scores + lifecycle narrative from Watchlist OS intelligence engine */
+export interface WatchlistIntelligence {
+  pillar_scores?: Record<string, number>;
+  readiness_weighted_pct?: number;
+  readiness_delta_hint?: string | null;
+  structure_quality?: string;
+  momentum_quality?: string;
+  setup_quality?: string;
+  risk_grade?: string;
+  setup_deteriorating?: boolean;
+  stage_reason?: string;
+  next_trigger?: string | null;
+  invalidation_reason?: string | null;
+  market_regime?: unknown;
+}
+
+/** Phase 5 / 5.5 decision intelligence — probabilistic, snapshot-derived */
+export interface WatchlistDecisionIntel {
+  setup_maturity_stage?: string;
+  setup_maturity_score?: number;
+  maturity_delta?: number;
+  maturity_velocity?: number;
+  lifecycle_probability_pct?: number;
+  deterioration_probability_pct?: number;
+  readiness_evolution?: {
+    readiness_last_5m?: number;
+    readiness_last_15m?: number;
+    readiness_last_1h?: number;
+    readiness_acceleration?: number;
+    readiness_decay?: number;
+    readiness_consistency?: number;
+    evolution_regime?: string;
+  };
+  execution_quality?: { band?: string; score?: number };
+  allocation?: { priority_score?: number; label?: string };
+  deterioration?: {
+    flags?: string[];
+    false_breakout_probability_pct?: number;
+    trap_probability_pct?: number;
+    overall_risk_tone?: string;
+    capital_protection_warning?: boolean;
+  };
+  deterioration_validation?: {
+    validated_overall?: string;
+    failed_continuation?: boolean;
+    eject_from_portfolio?: boolean;
+  };
+  promotion?: Record<string, unknown>;
+  signal_tier?: string;
+  holding_period_hint?: string;
+  confidence_calibration?: {
+    inst_probability_pct?: number;
+    high_probability_pct?: number;
+    failure_probability_pct?: number;
+    false_break_probability_pct?: number;
+    calibration_samples_for_tier?: number;
+    note?: string;
+  };
+  regimes?: { liquidity_regime?: string; volatility_regime?: string; macro_regime_hint?: string };
+  execution_realism?: {
+    distance_from_entry_pct?: number | null;
+    rr_planned?: number | null;
+    rr_effective_estimate?: number | null;
+    rr_degradation?: number | null;
+    slippage_risk_pct?: number;
+    liquidity_risk_pct?: number;
+    execution_delay_risk_pct?: number;
+    volatility_expansion_risk_pct?: number;
+    execution_posture?: string;
+    trust_note?: string;
+  };
+  trade_levels?: {
+    show_actionable_levels?: boolean;
+    zone_reason?: string;
+    monitoring_copy?: string | null;
+  };
+  user_action?: { primary_action?: string; rationale?: string };
+  time_decay?: {
+    stagnation_window_min?: number;
+    readiness_stagnation?: boolean;
+    watchlist_tenure_min?: number | null;
+    setup_expired_hint?: boolean;
+    momentum_aging_note?: string | null;
+  };
+  portfolio_competition_score?: number;
+  confidence_language?: { lifecycle?: string; deterioration?: string; tiers?: string };
+  note?: string;
+}
+
+/** Phase 6.5 — Personal desk dependency (backend retention_engine) */
+export interface DeskOsPayload {
+  evolving_rank?: number;
+  urgency_state?: string;
+  urgency_detail?: string;
+  urgency_severity?: string;
+  capital_priority_score?: number;
+  deterioration_risk_trend?: string;
+  confidence_evolution?: string;
+  execution_timing_quality?: string;
+  momentum_pillar?: number;
+  nearest_actionable_trigger?: string;
+  expected_opportunity_window?: string;
+}
+
 export interface WatchlistIntelItem {
   symbol: string;
+  /** Redis LTP cache when available */
+  quote_ltp?: number | null;
   horizon?: string | null;
   trend_state?: string;
   setup_status?: string;
@@ -479,6 +590,11 @@ export interface WatchlistIntelItem {
   current_stage?: string;
   /** True only when entry / SL / target may be shown as actionable */
   entry_ready?: boolean;
+  intelligence?: WatchlistIntelligence;
+  /** Raw progression steps readiness before pillar weighting */
+  readiness_progression_pct?: number;
+  /** Weighted readiness delta vs prior persisted snapshot (desk refresh). */
+  readiness_delta_pct?: number | null;
   progression?: WatchlistProgressionStep[];
   readiness_pct?: number;
   conviction_pct?: number;
@@ -495,7 +611,9 @@ export interface WatchlistIntelItem {
     nearest_trigger?: string | null;
     invalidation_reason?: string | null;
   };
-  meta?: { has_research_row?: boolean; in_active_trade?: boolean };
+  meta?: { has_research_row?: boolean; in_active_trade?: boolean; engine_tick_ts?: string | null };
+  decision?: WatchlistDecisionIntel;
+  desk_os?: DeskOsPayload;
 }
 
 export interface WatchlistFeedEvent {
@@ -506,6 +624,77 @@ export interface WatchlistFeedEvent {
   setup_status?: string;
 }
 
+export interface DecisionPortfoliosPayload {
+  intraday_momentum?: string[];
+  mtf_swing?: string[];
+  short_term_growth?: string[];
+  long_term_compounders?: string[];
+  slot_cap?: number;
+  note?: string;
+}
+
+/** Phase 6 — Trader Command Center */
+export interface PriorityFeedLine {
+  headline: string;
+  severity: string;
+  symbol?: string | null;
+  kind?: string;
+}
+
+export interface CommandCenterResponse {
+  ok?: boolean;
+  engine_version?: string;
+  market_regime?: unknown;
+  signals_today?: unknown;
+  best_opportunities_now?: { symbol: string; note?: string; confidence_score?: number }[];
+  biggest_improvements?: { symbol: string; readiness_delta_pct?: number; action?: string }[];
+  biggest_deteriorations?: { symbol: string; deterioration_probability_pct?: number; validated_overall?: string; action?: string }[];
+  active_high_conviction?: { symbol: string; confidence_score?: number; note?: string }[];
+  portfolio_rotation?: { desks?: DecisionPortfoliosPayload; note?: string | null };
+  alerts_requiring_attention?: { symbol: string; action: string; severity?: string }[];
+  what_matters_now?: PriorityFeedLine[];
+  watchlist_feed_preview?: WatchlistFeedEvent[];
+  personal_desk_symbols?: number;
+  premium?: { tier?: string; feed_limit?: number; full_watchlist_intel?: boolean; note?: string };
+  trust_banner?: string;
+  urgency_layer?: {
+    rows?: { symbol?: string; label?: string; detail?: string; severity?: string }[];
+    market_regime?: unknown;
+    near_ready_count?: number;
+    weakening_count?: number;
+    trust_note?: string;
+  };
+  revisit_psychology?: {
+    has_prior_visit?: boolean;
+    lines?: string[];
+    significant_changes?: number;
+    last_visit_ts?: string | null;
+    trust_note?: string;
+  };
+  session_intelligence_today?: {
+    strongest_readiness_gains?: { symbol?: string; readiness_pct?: number; setup_status?: string }[];
+    largest_deterioration_stress?: { symbol?: string; readiness_pct?: number; setup_status?: string }[];
+    highest_momentum_names?: { symbol?: string; readiness_pct?: number; setup_status?: string }[];
+    trust_note?: string;
+  };
+  _global_state_version?: number;
+}
+
+export interface DailyBriefSection {
+  title: string;
+  body: string;
+}
+
+export interface DailyBriefResponse {
+  ok?: boolean;
+  regime?: unknown;
+  top_discovery_symbols?: string[];
+  sections?: DailyBriefSection[];
+  narrative_sections?: DailyBriefSection[];
+  trust_note?: string;
+  generated_at?: string;
+}
+
 export interface WatchlistOperatingResponse {
   ok?: boolean;
   engine_version?: string;
@@ -514,11 +703,17 @@ export interface WatchlistOperatingResponse {
   retention?: {
     closest_to_trigger?: string[];
     strongest_scores?: string[];
+    weakening?: string[];
     invalidated?: string[];
     best_rr?: string[];
+    active?: string[];
+    improving_readiness?: string[];
+    momentum_expansion?: string[];
   };
   market_alignment?: Record<string, unknown>;
   counts?: { symbols?: number; with_research?: number };
+  decision_portfolios?: DecisionPortfoliosPayload;
+  decision_engine_version?: string;
   snapshot_stale?: boolean;
   snapshot_source?: string;
   hint?: string;
@@ -1186,6 +1381,60 @@ export const api = {
       `/api/watchlist/feed?limit=${encodeURIComponent(String(limit))}`,
       token
     ),
+
+  /** Phase 6 — Command Center + retention hooks */
+  commandCenter: (token?: string | null) =>
+    get<CommandCenterResponse>("/api/command-center", token ?? undefined),
+  dailyBrief: (token?: string | null) =>
+    get<DailyBriefResponse>("/api/market/daily-brief", token ?? undefined),
+  visitMark: (token: string) =>
+    fetch(`${BASE}/api/user/visit-mark`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`visit-mark ${r.status}`);
+      return r.json() as Promise<{ ok: boolean }>;
+    }),
+  revisitSummary: (token: string) =>
+    get<{
+      ok: boolean;
+      lines?: string[];
+      has_prior_visit?: boolean;
+      significant_changes?: number;
+      last_visit_ts?: string | null;
+      trust_note?: string;
+    }>("/api/user/revisit-summary", token),
+  evolutionTimeline: (token: string, symbol: string, limit = 32) =>
+    get<{
+      ok: boolean;
+      symbol?: string;
+      items: Array<{ ts?: string; headline?: string; kind?: string }>;
+      cap?: number;
+      premium?: boolean;
+    }>(
+      `/api/user/evolution/${encodeURIComponent(symbol)}?limit=${encodeURIComponent(String(limit))}`,
+      token
+    ),
+  sessionPulse: (token: string) =>
+    fetch(`${BASE}/api/user/session-pulse`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`session-pulse ${r.status}`);
+      return r.json() as Promise<{ ok: boolean }>;
+    }),
+  intelEvent: (token: string, body: { event: string; symbol?: string }) =>
+    fetch(`${BASE}/api/user/intel/event`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`intel-event ${r.status}`);
+      return r.json() as Promise<{ ok: boolean; stored?: boolean }>;
+    }),
 
   // ── Market Intelligence ───────────────────────────────────────────────────
   marketIntelSnapshot: () => get<MISnapshot>("/api/market-intelligence/snapshot"),

@@ -67,6 +67,31 @@ QUEUE_STALE_SEC = float(os.getenv("SIGNAL_QUEUE_STALE_SEC", "120"))
 TelegramSendSig = Callable[..., Any]
 
 
+def apply_signal_confidence_prefix(message: str, meta: dict | None) -> str:
+    """
+    Optional Telegram prefix when engine attaches confidence tier in signal_meta.
+    Forward-compatible — no prefix when tier absent.
+    """
+    if not message:
+        return message
+    if not meta:
+        return message
+    tier = meta.get("confidence_tier") or meta.get("signal_tier")
+    if not tier:
+        return message
+    labels = {
+        "institutional grade": "[INST]",
+        "high conviction": "[HIGH]",
+        "actionable": "[ACT]",
+        "developing": "[DEV]",
+        "informational": "[INFO]",
+    }
+    prefix = labels.get(str(tier).strip().lower(), "")
+    if not prefix:
+        return message
+    return f"{prefix}\n{message}"
+
+
 def _get_redis():
     try:
         import redis as redis_lib
@@ -551,6 +576,7 @@ def _dispatch_queued_item(
     msg = item.get("message", "")
     sid = item.get("signal_id")
     meta = item.get("signal_meta") or {}
+    msg = apply_signal_confidence_prefix(msg, meta if isinstance(meta, dict) else None)
     chat = item.get("chat_id")
     retries_done = int(item.get("retries") or 0)
 

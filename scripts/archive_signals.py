@@ -162,7 +162,7 @@ def main():
 
     print(f"\n=== Signal Archiver ===")
     print(f"Backend : {BACKEND}")
-    print(f"Dates   : {dates_to_fetch[0]} → {dates_to_fetch[-1]} ({len(dates_to_fetch)} days)")
+    print(f"Dates   : {dates_to_fetch[0]} to {dates_to_fetch[-1]} ({len(dates_to_fetch)} days)")
     print(f"Output  : {SIGNAL_HISTORY_DIR}\n")
 
     # Load all existing signal IDs from all yearly CSVs upfront
@@ -182,7 +182,7 @@ def main():
         added, existing_ids = _append_signals(signals, existing_ids)
         total_added += added
         status = f"+{added} new" if added else "no new"
-        print(f"  {d_str}: {len(signals):2d} fetched  → {status}")
+        print(f"  {d_str}: {len(signals):2d} fetched  -> {status}")
 
     print(f"\n{'─'*40}")
     print(f"Total fetched : {total_fetched}")

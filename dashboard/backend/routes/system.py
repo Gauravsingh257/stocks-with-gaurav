@@ -22,7 +22,7 @@ from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-BACKEND_VERSION = "1.1.4"
+BACKEND_VERSION = "1.2.0"
 AGENT_VERSION   = "2.0.0"
 _start_time     = time.time()
 
@@ -864,6 +864,213 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
         diag["signal_health"] = get_signal_debug()
     except Exception as e:
         diag["signal_health"] = {"error": str(e)}
+
+    # ── Watchlist OS aggregate health (Redis SCAN + JSON samples; bounded cost) ──
+    try:
+        import json as _json
+
+        from dashboard.backend.cache import _get_redis
+
+        _r = _get_redis()
+        _wh: dict = {}
+        if _r is not None:
+            _now_ts = time.time()
+            _digest_sizes: list[int] = []
+            _digest_stale = 0
+            _max_snap_age = 0.0
+            _op_sizes: list[int] = []
+            _feed_events = 0
+            _feed_invalidations = 0
+            _feed_transitions = 0
+            _op_keys = 0
+            _build_samples: list[float] = []
+
+            _dc = 0
+            for _ in range(120):
+                _dc, _batch = _r.scan(_dc, match="snapshot:watchlist_digest:*", count=48)
+                for _bk in _batch:
+                    _ks = _bk if isinstance(_bk, str) else _bk.decode("utf-8", errors="replace")
+                    _raw = _r.get(_ks)
+                    if not _raw:
+                        continue
+                    try:
+                        _d = _json.loads(_raw)
+                        _sc = int(_d.get("symbol_count") or 0)
+                        _digest_sizes.append(_sc)
+                        _bm = _d.get("build_ms")
+                        if _bm is not None:
+                            try:
+                                _build_samples.append(float(_bm))
+                            except (TypeError, ValueError):
+                                pass
+                        _ua = float(_d.get("updated_at") or 0)
+                        if _ua and _now_ts - _ua > 120:
+                            _digest_stale += 1
+                        if _ua:
+                            _max_snap_age = max(_max_snap_age, _now_ts - _ua)
+                    except Exception:
+                        pass
+                if _dc == 0:
+                    break
+
+            _oc = 0
+            for _ in range(120):
+                _oc, _batch = _r.scan(_oc, match="snapshot:watchlist_operating:*", count=48)
+                _op_keys += len(_batch)
+                for _bk in _batch[:8]:
+                    _ks = _bk if isinstance(_bk, str) else _bk.decode("utf-8", errors="replace")
+                    _raw = _r.get(_ks)
+                    if not _raw:
+                        continue
+                    try:
+                        _pl = _json.loads(_raw)
+                        _items = _pl.get("items") if isinstance(_pl.get("items"), list) else []
+                        _op_sizes.append(len(_items))
+                        _w = float(_pl.get("_snapshot_written_at") or 0)
+                        if _w:
+                            _max_snap_age = max(_max_snap_age, _now_ts - _w)
+                    except Exception:
+                        pass
+                if _oc == 0:
+                    break
+
+            _fc = 0
+            for _ in range(100):
+                _fc, _batch = _r.scan(_fc, match="watchlist:feed:*", count=40)
+                for _bk in _batch:
+                    _ks = _bk if isinstance(_bk, str) else _bk.decode("utf-8", errors="replace")
+                    _raw = _r.get(_ks)
+                    if not _raw:
+                        continue
+                    try:
+                        _hist = _json.loads(_raw)
+                        if isinstance(_hist, list):
+                            _feed_events += len(_hist)
+                            for _ev in _hist[:40]:
+                                if not isinstance(_ev, dict):
+                                    continue
+                                _hl = str(_ev.get("headline") or "").lower()
+                                if "invalid" in _hl:
+                                    _feed_invalidations += 1
+                                if (
+                                    "→" in _hl
+                                    or "stage" in _hl
+                                    or "readiness" in _hl
+                                    or "weakening" in _hl
+                                    or "near executable" in _hl
+                                ):
+                                    _feed_transitions += 1
+                    except Exception:
+                        pass
+                if _fc == 0:
+                    break
+
+            try:
+                _wt = diag.get("websocket_telemetry") or {}
+                _bps = float(_wt.get("avg_broadcast_bytes") or 0)
+                _bc = int(_wt.get("total_broadcasts_since_boot") or 0)
+                _upt = float(diag.get("backend_uptime_sec") or 1)
+                _delta_rate = round((_bps * max(_bc, 1)) / max(_upt, 1.0), 2)
+            except Exception:
+                _delta_rate = None
+
+            _wh = {
+                "active_watchlists_operating_keys_approx": _op_keys,
+                "avg_watchlist_size_digest": (
+                    round(sum(_digest_sizes) / len(_digest_sizes), 2) if _digest_sizes else None
+                ),
+                "avg_watchlist_size_operating_sample": (
+                    round(sum(_op_sizes) / len(_op_sizes), 2) if _op_sizes else None
+                ),
+                "digest_key_samples": len(_digest_sizes),
+                "stale_watchlists_digest_age_gt_120s": _digest_stale,
+                "max_snapshot_age_sec_approx": round(_max_snap_age, 1) if _max_snap_age else None,
+                "feed_events_total_list_items_scanned": _feed_events,
+                "feed_invalidation_headlines_sample": _feed_invalidations,
+                "feed_lifecycle_hint_headlines_sample": _feed_transitions,
+                "websocket_broadcast_volume_rate_bytes_per_sec_est": _delta_rate,
+                "avg_rebuild_duration_ms_digest": (
+                    round(sum(_build_samples) / len(_build_samples), 2) if _build_samples else None
+                ),
+                "watchlist_delta_ws_enabled": True,
+                "note": "watchlist_delta WS frames carry user_id only; clients refetch GET /api/watchlist/operating. Feed lists stay Redis-backed.",
+            }
+        else:
+            _wh = {"note": "redis_unavailable"}
+        diag["watchlist_health"] = _wh
+    except Exception as e:
+        diag["watchlist_health"] = {"error": str(e)}
+
+    try:
+        import json as _json
+
+        from dashboard.backend.cache import _get_redis
+        from dashboard.backend.global_state_version import KEY_LAST_BUMP_META, read_global_state_version
+
+        _r_eng = _get_redis()
+        _gsv_dbg = read_global_state_version()
+        _leg_dbg = 0
+        _bump_meta: dict = {}
+        if _r_eng is not None:
+            try:
+                _gv_raw = _r_eng.get("snapshot:global_version")
+                _leg_dbg = int(_gv_raw) if _gv_raw is not None else 0
+            except Exception:
+                _leg_dbg = 0
+            try:
+                _mr = _r_eng.get(KEY_LAST_BUMP_META)
+                if _mr:
+                    _bump_meta = _json.loads(_mr.decode() if isinstance(_mr, bytes) else _mr)
+            except Exception:
+                _bump_meta = {}
+        diag["state_engine"] = {
+            "global_version": _gsv_dbg,
+            "legacy_global_version": _leg_dbg,
+            "versions_aligned": _gsv_dbg == _leg_dbg,
+            "last_bump_meta": _bump_meta,
+            "redis_keys": {
+                "global_state_version": "snapshot:global_state_version",
+                "legacy_mirror": "snapshot:global_version",
+            },
+            "ws_queue_depth": None,
+            "stale_entities": None,
+            "reconciliation_failures": None,
+            "rejected_deltas": None,
+            "forced_resyncs": None,
+            "entity_registry_size": None,
+            "duplicate_entity_keys": None,
+            "avg_event_latency_ms": None,
+            "stale_snapshot_count": None,
+            "notes": "Browser-side queue/reconcile metrics require client instrumentation; Redis holds canonical global_state_version.",
+        }
+    except Exception as e:
+        diag["state_engine"] = {"error": str(e)}
+
+    try:
+        from dashboard.backend.services.decision_intelligence_engine import (
+            read_decision_engine_debug,
+            read_execution_engine_debug,
+        )
+
+        diag["decision_engine"] = read_decision_engine_debug()
+        diag["execution_engine"] = read_execution_engine_debug()
+    except Exception as e:
+        diag["decision_engine"] = {"error": str(e)}
+        diag["execution_engine"] = {"error": str(e)}
+
+    try:
+        from dashboard.backend.routes.user_product import read_product_metrics
+
+        diag["product_metrics"] = read_product_metrics()
+    except Exception as e:
+        diag["product_metrics"] = {"error": str(e)}
+
+    try:
+        from dashboard.backend.services.retention_engine_service import read_retention_engine_metrics
+
+        diag["retention_engine"] = read_retention_engine_metrics()
+    except Exception as e:
+        diag["retention_engine"] = {"error": str(e)}
 
     diag["total_latency_ms"] = round((time.perf_counter_ns() - start_ns) / 1_000_000, 2)
     return diag

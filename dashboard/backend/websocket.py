@@ -16,7 +16,9 @@ import json
 import logging
 import os
 import threading
-from typing import Set
+import time
+import uuid
+from typing import Any, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -125,6 +127,35 @@ class _ConnectionManager:
 
 manager = _ConnectionManager()
 
+
+def _ws_json_envelope(base_type: str, data_obj: Any, **top_level: Any) -> str:
+    """Common WS envelope: versioning + event id (additive; clients remain backward compatible)."""
+    from dashboard.backend.global_state_version import read_global_state_version
+
+    gv = read_global_state_version()
+    kind_map = {
+        "snapshot": "snapshot_full",
+        "digest": "snapshot_digest",
+        "ltp": "market_ltp_update",
+        "oi_intelligence": "oi_shift",
+        "event": "activity_event",
+        "ping": "heartbeat",
+        "watchlist_delta": "watchlist_delta",
+    }
+    out: dict = {
+        "type": base_type,
+        "ws_event_kind": kind_map.get(base_type, base_type),
+        "event_id": str(uuid.uuid4()),
+        "event_ts": time.time(),
+        "global_state_version": gv,
+        "snapshot_version": gv,
+        "entity_version": gv,
+        "data": data_obj,
+    }
+    out.update({k: v for k, v in top_level.items() if v is not None})
+    return json.dumps(out)
+
+
 # ---------------------------------------------------------------------------
 # Background broadcast loop — started from main.py lifespan
 # ---------------------------------------------------------------------------
@@ -133,6 +164,7 @@ _ltp_broadcast_task: asyncio.Task | None = None
 _event_broadcast_task: asyncio.Task | None = None
 _ltp_subscriber_thread: threading.Thread | None = None
 _events_subscriber_thread: threading.Thread | None = None
+_watchlist_os_subscriber_thread: threading.Thread | None = None
 
 
 def _ltp_subscriber_thread_fn() -> None:
@@ -184,6 +216,36 @@ def _events_subscriber_thread_fn(loop: asyncio.AbstractEventLoop) -> None:
         log.debug("Events subscriber thread exited: %s", e)
 
 
+def _watchlist_os_subscriber_thread_fn(loop: asyncio.AbstractEventLoop) -> None:
+    """Subscribe to watchlist_os:notify — thin user_id hints (no symbol payloads)."""
+    try:
+        from dashboard.backend.cache import _get_redis
+        from dashboard.backend.watchlist_notify import WATCHLIST_OS_PUB_CHANNEL
+
+        r = _get_redis()
+        if r is None:
+            return
+        pub = r.pubsub()
+        pub.subscribe(WATCHLIST_OS_PUB_CHANNEL)
+        for msg in pub.listen():
+            if _ltp_subscriber_stop.is_set():
+                break
+            if msg and msg.get("type") == "message" and msg.get("data"):
+                try:
+                    data = json.loads(msg["data"])
+                    if isinstance(data, dict) and _event_queue is not None:
+                        uid = data.get("user_id")
+                        kind = data.get("kind") or "hint"
+                        loop.call_soon_threadsafe(
+                            _event_queue.put_nowait,
+                            {"type": "watchlist_delta", "user_id": uid, "kind": kind},
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+    except Exception as e:
+        log.debug("Watchlist OS subscriber thread exited: %s", e)
+
+
 async def _event_forward_loop() -> None:
     """Drain the Redis-event queue and broadcast each event to all WS clients."""
     if _event_queue is None:
@@ -192,8 +254,19 @@ async def _event_forward_loop() -> None:
         try:
             event = await asyncio.wait_for(_event_queue.get(), timeout=5.0)
             if manager.client_count > 0:
-                msg = json.dumps({"type": "event", "data": event})
-                await manager.broadcast(msg)
+                if isinstance(event, dict) and event.get("type") == "watchlist_delta":
+                    uid = event.get("user_id")
+                    kind = event.get("kind") or "hint"
+                    payload = _ws_json_envelope(
+                        "watchlist_delta",
+                        {"user_id": uid, "kind": kind},
+                    )
+                    record_broadcast(len(payload.encode("utf-8")), "watchlist_delta")
+                    await manager.broadcast(payload)
+                else:
+                    msg = _ws_json_envelope("event", event)
+                    record_broadcast(len(msg.encode("utf-8")), "event")
+                    await manager.broadcast(msg)
         except asyncio.TimeoutError:
             continue
         except asyncio.CancelledError:
@@ -213,7 +286,8 @@ async def _ltp_broadcast_loop() -> None:
             _pending_ltp = None
         if payload:
             try:
-                msg = json.dumps({"type": "ltp", "data": payload})
+                msg = _ws_json_envelope("ltp", payload)
+                record_broadcast(len(msg.encode("utf-8")), "ltp")
                 await manager.broadcast(msg)
             except Exception as exc:
                 log.debug("LTP broadcast error: %s", exc)
@@ -276,11 +350,11 @@ async def _broadcast_loop() -> None:
                             _pub_event("STOP_HIT", sym, {**evt_payload, "result": "LOSS"})
                 except Exception as exc:
                     log.debug("State-transition event detection failed: %s", exc)
-                payload = json.dumps({"type": "snapshot", "data": snapshot})
+                payload = _ws_json_envelope("snapshot", snapshot)
                 record_broadcast(len(payload.encode("utf-8")), "snapshot")
             else:
                 digest = build_engine_digest(snapshot)
-                payload = json.dumps({"type": "digest", "data": digest})
+                payload = _ws_json_envelope("digest", digest)
                 record_broadcast(len(payload.encode("utf-8")), "digest")
         except Exception as exc:
             log.error("Snapshot error: %s", exc)
@@ -292,14 +366,14 @@ async def _broadcast_loop() -> None:
             oi_snap = _get_oi_intelligence_snapshot()
             if oi_snap:
                 try:
-                    oi_payload = json.dumps({"type": "oi_intelligence", "data": dict(oi_snap)})
+                    oi_payload = _ws_json_envelope("oi_intelligence", dict(oi_snap))
                     record_broadcast(len(oi_payload.encode("utf-8")), "oi_intelligence")
                     await manager.broadcast(oi_payload)
                 except Exception as exc:
                     log.error("OI Intelligence broadcast error: %s", exc)
 
         if tick % PING_EVERY == 0:
-            ping = json.dumps({"type": "ping", "tick": tick})
+            ping = _ws_json_envelope("ping", {"tick": tick})
             record_broadcast(len(ping.encode("utf-8")), "ping")
             await manager.broadcast(ping)
 
@@ -307,7 +381,8 @@ async def _broadcast_loop() -> None:
 def start_broadcast_loop() -> None:
     """Called from FastAPI lifespan to start the loop."""
     global _broadcast_task, _ltp_broadcast_task, _event_broadcast_task
-    global _ltp_subscriber_thread, _events_subscriber_thread, _event_queue
+    global _ltp_subscriber_thread, _events_subscriber_thread, _watchlist_os_subscriber_thread
+    global _event_queue
     loop = asyncio.get_event_loop()
     _event_queue = asyncio.Queue()
     _broadcast_task = loop.create_task(_broadcast_loop())
@@ -325,6 +400,11 @@ def start_broadcast_loop() -> None:
             )
             _events_subscriber_thread.start()
             log.info("Events Redis subscriber started")
+            _watchlist_os_subscriber_thread = threading.Thread(
+                target=_watchlist_os_subscriber_thread_fn, args=(loop,), daemon=True
+            )
+            _watchlist_os_subscriber_thread.start()
+            log.info("Watchlist OS Redis subscriber started")
     except Exception as e:
         log.debug("Subscribers not started: %s", e)
     log.info("WebSocket broadcast loop started")
@@ -333,7 +413,7 @@ def start_broadcast_loop() -> None:
 def stop_broadcast_loop() -> None:
     """Called from FastAPI lifespan on shutdown."""
     global _broadcast_task, _ltp_broadcast_task, _event_broadcast_task
-    global _ltp_subscriber_thread, _events_subscriber_thread
+    global _ltp_subscriber_thread, _events_subscriber_thread, _watchlist_os_subscriber_thread
     _ltp_subscriber_stop.set()
     if _ltp_subscriber_thread is not None:
         try:
@@ -345,6 +425,7 @@ def stop_broadcast_loop() -> None:
             pass
         _ltp_subscriber_thread = None
     _events_subscriber_thread = None
+    _watchlist_os_subscriber_thread = None
     if _event_broadcast_task and not _event_broadcast_task.done():
         _event_broadcast_task.cancel()
     if _ltp_broadcast_task and not _ltp_broadcast_task.done():
@@ -368,9 +449,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         # Send immediate snapshot on connect so client doesn't wait 1 second
         try:
             snapshot = get_engine_snapshot()
-            await websocket.send_text(
-                json.dumps({"type": "snapshot", "data": snapshot})
-            )
+            await websocket.send_text(_ws_json_envelope("snapshot", snapshot))
         except Exception as exc:
             log.warning("Initial snapshot send failed: %s", exc)
 

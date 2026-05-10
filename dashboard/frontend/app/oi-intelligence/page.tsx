@@ -71,21 +71,30 @@ export default function OIIntelligencePage() {
       }
     }
     if (!wsUrl) return;
-    let ws: WebSocket;
+    let ws: WebSocket | undefined;
     let dead = false;
     let failCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     function connect() {
-      if (dead || failCount >= 3) return;
+      if (dead) return;
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => { setWsConnected(true); failCount = 0; };
+      ws.onopen = () => {
+        setWsConnected(true);
+        failCount = 0;
+      };
       ws.onclose = () => {
         setWsConnected(false);
         failCount += 1;
-        const delay = Math.min(3000 * Math.pow(2, failCount - 1), 30000);
-        if (!dead && failCount < 3) setTimeout(connect, delay);
+        const delay = Math.min(3000 * Math.pow(2, Math.min(failCount - 1, 10)), 30000);
+        if (!dead) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            connect();
+          }, delay);
+        }
       };
       ws.onerror = () => setWsConnected(false);
       ws.onmessage = (ev) => {
@@ -101,8 +110,32 @@ export default function OIIntelligencePage() {
       };
     }
 
+    /** Faster WS recovery after sleep / network blips (aligns with main engine hook). */
+    function onWsVisibility() {
+      if (document.visibilityState !== "visible") return;
+      failCount = 0;
+      const cur = wsRef.current;
+      if (cur && (cur.readyState === WebSocket.OPEN || cur.readyState === WebSocket.CONNECTING)) return;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      try {
+        ws?.close();
+      } catch {
+        /* noop */
+      }
+      if (!dead) connect();
+    }
+
+    document.addEventListener("visibilitychange", onWsVisibility);
     connect();
-    return () => { dead = true; ws?.close(); };
+    return () => {
+      dead = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener("visibilitychange", onWsVisibility);
+      ws?.close();
+    };
   }, []);
 
   /* ── REST Polling — fallback only when WebSocket is down ── */
@@ -143,7 +176,7 @@ export default function OIIntelligencePage() {
             Live OI Radar
           </h1>
           <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: "4px 0 0" }}>
-            AI-style derivatives narrative — regime, flow shifts, and actionable levels (OI snapshot from Railway + Redis)
+            Derivatives bias, support/resistance, and flow analysis from live OI data
           </p>
           {snapshot?.last_update && (
             <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "2px 0 0" }}>
@@ -274,15 +307,23 @@ export default function OIIntelligencePage() {
             <UnderlyingSummaryCards summaries={snapshot.underlying_summaries} />
           </div>
 
-          <StrikeHeatmap entries={snapshot.strike_heatmap} />
+          {(snapshot.strike_heatmap?.length ?? 0) > 0 && (
+            <StrikeHeatmap entries={snapshot.strike_heatmap} />
+          )}
 
+          {((snapshot.short_covering_signals?.length ?? 0) > 0 || snapshot.execution_quality) && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <ShortCoveringPanel signals={snapshot.short_covering_signals} />
-            <ExecutionQualityPanel
-              quality={snapshot.execution_quality}
-              scSignals={snapshot.short_covering_signals}
-            />
+            {(snapshot.short_covering_signals?.length ?? 0) > 0 && (
+              <ShortCoveringPanel signals={snapshot.short_covering_signals} />
+            )}
+            {snapshot.execution_quality && (
+              <ExecutionQualityPanel
+                quality={snapshot.execution_quality}
+                scSignals={snapshot.short_covering_signals}
+              />
+            )}
           </div>
+          )}
         </div>
         </StaggerItem>
       )}

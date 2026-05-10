@@ -158,6 +158,7 @@ def _write_last_known_good(r, snapshot: Dict) -> None:
 
 def _enrich_snapshot(snap: Dict, source: str, stale: bool, stale_reason: str = "") -> Dict:
     """Add metadata fields to a snapshot before returning to API callers."""
+    engine_iso_for_age = snap.get("snapshot_time")
     r = _get_redis()
 
     # Engine health from dedicated Redis keys
@@ -226,6 +227,16 @@ def _enrich_snapshot(snap: Dict, source: str, stale: bool, stale_reason: str = "
     })
     if stale_reason:
         snap["stale_reason"] = stale_reason
+    try:
+        from dashboard.backend.global_state_version import attach_snapshot_meta
+
+        attach_snapshot_meta(
+            snap,
+            origin=f"state_bridge:{source}",
+            reference_iso_for_age=str(engine_iso_for_age) if engine_iso_for_age else None,
+        )
+    except Exception:
+        pass
     return snap
 
 
@@ -260,6 +271,12 @@ def get_engine_snapshot() -> Dict:
                 empty = dict(_EMPTY_SNAPSHOT)
                 empty["snapshot_time"] = datetime.now(_IST).isoformat()
                 empty["stale_reason"] = "invalid_snapshot_no_fallback"
+                try:
+                    from dashboard.backend.global_state_version import attach_snapshot_meta
+
+                    attach_snapshot_meta(empty, origin="state_bridge:empty_scaffold", reference_iso_for_age=None)
+                except Exception:
+                    pass
                 return empty
 
             # Write watchdog: if engine hasn't written recently, force fallback even if key exists
@@ -287,6 +304,12 @@ def get_engine_snapshot() -> Dict:
     logger.warning("[StateBridge] No snapshot available — returning empty scaffold")
     empty = dict(_EMPTY_SNAPSHOT)
     empty["snapshot_time"] = datetime.now(_IST).isoformat()
+    try:
+        from dashboard.backend.global_state_version import attach_snapshot_meta
+
+        attach_snapshot_meta(empty, origin="state_bridge:no_redis", reference_iso_for_age=None)
+    except Exception:
+        pass
     return empty
 
 

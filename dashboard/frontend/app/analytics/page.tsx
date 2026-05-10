@@ -51,52 +51,67 @@ function HeroBar({ intraday, swing, longterm }: HeroProps) {
   const ltHR    = longterm?.summary.hit_rate_pct ?? 0;
   const ltAvg   = longterm?.summary.avg_pnl_pct ?? 0;
 
-  // Composite algo score: weighted avg of WR + hit rates (only components with data)
-  const weights: [number, number][] = [];
-  if ((intraday?.total_trades ?? 0) > 0) weights.push([wr, 0.4]);
-  if ((swing?.summary.total ?? 0) > 0) weights.push([swingHR, 0.35]);
-  if ((longterm?.summary.total ?? 0) > 0) weights.push([ltHR, 0.25]);
-  const wSum = weights.reduce((s, [, w]) => s + w, 0) || 1;
-  const score = Math.round(weights.reduce((s, [v, w]) => s + v * (w / wSum), 0));
+  const hasIntraday = (intraday?.total_trades ?? 0) > 0;
+  const hasSwing = (swing?.summary.total ?? 0) > 0;
+  const hasLongterm = (longterm?.summary.total ?? 0) > 0;
+  const hasAny = hasIntraday || hasSwing || hasLongterm;
 
-  const cards = [
-    {
+  const weights: [number, number][] = [];
+  if (hasIntraday) weights.push([wr, 0.4]);
+  if (hasSwing) weights.push([swingHR, 0.35]);
+  if (hasLongterm) weights.push([ltHR, 0.25]);
+  const wSum = weights.reduce((s, [, w]) => s + w, 0) || 1;
+  const score = hasAny ? Math.round(weights.reduce((s, [v, w]) => s + v * (w / wSum), 0)) : null;
+
+  const cards: { label: string; sub: string; val1: string; val2: string; col1: string; col2: string }[] = [];
+  if (hasIntraday) {
+    cards.push({
       label: "Intraday",
       sub: "Total R · Win Rate",
       val1: fmt.r(totalR),
       val2: `${wr.toFixed(1)}% WR`,
       col1: pnlColor(totalR),
       col2: wr >= 50 ? "var(--success)" : "var(--warning)",
-      icon: "⚡",
-    },
-    {
+    });
+  }
+  if (hasSwing) {
+    cards.push({
       label: "Swing Picks",
       sub: "Hit Rate · Avg Gain",
       val1: `${swingHR.toFixed(1)}%`,
       val2: fmt.pct(swingAvg),
       col1: swingHR >= 50 ? "var(--success)" : "var(--warning)",
       col2: pnlColor(swingAvg),
-      icon: "📈",
-    },
-    {
+    });
+  }
+  if (hasLongterm) {
+    cards.push({
       label: "Long-Term",
       sub: "Hit Rate · Avg Gain",
       val1: `${ltHR.toFixed(1)}%`,
       val2: fmt.pct(ltAvg),
       col1: ltHR >= 50 ? "var(--success)" : "var(--warning)",
       col2: pnlColor(ltAvg),
-      icon: "🏦",
-    },
-    {
+    });
+  }
+  if (score !== null) {
+    cards.push({
       label: "Algo Score",
-      sub: "Composite Performance",
+      sub: "Composite from verified trades",
       val1: `${score}/100`,
-      val2: score >= 60 ? "Strong" : score >= 40 ? "Average" : "Weak",
-      col1: score >= 60 ? "var(--success)" : score >= 40 ? "var(--warning)" : "var(--danger)",
-      col2: score >= 60 ? "var(--success)" : score >= 40 ? "var(--warning)" : "var(--danger)",
-      icon: "🏆",
-    },
-  ];
+      val2: score >= 60 ? "Strong" : score >= 40 ? "Moderate" : "Building",
+      col1: score >= 60 ? "var(--success)" : score >= 40 ? "var(--warning)" : "var(--text-secondary)",
+      col2: score >= 60 ? "var(--success)" : score >= 40 ? "var(--warning)" : "var(--text-secondary)",
+    });
+  }
+
+  if (cards.length === 0) {
+    return (
+      <div className="glass" style={{ padding: "28px 24px", textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+        Building verified track record — analytics populate as real signals and trades are tracked.
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
@@ -107,10 +122,7 @@ function HeroBar({ intraday, swing, longterm }: HeroProps) {
           borderLeft: `3px solid ${c.col1}`,
           display: "flex", flexDirection: "column", gap: 6,
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: ".07em" }}>{c.label}</span>
-            <span style={{ fontSize: "1.2rem" }}>{c.icon}</span>
-          </div>
+          <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: ".07em" }}>{c.label}</span>
           <div style={{ fontSize: "1.55rem", fontWeight: 800, color: c.col1 }}>{c.val1}</div>
           <div style={{ fontSize: "0.88rem", fontWeight: 600, color: c.col2 }}>{c.val2}</div>
           <div style={{ fontSize: "0.65rem", color: "var(--text-dim)" }}>{c.sub}</div>
@@ -184,7 +196,7 @@ function ResearchSection({ data, label, color }: { data: ResearchPerformanceResp
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ textAlign: "center", color: "var(--text-dim)", paddingTop: 60, fontSize: "0.85rem" }}>No data yet</div>
+            <div style={{ textAlign: "center", color: "var(--text-dim)", paddingTop: 60, fontSize: "0.85rem" }}>Awaiting resolved picks</div>
           )}
         </div>
 
@@ -207,7 +219,7 @@ function ResearchSection({ data, label, color }: { data: ResearchPerformanceResp
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ textAlign: "center", color: "var(--text-dim)", paddingTop: 60, fontSize: "0.85rem" }}>No data yet</div>
+            <div style={{ textAlign: "center", color: "var(--text-dim)", paddingTop: 60, fontSize: "0.85rem" }}>Awaiting resolved picks</div>
           )}
         </div>
       </div>
@@ -227,7 +239,7 @@ function ResearchSection({ data, label, color }: { data: ResearchPerformanceResp
             </thead>
             <tbody>
               {picks.length === 0 ? (
-                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>No picks yet — run a scan first</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-secondary)", padding: 24 }}>Awaiting scan results — picks appear after research scans complete.</td></tr>
               ) : (
                 picks.map((p: ResearchPickRow, i: number) => (
                   <tr key={`${p.symbol}-${i}`}>
@@ -323,6 +335,8 @@ export default function AnalyticsPage() {
   const maxDD  = (summary?.max_drawdown_r ?? 0).toFixed(2);
   const maxCL  = summary?.max_consec_losses ?? 0;
   const total  = summary?.total_trades ?? 0;
+  const hasIntradayData = total > 0;
+  const hasAnyData = hasIntradayData || !!swingPerf || !!ltPerf;
 
   return (
     <StaggerContainer stagger={0.07} style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -348,6 +362,8 @@ export default function AnalyticsPage() {
       <StaggerItem><HeroBar intraday={summary} swing={swingPerf} longterm={ltPerf} /></StaggerItem>
 
       {/* ── SECTION 1: INTRADAY ─────────────────────────────────────────── */}
+      {hasIntradayData && (
+      <>
       <StaggerItem><SectionDivider label="Intraday Trading" /></StaggerItem>
 
       <StaggerItem>
@@ -358,7 +374,6 @@ export default function AnalyticsPage() {
           { label: "Profit Factor",  value: pf,           color: parseFloat(pf) >= 1  ? "var(--success)" : "var(--danger)" },
           { label: "Expectancy",     value: `${exp}R`,    color: parseFloat(exp) >= 0 ? "var(--success)" : "var(--danger)" },
           { label: "Max Drawdown",   value: `${maxDD}R`,  color: "var(--danger)" },
-          { label: "Max Consec Loss",value: String(maxCL),color: maxCL >= 5 ? "var(--danger)" : "var(--warning)" },
           { label: "Total Trades",   value: String(total),color: "var(--text-primary)" },
         ].map(({ label, value, color }) => (
           <div className="stat-card" key={label}>
@@ -467,6 +482,9 @@ export default function AnalyticsPage() {
       </div>
       </StaggerItem>
 
+      </>
+      )}
+
       {/* ── SECTION 2: SWING SCAN ─────────────────────────────────────────── */}
       {swingPerf && (
         <StaggerItem>
@@ -483,9 +501,13 @@ export default function AnalyticsPage() {
         </StaggerItem>
       )}
 
-      {!swingPerf && !ltPerf && (
-        <div className="glass" style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>
-          No research performance data yet — run a scan on the Research page to get started.
+      {!hasAnyData && (
+        <div className="glass" style={{ padding: 40, textAlign: "center", color: "var(--text-secondary)" }}>
+          <div style={{ fontSize: "0.95rem", fontWeight: 700, marginBottom: 8, color: "var(--text-primary)" }}>Building verified track record</div>
+          <div style={{ fontSize: "0.82rem" }}>
+            Analytics populate as the engine generates signals and tracks outcomes.
+            Verified data only — no synthetic projections.
+          </div>
         </div>
       )}
     </StaggerContainer>

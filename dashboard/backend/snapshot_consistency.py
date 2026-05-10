@@ -65,16 +65,28 @@ def validate_research_list_snapshot(p: Any) -> Tuple[bool, List[str]]:
     return ok, issues
 
 
-def read_global_snapshot_version() -> int:
-    """Redis snapshot:global_version (best-effort, 0 if unavailable)."""
-    try:
-        from dashboard.backend.cache import _get_redis
+def validate_watchlist_operating_payload(p: Any) -> Tuple[bool, List[str]]:
+    """
+    Structural validation for Redis / JSON watchlist operating snapshots.
+    Does not enforce business rules.
+    """
+    issues: List[str] = []
+    if not isinstance(p, dict):
+        return False, ["not_a_dict"]
+    if "items" in p and not isinstance(p.get("items"), list):
+        issues.append("items_not_list")
+    if "feed" in p and not isinstance(p.get("feed"), list):
+        issues.append("feed_not_list")
+    ok = len(issues) == 0
+    return ok, issues
 
-        r = _get_redis()
-        if r is None:
-            return 0
-        raw = r.get("snapshot:global_version")
-        return int(raw) if raw is not None else 0
+
+def read_global_snapshot_version() -> int:
+    """Unified global state version (snapshot:global_state_version + legacy mirror)."""
+    try:
+        from dashboard.backend.global_state_version import read_global_state_version
+
+        return read_global_state_version()
     except Exception:
         return 0
 

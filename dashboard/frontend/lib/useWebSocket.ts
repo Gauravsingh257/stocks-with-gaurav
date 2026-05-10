@@ -11,6 +11,17 @@
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { EngineSnapshot } from "./api";
+import { emitWatchlistOsHint } from "./watchlistOsBridge";
+import { enqueueSequential } from "./stateEngine/eventQueue";
+import {
+  extractDataSnapshot,
+  extractEnvelopeVersion,
+  mergeDigestPatch,
+  mergeSnapshot,
+  rejectStaleSnapshotAge,
+  rejectStaleUpdate,
+} from "./stateEngine/reconcile";
+import type { WsEnvelope } from "./stateEngine/types";
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_WS_RETRIES_BEFORE_POLLING = 3;
@@ -49,12 +60,35 @@ export function useEngineSocket() {
   const [status,            setStatus           ] = useState<WsStatus>("disconnected");
   const [lastPing,          setLastPing         ] = useState<number>(0);
   const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(0);
+  const [globalStateVersion, setGlobalStateVersion] = useState(0);
+  const [rejectedStaleUpdates, setRejectedStaleUpdates] = useState(0);
+  const [forcedResyncs, setForcedResyncs] = useState(0);
   const wsRef      = useRef<WebSocket | null>(null);
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const deadRef    = useRef(false);
   const failCount  = useRef(0);
   const pollingRef = useRef(false);
+  const lastGvRef  = useRef(0);
+
+  const requestResync = useCallback(async () => {
+    setForcedResyncs((x) => x + 1);
+    try {
+      const r = await fetch(`${BASE}/api/snapshot`, { cache: "no-store" });
+      if (r.ok) {
+        const data = (await r.json()) as EngineSnapshot;
+        const gv = (data as unknown as { _global_state_version?: number })._global_state_version;
+        if (typeof gv === "number") {
+          lastGvRef.current = Math.max(lastGvRef.current, gv);
+          setGlobalStateVersion(lastGvRef.current);
+        }
+        setSnapshot(data);
+        setSnapshotReceivedAt(Date.now());
+      }
+    } catch {
+      /* keep prior snapshot */
+    }
+  }, []);
 
   /* ── REST polling fallback ──────────────────────────────────────────────── */
   const startPolling = useCallback(() => {
@@ -68,8 +102,14 @@ export function useEngineSocket() {
       try {
         const r = await fetch(`${BASE}/api/snapshot`, { cache: "no-store" });
         if (r.ok) {
-          const data = await r.json();
-          setSnapshot(data as EngineSnapshot);
+          const data = (await r.json()) as EngineSnapshot;
+          const gv = (data as unknown as { _global_state_version?: number })._global_state_version;
+          if (typeof gv === "number") {
+            lastGvRef.current = Math.max(lastGvRef.current, gv);
+            setGlobalStateVersion(lastGvRef.current);
+          }
+          setSnapshot(data);
+          setSnapshotReceivedAt(Date.now());
         }
       } catch { /* network error — keep polling */ }
     };
@@ -117,35 +157,74 @@ export function useEngineSocket() {
       };
 
       ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data as string);
-          if (msg.type === "snapshot" && msg.data) {
-            setSnapshot(msg.data as EngineSnapshot);
-            setSnapshotReceivedAt(Date.now());
+        enqueueSequential(() => {
+          let msg: WsEnvelope & Record<string, unknown>;
+          try {
+            msg = JSON.parse(ev.data as string) as WsEnvelope & Record<string, unknown>;
+          } catch {
+            return;
           }
-          if (msg.type === "digest" && msg.data && typeof msg.data === "object") {
+
+          const gv = extractEnvelopeVersion(msg);
+          if (gv !== undefined) {
+            if (rejectStaleUpdate(lastGvRef.current, gv)) {
+              setRejectedStaleUpdates((n) => n + 1);
+              void requestResync();
+              return;
+            }
+            lastGvRef.current = Math.max(lastGvRef.current, gv);
+            setGlobalStateVersion(lastGvRef.current);
+          }
+
+          const t = msg.type;
+          if (t === "snapshot" && msg.data) {
+            const snap = extractDataSnapshot(msg.data);
+            if (snap) {
+              const age = (snap as unknown as { _snapshot_age_ms?: number | null })._snapshot_age_ms;
+              if (rejectStaleSnapshotAge(age ?? null)) {
+                void requestResync();
+                return;
+              }
+              setSnapshot((prev) => mergeSnapshot(prev, snap));
+              setSnapshotReceivedAt(Date.now());
+            }
+            return;
+          }
+
+          if (t === "digest" && msg.data && typeof msg.data === "object") {
             const raw = msg.data as Record<string, unknown>;
-            const {
-              digest: _dig,
-              active_symbols_sample: _sym,
-              _estimate_full_bytes: _est,
-              ...patch
-            } = raw;
-            setSnapshot((prev) =>
-              prev
-                ? ({ ...prev, ...patch } as EngineSnapshot)
-                : ({ ...patch } as unknown as EngineSnapshot)
-            );
+            setSnapshot((prev) => mergeDigestPatch(prev, raw));
             setSnapshotReceivedAt(Date.now());
+            return;
           }
-          if (msg.type === "ltp" && msg.data && typeof msg.data === "object") {
+
+          if (t === "ltp" && msg.data && typeof msg.data === "object") {
             setSnapshot((prev) =>
               prev ? { ...prev, index_ltp: msg.data as Record<string, number> } : prev
             );
             setSnapshotReceivedAt(Date.now());
+            return;
           }
-          if (msg.type === "ping" || msg.type === "keepalive") setLastPing(Date.now());
-        } catch { /* ignore parse errors */ }
+
+          if (t === "ping" || t === "keepalive") setLastPing(Date.now());
+
+          if (t === "watchlist_delta") {
+            const inner = msg.data && typeof msg.data === "object" ? (msg.data as { user_id?: number; kind?: string }) : {};
+            const uid =
+              typeof msg.user_id === "number"
+                ? msg.user_id
+                : typeof inner.user_id === "number"
+                  ? inner.user_id
+                  : undefined;
+            const kind =
+              typeof msg.kind === "string"
+                ? msg.kind
+                : typeof inner.kind === "string"
+                  ? inner.kind
+                  : "hint";
+            if (typeof uid === "number") emitWatchlistOsHint(uid, kind);
+          }
+        });
       };
 
       ws.onerror = () => {
@@ -177,7 +256,7 @@ export function useEngineSocket() {
         retryRef.current = setTimeout(connect, delay);
       }
     }
-  }, [startPolling, stopPolling]);
+  }, [startPolling, stopPolling, requestResync]);
 
   useEffect(() => {
     deadRef.current = false;
@@ -209,5 +288,21 @@ export function useEngineSocket() {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [connect, stopPolling]);
 
-  return { snapshot, status, lastPing, snapshotReceivedAt };
+  const snapshotAgeMs = snapshot?._snapshot_age_ms ?? null;
+  const snapshotLikelyStale =
+    snapshotAgeMs !== null &&
+    snapshotAgeMs !== undefined &&
+    rejectStaleSnapshotAge(snapshotAgeMs);
+
+  return {
+    snapshot,
+    status,
+    lastPing,
+    snapshotReceivedAt,
+    globalStateVersion,
+    rejectedStaleUpdates,
+    forcedResyncs,
+    snapshotLikelyStale,
+    requestResync,
+  };
 }

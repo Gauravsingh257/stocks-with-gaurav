@@ -13,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header
 from pydantic import BaseModel
 
 from dashboard.backend.db import get_connection
+from dashboard.backend.ops_auth import verify_ops_key
 
 router = APIRouter(tags=["auth"])
 log = logging.getLogger("dashboard.auth")
@@ -189,8 +190,11 @@ def get_me(user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/auth/upgrade")
-def upgrade_to_premium(user: dict = Depends(get_current_user)):
-    """Placeholder for payment integration — manually toggles role to PREMIUM."""
+def upgrade_to_premium(
+    user: dict = Depends(get_current_user),
+    _ops: None = Depends(verify_ops_key),
+):
+    """Admin-only role toggle — requires OPS_API_KEY header. Payment integration pending."""
     conn = get_connection()
     try:
         conn.execute("UPDATE users SET role = 'PREMIUM' WHERE id = ?", (user["sub"],))

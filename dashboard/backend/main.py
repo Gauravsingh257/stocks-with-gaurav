@@ -46,6 +46,8 @@ if _env_path.exists():
 from dashboard.backend.db import init_db, full_sync_from_csv, start_csv_watcher
 from dashboard.backend.routes import trades_router, analytics_router, journal_router, agents_router, charts_router, chat_router, system_router, oi_intelligence_router, engine_router, research_router, kite_router, market_intelligence_router, portfolio_router, content_router, auth_router, terminal_router
 from dashboard.backend.routes.watchlist_os import router as watchlist_os_router
+from dashboard.backend.routes.command_center import router as command_center_router
+from dashboard.backend.routes.user_product import router as user_product_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 from dashboard.backend.terminal_ws import trades_ws_endpoint, start_terminal_ws, stop_terminal_ws
 
@@ -257,6 +259,8 @@ app.include_router(portfolio_router)
 app.include_router(content_router)
 app.include_router(auth_router)
 app.include_router(watchlist_os_router)
+app.include_router(command_center_router)
+app.include_router(user_product_router)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────

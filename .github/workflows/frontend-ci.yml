@@ -1,0 +1,45 @@
+# Blocks broken Vercel deploys: TypeScript + ESLint + production build (matches Vercel).
+name: Frontend CI
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "dashboard/frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "dashboard/frontend/**"
+
+defaults:
+  run:
+    working-directory: dashboard/frontend
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # Same gate as Vercel: tsc + next build (catches the failure class that broke deploy acba68a).
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+        env:
+          # Public vars only — never commit secrets. Override in fork if needed.
+          NEXT_PUBLIC_BACKEND_URL: https://example.invalid
+
+      - name: ESLint (informational — repo has legacy hook-rule violations)
+        run: npm run lint
+        continue-on-error: true

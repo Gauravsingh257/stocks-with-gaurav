@@ -114,7 +114,7 @@ export default function TrackRecordPage() {
       {loading ? (
         <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>Loading track record...</div>
       ) : filtered.length === 0 ? (
-        <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>No picks found for the selected filters.</div>
+        <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>No matching results for current filters — try widening the criteria or check back after the next scan.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table className="data-table" style={{ minWidth: 900 }}>
