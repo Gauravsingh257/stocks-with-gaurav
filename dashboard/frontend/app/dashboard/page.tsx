@@ -158,6 +158,37 @@ export default function CommandCenterPage() {
         </div>
       ) : (
         <>
+          <section className="glass" style={{ padding: 16, border: "1px solid rgba(0,212,255,0.2)" }}>
+            <div style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: 0.08, color: "var(--text-dim)", marginBottom: 12 }}>
+              WHAT MATTERS NOW
+            </div>
+            {wm.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: 0 }}>No priority headlines yet — add symbols to your watchlist or check Research.</p>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+                {wm.map((line, i) => (
+                  <li
+                    key={`${line.headline}-${i}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 4,
+                      fontSize: "0.82rem",
+                      lineHeight: 1.45,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    <SeverityDot severity={line.severity} />
+                    <span>
+                      {line.symbol && <strong style={{ color: "var(--accent)" }}>{line.symbol} · </strong>}
+                      {line.headline}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <section className="glass" style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             <Metric icon={<Zap size={16} />} label="Regime" value={String(cc?.market_regime ?? "—")} />
             <Metric icon={<Sparkles size={16} />} label="Signals today" value={String(cc?.signals_today ?? "—")} />
@@ -168,6 +199,12 @@ export default function CommandCenterPage() {
               value={`${cc?.alerts_requiring_attention?.length ?? 0} need attention`}
             />
           </section>
+
+          {tierNote && (
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--warning)" }}>
+              {tierNote}
+            </p>
+          )}
 
           {cc?.trust_banner && (
             <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-dim)", lineHeight: 1.5 }}>
@@ -250,43 +287,6 @@ export default function CommandCenterPage() {
               )}
             </section>
           )}
-
-          {tierNote && (
-            <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--warning)" }}>
-              {tierNote}
-            </p>
-          )}
-
-          <section className="glass" style={{ padding: 16, border: "1px solid rgba(0,212,255,0.2)" }}>
-            <div style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: 0.08, color: "var(--text-dim)", marginBottom: 12 }}>
-              WHAT MATTERS NOW
-            </div>
-            {wm.length === 0 ? (
-              <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: 0 }}>No priority headlines yet — add symbols to your watchlist or check Research.</p>
-            ) : (
-              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-                {wm.map((line, i) => (
-                  <li
-                    key={`${line.headline}-${i}`}
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: 4,
-                      fontSize: "0.82rem",
-                      lineHeight: 1.45,
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    <SeverityDot severity={line.severity} />
-                    <span>
-                      {line.symbol && <strong style={{ color: "var(--accent)" }}>{line.symbol} · </strong>}
-                      {line.headline}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap: 12 }}>
             <CardList

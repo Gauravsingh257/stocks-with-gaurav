@@ -211,6 +211,14 @@ def _enrich_snapshot(snap: Dict, source: str, stale: bool, stale_reason: str = "
         except Exception:
             pass
 
+    equity_ltp: Dict[str, float] = {}
+    try:
+        from dashboard.backend.snapshot_consistency import equity_ltp_from_snapshot
+
+        equity_ltp = equity_ltp_from_snapshot(snap)
+    except Exception:
+        pass
+
     snap.update({
         "engine_live": engine_live,
         "engine_running": engine_running,
@@ -221,6 +229,7 @@ def _enrich_snapshot(snap: Dict, source: str, stale: bool, stale_reason: str = "
         "engine_last_cycle_age_sec": last_cycle_age,
         "snapshot_time": datetime.now(_IST).isoformat(),
         "index_ltp": index_ltp,
+        "equity_ltp": equity_ltp,
         "data_source": source,
         "redis_available": redis_up,
         "stale": stale,

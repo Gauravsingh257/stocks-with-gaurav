@@ -1,11 +1,11 @@
 /**
- * Single shared LTP/index overlay for TopBar / watchlist / strips — ordered WS updates win.
- * Survives reconnect (no blanking); sequence checks happen in useWebSocket before merging here.
+ * Unified market LTP overlay (indices + equities) for TopBar / watchlist / strips.
+ * Survives reconnect; stream ordering is enforced in useWebSocket before merging here.
  */
 
 import { useEffect, useMemo, useState } from "react";
 
-let indexLtpOverlay: Record<string, number> = {};
+let marketLtpOverlay: Record<string, number> = {};
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -18,24 +18,54 @@ function emit() {
   });
 }
 
-export function mergeIndexLtpOverlay(patch: Record<string, number> | undefined): void {
+/** Merge WS LTP patch (any symbol or index label) into the shared overlay. */
+export function mergeMarketLtpOverlay(patch: Record<string, number> | undefined): void {
   if (!patch || !Object.keys(patch).length) return;
-  indexLtpOverlay = { ...indexLtpOverlay, ...patch };
+  marketLtpOverlay = { ...marketLtpOverlay, ...patch };
   emit();
 }
 
-/** Full snapshot replaces overlay keys present on engine tick (authoritative bundle). */
+/** @deprecated use mergeMarketLtpOverlay */
+export const mergeIndexLtpOverlay = mergeMarketLtpOverlay;
+
+/**
+ * Authoritative bundle from snapshot / resync: rebuild overlay from index + equity baselines.
+ */
+export function replaceMarketLtpFromSnapshot(
+  indexPatch?: Record<string, number> | null,
+  equityPatch?: Record<string, number> | null
+): void {
+  const next = { ...(indexPatch || {}), ...(equityPatch || {}) };
+  if (!Object.keys(next).length) return;
+  marketLtpOverlay = { ...next };
+  emit();
+}
+
+/** @deprecated use replaceMarketLtpFromSnapshot(index, undefined) */
 export function replaceIndexLtpFromSnapshot(patch: Record<string, number> | undefined): void {
-  if (!patch || !Object.keys(patch).length) return;
-  indexLtpOverlay = { ...patch };
-  emit();
+  replaceMarketLtpFromSnapshot(patch ?? null, null);
 }
 
+export function getMergedMarketLtp(
+  indexBaseline?: Record<string, number> | null,
+  equityBaseline?: Record<string, number> | null
+): Record<string, number> {
+  return {
+    ...(indexBaseline || {}),
+    ...(equityBaseline || {}),
+    ...marketLtpOverlay,
+  };
+}
+
+/** Index-first helper; overlay may still contain equity keys from unified WS LTP. */
 export function getMergedIndexLtp(restBaseline?: Record<string, number> | null): Record<string, number> {
-  return { ...(restBaseline || {}), ...indexLtpOverlay };
+  return getMergedMarketLtp(restBaseline, null);
 }
 
-export function useMergedIndexLtp(restBaseline?: Record<string, number> | null): Record<string, number> {
+export function useMergedMarketLtp(
+  indexBaseline?: Record<string, number> | null,
+  equityBaseline?: Record<string, number> | null
+): Record<string, number> {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const u = () => setTick((x) => x + 1);
@@ -44,5 +74,9 @@ export function useMergedIndexLtp(restBaseline?: Record<string, number> | null):
       listeners.delete(u);
     };
   }, []);
-  return useMemo(() => getMergedIndexLtp(restBaseline), [restBaseline, tick]);
+  return useMemo(() => getMergedMarketLtp(indexBaseline, equityBaseline), [indexBaseline, equityBaseline, tick]);
+}
+
+export function useMergedIndexLtp(restBaseline?: Record<string, number> | null): Record<string, number> {
+  return useMergedMarketLtp(restBaseline, null);
 }

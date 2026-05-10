@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import { api, type DecisionPortfoliosPayload, type WatchlistIntelItem } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useMergedMarketLtp } from "@/lib/realtimeRegistry";
 import { subscribeWatchlistOsHint } from "@/lib/watchlistOsBridge";
+
+function normalizeTickerSymbol(s: string): string {
+  return s.replace(/^NSE:/i, "").trim().toUpperCase();
+}
 
 export default function WatchlistPage() {
   const { user, token } = useAuth();
@@ -28,6 +33,9 @@ export default function WatchlistPage() {
   const [error, setError] = useState<string | null>(null);
   const [osStale, setOsStale] = useState(false);
   const [osSource, setOsSource] = useState<string | null>(null);
+
+  /** Unified LTP overlay (indices + equities) maintained by layout WS hooks — avoids a duplicate socket. */
+  const marketLtp = useMergedMarketLtp();
 
   const loadOperating = useCallback(async () => {
     if (!token) return;
@@ -527,7 +535,12 @@ export default function WatchlistPage() {
                 <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, fontSize: "0.78rem" }}>
                   <div>
                     LTP:{" "}
-                    <strong>{row.quote_ltp != null ? `₹${Number(row.quote_ltp).toFixed(2)}` : "—"}</strong>
+                    <strong>
+                      {(() => {
+                        const v = marketLtp[normalizeTickerSymbol(row.symbol)] ?? row.quote_ltp;
+                        return v != null ? `₹${Number(v).toFixed(2)}` : "—";
+                      })()}
+                    </strong>
                   </div>
                   <div>
                     Last engine tick:{" "}

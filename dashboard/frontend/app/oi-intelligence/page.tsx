@@ -302,23 +302,35 @@ export default function OIIntelligencePage() {
             </div>
           </details>
 
-          {/* Market State Engine */}
-          <div>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-              <Activity size={14} /> MARKET STATE
+          <details className="glass" style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
+            <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
+              Market state &amp; underlying (collapsed — expand for detail)
+            </summary>
+            <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6">
+              <div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-secondary)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Activity size={12} /> Market state
+                </div>
+                <MarketStatePanel marketState={snapshot.market_state} />
+              </div>
+              <div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-secondary)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Shield size={12} /> Underlying
+                </div>
+                <UnderlyingSummaryCards summaries={snapshot.underlying_summaries} />
+              </div>
             </div>
-            <MarketStatePanel marketState={snapshot.market_state} />
-          </div>
-
-          <div>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-              <Shield size={14} /> UNDERLYING ANALYSIS
-            </div>
-            <UnderlyingSummaryCards summaries={snapshot.underlying_summaries} />
-          </div>
+          </details>
 
           {(snapshot.strike_heatmap?.length ?? 0) > 0 && (
-            <StrikeHeatmap entries={snapshot.strike_heatmap} />
+            <details className="glass" style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
+              <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
+                Strike heatmap (detail)
+              </summary>
+              <div style={{ marginTop: 12 }}>
+                <StrikeHeatmap entries={snapshot.strike_heatmap} />
+              </div>
+            </details>
           )}
 
           {((snapshot.short_covering_signals?.length ?? 0) > 0 || snapshot.execution_quality) && (

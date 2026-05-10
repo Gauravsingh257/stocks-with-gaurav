@@ -314,7 +314,18 @@ async def _ltp_broadcast_loop() -> None:
             _pending_ltp = None
         if payload:
             try:
-                msg = _ws_json_envelope("ltp", payload)
+                merged = dict(payload)
+                try:
+                    from dashboard.backend.state_bridge import get_engine_snapshot
+                    from dashboard.backend.snapshot_consistency import equity_ltp_from_snapshot
+
+                    snap = get_engine_snapshot()
+                    eq = equity_ltp_from_snapshot(snap)
+                    if eq:
+                        merged.update(eq)
+                except Exception:
+                    pass
+                msg = _ws_json_envelope("ltp", merged)
                 await manager.broadcast(msg)
             except Exception as exc:
                 log.debug("LTP broadcast error: %s", exc)

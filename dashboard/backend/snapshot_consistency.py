@@ -91,6 +91,46 @@ def read_global_snapshot_version() -> int:
         return 0
 
 
+def _norm_equity_sym(s: str) -> str:
+    return str(s).replace("NSE:", "").strip().upper()
+
+
+def equity_ltp_from_snapshot(full_snap: Dict[str, Any], max_symbols: int = 64) -> Dict[str, float]:
+    """
+    Redis-backed equity last prices for symbols visible in the engine snapshot (active trades).
+    Keys are uppercase symbols (e.g. RELIANCE) for client unified market-LTP registry.
+    """
+    out: Dict[str, float] = {}
+    seen: set[str] = set()
+    syms: list[str] = []
+    for t in full_snap.get("active_trades") or []:
+        if not isinstance(t, dict):
+            continue
+        raw = t.get("symbol")
+        if not raw:
+            continue
+        sym = _norm_equity_sym(str(raw))
+        if sym and sym not in seen:
+            seen.add(sym)
+            syms.append(sym)
+        if len(syms) >= max_symbols:
+            break
+    if not syms:
+        return out
+    try:
+        from dashboard.backend.cache import get_ltp
+
+        for sym in syms:
+            p = get_ltp(sym)
+            if p is not None:
+                out[sym] = float(p)
+            if len(out) >= max_symbols:
+                break
+    except Exception:
+        return out
+    return out
+
+
 def build_engine_digest(full_snap: Dict[str, Any]) -> Dict[str, Any]:
     """
     Lightweight digest for WebSocket streaming — avoid re-sending full snapshot every tick.
@@ -99,7 +139,16 @@ def build_engine_digest(full_snap: Dict[str, Any]) -> Dict[str, Any]:
     """
     trades = full_snap.get("active_trades") or []
     idx = full_snap.get("index_ltp") if isinstance(full_snap.get("index_ltp"), dict) else {}
-    return {
+    cached_eq = full_snap.get("equity_ltp")
+    if isinstance(cached_eq, dict) and cached_eq:
+        eq = {
+            str(k): float(v)
+            for k, v in cached_eq.items()
+            if isinstance(v, (int, float)) and str(k).strip()
+        }
+    else:
+        eq = equity_ltp_from_snapshot(full_snap)
+    base = {
         "digest": True,
         "snapshot_time": full_snap.get("snapshot_time"),
         "stale": full_snap.get("stale"),
@@ -118,3 +167,6 @@ def build_engine_digest(full_snap: Dict[str, Any]) -> Dict[str, Any]:
         "active_symbols_sample": [t.get("symbol") for t in trades[:12] if isinstance(t, dict)],
         "_estimate_full_bytes": estimate_json_bytes(full_snap),
     }
+    if eq:
+        base["equity_ltp"] = eq
+    return base

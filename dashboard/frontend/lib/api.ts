@@ -146,6 +146,8 @@ export interface EngineSnapshot {
   adaptive_intel?:     AdaptiveIntel;
   /** Index LTP from cache (NIFTY 50, NIFTY BANK) for command bar / sparklines */
   index_ltp?:          Record<string, number>;
+  /** Equity symbols (uppercase, e.g. RELIANCE) from Redis ltp:{SYM} for unified realtime desk */
+  equity_ltp?:         Record<string, number>;
 }
 
 export interface AdaptiveEvent {

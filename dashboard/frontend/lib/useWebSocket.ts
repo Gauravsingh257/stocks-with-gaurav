@@ -24,7 +24,19 @@ import {
   rejectStaleUpdate,
 } from "./stateEngine/reconcile";
 import type { WsEnvelope } from "./stateEngine/types";
-import { mergeIndexLtpOverlay, replaceIndexLtpFromSnapshot } from "./realtimeRegistry";
+import {
+  mergeMarketLtpOverlay,
+  replaceMarketLtpFromSnapshot,
+} from "./realtimeRegistry";
+import {
+  recordReconcileReject,
+  recordTabResumeReconnect,
+  recordWsClose,
+  recordWsReconnect,
+} from "./clientTrustTelemetry";
+
+/** Index labels from dashboard realtime ticks — everything else in unified LTP is treated as equity. */
+const INDEX_LTP_LABELS = new Set(["NIFTY 50", "NIFTY BANK"]);
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_WS_RETRIES_BEFORE_POLLING = 3;
@@ -79,6 +91,7 @@ export function useEngineSocket() {
   const pollingRef = useRef(false);
   const lastGvRef  = useRef(0);
   const lastStreamSeqRef = useRef(0);
+  const hadDisconnectRef = useRef(false);
 
   const requestResync = useCallback(async () => {
     setForcedResyncs((x) => x + 1);
@@ -91,7 +104,7 @@ export function useEngineSocket() {
           lastGvRef.current = Math.max(lastGvRef.current, gv);
           setGlobalStateVersion(lastGvRef.current);
         }
-        replaceIndexLtpFromSnapshot(data.index_ltp);
+        replaceMarketLtpFromSnapshot(data.index_ltp, data.equity_ltp);
         setSnapshot(data);
         setSnapshotReceivedAt(Date.now());
       }
@@ -118,7 +131,7 @@ export function useEngineSocket() {
             lastGvRef.current = Math.max(lastGvRef.current, gv);
             setGlobalStateVersion(lastGvRef.current);
           }
-          replaceIndexLtpFromSnapshot(data.index_ltp);
+          replaceMarketLtpFromSnapshot(data.index_ltp, data.equity_ltp);
           setSnapshot(data);
           setSnapshotReceivedAt(Date.now());
         }
@@ -164,6 +177,10 @@ export function useEngineSocket() {
         wsDbg("WS CONNECTED");
         lastStreamSeqRef.current = 0;
         setStatus("connected");
+        if (hadDisconnectRef.current) {
+          hadDisconnectRef.current = false;
+          recordWsReconnect();
+        }
         failCount.current = 0;
         stopPolling();
       };
@@ -181,6 +198,7 @@ export function useEngineSocket() {
             typeof msg.stream_sequence === "number" ? msg.stream_sequence : undefined;
           if (rejectOutOfOrderStream(lastStreamSeqRef.current, seq)) {
             setRejectedOutOfOrder((n) => n + 1);
+            recordReconcileReject("out_of_order");
             return;
           }
           lastStreamSeqRef.current = nextStreamCursor(lastStreamSeqRef.current, seq);
@@ -189,6 +207,7 @@ export function useEngineSocket() {
           if (gv !== undefined) {
             if (rejectStaleUpdate(lastGvRef.current, gv)) {
               setRejectedStaleUpdates((n) => n + 1);
+              recordReconcileReject("stale_gv");
               void requestResync();
               return;
             }
@@ -202,11 +221,13 @@ export function useEngineSocket() {
             if (snap) {
               const age = (snap as unknown as { _snapshot_age_ms?: number | null })._snapshot_age_ms;
               if (rejectStaleSnapshotAge(age ?? null)) {
+                recordReconcileReject("stale_snapshot_age");
                 void requestResync();
                 return;
               }
               const idx = (snap as { index_ltp?: Record<string, number> }).index_ltp;
-              replaceIndexLtpFromSnapshot(idx);
+              const eq = (snap as { equity_ltp?: Record<string, number> }).equity_ltp;
+              replaceMarketLtpFromSnapshot(idx, eq);
               setSnapshot((prev) => mergeSnapshot(prev, snap));
               setSnapshotReceivedAt(Date.now());
             }
@@ -216,9 +237,12 @@ export function useEngineSocket() {
           if (t === "digest" && msg.data && typeof msg.data === "object") {
             const raw = msg.data as Record<string, unknown>;
             const idx = raw.index_ltp;
-            if (idx && typeof idx === "object") {
-              mergeIndexLtpOverlay(idx as Record<string, number>);
-            }
+            const eq = raw.equity_ltp;
+            const mergedPatch = {
+              ...(typeof idx === "object" && idx ? (idx as Record<string, number>) : {}),
+              ...(typeof eq === "object" && eq ? (eq as Record<string, number>) : {}),
+            };
+            if (Object.keys(mergedPatch).length) mergeMarketLtpOverlay(mergedPatch);
             setSnapshot((prev) => mergeDigestPatch(prev, raw));
             setSnapshotReceivedAt(Date.now());
             return;
@@ -226,10 +250,18 @@ export function useEngineSocket() {
 
           if (t === "ltp" && msg.data && typeof msg.data === "object") {
             const patch = msg.data as Record<string, number>;
-            mergeIndexLtpOverlay(patch);
-            setSnapshot((prev) =>
-              prev ? { ...prev, index_ltp: { ...(prev.index_ltp || {}), ...patch } } : prev
-            );
+            mergeMarketLtpOverlay(patch);
+            setSnapshot((prev) => {
+              if (!prev) return prev;
+              const nextIdx = { ...(prev.index_ltp || {}) };
+              const nextEq = { ...(prev.equity_ltp || {}) };
+              for (const [k, v] of Object.entries(patch)) {
+                if (typeof v !== "number" || !Number.isFinite(v)) continue;
+                if (INDEX_LTP_LABELS.has(k)) nextIdx[k] = v;
+                else nextEq[k] = v;
+              }
+              return { ...prev, index_ltp: nextIdx, equity_ltp: nextEq };
+            });
             setSnapshotReceivedAt(Date.now());
             return;
           }
@@ -261,17 +293,21 @@ export function useEngineSocket() {
       };
 
       ws.onclose = () => {
+        if (deadRef.current) {
+          wsDbg("WS closed (cleanup)");
+          return;
+        }
+        hadDisconnectRef.current = true;
+        recordWsClose();
         wsDbg("WS closed — reconnecting with backoff");
         setStatus("disconnected");
         failCount.current += 1;
         // Keep last snapshot during reconnect — REST polling / digest merge still valid as LKG.
-        if (!deadRef.current) {
-          const delay = Math.min(
-            WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),
-            WS_BACKOFF_MAX_MS
-          );
-          retryRef.current = setTimeout(connect, delay);
-        }
+        const delay = Math.min(
+          WS_BACKOFF_BASE_MS * Math.pow(2, failCount.current - 1),
+          WS_BACKOFF_MAX_MS
+        );
+        retryRef.current = setTimeout(connect, delay);
       };
     } catch (err) {
       wsDbg("WS FAILED (throw)", err);
@@ -304,6 +340,7 @@ export function useEngineSocket() {
   useEffect(() => {
     const handleVisibility = () => {
       if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+      recordTabResumeReconnect();
       void requestResync();
       const wsAlive = wsRef.current?.readyState === WebSocket.OPEN;
       if (wsAlive) return;

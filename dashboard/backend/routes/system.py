@@ -16,7 +16,9 @@ from pathlib import Path
 
 import os
 
-from fastapi import APIRouter, Depends
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, Depends
 
 from dashboard.backend.ops_auth import verify_ops_key
 
@@ -121,6 +123,47 @@ def invalidate_kite_status_cache():
         _kite_status_cache["connected"] = None
         _kite_status_cache["checked_at"] = 0.0
         _kite_status_cache["fail_streak"] = 0
+
+
+@router.post("/client-trust-metrics")
+def client_trust_metrics(payload: Optional[dict[str, Any]] = Body(default=None)):
+    """
+    Ingest anonymous browser trust counters (WS reconnects, tab resume, reconcile rejects).
+    Stored in Redis hash metrics:client_trust:{YYYYMMDD} for ops dashboards.
+    """
+    raw = payload or {}
+    counters = raw.get("counters")
+    if not isinstance(counters, dict):
+        return {"ok": False}
+    try:
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore
+
+        day = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d")
+        hk = f"metrics:client_trust:{day}"
+        from dashboard.backend.cache import _get_redis
+
+        r = _get_redis()
+        if r is None:
+            return {"ok": True, "stored": False}
+        pipe = r.pipeline()
+        for k, v in counters.items():
+            if not isinstance(k, str) or len(k) > 64 or not k.strip():
+                continue
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if n <= 0 or n > 50_000:
+                continue
+            pipe.hincrby(hk, k, n)
+        pipe.execute()
+        r.expire(hk, 86400 * 14)
+    except Exception:
+        pass
+    return {"ok": True, "stored": True}
 
 
 @router.get("/health")
