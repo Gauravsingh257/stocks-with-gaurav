@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
+import { useMergedIndexLtp } from "@/lib/realtimeRegistry";
 import { useHealth } from "@/lib/useHealth";
 import Sparkline from "@/components/Sparkline";
 import { API_BASE } from "@/lib/api";
@@ -39,6 +40,7 @@ function pushTick(arr: number[], value: number, max: number): number[] {
 
 export default function MarketCommandBar() {
   const { snapshot, status, snapshotReceivedAt } = useEngineSocket();
+  const indexLtpMerged = useMergedIndexLtp(snapshot?.index_ltp);
   const health = useHealth();
   const [history, setHistory] = useState<{ NIFTY: number[]; BANKNIFTY: number[] }>({
     NIFTY: [],
@@ -80,9 +82,9 @@ export default function MarketCommandBar() {
     return () => clearInterval(t);
   }, []);
 
-  // Tick-based history and flash: every WebSocket snapshot with index_ltp
+  // Tick-based history and flash: merged registry + snapshot (ordered WS+LTP)
   useEffect(() => {
-    const indexLtp = snapshot?.index_ltp;
+    const indexLtp = indexLtpMerged;
     if (!indexLtp || typeof indexLtp !== "object") return;
 
     const updates: { key: "NIFTY" | "BANKNIFTY"; price: number }[] = [];
@@ -121,11 +123,11 @@ export default function MarketCommandBar() {
       const t = setTimeout(() => setFlashClass({ NIFTY: "", BANKNIFTY: "" }), 600);
       return () => clearTimeout(t);
     }
-  }, [snapshot?.index_ltp]);
+  }, [indexLtpMerged]);
 
   // Ticks derived from snapshot (for change/percent)
   const ticks = useMemo(() => {
-    const indexLtp = snapshot?.index_ltp;
+    const indexLtp = indexLtpMerged;
     if (!indexLtp || typeof indexLtp !== "object") return {} as Record<string, TickData>;
     const out: Record<string, TickData> = {};
     for (const label of LABELS) {
@@ -139,7 +141,7 @@ export default function MarketCommandBar() {
       out[label] = { price, change, percentChange };
     }
     return out;
-  }, [history, snapshot?.index_ltp]);
+  }, [history, indexLtpMerged]);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 

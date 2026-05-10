@@ -645,6 +645,19 @@ def _intel_hash(item: Dict[str, Any]) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:20]
 
 
+def _collapse_adjacent_duplicate_feed_events(hist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Suppress replay spam: drop consecutive identical symbol+headline rows."""
+    if not hist:
+        return hist
+    out: List[Dict[str, Any]] = [hist[0]]
+    for ev in hist[1:]:
+        prev = out[-1]
+        if ev.get("symbol") == prev.get("symbol") and ev.get("headline") == prev.get("headline"):
+            continue
+        out.append(ev)
+    return out
+
+
 def append_feed_diff(user_id: int, enriched: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Persist diff-based feed events; returns newest events (cap 12 for API)."""
     from dashboard.backend.cache import get as cache_get, set as cache_set
@@ -807,6 +820,7 @@ def append_feed_diff(user_id: int, enriched: List[Dict[str, Any]]) -> List[Dict[
     cur = cache_get(key)
     hist: List[Dict[str, Any]] = cur if isinstance(cur, list) else []
     hist = events + hist[: MAX_FEED_EVENTS - len(events)]
+    hist = _collapse_adjacent_duplicate_feed_events(hist)
     cache_set(key, hist, ttl_seconds=FEED_TTL_SEC)
 
     return hist[:12]

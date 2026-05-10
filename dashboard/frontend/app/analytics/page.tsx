@@ -361,6 +361,24 @@ export default function AnalyticsPage() {
       {/* ── HERO BAR ───────────────────────────────────────────────────────── */}
       <StaggerItem><HeroBar intraday={summary} swing={swingPerf} longterm={ltPerf} /></StaggerItem>
 
+      {(summary?.total_trades ?? 0) < 20 &&
+        (swingPerf?.summary?.total ?? 0) < 10 &&
+        (ltPerf?.summary?.total ?? 0) < 10 && (
+        <StaggerItem>
+          <div
+            className="glass"
+            style={{
+              padding: "12px 16px",
+              fontSize: "0.78rem",
+              color: "var(--text-secondary)",
+              border: "1px solid rgba(148,163,184,0.2)",
+            }}
+          >
+            Building verified performance history — statistics gain reliability as more closed trades and research outcomes accumulate. Treat early samples as directional, not definitive.
+          </div>
+        </StaggerItem>
+      )}
+
       {/* ── SECTION 1: INTRADAY ─────────────────────────────────────────── */}
       {hasIntradayData && (
       <>

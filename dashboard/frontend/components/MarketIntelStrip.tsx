@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Gauge, TrendingUp } from "lucide-react";
 import { useEngineSocket } from "@/lib/useWebSocket";
+import { useMergedIndexLtp } from "@/lib/realtimeRegistry";
 import { api, type MISnapshot } from "@/lib/api";
 
 function fmtNum(n: number | undefined): string {
@@ -12,6 +13,7 @@ function fmtNum(n: number | undefined): string {
 
 export default function MarketIntelStrip() {
   const { snapshot } = useEngineSocket();
+  const indexLtpMerged = useMergedIndexLtp(snapshot?.index_ltp);
   const [mi, setMi] = useState<MISnapshot | null>(null);
 
   useEffect(() => {
@@ -33,8 +35,8 @@ export default function MarketIntelStrip() {
     };
   }, []);
 
-  const nifty = snapshot?.index_ltp?.["NIFTY 50"];
-  const bank = snapshot?.index_ltp?.["NIFTY BANK"];
+  const nifty = indexLtpMerged["NIFTY 50"];
+  const bank = indexLtpMerged["NIFTY BANK"];
   const regime = snapshot?.market_regime ?? "NEUTRAL";
 
   const niftyBias =

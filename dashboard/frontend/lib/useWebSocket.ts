@@ -18,15 +18,22 @@ import {
   extractEnvelopeVersion,
   mergeDigestPatch,
   mergeSnapshot,
+  nextStreamCursor,
+  rejectOutOfOrderStream,
   rejectStaleSnapshotAge,
   rejectStaleUpdate,
 } from "./stateEngine/reconcile";
 import type { WsEnvelope } from "./stateEngine/types";
+import { mergeIndexLtpOverlay, replaceIndexLtpFromSnapshot } from "./realtimeRegistry";
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_WS_RETRIES_BEFORE_POLLING = 3;
 const WS_BACKOFF_BASE_MS = 3000;
 const WS_BACKOFF_MAX_MS = 30000;
+
+const wsDbg = (...args: unknown[]) => {
+  if (process.env.NODE_ENV === "development") console.log(...args);
+};
 
 /** Derive WS URL from env or return "" (no WS connection attempted). */
 function getWsUrl(): string {
@@ -62,6 +69,7 @@ export function useEngineSocket() {
   const [snapshotReceivedAt, setSnapshotReceivedAt] = useState<number>(0);
   const [globalStateVersion, setGlobalStateVersion] = useState(0);
   const [rejectedStaleUpdates, setRejectedStaleUpdates] = useState(0);
+  const [rejectedOutOfOrder, setRejectedOutOfOrder] = useState(0);
   const [forcedResyncs, setForcedResyncs] = useState(0);
   const wsRef      = useRef<WebSocket | null>(null);
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -70,6 +78,7 @@ export function useEngineSocket() {
   const failCount  = useRef(0);
   const pollingRef = useRef(false);
   const lastGvRef  = useRef(0);
+  const lastStreamSeqRef = useRef(0);
 
   const requestResync = useCallback(async () => {
     setForcedResyncs((x) => x + 1);
@@ -82,6 +91,7 @@ export function useEngineSocket() {
           lastGvRef.current = Math.max(lastGvRef.current, gv);
           setGlobalStateVersion(lastGvRef.current);
         }
+        replaceIndexLtpFromSnapshot(data.index_ltp);
         setSnapshot(data);
         setSnapshotReceivedAt(Date.now());
       }
@@ -108,6 +118,7 @@ export function useEngineSocket() {
             lastGvRef.current = Math.max(lastGvRef.current, gv);
             setGlobalStateVersion(lastGvRef.current);
           }
+          replaceIndexLtpFromSnapshot(data.index_ltp);
           setSnapshot(data);
           setSnapshotReceivedAt(Date.now());
         }
@@ -137,20 +148,21 @@ export function useEngineSocket() {
 
     const wsUrl = getWsUrl();
     if (!wsUrl) {
-      if (typeof console !== "undefined") console.warn("WS CONNECTING → (no URL; Vercel needs NEXT_PUBLIC_WS_URL or NEXT_PUBLIC_BACKEND_URL)");
+      wsDbg("WS CONNECTING → (no URL; Vercel needs NEXT_PUBLIC_WS_URL or NEXT_PUBLIC_BACKEND_URL)");
       failCount.current += 1;
       startPolling();
       return;
     }
 
-    if (typeof console !== "undefined") console.log("WS CONNECTING →", wsUrl);
+    wsDbg("WS CONNECTING →", wsUrl);
     setStatus("connecting");
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        if (typeof console !== "undefined") console.log("WS CONNECTED");
+        wsDbg("WS CONNECTED");
+        lastStreamSeqRef.current = 0;
         setStatus("connected");
         failCount.current = 0;
         stopPolling();
@@ -164,6 +176,14 @@ export function useEngineSocket() {
           } catch {
             return;
           }
+
+          const seq =
+            typeof msg.stream_sequence === "number" ? msg.stream_sequence : undefined;
+          if (rejectOutOfOrderStream(lastStreamSeqRef.current, seq)) {
+            setRejectedOutOfOrder((n) => n + 1);
+            return;
+          }
+          lastStreamSeqRef.current = nextStreamCursor(lastStreamSeqRef.current, seq);
 
           const gv = extractEnvelopeVersion(msg);
           if (gv !== undefined) {
@@ -185,6 +205,8 @@ export function useEngineSocket() {
                 void requestResync();
                 return;
               }
+              const idx = (snap as { index_ltp?: Record<string, number> }).index_ltp;
+              replaceIndexLtpFromSnapshot(idx);
               setSnapshot((prev) => mergeSnapshot(prev, snap));
               setSnapshotReceivedAt(Date.now());
             }
@@ -193,14 +215,20 @@ export function useEngineSocket() {
 
           if (t === "digest" && msg.data && typeof msg.data === "object") {
             const raw = msg.data as Record<string, unknown>;
+            const idx = raw.index_ltp;
+            if (idx && typeof idx === "object") {
+              mergeIndexLtpOverlay(idx as Record<string, number>);
+            }
             setSnapshot((prev) => mergeDigestPatch(prev, raw));
             setSnapshotReceivedAt(Date.now());
             return;
           }
 
           if (t === "ltp" && msg.data && typeof msg.data === "object") {
+            const patch = msg.data as Record<string, number>;
+            mergeIndexLtpOverlay(patch);
             setSnapshot((prev) =>
-              prev ? { ...prev, index_ltp: msg.data as Record<string, number> } : prev
+              prev ? { ...prev, index_ltp: { ...(prev.index_ltp || {}), ...patch } } : prev
             );
             setSnapshotReceivedAt(Date.now());
             return;
@@ -228,12 +256,12 @@ export function useEngineSocket() {
       };
 
       ws.onerror = () => {
-        if (typeof console !== "undefined") console.warn("WS FAILED (error)");
+        wsDbg("WS FAILED (error)");
         ws.close();
       };
 
       ws.onclose = () => {
-        if (typeof console !== "undefined") console.warn("WS FAILED (close)");
+        wsDbg("WS closed — reconnecting with backoff");
         setStatus("disconnected");
         failCount.current += 1;
         // Keep last snapshot during reconnect — REST polling / digest merge still valid as LKG.
@@ -246,7 +274,7 @@ export function useEngineSocket() {
         }
       };
     } catch (err) {
-      if (typeof console !== "undefined") console.warn("WS FAILED (throw)", err);
+      wsDbg("WS FAILED (throw)", err);
       failCount.current += 1;
       if (!deadRef.current) {
         const delay = Math.min(
@@ -276,9 +304,10 @@ export function useEngineSocket() {
   useEffect(() => {
     const handleVisibility = () => {
       if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+      void requestResync();
       const wsAlive = wsRef.current?.readyState === WebSocket.OPEN;
-      if (wsAlive) return; // already connected, nothing to do
-      if (typeof console !== "undefined") console.log("WS — tab visible, attempting reconnect");
+      if (wsAlive) return;
+      wsDbg("WS — tab visible, attempting reconnect");
       if (retryRef.current) clearTimeout(retryRef.current);
       failCount.current = 0; // reset so WS is tried before falling back to polling
       if (pollingRef.current) stopPolling(); // drop polling — WS takes priority
@@ -286,7 +315,7 @@ export function useEngineSocket() {
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [connect, stopPolling]);
+  }, [connect, stopPolling, requestResync]);
 
   const snapshotAgeMs = snapshot?._snapshot_age_ms ?? null;
   const snapshotLikelyStale =
@@ -301,6 +330,7 @@ export function useEngineSocket() {
     snapshotReceivedAt,
     globalStateVersion,
     rejectedStaleUpdates,
+    rejectedOutOfOrder,
     forcedResyncs,
     snapshotLikelyStale,
     requestResync,

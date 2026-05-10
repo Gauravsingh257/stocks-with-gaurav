@@ -768,6 +768,39 @@ def debug_platform(_unused: None = Depends(verify_ops_key)):
     except Exception as e:
         diag["websocket_health"] = {"error": str(e)}
 
+    # ── WS transport ordering + queue (Phase B) ─────────────────────────────
+    try:
+        from dashboard.backend.state_bridge import get_engine_snapshot
+        from dashboard.backend.websocket import (
+            get_ws_event_queue_depth,
+            read_ws_stream_sequence,
+        )
+        from dashboard.backend.ws_telemetry import get_ws_telemetry
+
+        _wt2 = get_ws_telemetry()
+        _snap_age = None
+        try:
+            _es2 = get_engine_snapshot()
+            if isinstance(_es2, dict):
+                _snap_age = _es2.get("_snapshot_age_ms")
+        except Exception:
+            pass
+        diag["websocket_realtime_health"] = {
+            "stream_sequence_current": read_ws_stream_sequence(),
+            "last_broadcast_stream_sequence": _wt2.get("last_stream_sequence"),
+            "ws_event_queue_depth": get_ws_event_queue_depth(),
+            "avg_snapshot_age_ms": _snap_age,
+            "reconnect_count": None,
+            "stale_event_rejections": None,
+            "avg_ltp_delay_ms": None,
+            "reconciliation_failures": None,
+            "forced_resyncs": None,
+            "inactive_tab_resyncs": None,
+            "note": "Null fields are browser-side counters (not yet POSTed to server). Server exposes monotonic stream_sequence on every WS frame + Redis→WS queue depth.",
+        }
+    except Exception as e:
+        diag["websocket_realtime_health"] = {"error": str(e)}
+
     # ── Snapshot route health (research swing/longterm meta ages) ────────────
     try:
         from dashboard.backend.cache import _get_redis

@@ -11,16 +11,21 @@ _total_broadcasts: int = 0
 _last_broadcast_mono: float = 0.0
 _bytes_sum: int = 0
 _connections_accepted: int = 0
+_last_stream_sequence: int = 0
 
 
-def record_broadcast(payload_utf8_len: int, msg_type: str) -> None:
+def record_broadcast(
+    payload_utf8_len: int, msg_type: str, stream_sequence: int | None = None
+) -> None:
     global _last_broadcast_bytes, _last_broadcast_type, _total_broadcasts
-    global _last_broadcast_mono, _bytes_sum
+    global _last_broadcast_mono, _bytes_sum, _last_stream_sequence
     _last_broadcast_bytes = payload_utf8_len
     _last_broadcast_type = msg_type
     _total_broadcasts += 1
     _bytes_sum += payload_utf8_len
     _last_broadcast_mono = time.monotonic()
+    if stream_sequence is not None:
+        _last_stream_sequence = int(stream_sequence)
 
 
 def record_ws_connection_accepted() -> None:
@@ -43,4 +48,5 @@ def get_ws_telemetry() -> Dict[str, Any]:
         "connections_accepted_since_boot": _connections_accepted,
         "avg_broadcast_bytes": avg_b,
         "last_broadcast_age_ms": age_ms,
+        "last_stream_sequence": _last_stream_sequence,
     }

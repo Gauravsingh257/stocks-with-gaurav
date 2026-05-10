@@ -138,6 +138,12 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
         "_snapshot_written_at": now,
         "_watchlist_os_schema": "v2",
         "_watchlist_build_ms": _build_ms,
+        "_trust": {
+            "schema": "phase_b_v1",
+            "built_at_ms": int(now * 1000),
+            "engine_snapshot_time": (snap.get("snapshot_time") if isinstance(snap, dict) else None),
+            "symbol_count": len(symbols),
+        },
     }
     try:
         from dashboard.backend.global_state_version import attach_snapshot_meta
@@ -161,6 +167,18 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
                 uid,
             )
             return
+
+    try:
+        from dashboard.backend.cache import _get_redis
+
+        r = _get_redis()
+        if r is not None:
+            rev = int(r.incr(f"watchlist:bundle_ver:{int(uid)}"))
+            tm = body.get("_trust") if isinstance(body.get("_trust"), dict) else {}
+            tm["bundle_revision"] = rev
+            body["_trust"] = tm
+    except Exception:
+        pass
 
     cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
     cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)

@@ -41,6 +41,26 @@ export function extractEnvelopeVersion(msg: WsEnvelope): number | undefined {
   return undefined;
 }
 
+/**
+ * Strict transport ordering: reject duplicate / replayed frames (older sequence).
+ * On WebSocket reconnect, caller resets lastSeq to 0 so new server epochs apply.
+ */
+export function rejectOutOfOrderStream(
+  lastSeq: number,
+  incomingSeq: number | undefined
+): boolean {
+  if (incomingSeq === undefined || incomingSeq === null) return false;
+  return incomingSeq < lastSeq;
+}
+
+export function nextStreamCursor(
+  lastSeq: number,
+  incomingSeq: number | undefined
+): number {
+  if (incomingSeq === undefined || incomingSeq === null) return lastSeq;
+  return Math.max(lastSeq, incomingSeq);
+}
+
 export function extractDataSnapshot(data: unknown): EngineSnapshot | null {
   if (data && typeof data === "object") return data as EngineSnapshot;
   return null;

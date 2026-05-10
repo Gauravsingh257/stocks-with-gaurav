@@ -19,6 +19,8 @@ export interface WsEnvelope {
   global_state_version?: number;
   snapshot_version?: number;
   entity_version?: number;
+  /** Monotonic per-server ordering — digest/LTP/snapshot (Phase B). */
+  stream_sequence?: number;
   data?: unknown;
   /** Thin watchlist hint */
   user_id?: number;

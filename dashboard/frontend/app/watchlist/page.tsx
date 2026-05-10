@@ -79,8 +79,18 @@ export default function WatchlistPage() {
 
   const handleRemove = async (symbol: string) => {
     if (!token) return;
-    await api.removeFromWatchlist(token, symbol);
+    const prevIntel = intel;
+    const prevSaved = savedSymbols;
     setIntel((prev) => prev.filter((x) => x.symbol !== symbol));
+    setSavedSymbols((prev) => prev.filter((x) => x.symbol !== symbol));
+    try {
+      await api.removeFromWatchlist(token, symbol);
+      await loadOperating();
+    } catch {
+      setIntel(prevIntel);
+      setSavedSymbols(prevSaved);
+      setError("Could not remove symbol — restored watchlist.");
+    }
   };
 
   if (!user) {

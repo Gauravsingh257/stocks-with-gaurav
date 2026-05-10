@@ -26,6 +26,7 @@ import { ExecutionQualityPanel } from "./ExecutionQualityPanel";
 import { PCRSparkline, BiasTimeline } from "./HistoryCharts";
 import { MarketStatePanel } from "./MarketStatePanel";
 import { MarketIntelligenceSuite } from "./MarketIntelligenceSuite";
+import { OIInterpretationEssentials } from "./OIInterpretationEssentials";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
@@ -290,7 +291,16 @@ export default function OIIntelligencePage() {
             </div>
           </div>
 
-          <MarketIntelligenceSuite data={snapshot.interpretation} />
+          <OIInterpretationEssentials data={snapshot.interpretation} />
+
+          <details className="glass" style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
+            <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
+              Advanced narrative &amp; strike intelligence (collapsed by default)
+            </summary>
+            <div style={{ marginTop: 12 }}>
+              <MarketIntelligenceSuite data={snapshot.interpretation} />
+            </div>
+          </details>
 
           {/* Market State Engine */}
           <div>

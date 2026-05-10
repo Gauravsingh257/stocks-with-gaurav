@@ -127,12 +127,39 @@ class _ConnectionManager:
 
 manager = _ConnectionManager()
 
+_stream_seq_lock = threading.Lock()
+_stream_seq: int = 0
+
+
+def next_ws_stream_sequence() -> int:
+    """Monotonic per-process ordering for all WS frames (digest/LTP/snapshot)."""
+    global _stream_seq
+    with _stream_seq_lock:
+        _stream_seq += 1
+        return _stream_seq
+
+
+def read_ws_stream_sequence() -> int:
+    with _stream_seq_lock:
+        return _stream_seq
+
+
+def get_ws_event_queue_depth() -> int:
+    """Depth of Redis→WS async queue (terminal events + watchlist hints)."""
+    try:
+        if _event_queue is None:
+            return 0
+        return int(_event_queue.qsize())
+    except Exception:
+        return 0
+
 
 def _ws_json_envelope(base_type: str, data_obj: Any, **top_level: Any) -> str:
-    """Common WS envelope: versioning + event id (additive; clients remain backward compatible)."""
+    """Common WS envelope: versioning + monotonic stream_sequence (Phase B ordering)."""
     from dashboard.backend.global_state_version import read_global_state_version
 
     gv = read_global_state_version()
+    seq = next_ws_stream_sequence()
     kind_map = {
         "snapshot": "snapshot_full",
         "digest": "snapshot_digest",
@@ -150,10 +177,13 @@ def _ws_json_envelope(base_type: str, data_obj: Any, **top_level: Any) -> str:
         "global_state_version": gv,
         "snapshot_version": gv,
         "entity_version": gv,
+        "stream_sequence": seq,
         "data": data_obj,
     }
     out.update({k: v for k, v in top_level.items() if v is not None})
-    return json.dumps(out)
+    raw = json.dumps(out)
+    record_broadcast(len(raw.encode("utf-8")), base_type, seq)
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +291,9 @@ async def _event_forward_loop() -> None:
                         "watchlist_delta",
                         {"user_id": uid, "kind": kind},
                     )
-                    record_broadcast(len(payload.encode("utf-8")), "watchlist_delta")
                     await manager.broadcast(payload)
                 else:
                     msg = _ws_json_envelope("event", event)
-                    record_broadcast(len(msg.encode("utf-8")), "event")
                     await manager.broadcast(msg)
         except asyncio.TimeoutError:
             continue
@@ -287,7 +315,6 @@ async def _ltp_broadcast_loop() -> None:
         if payload:
             try:
                 msg = _ws_json_envelope("ltp", payload)
-                record_broadcast(len(msg.encode("utf-8")), "ltp")
                 await manager.broadcast(msg)
             except Exception as exc:
                 log.debug("LTP broadcast error: %s", exc)
@@ -351,11 +378,9 @@ async def _broadcast_loop() -> None:
                 except Exception as exc:
                     log.debug("State-transition event detection failed: %s", exc)
                 payload = _ws_json_envelope("snapshot", snapshot)
-                record_broadcast(len(payload.encode("utf-8")), "snapshot")
             else:
                 digest = build_engine_digest(snapshot)
                 payload = _ws_json_envelope("digest", digest)
-                record_broadcast(len(payload.encode("utf-8")), "digest")
         except Exception as exc:
             log.error("Snapshot error: %s", exc)
             continue
@@ -367,14 +392,12 @@ async def _broadcast_loop() -> None:
             if oi_snap:
                 try:
                     oi_payload = _ws_json_envelope("oi_intelligence", dict(oi_snap))
-                    record_broadcast(len(oi_payload.encode("utf-8")), "oi_intelligence")
                     await manager.broadcast(oi_payload)
                 except Exception as exc:
                     log.error("OI Intelligence broadcast error: %s", exc)
 
         if tick % PING_EVERY == 0:
             ping = _ws_json_envelope("ping", {"tick": tick})
-            record_broadcast(len(ping.encode("utf-8")), "ping")
             await manager.broadcast(ping)
 
 
