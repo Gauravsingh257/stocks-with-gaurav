@@ -84,6 +84,7 @@ tmpclaude-*
 # --- NODE ---
 node_modules/
 package-lock.json
+!dashboard/frontend/package-lock.json
 .next/
 dashboard/frontend/.next/
 dashboard/frontend/node_modules/
