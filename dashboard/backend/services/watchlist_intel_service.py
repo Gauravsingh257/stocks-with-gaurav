@@ -515,6 +515,20 @@ def build_symbol_intel(
             out["recommendation"]["monitoring_message"] = mc
         out["recommendation"]["rationale"] = None
 
+    try:
+        from dashboard.backend.global_state_version import read_global_state_version
+
+        _gv = int(read_global_state_version())
+    except Exception:
+        _gv = 0
+    _qltp = out.get("quote_ltp")
+    out["sync_meta"] = {
+        "row_as_of_ms": int(time.time() * 1000),
+        "global_state_version": _gv,
+        "engine_snapshot_time": es.get("snapshot_time"),
+        "ltp_source": "redis_ltp_cache" if _qltp is not None else "unavailable",
+    }
+
     return out
 
 

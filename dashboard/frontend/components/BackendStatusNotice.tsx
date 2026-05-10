@@ -8,7 +8,15 @@ import { getMarketSession } from "@/lib/marketSession";
  * Suppresses banners during brief WS reconnect when a prior snapshot is still in memory.
  */
 export default function BackendStatusNotice() {
-  const { snapshot, status, snapshotLikelyStale, globalStateVersion, forcedResyncs } = useEngineSocket();
+  const {
+    snapshot,
+    status,
+    snapshotLikelyStale,
+    globalStateVersion,
+    forcedResyncs,
+    rejectedOutOfOrder,
+    snapshotReceivedAt,
+  } = useEngineSocket();
   const session = getMarketSession();
   const hasFreshPath = status === "connected" || status === "polling";
   const engineHint = snapshot?.engine_running === true || snapshot?.engine_live === true;
@@ -78,6 +86,15 @@ export default function BackendStatusNotice() {
           {" "}
           · unified state v{globalStateVersion}
           {forcedResyncs > 0 ? ` · resyncs ${forcedResyncs}` : ""}
+          {rejectedOutOfOrder > 0 ? ` · ordered stream (${rejectedOutOfOrder} stale frames dropped)` : ""}
+          {snapshotReceivedAt > 0 ? (
+            <>
+              {" "}
+              · last tick{" "}
+              {Math.min(599, Math.round((Date.now() - snapshotReceivedAt) / 1000))}
+              s ago
+            </>
+          ) : null}
         </span>
       ) : null}
     </div>

@@ -41,17 +41,19 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
   const lineColor = isUp ? "#00e096" : "#ff4757";
   const areaTopColor = isUp ? "rgba(0,224,150,0.22)" : "rgba(255,71,87,0.22)";
 
-  // Init chart once
+  /* Chart lifecycle: recreate on symbol / levels so switching opportunities never freezes stale series */
   useEffect(() => {
-    if (typeof window === "undefined" || !containerRef.current) return;
+    if (typeof window === "undefined") return;
+    if (!containerRef.current) return;
 
-    let chart: ReturnType<typeof import("lightweight-charts").createChart> | null = null;
+    let disposed = false;
+    let ro: ResizeObserver | null = null;
 
-    (async () => {
+    void (async () => {
       const { createChart, AreaSeries, LineStyle } = await import("lightweight-charts");
-      if (!containerRef.current) return;
+      if (disposed || !containerRef.current) return;
 
-      chart = createChart(containerRef.current, {
+      const chart = createChart(containerRef.current, {
         width: containerRef.current.clientWidth || 220,
         height,
         layout: {
@@ -92,7 +94,6 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
       seriesRef.current = series;
       chartRef.current = chart;
 
-      // Price level lines
       if (entry != null) {
         series.createPriceLine({
           price: entry,
@@ -124,35 +125,36 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
         });
       }
 
-      // ResizeObserver keeps chart filling its container
-      const ro = new ResizeObserver(() => {
-        if (containerRef.current && chart) {
-          chart.applyOptions({ width: containerRef.current.clientWidth });
+      ro = new ResizeObserver(() => {
+        if (containerRef.current && chartRef.current) {
+          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
         }
       });
-      if (containerRef.current) ro.observe(containerRef.current);
-
-      return () => {
-        ro.disconnect();
-        chart?.remove();
-        chartRef.current = null;
-        seriesRef.current = null;
-      };
+      containerRef.current && ro.observe(containerRef.current);
     })();
 
     return () => {
-      // Cleanup handled inside async IIFE
+      disposed = true;
+      ro?.disconnect();
+      try {
+        chartRef.current?.remove();
+      } catch {
+        /* noop */
+      }
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, lineColor, areaTopColor]);
+  }, [symbol, height, lineColor, areaTopColor, entry, stop, target]);
 
-  // Push new bars whenever data changes
   useEffect(() => {
     if (!seriesRef.current || !bars.length) return;
-    const mapped = bars.map((b: OHLCBar) => ({ time: b.time as unknown as import("lightweight-charts").UTCTimestamp, value: b.close }));
+    const mapped = bars.map((b: OHLCBar) => ({
+      time: b.time as unknown as import("lightweight-charts").UTCTimestamp,
+      value: b.close,
+    }));
     seriesRef.current.setData(mapped);
     chartRef.current?.timeScale().fitContent();
-  }, [bars]);
+  }, [bars, symbol]);
 
   // Loading skeleton
   if (loading) {

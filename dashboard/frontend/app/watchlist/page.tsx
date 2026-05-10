@@ -26,6 +26,8 @@ export default function WatchlistPage() {
   const [decisionPortfolios, setDecisionPortfolios] = useState<DecisionPortfoliosPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [osStale, setOsStale] = useState(false);
+  const [osSource, setOsSource] = useState<string | null>(null);
 
   const loadOperating = useCallback(async () => {
     if (!token) return;
@@ -47,10 +49,14 @@ export default function WatchlistPage() {
       setRetention(data.retention || null);
       setMarketAlign(data.market_alignment || null);
       setDecisionPortfolios(data.decision_portfolios ?? null);
+      setOsStale(Boolean(data.snapshot_stale));
+      setOsSource(typeof data.snapshot_source === "string" ? data.snapshot_source : null);
     } catch {
       setError("Could not load watchlist intelligence.");
       setIntel([]);
       setSavedSymbols([]);
+      setOsStale(false);
+      setOsSource(null);
     } finally {
       setLoading(false);
     }
@@ -141,6 +147,23 @@ export default function WatchlistPage() {
           <RefreshCw size={14} /> Sync
         </button>
       </div>
+
+      {osStale && (
+        <div
+          className="glass"
+          style={{
+            padding: "10px 14px",
+            fontSize: "0.72rem",
+            color: "var(--text-secondary)",
+            border: "1px solid rgba(245,158,11,0.25)",
+            background: "rgba(245,158,11,0.06)",
+          }}
+          role="status"
+        >
+          Desk snapshot <strong style={{ color: "var(--warning)" }}>syncing</strong>
+          {osSource ? ` (${osSource.replace(/_/g, " ")})` : ""} — values remain last verified; refreshing automatically.
+        </div>
+      )}
 
       {marketAlign && (
         <div className="glass" style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 12, fontSize: "0.75rem", color: "var(--text-secondary)" }}>
@@ -511,6 +534,12 @@ export default function WatchlistPage() {
                     <span style={{ color: "var(--text-dim)" }}>
                       {row.meta?.engine_tick_ts ? String(row.meta.engine_tick_ts).slice(11, 19) : "—"}
                     </span>
+                    {row.sync_meta?.global_state_version != null ? (
+                      <span style={{ display: "block", marginTop: 4, fontSize: "0.62rem", color: "var(--text-dim)" }}>
+                        Sync v{row.sync_meta.global_state_version}
+                        {row.sync_meta.ltp_source === "unavailable" ? " · LTP awaiting quote" : ""}
+                      </span>
+                    ) : null}
                   </div>
                   <div>
                     Readiness: <strong>{row.readiness_pct ?? "—"}%</strong>

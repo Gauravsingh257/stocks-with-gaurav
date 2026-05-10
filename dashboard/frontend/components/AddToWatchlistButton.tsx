@@ -28,16 +28,17 @@ export default function AddToWatchlistButton({
     if (!token || !clean) return;
     setBusy(true);
     setErr(null);
+    setDone(true);
     try {
       await api.addToWatchlist(token, clean);
-      setDone(true);
       onAdded?.();
     } catch {
+      setDone(false);
       setErr("Could not save");
     } finally {
       setBusy(false);
     }
-  }, [token, clean]);
+  }, [token, clean, onAdded]);
 
   if (!user || !token) {
     return (

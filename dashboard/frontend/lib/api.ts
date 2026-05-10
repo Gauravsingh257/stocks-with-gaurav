@@ -612,6 +612,13 @@ export interface WatchlistIntelItem {
     invalidation_reason?: string | null;
   };
   meta?: { has_research_row?: boolean; in_active_trade?: boolean; engine_tick_ts?: string | null };
+  /** Row build identity for cross-tab / resync (Phase B). */
+  sync_meta?: {
+    row_as_of_ms?: number;
+    global_state_version?: number;
+    engine_snapshot_time?: string | null;
+    ltp_source?: string;
+  };
   decision?: WatchlistDecisionIntel;
   desk_os?: DeskOsPayload;
 }
@@ -717,6 +724,9 @@ export interface WatchlistOperatingResponse {
   snapshot_stale?: boolean;
   snapshot_source?: string;
   hint?: string;
+  _trust?: Record<string, unknown>;
+  _global_state_version?: number;
+  _snapshot_age_ms?: number | null;
 }
 
 // ── Portfolio types ────────────────────────────────────────────────────────
