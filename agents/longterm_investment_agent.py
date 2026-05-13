@@ -8,7 +8,7 @@ from dashboard.backend.db import create_stock_recommendation, log_ranking_run, g
 from services import generate_rankings
 from services.portfolio_constructor import apply_sector_cap
 
-MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "10"))
+MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "25"))
 RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
@@ -43,7 +43,11 @@ class LongTermInvestmentAgent(BaseAgent):
 
         # When forcing a scan with no empty slots, still pull a fresh top-K so
         # users see refreshed candidates ranked alongside the current active set.
-        scan_top_k = empty_slots if empty_slots > 0 else MAX_LONGTERM_SLOTS
+        # Scan at least 15 candidates even when only a few slots are empty.
+        scan_top_k = max(
+            empty_slots if empty_slots > 0 else MAX_LONGTERM_SLOTS,
+            int(os.getenv("MIN_LONGTERM_SCAN_K", "15")),
+        )
 
         ranking = asyncio.run(generate_rankings(
             "LONGTERM", top_k=scan_top_k, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,

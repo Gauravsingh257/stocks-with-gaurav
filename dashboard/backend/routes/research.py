@@ -146,6 +146,19 @@ def _get_sector(row: dict) -> str | None:
     return _resolve_sector(symbol)
 
 
+def _confidence_tier(confidence: float) -> str:
+    """Map confidence_score (0.0–1.0) to quality tier label."""
+    if confidence >= 0.85:
+        return "Elite"
+    if confidence >= 0.75:
+        return "Strong"
+    if confidence >= 0.65:
+        return "Good"
+    if confidence >= 0.55:
+        return "Watchlist"
+    return "Below"
+
+
 # Track in-flight auto-scans to avoid duplicate triggers
 _auto_scan_lock = threading.Lock()
 _auto_scan_running: set[str] = set()
@@ -547,6 +560,7 @@ def _swing_payload(limit: int) -> dict:
         if action_tag != "MISSED" and favorable_move_R > 0.5:
             action_tag = "IN_MOTION"
 
+        conf = float(row.get("confidence_score", 0))
         items.append(
             {
                 "id": row["id"],
@@ -559,7 +573,8 @@ def _swing_payload(limit: int) -> dict:
                 "target_1": target_1,
                 "target_2": target_2,
                 "risk_reward": round(rr, 2),
-                "confidence_score": float(row.get("confidence_score", 0)),
+                "confidence_score": conf,
+                "quality_tier": _confidence_tier(conf),
                 "expected_holding_period": row.get("expected_holding_period") or "1-8 weeks",
                 "technical_signals": row.get("technical_signals", {}),
                 "fundamental_signals": row.get("fundamental_signals", {}),
@@ -654,6 +669,7 @@ def _longterm_payload(limit: int) -> dict:
         if action_tag != "MISSED" and favorable_move_R > 0.5:
             action_tag = "IN_MOTION"
 
+        conf_lt = float(row.get("confidence_score", 0))
         items.append(
             {
                 "id": row["id"],
@@ -670,7 +686,8 @@ def _longterm_payload(limit: int) -> dict:
                 "risk_reward": round(rr, 2),
                 "risk_factors": row.get("risk_factors") or [],
                 "time_horizon": row.get("expected_holding_period") or "6-24 months",
-                "confidence_score": float(row.get("confidence_score", 0)),
+                "confidence_score": conf_lt,
+                "quality_tier": _confidence_tier(conf_lt),
                 "technical_signals": row.get("technical_signals", {}),
                 "fundamental_signals": row.get("fundamental_signals", {}),
                 "sentiment_signals": row.get("sentiment_signals", {}),

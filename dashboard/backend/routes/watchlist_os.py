@@ -4,6 +4,7 @@ Watchlist Operating System API — snapshot-first per-user Redis payloads.
 Live key:   snapshot:watchlist_operating:{user_id}
 LKG key:    snapshot:last_known_good:watchlist_operating:{user_id}
 Digest key: snapshot:watchlist_digest:{user_id} (telemetry / observability)
+Trace key:  watchlist:event_trace:{user_id} (rolling 200-event lifecycle log)
 
 Cold GET never returns an empty items[] when SQLite still has symbols — fixes empty page after add.
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends
@@ -46,6 +48,9 @@ WATCHLIST_OS_SNAPSHOT_ONLY = os.getenv("WATCHLIST_OS_SNAPSHOT_ONLY", "true").low
 RESEARCH_SNAPSHOT_ONLY = os.getenv("RESEARCH_SNAPSHOT_ONLY", "true").lower() in ("1", "true", "yes")
 
 DIGEST_PREFIX = "snapshot:watchlist_digest:"
+TRACE_PREFIX = "watchlist:event_trace:"
+TRACE_TTL = 86400
+TRACE_MAX_EVENTS = 200
 
 
 def _live_key(uid: int) -> str:
@@ -159,14 +164,30 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
     from dashboard.backend.cache import set as cache_set
 
     items = body.get("items") if isinstance(body.get("items"), list) else []
+
+    # Only skip persist when items=[] AND SQLite also has no symbols for this user.
+    # Previously this guard skipped the write when LKG had items, which caused the
+    # watchlist page to stay empty after a user added their first symbol (the rebuild
+    # returned enriched=[] because research data was still warming up, but SQLite had
+    # the symbol). Now we only skip if SQLite confirms the user truly has no symbols.
     if len(items) == 0:
-        prev = cache_get(_lkg_key(uid))
-        if prev and isinstance(prev, dict) and len(prev.get("items") or []) > 0:
+        db_symbols = _user_symbols(uid)
+        if db_symbols:
             logger.warning(
-                "watchlist_os: skip persist empty snapshot (preserve LKG) uid=%s",
+                "watchlist_os: empty enriched result but SQLite has %d symbol(s) uid=%s — persisting with empty items to show stale indicator",
+                len(db_symbols),
                 uid,
             )
-            return
+            # Fall through — write the snapshot so the UI at least shows stale state
+            # rather than staying on the LKG with no stale indicator.
+        else:
+            prev = cache_get(_lkg_key(uid))
+            if prev and isinstance(prev, dict) and len(prev.get("items") or []) > 0:
+                logger.warning(
+                    "watchlist_os: skip persist empty snapshot (no db symbols, preserve LKG) uid=%s",
+                    uid,
+                )
+                return
 
     try:
         from dashboard.backend.cache import _get_redis
@@ -183,17 +204,25 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
     cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
     cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)
 
-    try:
-        from dashboard.backend.watchlist_notify import publish_watchlist_os_refresh
-
-        publish_watchlist_os_refresh(uid, kind="hint")
-    except Exception:
-        pass
-
+    gv_after = 0
     try:
         from dashboard.backend.global_state_version import bump_global_state_version
 
-        bump_global_state_version("watchlist_operating_persist")
+        gv_after = bump_global_state_version("watchlist_operating_persist")
+    except Exception:
+        pass
+
+    # Publish WS delta with version info so clients can reject stale hints
+    try:
+        from dashboard.backend.watchlist_notify import publish_watchlist_os_refresh
+
+        rev = (body.get("_trust") or {}).get("bundle_revision", 0)
+        publish_watchlist_os_refresh(
+            uid,
+            kind="hint",
+            global_state_version=gv_after or body.get("_global_state_version"),
+            snapshot_version=rev,
+        )
     except Exception:
         pass
 
@@ -217,6 +246,61 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
         logger.debug("watchlist digest persist skipped: %s", exc)
 
 
+def _append_event_trace(uid: int, action: str, symbol: str | None, extra: Dict[str, Any] | None = None) -> str:
+    """Append one lifecycle event to watchlist:event_trace:{uid} (rolling 200-event list, TTL 24h)."""
+    event_id = str(uuid.uuid4())
+    event: Dict[str, Any] = {
+        "event_id": event_id,
+        "action": action,
+        "user_id": uid,
+        "ts_ms": int(time.time() * 1000),
+    }
+    if symbol:
+        event["symbol"] = symbol
+    if extra:
+        event.update(extra)
+    try:
+        import json as _json
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+        if r is not None:
+            key = f"{TRACE_PREFIX}{int(uid)}"
+            pipe = r.pipeline(transaction=False)
+            pipe.rpush(key, _json.dumps(event))
+            pipe.ltrim(key, -TRACE_MAX_EVENTS, -1)
+            pipe.expire(key, TRACE_TTL)
+            pipe.execute()
+    except Exception as exc:
+        logger.debug("event trace append failed uid=%s: %s", uid, exc)
+    return event_id
+
+
+def _validate_watchlist_os_payload(payload: Any) -> tuple[bool, list[str]]:
+    """
+    Structural validation for a watchlist OS snapshot.
+    Returns (ok, issues). Never wipes UI on malformed payload — caller requests resync instead.
+    """
+    issues: list[str] = []
+    if not isinstance(payload, dict):
+        return False, ["not_a_dict"]
+    if "items" in payload and not isinstance(payload["items"], list):
+        issues.append("items_not_list")
+    if "feed" in payload and not isinstance(payload["feed"], list):
+        issues.append("feed_not_list")
+    written_at = payload.get("_snapshot_written_at")
+    if written_at is not None:
+        try:
+            age_sec = time.time() - float(written_at)
+            if age_sec > WL_OS_TTL * 4:
+                issues.append(f"snapshot_too_old_{int(age_sec)}s")
+        except (TypeError, ValueError):
+            issues.append("invalid_snapshot_written_at")
+    gv = payload.get("_global_state_version")
+    if gv is not None and not isinstance(gv, int):
+        issues.append("invalid_global_state_version")
+    return len(issues) == 0, issues
+
+
 def invalidate_watchlist_os_cache(uid: int) -> None:
     """Drop live snapshot so the next GET rebuilds or serves LKG."""
     from dashboard.backend.cache import delete as cache_delete
@@ -224,12 +308,40 @@ def invalidate_watchlist_os_cache(uid: int) -> None:
     cache_delete(_live_key(uid))
 
 
-def _refresh_watchlist_os(uid: int) -> None:
+def _refresh_watchlist_os(uid: int, trigger: str = "background") -> Dict[str, Any]:
+    """Rebuild + persist watchlist OS snapshot. Returns dict with persisted + version info."""
     try:
         body = _build_watchlist_os_payload(uid)
         _persist_watchlist_os(uid, body)
+        gv = body.get("_global_state_version", 0)
+        rev = (body.get("_trust") or {}).get("bundle_revision", 0)
+        _append_event_trace(uid, f"refresh_{trigger}", None, {
+            "global_state_version": gv,
+            "bundle_revision": rev,
+            "symbol_count": len(body.get("items") or []),
+        })
+        return {"persisted": True, "global_state_version": gv, "bundle_revision": rev}
     except Exception as exc:
         logger.warning("watchlist_os background refresh failed uid=%s: %s", uid, exc)
+        return {"persisted": False}
+
+
+def _attach_row_versions(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach row_version + updated_at to each item for last-write-wins reconciliation."""
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return payload
+    now_ms = int(time.time() * 1000)
+    snap_ts = payload.get("_snapshot_written_at")
+    snap_ms = int(float(snap_ts) * 1000) if snap_ts is not None else now_ms
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if "row_version" not in item:
+            item["row_version"] = snap_ms
+        if "updated_at" not in item:
+            item["updated_at"] = snap_ms
+    return payload
 
 
 @router.get("/operating")
@@ -239,35 +351,50 @@ def watchlist_operating_system(
 ):
     """
     Snapshot-first: Redis live → LKG → synchronous build if DB has symbols (no empty shell).
+    Validates payload structure before serving. Rejects malformed snapshots and triggers resync.
     """
     uid = int(user["sub"])
 
     if not WATCHLIST_OS_SNAPSHOT_ONLY:
         body = _build_watchlist_os_payload(uid)
         _persist_watchlist_os(uid, body)
-        return body
+        return _attach_row_versions(body)
 
     from dashboard.backend.cache import get as cache_get
 
     hit = cache_get(_live_key(uid))
     if hit is not None:
-        return hit
+        ok, issues = _validate_watchlist_os_payload(hit)
+        if not ok:
+            logger.warning("watchlist_os: live snapshot invalid uid=%s issues=%s — falling to LKG", uid, issues)
+            _append_event_trace(uid, "live_invalid", None, {"issues": issues})
+            hit = None  # fall through to LKG
+
+    if hit is not None:
+        return _attach_row_versions(hit)
 
     lkg = cache_get(_lkg_key(uid))
+    if lkg is not None:
+        ok, issues = _validate_watchlist_os_payload(lkg)
+        if not ok:
+            logger.warning("watchlist_os: LKG snapshot invalid uid=%s issues=%s — forcing sync build", uid, issues)
+            _append_event_trace(uid, "lkg_invalid", None, {"issues": issues})
+            lkg = None  # fall through to sync build
+
     if lkg is not None:
         out = dict(lkg)
         out["snapshot_stale"] = True
         out["snapshot_source"] = "last_known_good"
-        background_tasks.add_task(_refresh_watchlist_os, uid)
-        return out
+        background_tasks.add_task(_refresh_watchlist_os, uid, "visibility")
+        return _attach_row_versions(out)
 
     symbols = _user_symbols(uid)
     if symbols:
         body = _build_watchlist_os_payload(uid)
         _persist_watchlist_os(uid, body)
-        return body
+        return _attach_row_versions(body)
 
-    background_tasks.add_task(_refresh_watchlist_os, uid)
+    background_tasks.add_task(_refresh_watchlist_os, uid, "cold")
     return {
         "ok": True,
         "engine_version": "watchlist_os_v2",

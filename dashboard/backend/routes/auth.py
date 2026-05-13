@@ -84,15 +84,16 @@ def _create_token(user_id: int, email: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def _bump_watchlist_os(uid: int) -> None:
-    """Invalidate live Redis slice and rebuild Watchlist OS after SQLite mutation."""
+def _bump_watchlist_os(uid: int) -> dict:
+    """Invalidate live Redis slice and rebuild Watchlist OS after SQLite mutation. Returns ACK dict."""
     try:
         from dashboard.backend.routes.watchlist_os import _refresh_watchlist_os, invalidate_watchlist_os_cache
 
         invalidate_watchlist_os_cache(uid)
-        _refresh_watchlist_os(uid)
+        return _refresh_watchlist_os(uid, trigger="mutation")
     except Exception as exc:
         log.warning("watchlist OS refresh after mutation failed uid=%s: %s", uid, exc)
+        return {"persisted": False}
 
 
 def decode_token(token: str) -> dict:
@@ -237,8 +238,20 @@ def add_to_watchlist(
         )
         conn.commit()
         uid = int(user["sub"])
-        background_tasks.add_task(_bump_watchlist_os, uid)
-        return {"ok": True, "symbol": symbol}
+        # Emit trace before background rebuild
+        try:
+            from dashboard.backend.routes.watchlist_os import _append_event_trace
+            _append_event_trace(uid, "add", symbol, {"trigger": "post_api"})
+        except Exception:
+            pass
+        ack = _bump_watchlist_os(uid)
+        resp: dict = {"ok": True, "symbol": symbol}
+        resp["persisted"] = ack.get("persisted", False)
+        if ack.get("global_state_version") is not None:
+            resp["global_state_version"] = ack["global_state_version"]
+        if ack.get("bundle_revision") is not None:
+            resp["snapshot_version"] = ack["bundle_revision"]
+        return resp
     finally:
         conn.close()
 
@@ -257,7 +270,20 @@ def remove_from_watchlist(
             (user["sub"], sym),
         )
         conn.commit()
-        background_tasks.add_task(_bump_watchlist_os, int(user["sub"]))
-        return {"ok": True, "symbol": sym}
+        uid = int(user["sub"])
+        # Emit trace before background rebuild
+        try:
+            from dashboard.backend.routes.watchlist_os import _append_event_trace
+            _append_event_trace(uid, "remove", sym, {"trigger": "delete_api"})
+        except Exception:
+            pass
+        ack = _bump_watchlist_os(uid)
+        resp: dict = {"ok": True, "symbol": sym}
+        resp["persisted"] = ack.get("persisted", False)
+        if ack.get("global_state_version") is not None:
+            resp["global_state_version"] = ack["global_state_version"]
+        if ack.get("bundle_revision") is not None:
+            resp["snapshot_version"] = ack["bundle_revision"]
+        return resp
     finally:
         conn.close()

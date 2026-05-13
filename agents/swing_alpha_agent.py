@@ -7,7 +7,7 @@ from agents.base import BaseAgent, AgentResult
 from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, get_stock_recommendations
 from services import generate_rankings
 
-MAX_SWING_SLOTS = int(__import__("os").getenv("MAX_SWING_SLOTS", "10"))
+MAX_SWING_SLOTS = int(__import__("os").getenv("MAX_SWING_SLOTS", "25"))
 RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
@@ -30,8 +30,11 @@ class SwingTradeAlphaAgent(BaseAgent):
             result.metrics = {"active_slots": active_count, "empty_slots": 0}
             return
 
+        # Scan at least 15 candidates even when only a few slots are empty —
+        # the extra candidates serve as ranked fallback for the research page.
+        scan_top_k = max(empty_slots, int(os.getenv("MIN_SWING_SCAN_K", "15")))
         ranking = asyncio.run(generate_rankings(
-            "SWING", top_k=empty_slots, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
+            "SWING", top_k=scan_top_k, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
             exclude_symbols=active_symbols,
         ))
 

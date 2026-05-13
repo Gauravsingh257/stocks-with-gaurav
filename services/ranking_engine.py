@@ -38,7 +38,7 @@ def _empty_watchlist_fallback_enabled() -> bool:
 
 
 def _watchlist_fallback_cap() -> int:
-    return max(1, min(10, int(os.getenv("RESEARCH_FALLBACK_WATCHLIST_COUNT", "5"))))
+    return max(1, min(30, int(os.getenv("RESEARCH_FALLBACK_WATCHLIST_COUNT", "15"))))
 
 
 def _log_swing_materialize_miss(symbol: str, daily_df: object) -> None:
@@ -747,7 +747,7 @@ async def _collect_watchlist_fallback(
     return out
 
 
-async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: int = 2200, exclude_symbols: list[str] | None = None) -> RankingResult:
+async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: int = 2200, exclude_symbols: list[str] | None = None) -> RankingResult:
     universe = load_nse_universe(target_universe)
     symbols = universe.symbols
     # Exclude symbols already in active slots
@@ -770,7 +770,8 @@ async def generate_rankings(horizon: Horizon, top_k: int = 10, target_universe: 
     for symbol in symbols:
         q = evaluate_symbol_quality(symbol, tech[symbol], fund[symbol], sent[symbol])
         if not q.passed:
-            rejections.append(RejectionRecord(symbol, "quality", getattr(q, "reason", "quality_gate")))
+            reason_str = q.reasons[0] if q.reasons else "quality_gate"
+            rejections.append(RejectionRecord(symbol, "quality", reason_str))
             continue
         quality_passed += 1
 

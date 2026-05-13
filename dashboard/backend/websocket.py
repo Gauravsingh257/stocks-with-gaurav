@@ -266,9 +266,19 @@ def _watchlist_os_subscriber_thread_fn(loop: asyncio.AbstractEventLoop) -> None:
                     if isinstance(data, dict) and _event_queue is not None:
                         uid = data.get("user_id")
                         kind = data.get("kind") or "hint"
+                        gv = data.get("global_state_version")
+                        snap_ver = data.get("snapshot_version")
+                        event_id = data.get("event_id") or str(uuid.uuid4())
                         loop.call_soon_threadsafe(
                             _event_queue.put_nowait,
-                            {"type": "watchlist_delta", "user_id": uid, "kind": kind},
+                            {
+                                "type": "watchlist_delta",
+                                "user_id": uid,
+                                "kind": kind,
+                                "global_state_version": gv,
+                                "snapshot_version": snap_ver,
+                                "event_id": event_id,
+                            },
                         )
                 except (json.JSONDecodeError, TypeError):
                     pass
@@ -287,10 +297,19 @@ async def _event_forward_loop() -> None:
                 if isinstance(event, dict) and event.get("type") == "watchlist_delta":
                     uid = event.get("user_id")
                     kind = event.get("kind") or "hint"
-                    payload = _ws_json_envelope(
-                        "watchlist_delta",
-                        {"user_id": uid, "kind": kind},
-                    )
+                    # Structured envelope: include version info so clients can reject stale deltas
+                    delta_data: dict = {
+                        "user_id": uid,
+                        "kind": kind,
+                        "server_ts": int(time.time() * 1000),
+                    }
+                    if event.get("global_state_version") is not None:
+                        delta_data["global_state_version"] = event["global_state_version"]
+                    if event.get("snapshot_version") is not None:
+                        delta_data["snapshot_version"] = event["snapshot_version"]
+                    if event.get("event_id"):
+                        delta_data["event_id"] = event["event_id"]
+                    payload = _ws_json_envelope("watchlist_delta", delta_data)
                     await manager.broadcast(payload)
                 else:
                     msg = _ws_json_envelope("event", event)

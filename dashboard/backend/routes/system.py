@@ -550,6 +550,159 @@ def health_full():
     return result
 
 
+@router.get("/debug/watchlist-sync")
+def debug_watchlist_sync(_unused: None = Depends(verify_ops_key)):
+    """
+    Watchlist lifecycle diagnostics: Redis key inventory, event traces, bundle revisions,
+    LKG vs live divergence, TTL health, per-user symbol counts.
+    """
+    import json as _json
+
+    try:
+        from dashboard.backend.cache import _get_redis
+    except Exception as e:
+        return {"error": f"Redis unavailable: {e}"}
+
+    r = _get_redis()
+    if r is None:
+        return {"error": "redis_unavailable"}
+
+    now_ts = time.time()
+    out: dict = {"checked_at": datetime.utcnow().isoformat() + "Z"}
+
+    # ── Scan all watchlist-related Redis keys ─────────────────────────────────
+    key_inventory: list[dict] = []
+    patterns = [
+        "snapshot:watchlist_operating:*",
+        "snapshot:last_known_good:watchlist_operating:*",
+        "snapshot:watchlist_digest:*",
+        "watchlist:event_trace:*",
+        "watchlist:bundle_ver:*",
+        "watchlist:feed:*",
+    ]
+    for pat in patterns:
+        cur = 0
+        for _ in range(120):
+            cur, batch = r.scan(cur, match=pat, count=48)
+            for bk in batch:
+                ks = bk.decode("utf-8", errors="replace") if isinstance(bk, bytes) else str(bk)
+                try:
+                    ttl = r.ttl(ks)
+                    size = r.strlen(ks)
+                    key_inventory.append({"key": ks, "ttl_sec": int(ttl), "size_bytes": int(size)})
+                except Exception:
+                    key_inventory.append({"key": ks})
+            if cur == 0:
+                break
+    out["key_inventory"] = key_inventory
+    out["total_watchlist_redis_keys"] = len(key_inventory)
+
+    # ── Per-user snapshot health ──────────────────────────────────────────────
+    users_health: list[dict] = []
+    live_keys = [k["key"] for k in key_inventory if "watchlist_operating:" in k["key"] and "last_known_good" not in k["key"]]
+    for lk in live_keys[:20]:
+        uid_str = lk.split(":")[-1]
+        lkg_key = f"snapshot:last_known_good:watchlist_operating:{uid_str}"
+        trace_key = f"watchlist:event_trace:{uid_str}"
+        bver_key = f"watchlist:bundle_ver:{uid_str}"
+
+        user_h: dict = {"user_id": uid_str}
+        try:
+            raw_live = r.get(lk)
+            if raw_live:
+                pl = _json.loads(raw_live)
+                user_h["live_items"] = len(pl.get("items") or [])
+                user_h["live_gv"] = pl.get("_global_state_version")
+                user_h["live_snapshot_source"] = pl.get("snapshot_source")
+                user_h["live_age_sec"] = round(now_ts - float(pl.get("_snapshot_written_at") or now_ts), 1)
+                trust = pl.get("_trust") or {}
+                user_h["bundle_revision"] = trust.get("bundle_revision")
+        except Exception:
+            user_h["live_parse_error"] = True
+
+        try:
+            raw_lkg = r.get(lkg_key)
+            if raw_lkg:
+                lkg_pl = _json.loads(raw_lkg)
+                user_h["lkg_items"] = len(lkg_pl.get("items") or [])
+                user_h["lkg_gv"] = lkg_pl.get("_global_state_version")
+                user_h["lkg_age_sec"] = round(now_ts - float(lkg_pl.get("_snapshot_written_at") or now_ts), 1)
+            else:
+                user_h["lkg_missing"] = True
+        except Exception:
+            user_h["lkg_parse_error"] = True
+
+        try:
+            trace_len = r.llen(trace_key)
+            user_h["event_trace_count"] = int(trace_len) if trace_len is not None else 0
+            # Sample last 5 events
+            if trace_len:
+                raw_events = r.lrange(trace_key, -5, -1)
+                user_h["event_trace_recent"] = [
+                    _json.loads(e.decode("utf-8") if isinstance(e, bytes) else e)
+                    for e in raw_events
+                ]
+        except Exception:
+            user_h["event_trace_error"] = True
+
+        try:
+            bver = r.get(bver_key)
+            user_h["bundle_ver_counter"] = int(bver) if bver is not None else 0
+        except Exception:
+            pass
+
+        # Check divergence between live and LKG
+        live_gv = user_h.get("live_gv")
+        lkg_gv = user_h.get("lkg_gv")
+        if live_gv is not None and lkg_gv is not None:
+            user_h["gv_diverged"] = live_gv != lkg_gv
+
+        users_health.append(user_h)
+
+    out["users_health"] = users_health
+
+    # ── SQLite symbol counts per user ─────────────────────────────────────────
+    try:
+        from dashboard.backend.db import get_connection
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT user_id, COUNT(*) AS cnt FROM user_watchlist GROUP BY user_id"
+        ).fetchall()
+        conn.close()
+        out["db_symbol_counts"] = {str(r["user_id"]): r["cnt"] for r in rows}
+    except Exception as e:
+        out["db_symbol_counts"] = {"error": str(e)}
+
+    # ── Consistency check: DB users with symbols but no live Redis key ────────
+    db_counts = out.get("db_symbol_counts") or {}
+    live_uids = {k["key"].split(":")[-1] for k in key_inventory if "watchlist_operating:" in k["key"] and "last_known_good" not in k["key"]}
+    missing_redis: list[str] = []
+    for uid_s, cnt in db_counts.items():
+        if isinstance(cnt, int) and cnt > 0 and uid_s not in live_uids:
+            missing_redis.append(uid_s)
+    out["users_with_db_symbols_but_no_live_redis_key"] = missing_redis
+
+    # ── Global state version ──────────────────────────────────────────────────
+    try:
+        from dashboard.backend.global_state_version import read_global_state_version
+        out["global_state_version"] = read_global_state_version()
+    except Exception:
+        out["global_state_version"] = None
+
+    out["diagnosis"] = {
+        "empty_live_snapshots": [
+            u["user_id"] for u in users_health if u.get("live_items", -1) == 0
+        ],
+        "lkg_missing": [u["user_id"] for u in users_health if u.get("lkg_missing")],
+        "stale_live_gt_60s": [
+            u["user_id"] for u in users_health if (u.get("live_age_sec") or 0) > 60
+        ],
+        "users_missing_redis": missing_redis,
+    }
+
+    return out
+
+
 @router.get("/debug/cache")
 def debug_cache(_unused: None = Depends(verify_ops_key)):
     """Observability: Redis key inventory, TTLs, snapshot timestamps, OI interpretation meta."""
