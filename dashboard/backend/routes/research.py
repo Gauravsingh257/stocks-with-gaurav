@@ -991,26 +991,30 @@ def get_live_signals(limit: int = Query(40, ge=1, le=200)):
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
     """
-    Resilient: catches any failure in payload build OR Redis finalize and returns
-    a stable empty shape so the frontend never sees a CORS error masking a 500.
+    Resilient: never raises. Builds payload, optionally enriches with Redis LKG
+    finalize, but bypasses everything on failure so the endpoint always returns
+    a stable shape.
     """
-    payload: dict
     try:
         payload = _running_trades_payload(limit)
     except Exception:
-        log.exception("running-trades _running_trades_payload failed")
-        payload = {"items": [], "count": 0, "error": "payload_build_failed"}
+        log.exception("running-trades payload_build failed")
+        return {"items": [], "count": 0, "error": "payload_build_failed"}
+
+    if not isinstance(payload, dict):
+        return {"items": [], "count": 0, "error": "invalid_payload_shape"}
 
     try:
-        return finalize_endpoint(
+        finalized = finalize_endpoint(
             "running_trades",
             payload,
             valid_running_trades_payload,
         )
+        if isinstance(finalized, dict):
+            return finalized
     except Exception:
-        log.exception("running-trades finalize_endpoint failed")
-        # Last-ditch: return the raw payload without LKG/finalize semantics.
-        return payload if isinstance(payload, dict) else {"items": [], "count": 0, "error": "finalize_failed"}
+        log.exception("running-trades finalize_endpoint failed; returning raw payload")
+    return payload
 
 
 @router.get("/api/research/coverage")
