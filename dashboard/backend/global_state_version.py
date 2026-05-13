@@ -113,13 +113,27 @@ def attach_snapshot_meta(
 
     Does not mutate external schemas beyond additive underscore keys.
     Age uses reference_iso_for_age (e.g. engine snapshot_time) when provided.
+    Falls back to payload.snapshot_time, then to 0ms (just-built scaffold).
+    _snapshot_age_ms is always a number — never None — so frontend stale rejection
+    can always make a real decision rather than silently bypassing the check.
     """
     gv = read_global_state_version()
-    ref = reference_iso_for_age if reference_iso_for_age is not None else payload.get("snapshot_time")
-    age_ms = _parse_iso_age_ms(str(ref)) if ref else None
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    ref = (
+        reference_iso_for_age
+        if reference_iso_for_age is not None
+        else payload.get("snapshot_time")
+    )
+    if ref:
+        age_ms = _parse_iso_age_ms(str(ref))
+    else:
+        # No reference timestamp at all → this is a freshly-built scaffold served right now.
+        # Report age=0 so the client knows it's not stale data being replayed.
+        age_ms = 0.0
 
     payload["_global_state_version"] = gv
-    payload["_snapshot_ts"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    payload["_snapshot_ts"] = now_iso
     payload["_snapshot_origin"] = origin
-    payload["_snapshot_age_ms"] = round(age_ms, 1) if age_ms is not None else None
+    payload["_snapshot_age_ms"] = round(age_ms, 1) if age_ms is not None else 0.0
     return payload

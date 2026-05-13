@@ -41,7 +41,7 @@ _event_queue: asyncio.Queue | None = None
 _prev_trade_states: dict[str, str] = {}
 _prev_trade_states_lock = threading.Lock()
 
-MAX_WS_CONNECTIONS_PER_IP = 5
+MAX_WS_CONNECTIONS_PER_IP = 8
 
 
 def _get_oi_intelligence_snapshot() -> dict | None:
@@ -338,7 +338,7 @@ async def _broadcast_loop() -> None:
     Env WS_FULL_SNAPSHOT_EVERY_TICKS (default 6) → full frame every ~30s at 5s interval.
     """
     INTERVAL = 5.0
-    PING_EVERY = 6
+    PING_EVERY = 4   # ping every 20s (4 × 5s) — keeps Railway proxy alive (was 6 = 30s)
     OI_EVERY = 6
     FULL_EVERY = max(1, int(os.getenv("WS_FULL_SNAPSHOT_EVERY_TICKS", "6")))
     tick = 0
@@ -490,12 +490,12 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         # Keep alive — listen for any client messages (ping/pong, commands)
         while True:
             try:
-                msg = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=20.0)
                 data = json.loads(msg)
                 if data.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
             except asyncio.TimeoutError:
-                # No message in 30s → send a keepalive
+                # No message in 20s → send a keepalive (matches PING_EVERY=4 × 5s interval)
                 await websocket.send_text(json.dumps({"type": "keepalive"}))
             except json.JSONDecodeError:
                 pass  # ignore malformed messages

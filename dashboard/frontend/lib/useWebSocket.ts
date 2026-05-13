@@ -92,6 +92,7 @@ export function useEngineSocket() {
   const lastGvRef  = useRef(0);
   const lastStreamSeqRef = useRef(0);
   const hadDisconnectRef = useRef(false);
+  const lastConnectAttemptRef = useRef(0);
 
   const requestResync = useCallback(async () => {
     setForcedResyncs((x) => x + 1);
@@ -168,6 +169,7 @@ export function useEngineSocket() {
     }
 
     wsDbg("WS CONNECTING →", wsUrl);
+    lastConnectAttemptRef.current = Date.now();
     setStatus("connecting");
     try {
       const ws = new WebSocket(wsUrl);
@@ -346,7 +348,13 @@ export function useEngineSocket() {
       if (wsAlive) return;
       wsDbg("WS — tab visible, attempting reconnect");
       if (retryRef.current) clearTimeout(retryRef.current);
-      failCount.current = 0; // reset so WS is tried before falling back to polling
+      // Only reset failCount if we haven't attempted a connection recently.
+      // Without this guard, rapid tab-switch / mobile-wake cycles compound into
+      // a reconnect storm that exhausts MAX_WS_CONNECTIONS_PER_IP.
+      const msSinceLastAttempt = Date.now() - lastConnectAttemptRef.current;
+      if (msSinceLastAttempt > 30_000) {
+        failCount.current = 0; // reset so WS is tried before falling back to polling
+      }
       if (pollingRef.current) stopPolling(); // drop polling — WS takes priority
       connect();
     };

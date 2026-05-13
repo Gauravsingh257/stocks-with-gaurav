@@ -422,7 +422,7 @@ def write_engine_snapshot(snapshot: dict) -> None:
 
         # Write watchdog + debug/meta keys
         pipe.setex(ENGINE_LAST_WRITE_TS_KEY, 600, str(now))
-        pipe.setex(SNAPSHOT_VERSION_KEY, 86400, str(version))
+        pipe.setex(SNAPSHOT_VERSION_KEY, ENGINE_SNAPSHOT_TTL_SEC, str(version))
         pipe.setex(SNAPSHOT_META_KEY, 600, json.dumps(meta, default=str))
         pipe.setex(SNAPSHOT_WRITE_STATUS_KEY, 600, "success")
         pipe.setex(SNAPSHOT_SIZE_KEY, 600, str(size_bytes))
@@ -478,6 +478,37 @@ def set_index_ltp(nifty: Optional[float] = None, banknifty: Optional[float] = No
             r.setex(LTP_KEY_BANKNIFTY, LTP_TTL_SEC, str(banknifty))
     except Exception as e:
         log.debug("set_index_ltp failed: %s", e)
+
+
+EQUITY_LTP_HASH_KEY = "equity:ltp:latest"
+EQUITY_LTP_HASH_TTL_SEC = 600  # matches ENGINE_SNAPSHOT_TTL_SEC
+
+
+def write_equity_ltp(prices: dict) -> None:
+    """
+    Write a batch of equity symbol → LTP pairs to Redis hash equity:ltp:latest (TTL 600s).
+    Keys are uppercase symbols without exchange prefix (e.g. RELIANCE, INFY).
+    Called from engine snapshot publisher so watchlist rows get live prices even with 0 active trades.
+    """
+    if not prices:
+        return
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        mapping = {
+            str(sym).replace("NSE:", "").replace("BSE:", "").strip().upper(): str(round(float(price), 4))
+            for sym, price in prices.items()
+            if price is not None and isinstance(price, (int, float)) and price > 0
+        }
+        if not mapping:
+            return
+        pipe = r.pipeline(transaction=False)
+        pipe.hset(EQUITY_LTP_HASH_KEY, mapping=mapping)
+        pipe.expire(EQUITY_LTP_HASH_KEY, EQUITY_LTP_HASH_TTL_SEC)
+        pipe.execute()
+    except Exception as e:
+        log.debug("write_equity_ltp failed: %s", e)
 
 
 # Redis runtime health: consecutive failures before forced shutdown on Railway

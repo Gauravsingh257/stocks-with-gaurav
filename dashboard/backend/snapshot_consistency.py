@@ -95,13 +95,30 @@ def _norm_equity_sym(s: str) -> str:
     return str(s).replace("NSE:", "").strip().upper()
 
 
+_EQUITY_LTP_HASH_KEY = "equity:ltp:latest"
+
+
 def equity_ltp_from_snapshot(full_snap: Dict[str, Any], max_symbols: int = 64) -> Dict[str, float]:
     """
-    Redis-backed equity last prices for symbols visible in the engine snapshot (active trades).
-    Keys are uppercase symbols (e.g. RELIANCE) for client unified market-LTP registry.
+    Equity last prices for the unified market-LTP registry.
+    Sources (merged in priority order):
+      1. snapshot.equity_ltp — written directly by engine each cycle
+      2. Redis ltp:{SYM} keys — for active trade symbols
+      3. Redis equity:ltp:latest hash — engine scan-cycle LTP cache
+    Keys are uppercase symbols (e.g. RELIANCE).
     """
     out: Dict[str, float] = {}
-    seen: set[str] = set()
+
+    # Source 1: snapshot.equity_ltp written directly by engine
+    snap_eq = full_snap.get("equity_ltp")
+    if isinstance(snap_eq, dict):
+        for k, v in snap_eq.items():
+            sym = _norm_equity_sym(str(k))
+            if sym and isinstance(v, (int, float)) and v > 0:
+                out[sym] = float(v)
+
+    # Source 2: ltp:{SYM} Redis keys for active trade symbols
+    seen: set[str] = set(out.keys())
     syms: list[str] = []
     for t in full_snap.get("active_trades") or []:
         if not isinstance(t, dict):
@@ -115,19 +132,41 @@ def equity_ltp_from_snapshot(full_snap: Dict[str, Any], max_symbols: int = 64) -
             syms.append(sym)
         if len(syms) >= max_symbols:
             break
-    if not syms:
-        return out
-    try:
-        from dashboard.backend.cache import get_ltp
+    if syms:
+        try:
+            from dashboard.backend.cache import get_ltp
+            for sym in syms:
+                if sym not in out:
+                    p = get_ltp(sym)
+                    if p is not None:
+                        out[sym] = float(p)
+                if len(out) >= max_symbols:
+                    break
+        except Exception:
+            pass
 
-        for sym in syms:
-            p = get_ltp(sym)
-            if p is not None:
-                out[sym] = float(p)
-            if len(out) >= max_symbols:
-                break
-    except Exception:
-        return out
+    # Source 3: equity:ltp:latest hash (scan-cycle LTP written by engine for all scanned symbols)
+    if len(out) < max_symbols:
+        try:
+            from dashboard.backend.cache import _get_redis
+            r = _get_redis()
+            if r is not None:
+                raw_hash = r.hgetall(_EQUITY_LTP_HASH_KEY)
+                if isinstance(raw_hash, dict):
+                    for k, v in raw_hash.items():
+                        sym = _norm_equity_sym(str(k))
+                        if sym and sym not in out:
+                            try:
+                                price = float(v)
+                                if price > 0:
+                                    out[sym] = price
+                            except (TypeError, ValueError):
+                                pass
+                        if len(out) >= max_symbols:
+                            break
+        except Exception:
+            pass
+
     return out
 
 

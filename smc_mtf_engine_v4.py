@@ -337,8 +337,9 @@ def _publish_redis_snapshot() -> None:
     try:
         import engine_runtime
         with ACTIVE_TRADES_LOCK:
+            _serialized_trades = [_serialize_trade(t) for t in ACTIVE_TRADES]
             _snap = {
-                "active_trades": [_serialize_trade(t) for t in ACTIVE_TRADES],
+                "active_trades": _serialized_trades,
                 "signals_today": DAILY_SIGNAL_COUNT,
                 "daily_pnl_r": DAILY_PNL_R,
                 "traded_today": list(TRADED_TODAY),
@@ -347,6 +348,7 @@ def _publish_redis_snapshot() -> None:
                 "market_regime": str(MARKET_REGIME),
                 "engine_mode": ENGINE_MODE,
                 "index_ltp": {},
+                "equity_ltp": {},
                 "timestamp": now_ist().isoformat(),
             }
         _n = ENGINE_STATE.get("nifty")
@@ -355,6 +357,22 @@ def _publish_redis_snapshot() -> None:
             _snap["index_ltp"]["NIFTY 50"] = float(_n)
         if _b is not None:
             _snap["index_ltp"]["NIFTY BANK"] = float(_b)
+        # Collect equity LTP from active trades (current price field)
+        _eq_ltp: dict = {}
+        for _t in _serialized_trades:
+            if not isinstance(_t, dict):
+                continue
+            _sym = str(_t.get("symbol") or "").replace("NSE:", "").replace("BSE:", "").strip().upper()
+            if not _sym:
+                continue
+            for _price_field in ("current_price", "ltp", "entry"):
+                _p = _t.get(_price_field)
+                if isinstance(_p, (int, float)) and _p > 0:
+                    _eq_ltp[_sym] = float(_p)
+                    break
+        if _eq_ltp:
+            _snap["equity_ltp"] = _eq_ltp
+            engine_runtime.write_equity_ltp(_eq_ltp)
         engine_runtime.write_engine_snapshot(_snap)
     except Exception as _e:
         logging.debug("_publish_redis_snapshot: %s", _e)
@@ -6695,6 +6713,8 @@ def run_live_mode():
                 )
 
             # --- Signal delivery: cycle diagnostics + heartbeat + queue start ---
+            # Import guard: isolate import errors from runtime errors for targeted diagnosis.
+            _sd_imported = False
             try:
                 from services.signal_delivery import (
                     drain_signal_queue_cycle,
@@ -6706,46 +6726,57 @@ def run_live_mode():
                     start_delivery_watchdog,
                     start_delivery_worker,
                 )
-                _sig_details = []
-                for _sd_sig in all_signals[:20]:
-                    _sig_details.append({
-                        "symbol": _sd_sig.get("symbol"),
-                        "setup": _sd_sig.get("setup"),
-                        "direction": _sd_sig.get("direction"),
-                        "score": _sd_sig.get("smc_score"),
-                        "ai_score": _sd_sig.get("ai_score"),
-                    })
-                _rej_reasons = []
-                if _scan_raw_signals == 0:
-                    if _scan_data_ok == 0:
-                        _rej_reasons.append("no_ohlc_data")
-                    if len(_scan_errors) > 0:
-                        _rej_reasons.append(f"scan_errors:{len(_scan_errors)}")
-                    if CIRCUIT_BREAKER_ACTIVE:
-                        _rej_reasons.append("circuit_breaker_active")
-                    if not _rej_reasons:
-                        _rej_reasons.append("no_setup_condition_met")
-                record_cycle_diagnostics(
-                    signals_generated=_scan_raw_signals,
-                    signal_details=_sig_details,
-                    rejection_reasons=_rej_reasons,
-                    zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
+                _sd_imported = True
+            except Exception as _sd_import_exc:
+                logging.warning(
+                    "signal_delivery import failed — Telegram pipeline disabled this cycle: %s",
+                    _sd_import_exc,
                 )
-                maybe_send_daily_pipeline_check(telegram_send)
-                maybe_send_no_setup_report(
-                    telegram_send,
-                    signals_generated=_scan_raw_signals,
-                    scanned_count=len(scan_universe),
-                    data_ok_count=_scan_data_ok,
-                    zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
-                )
-                maybe_send_heartbeat(telegram_send)
-                start_delivery_watchdog(telegram_send_signal)
-                ensure_delivery_worker_alive(telegram_send_signal)
-                start_delivery_worker(telegram_send_signal)
-                drain_signal_queue_cycle(telegram_send_signal)
-            except Exception as _sd_exc:
-                logging.debug("signal_delivery integration error (non-blocking): %s", _sd_exc)
+            if _sd_imported:
+                try:
+                    _sig_details = []
+                    for _sd_sig in all_signals[:20]:
+                        _sig_details.append({
+                            "symbol": _sd_sig.get("symbol"),
+                            "setup": _sd_sig.get("setup"),
+                            "direction": _sd_sig.get("direction"),
+                            "score": _sd_sig.get("smc_score"),
+                            "ai_score": _sd_sig.get("ai_score"),
+                        })
+                    _rej_reasons = []
+                    if _scan_raw_signals == 0:
+                        if _scan_data_ok == 0:
+                            _rej_reasons.append("no_ohlc_data")
+                        if len(_scan_errors) > 0:
+                            _rej_reasons.append(f"scan_errors:{len(_scan_errors)}")
+                        if CIRCUIT_BREAKER_ACTIVE:
+                            _rej_reasons.append("circuit_breaker_active")
+                        if not _rej_reasons:
+                            _rej_reasons.append("no_setup_condition_met")
+                    record_cycle_diagnostics(
+                        signals_generated=_scan_raw_signals,
+                        signal_details=_sig_details,
+                        rejection_reasons=_rej_reasons,
+                        zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
+                    )
+                    maybe_send_daily_pipeline_check(telegram_send)
+                    maybe_send_no_setup_report(
+                        telegram_send,
+                        signals_generated=_scan_raw_signals,
+                        scanned_count=len(scan_universe),
+                        data_ok_count=_scan_data_ok,
+                        zero_signal_reason="; ".join(_rej_reasons) if _scan_raw_signals == 0 else "",
+                    )
+                    maybe_send_heartbeat(telegram_send)
+                    start_delivery_watchdog(telegram_send_signal)
+                    ensure_delivery_worker_alive(telegram_send_signal)
+                    start_delivery_worker(telegram_send_signal)
+                    drain_signal_queue_cycle(telegram_send_signal)
+                except Exception as _sd_exc:
+                    logging.warning(
+                        "signal_delivery runtime error (non-blocking): %s",
+                        _sd_exc, exc_info=True,
+                    )
 
             # Periodic diagnostic telegram (first cycle only + on errors)
             if not hasattr(run_live_mode, '_diag_count'):
