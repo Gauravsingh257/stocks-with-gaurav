@@ -1007,12 +1007,30 @@ def _strip_non_finite(obj):
     return obj
 
 
-def _safe_json_response(content: dict, fallback: dict | None = None) -> JSONResponse:
-    """Pre-sanitize content (NaN→None) and run jsonable_encoder inside try/except
-    so serialization errors never escape as a 500."""
+def _to_jsonable(v):
+    """Coerce ANY value to a JSON-safe primitive. Last line of defense before serialization."""
+    if v is None or isinstance(v, (bool, int, str)):
+        return v
+    if isinstance(v, float):
+        if _math.isnan(v) or _math.isinf(v):
+            return None
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_to_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _to_jsonable(val) for k, val in v.items()}
+    # bytes, datetime, Decimal, sqlite3.Row, custom objects → string
     try:
-        clean = _strip_non_finite(content)
-        return JSONResponse(content=jsonable_encoder(clean))
+        return str(v)
+    except Exception:
+        return None
+
+
+def _safe_json_response(content: dict, fallback: dict | None = None) -> JSONResponse:
+    """Coerce content to pure JSON primitives, then serialize. Never raises."""
+    try:
+        clean = _to_jsonable(content)
+        return JSONResponse(content=clean)
     except Exception:
         log.exception("response serialization failed; returning fallback")
         return JSONResponse(content=fallback or {"items": [], "count": 0, "error": "serialization_failed"})
