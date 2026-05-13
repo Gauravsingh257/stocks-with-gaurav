@@ -10,6 +10,8 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
 from services.universe_manager import load_nse_universe
@@ -987,22 +989,32 @@ def get_live_signals(limit: int = Query(40, ge=1, le=200)):
         return {"items": [], "count": 0, "error": "transient_payload_error"}
 
 
+def _safe_json_response(content: dict, fallback: dict | None = None) -> JSONResponse:
+    """Run jsonable_encoder inside try/except so serialization errors never escape as 500."""
+    try:
+        return JSONResponse(content=jsonable_encoder(content))
+    except Exception:
+        log.exception("response serialization failed; returning fallback")
+        return JSONResponse(content=fallback or {"items": [], "count": 0, "error": "serialization_failed"})
+
+
 @router.get("/api/research/running-trades")
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
     """
     Resilient: never raises. Builds payload, optionally enriches with Redis LKG
-    finalize, but bypasses everything on failure so the endpoint always returns
-    a stable shape.
+    finalize, bypasses on failure, then serializes via jsonable_encoder to catch
+    any non-JSON-safe values (datetimes, Decimals, NaN) before they reach the
+    HTTP layer.
     """
     try:
         payload = _running_trades_payload(limit)
     except Exception:
         log.exception("running-trades payload_build failed")
-        return {"items": [], "count": 0, "error": "payload_build_failed"}
+        return _safe_json_response({"items": [], "count": 0, "error": "payload_build_failed"})
 
     if not isinstance(payload, dict):
-        return {"items": [], "count": 0, "error": "invalid_payload_shape"}
+        return _safe_json_response({"items": [], "count": 0, "error": "invalid_payload_shape"})
 
     try:
         finalized = finalize_endpoint(
@@ -1011,10 +1023,10 @@ def get_running_trades(limit: int = Query(40, ge=1, le=200)):
             valid_running_trades_payload,
         )
         if isinstance(finalized, dict):
-            return finalized
+            return _safe_json_response(finalized, fallback=payload)
     except Exception:
         log.exception("running-trades finalize_endpoint failed; returning raw payload")
-    return payload
+    return _safe_json_response(payload)
 
 
 @router.get("/api/research/coverage")
@@ -1741,7 +1753,7 @@ def get_running_trades_history(limit: int = Query(100, ge=1, le=500)):
         except Exception as exc:
             log.warning("running-trades/history row skip sym=%s err=%s", row.get("symbol"), exc)
             continue
-    return {"items": items, "count": len(items)}
+    return _safe_json_response({"items": items, "count": len(items)})
 
 
 @router.get("/api/research/performance")
