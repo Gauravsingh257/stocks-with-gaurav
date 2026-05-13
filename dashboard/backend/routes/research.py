@@ -989,10 +989,30 @@ def get_live_signals(limit: int = Query(40, ge=1, le=200)):
         return {"items": [], "count": 0, "error": "transient_payload_error"}
 
 
+import math as _math
+
+
+def _strip_non_finite(obj):
+    """Recursively replace NaN/Inf floats with None so json.dumps(allow_nan=False) accepts the payload."""
+    if isinstance(obj, float):
+        if _math.isnan(obj) or _math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strip_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_strip_non_finite(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_strip_non_finite(v) for v in obj)
+    return obj
+
+
 def _safe_json_response(content: dict, fallback: dict | None = None) -> JSONResponse:
-    """Run jsonable_encoder inside try/except so serialization errors never escape as 500."""
+    """Pre-sanitize content (NaN→None) and run jsonable_encoder inside try/except
+    so serialization errors never escape as a 500."""
     try:
-        return JSONResponse(content=jsonable_encoder(content))
+        clean = _strip_non_finite(content)
+        return JSONResponse(content=jsonable_encoder(clean))
     except Exception:
         log.exception("response serialization failed; returning fallback")
         return JSONResponse(content=fallback or {"items": [], "count": 0, "error": "serialization_failed"})
