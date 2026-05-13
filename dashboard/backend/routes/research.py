@@ -738,9 +738,9 @@ def _f(v, default: float = 0.0) -> float:
 def _running_trades_payload(limit: int) -> dict:
     rows = list_running_trades(limit=limit, active_only=True)
 
-    # ── Refresh CMP via the central resolver so research + running trades
-    # never disagree on price for the same symbol. Falls back to the stored
-    # current_price (last daemon update) if no live source is available. ──
+    # ── Refresh CMP via the central resolver. Time-bounded: if it raises or
+    # blocks on Kite API issues, we fall through to stored current_price so
+    # the endpoint never 500s due to upstream broker problems. ──
     stored_cmp_map: dict[str, float] = {}
     for r in rows:
         try:
@@ -749,7 +749,11 @@ def _running_trades_payload(limit: int) -> dict:
                 stored_cmp_map[r["symbol"]] = float(v)
         except (TypeError, ValueError, KeyError):
             pass
-    cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=stored_cmp_map)
+    try:
+        cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=stored_cmp_map)
+    except Exception as exc:
+        log.warning("running_trades: resolve_cmp failed (%s) — using stored prices", exc)
+        cmp_resolved = {}
 
     items: list[dict] = []
     for row in rows:
@@ -986,16 +990,27 @@ def get_live_signals(limit: int = Query(40, ge=1, le=200)):
 @router.get("/api/research/running-trades")
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
+    """
+    Resilient: catches any failure in payload build OR Redis finalize and returns
+    a stable empty shape so the frontend never sees a CORS error masking a 500.
+    """
+    payload: dict
+    try:
+        payload = _running_trades_payload(limit)
+    except Exception:
+        log.exception("running-trades _running_trades_payload failed")
+        payload = {"items": [], "count": 0, "error": "payload_build_failed"}
+
     try:
         return finalize_endpoint(
             "running_trades",
-            _running_trades_payload(limit),
+            payload,
             valid_running_trades_payload,
         )
     except Exception:
-        log.exception("running-trades endpoint failed; returning empty payload")
-        # Never 500 from this endpoint — frontend should see empty list, not CORS noise.
-        return {"items": [], "count": 0, "error": "transient_payload_error"}
+        log.exception("running-trades finalize_endpoint failed")
+        # Last-ditch: return the raw payload without LKG/finalize semantics.
+        return payload if isinstance(payload, dict) else {"items": [], "count": 0, "error": "finalize_failed"}
 
 
 @router.get("/api/research/coverage")
