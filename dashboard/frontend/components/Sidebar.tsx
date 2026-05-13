@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
-  { href: "/dashboard",       label: "Command Center", icon: LayoutDashboard, auth: true },
   { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
   { href: "/research",        label: "AI Research",     icon: Bot           },
   { href: "/watchlist",       label: "Watchlist",       icon: Bookmark, auth: true },
@@ -133,7 +132,7 @@ export default function Sidebar({
           )}
           {!user && (
             <div className="text-[0.65rem] text-center mt-2" style={{ color: "var(--text-dim)" }}>
-              Sign in to unlock Watchlist + Command Center
+              Sign in to unlock your personal Watchlist
             </div>
           )}
         </div>
