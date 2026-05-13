@@ -201,8 +201,18 @@ def _persist_watchlist_os(uid: int, body: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
-    cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)
+    live_ok = cache_set(_live_key(uid), body, ttl_seconds=WL_OS_TTL)
+    lkg_ok = cache_set(_lkg_key(uid), body, ttl_seconds=WL_OS_LKG_TTL)
+    if not live_ok or not lkg_ok:
+        logger.warning(
+            "watchlist_os: cache write degraded uid=%s live_ok=%s lkg_ok=%s items=%d",
+            uid, live_ok, lkg_ok, len(items),
+        )
+    else:
+        logger.info(
+            "watchlist_os: persisted uid=%s items=%d live_key=%s ttl=%s",
+            uid, len(items), _live_key(uid), WL_OS_TTL,
+        )
 
     gv_after = 0
     try:
@@ -309,21 +319,32 @@ def invalidate_watchlist_os_cache(uid: int) -> None:
 
 
 def _refresh_watchlist_os(uid: int, trigger: str = "background") -> Dict[str, Any]:
-    """Rebuild + persist watchlist OS snapshot. Returns dict with persisted + version info."""
+    """Rebuild + persist watchlist OS snapshot. Returns dict with persisted + version info.
+
+    Logs full traceback on failure so silent persistence bugs are visible in Railway logs.
+    """
     try:
         body = _build_watchlist_os_payload(uid)
+    except Exception:
+        logger.exception("watchlist_os build failed uid=%s trigger=%s", uid, trigger)
+        _append_event_trace(uid, f"refresh_{trigger}_build_error", None)
+        return {"persisted": False, "stage": "build"}
+
+    try:
         _persist_watchlist_os(uid, body)
-        gv = body.get("_global_state_version", 0)
-        rev = (body.get("_trust") or {}).get("bundle_revision", 0)
-        _append_event_trace(uid, f"refresh_{trigger}", None, {
-            "global_state_version": gv,
-            "bundle_revision": rev,
-            "symbol_count": len(body.get("items") or []),
-        })
-        return {"persisted": True, "global_state_version": gv, "bundle_revision": rev}
-    except Exception as exc:
-        logger.warning("watchlist_os background refresh failed uid=%s: %s", uid, exc)
-        return {"persisted": False}
+    except Exception:
+        logger.exception("watchlist_os persist failed uid=%s trigger=%s", uid, trigger)
+        _append_event_trace(uid, f"refresh_{trigger}_persist_error", None)
+        return {"persisted": False, "stage": "persist"}
+
+    gv = body.get("_global_state_version", 0)
+    rev = (body.get("_trust") or {}).get("bundle_revision", 0)
+    _append_event_trace(uid, f"refresh_{trigger}", None, {
+        "global_state_version": gv,
+        "bundle_revision": rev,
+        "symbol_count": len(body.get("items") or []),
+    })
+    return {"persisted": True, "global_state_version": gv, "bundle_revision": rev}
 
 
 def _attach_row_versions(payload: Dict[str, Any]) -> Dict[str, Any]:

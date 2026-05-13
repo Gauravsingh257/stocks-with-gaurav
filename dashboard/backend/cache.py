@@ -91,7 +91,7 @@ def get(key: str) -> Any | None:
                 return None
             return json.loads(raw)
         except Exception as e:
-            log.debug("Redis get error %s: %s", key, e)
+            log.warning("Redis get failed key=%s err=%s", key, e)
             return None
 
     with _memory_lock:
@@ -105,18 +105,20 @@ def get(key: str) -> Any | None:
         return val
 
 
-def set(key: str, value: Any, ttl_seconds: int = MARKET_DATA_TTL) -> None:
-    """Set value in Redis or in-memory cache with TTL."""
+def set(key: str, value: Any, ttl_seconds: int = MARKET_DATA_TTL) -> bool:
+    """Set value in Redis or in-memory cache with TTL. Returns True on success."""
     r = _get_redis()
     if r is not None:
         try:
             r.setex(key, ttl_seconds, json.dumps(value, default=str))
+            return True
         except Exception as e:
-            log.debug("Redis set error %s: %s", key, e)
-        return
+            log.warning("Redis set failed key=%s ttl=%s err=%s", key, ttl_seconds, e)
+            return False
 
     with _memory_lock:
         _memory_cache[key] = (value, time.time() + ttl_seconds)
+    return True
 
 
 def delete(key: str) -> None:
@@ -126,7 +128,7 @@ def delete(key: str) -> None:
         try:
             r.delete(key)
         except Exception as e:
-            log.debug("Redis delete error %s: %s", key, e)
+            log.warning("Redis delete failed key=%s err=%s", key, e)
 
     with _memory_lock:
         _memory_cache.pop(key, None)
