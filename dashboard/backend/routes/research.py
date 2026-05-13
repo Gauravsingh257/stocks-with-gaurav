@@ -1706,28 +1706,41 @@ def tracker_refresh():
 @router.get("/research/running-trades/history")
 def get_running_trades_history(limit: int = Query(100, ge=1, le=500)):
     """Return all running trades including closed ones (TARGET_HIT, STOP_HIT)."""
-    from dashboard.backend.db import list_running_trades
-    rows = list_running_trades(limit=limit, active_only=False)
+    try:
+        from dashboard.backend.db import list_running_trades
+        rows = list_running_trades(limit=limit, active_only=False)
+    except Exception:
+        log.exception("running-trades/history list_running_trades failed")
+        return {"items": [], "count": 0, "error": "db_query_failed"}
+
     items = []
-    for row in rows:
-        targets = [float(t) for t in row.get("targets", [])]
-        items.append({
-            "id": row["id"],
-            "symbol": row["symbol"],
-            "entry_price": float(row["entry_price"]),
-            "current_price": float(row["current_price"]),
-            "stop_loss": float(row["stop_loss"]),
-            "targets": targets,
-            "profit_loss": float(row.get("profit_loss", 0)),
-            "profit_loss_pct": float(row.get("profit_loss_pct", 0)),
-            "drawdown_pct": float(row.get("drawdown_pct", 0)),
-            "high_since_entry": row.get("high_since_entry"),
-            "low_since_entry": row.get("low_since_entry"),
-            "days_held": int(row.get("days_held", 0)),
-            "status": row.get("status", "RUNNING"),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-        })
+    for row in rows or []:
+        try:
+            entry = _f(row.get("entry_price"))
+            if entry <= 0:
+                continue
+            targets_raw = row.get("targets") or []
+            targets = [_f(t) for t in targets_raw if t is not None]
+            items.append({
+                "id": row.get("id"),
+                "symbol": row.get("symbol"),
+                "entry_price": entry,
+                "current_price": _f(row.get("current_price"), entry),
+                "stop_loss": _f(row.get("stop_loss"), entry * 0.95),
+                "targets": targets,
+                "profit_loss": _f(row.get("profit_loss")),
+                "profit_loss_pct": _f(row.get("profit_loss_pct")),
+                "drawdown_pct": _f(row.get("drawdown_pct")),
+                "high_since_entry": row.get("high_since_entry"),
+                "low_since_entry": row.get("low_since_entry"),
+                "days_held": int(_f(row.get("days_held"))),
+                "status": row.get("status", "RUNNING"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            })
+        except Exception as exc:
+            log.warning("running-trades/history row skip sym=%s err=%s", row.get("symbol"), exc)
+            continue
     return {"items": items, "count": len(items)}
 
 
