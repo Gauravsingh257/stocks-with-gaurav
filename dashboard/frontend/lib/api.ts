@@ -1325,6 +1325,7 @@ export const api = {
   longtermResearch: (limit = 12, authToken?: string | null) =>
     get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken, 30_000),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
+  liveSignals: (limit = 40) => get<{ items: Array<{ signal_id?: string; symbol?: string; direction?: string; strategy_name?: string; entry?: number | null; stop_loss?: number | null; target1?: number | null; target2?: number | null; score?: number | null; confidence?: number | null; timestamp?: string; signal_kind?: string }>; count: number; source?: string }>(`/api/research/live-signals?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
   researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchValidation: (horizon: "SWING" | "LONGTERM" = "SWING", topK = 10, targetUniverse = 2200) =>

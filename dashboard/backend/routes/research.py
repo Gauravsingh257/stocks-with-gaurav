@@ -725,6 +725,16 @@ def _longterm_payload(limit: int) -> dict:
     }
 
 
+def _f(v, default: float = 0.0) -> float:
+    """Coerce to float; return default on None / unparseable. Used to harden running_trades rows."""
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def _running_trades_payload(limit: int) -> dict:
     rows = list_running_trades(limit=limit, active_only=True)
 
@@ -734,61 +744,71 @@ def _running_trades_payload(limit: int) -> dict:
     stored_cmp_map: dict[str, float] = {}
     for r in rows:
         try:
-            stored_cmp_map[r["symbol"]] = float(r["current_price"])
+            v = r["current_price"]
+            if v is not None:
+                stored_cmp_map[r["symbol"]] = float(v)
         except (TypeError, ValueError, KeyError):
             pass
     cmp_resolved = resolve_cmp([r["symbol"] for r in rows], scan_cmp_map=stored_cmp_map)
 
     items: list[dict] = []
     for row in rows:
-        targets = [float(t) for t in row.get("targets", [])]
-        entry = float(row["entry_price"])
-        sym = row["symbol"]
-        live = cmp_resolved.get(sym)
-        if live:
-            current = float(live["price"])
-            cmp_source = live["source"]
-            cmp_age_sec = int(live["age_sec"])
-        else:
-            current = float(row["current_price"])
-            cmp_source = "db_snapshot"
-            cmp_age_sec = None
-        stop = float(row["stop_loss"])
-        max_target = max(targets) if targets else entry
-        range_size = max(max_target - entry, 0.01)
-        progress = max(0.0, min(1.0, (current - entry) / range_size))
-        if current <= stop * 1.01:
-            color = "red"
-        elif progress >= 0.75:
-            color = "green"
-        else:
-            color = "yellow"
-        items.append(
-            {
-                "id": row["id"],
-                "symbol": row["symbol"],
-                "entry_price": entry,
-                "current_price": current,
-                "cmp_source": cmp_source,
-                "cmp_age_sec": cmp_age_sec,
-                "stop_loss": stop,
-                "targets": targets,
-                "profit_loss": round(current - entry, 2),
-                "profit_loss_pct": round((current - entry) / entry * 100, 2) if entry else 0.0,
-                "drawdown": float(row.get("drawdown", 0)),
-                "drawdown_pct": float(row.get("drawdown_pct", 0)),
-                "high_since_entry": row.get("high_since_entry"),
-                "low_since_entry": row.get("low_since_entry"),
-                "days_held": int(row.get("days_held", 0)),
-                "distance_to_target": row.get("distance_to_target"),
-                "distance_to_stop_loss": row.get("distance_to_stop_loss"),
-                "status": row.get("status", "RUNNING"),
-                "progress": round(progress, 4),
-                "progress_color": color,
-                "created_at": row.get("created_at"),
-                "updated_at": row.get("updated_at"),
-            }
-        )
+        try:
+            targets_raw = row.get("targets") or []
+            targets = [_f(t) for t in targets_raw if t is not None]
+            entry = _f(row.get("entry_price"))
+            if entry <= 0:
+                # Row corrupt — skip rather than 500 the whole endpoint.
+                continue
+            sym = row["symbol"]
+            live = cmp_resolved.get(sym)
+            if live:
+                current = _f(live.get("price"), entry)
+                cmp_source = live.get("source") or "live"
+                cmp_age_sec = int(live.get("age_sec") or 0)
+            else:
+                current = _f(row.get("current_price"), entry)
+                cmp_source = "db_snapshot"
+                cmp_age_sec = None
+            stop = _f(row.get("stop_loss"), entry * 0.95)
+            max_target = max(targets) if targets else entry
+            range_size = max(max_target - entry, 0.01)
+            progress = max(0.0, min(1.0, (current - entry) / range_size))
+            if current <= stop * 1.01:
+                color = "red"
+            elif progress >= 0.75:
+                color = "green"
+            else:
+                color = "yellow"
+            items.append(
+                {
+                    "id": row.get("id"),
+                    "symbol": sym,
+                    "entry_price": entry,
+                    "current_price": current,
+                    "cmp_source": cmp_source,
+                    "cmp_age_sec": cmp_age_sec,
+                    "stop_loss": stop,
+                    "targets": targets,
+                    "profit_loss": round(current - entry, 2),
+                    "profit_loss_pct": round((current - entry) / entry * 100, 2),
+                    "drawdown": _f(row.get("drawdown")),
+                    "drawdown_pct": _f(row.get("drawdown_pct")),
+                    "high_since_entry": row.get("high_since_entry"),
+                    "low_since_entry": row.get("low_since_entry"),
+                    "days_held": int(_f(row.get("days_held"))),
+                    "distance_to_target": row.get("distance_to_target"),
+                    "distance_to_stop_loss": row.get("distance_to_stop_loss"),
+                    "status": row.get("status", "RUNNING"),
+                    "progress": round(progress, 4),
+                    "progress_color": color,
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        except Exception as exc:
+            log.warning("running_trades: row skipped sym=%s err=%s", row.get("symbol"), exc)
+            continue
     return {"items": items, "count": len(items)}
 
 
@@ -937,14 +957,45 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
     return finalize_endpoint("longterm", full, valid_research_list_payload)
 
 
+@router.get("/api/research/live-signals")
+@router.get("/research/live-signals")
+def get_live_signals(limit: int = Query(40, ge=1, le=200)):
+    """
+    Surface today's Telegram-delivered signals so the website never diverges
+    from what users see in Telegram.
+
+    Reads Redis `signals:today:YYYY-MM-DD` list (RPUSHed by the engine on every
+    Telegram send via utils.telegram_signal_log.push_signal_to_redis).
+    """
+    try:
+        from dashboard.backend.terminal_events import read_today_signals
+        items = read_today_signals() or []
+        # newest first, then bounded
+        items = list(reversed(items))[:limit]
+        return {
+            "items": items,
+            "count": len(items),
+            "source": "signals:today",
+            "note": "Mirror of Telegram signal stream. Same truth, same time.",
+        }
+    except Exception:
+        log.exception("live-signals endpoint failed; returning empty payload")
+        return {"items": [], "count": 0, "error": "transient_payload_error"}
+
+
 @router.get("/api/research/running-trades")
 @router.get("/research/running-trades")
 def get_running_trades(limit: int = Query(40, ge=1, le=200)):
-    return finalize_endpoint(
-        "running_trades",
-        _running_trades_payload(limit),
-        valid_running_trades_payload,
-    )
+    try:
+        return finalize_endpoint(
+            "running_trades",
+            _running_trades_payload(limit),
+            valid_running_trades_payload,
+        )
+    except Exception:
+        log.exception("running-trades endpoint failed; returning empty payload")
+        # Never 500 from this endpoint — frontend should see empty list, not CORS noise.
+        return {"items": [], "count": 0, "error": "transient_payload_error"}
 
 
 @router.get("/api/research/coverage")

@@ -26,6 +26,7 @@ import { ResearchLayerDebugPanel } from "./ResearchLayerDebugPanel";
 import { ResearchConversionPanel } from "./ResearchConversionPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
+import LiveSignals from "./LiveSignals";
 import { DailyIdeasLeadModal } from "./DailyIdeasLeadModal";
 import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
@@ -863,6 +864,7 @@ export default function ResearchPage() {
         )}
       </div>
       </StaggerItem>
+      <StaggerItem><LiveSignals /></StaggerItem>
       <StaggerItem><RunningTradesMonitor items={running} /></StaggerItem>
       </>)}
 
