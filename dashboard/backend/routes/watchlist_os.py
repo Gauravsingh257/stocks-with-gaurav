@@ -106,12 +106,16 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
         snap = {}
 
     _t0 = time.perf_counter_ns()
-    enriched = build_operating_payload(
-        symbols,
-        rmap,
-        snap if isinstance(snap, dict) else {},
-        uid,
-    )
+    try:
+        enriched = build_operating_payload(
+            symbols,
+            rmap,
+            snap if isinstance(snap, dict) else {},
+            uid,
+        )
+    except Exception:
+        logger.exception("build_operating_payload failed uid=%s symbols=%s", uid, symbols)
+        enriched = []
     _build_ms = round((time.perf_counter_ns() - _t0) / 1_000_000, 2)
     try:
         promotion_transition_touch(uid, enriched)
@@ -122,21 +126,40 @@ def _build_watchlist_os_payload(uid: int) -> Dict[str, Any]:
         feed_tail = append_feed_diff(uid, enriched)
     except Exception as exc:
         logger.debug("feed append skipped: %s", exc)
-        feed_tail = load_feed_only(uid, 12)
+        try:
+            feed_tail = load_feed_only(uid, 12)
+        except Exception:
+            feed_tail = []
 
     now = time.time()
+    try:
+        retention = retention_hints(enriched)
+    except Exception:
+        logger.exception("retention_hints failed uid=%s", uid)
+        retention = {}
+    try:
+        alignment = market_alignment(snap if isinstance(snap, dict) else {})
+    except Exception:
+        logger.exception("market_alignment failed uid=%s", uid)
+        alignment = {}
+    try:
+        decision_portfolios = build_virtual_portfolios(enriched)
+    except Exception:
+        logger.exception("build_virtual_portfolios failed uid=%s", uid)
+        decision_portfolios = {}
+
     body: Dict[str, Any] = {
         "ok": True,
         "engine_version": "watchlist_os_v2",
         "items": enriched,
         "feed": feed_tail,
-        "retention": retention_hints(enriched),
-        "market_alignment": market_alignment(snap if isinstance(snap, dict) else {}),
+        "retention": retention,
+        "market_alignment": alignment,
         "counts": {
             "symbols": len(symbols),
-            "with_research": sum(1 for x in enriched if x.get("meta", {}).get("has_research_row")),
+            "with_research": sum(1 for x in enriched if isinstance(x, dict) and (x.get("meta") or {}).get("has_research_row")),
         },
-        "decision_portfolios": build_virtual_portfolios(enriched),
+        "decision_portfolios": decision_portfolios,
         "decision_engine_version": "phase5_5_v1",
         "snapshot_stale": False,
         "snapshot_source": "live",
