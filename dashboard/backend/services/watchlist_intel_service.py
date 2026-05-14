@@ -744,21 +744,14 @@ def build_symbol_intel(
     except Exception:
         out["decision"] = {"note": "decision_intel_unavailable"}
 
+    # Legacy decision-engine override removed: it was wiping entry/SL/target
+    # whenever decision_intelligence_engine's show_actionable_levels=False,
+    # which was tuned against the old readiness_pct heuristic and now
+    # contradicts the new action_tag-based classifier (Elite EXECUTE_NOW
+    # picks were getting their levels wiped despite GOOD ENTRY state).
+    # The classifier in _derive_setup_status + _monitor_state_label is the
+    # single source of truth for level visibility now.
     dec = out.get("decision") if isinstance(out.get("decision"), dict) else {}
-    tl = dec.get("trade_levels") if isinstance(dec.get("trade_levels"), dict) else {}
-    if tl and not tl.get("show_actionable_levels"):
-        out["recommendation"]["show_trade_levels"] = False
-        out["recommendation"]["entry_ready"] = False
-        out["entry_ready"] = False
-        out["recommendation"]["entry"] = None
-        out["recommendation"]["stop_loss"] = None
-        out["recommendation"]["target"] = None
-        mc = tl.get("monitoring_copy") or (
-            "Monitoring zone — levels withheld until liquidity, RR, and execution realism align."
-        )
-        if out.get("setup_status") not in ("TARGET_HIT", "FAILED", "INVALIDATED"):
-            out["recommendation"]["monitoring_message"] = mc
-        out["recommendation"]["rationale"] = None
 
     try:
         from dashboard.backend.global_state_version import read_global_state_version
