@@ -58,9 +58,10 @@ def _trend_state(idea: Optional[Dict[str, Any]]) -> str:
     smc = _smc(idea)
     d = str(smc.get("structure_dir") or "").upper()
     st = str(smc.get("structure") or "")
-    if "DISTRIB" in str(idea.get("setup") or "").upper():
+    setup_str = str((idea or {}).get("setup") or "").upper()
+    if "DISTRIB" in setup_str:
         return "distribution"
-    if "ACCUM" in str(idea.get("setup") or "").upper():
+    if "ACCUM" in setup_str:
         return "accumulation"
     if d == "BEARISH":
         return "bearish"
