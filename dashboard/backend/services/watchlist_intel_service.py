@@ -161,6 +161,19 @@ def _derive_setup_status(
     confidence: float,
     readiness_pct: float,
 ) -> str:
+    """Decide the lifecycle status from the recommendation's *actual* signals.
+
+    The previous version drove off `readiness_pct` (which depends on
+    `smc_evidence` — a field the scanner agents never populate, so every
+    recommendation came back with ~21% readiness regardless of quality).
+    Stocks with confidence 92 + RR 3.5 + EXECUTE_NOW were classified as
+    EARLY/FORMING and the UI showed WATCH for everything.
+
+    New logic prefers the recommendation's published signals: `action_tag`
+    (EXECUTE_NOW / WAIT_FOR_RETEST / MISSED / IN_MOTION), `risk_reward`,
+    `confidence_score`, and `entry_gap_pct`. Falls back to readiness_pct
+    only when those are missing.
+    """
     if active_trade:
         return "ACTIVE"
     if not idea:
@@ -176,6 +189,36 @@ def _derive_setup_status(
         if res in ("LOSS", "STOP_HIT") or "STOP" in exit_reason:
             return "FAILED"
         return "INVALIDATED"
+
+    action_tag = str(idea.get("action_tag") or "").upper()
+    rr = float(idea.get("risk_reward") or 0)
+    try:
+        gap_pct = float(idea.get("entry_gap_pct") or 0)
+    except (TypeError, ValueError):
+        gap_pct = 0.0
+
+    if action_tag == "MISSED":
+        return "INVALIDATED"
+
+    # READY: published research is signalling actionable entry RIGHT NOW.
+    if action_tag == "EXECUTE_NOW" and confidence >= 55 and rr >= 1.2:
+        return "READY"
+
+    # IN_MOTION already-running trade idea — surface as ACTIVE on the card.
+    if action_tag == "IN_MOTION":
+        return "ACTIVE"
+
+    # NEAR_ENTRY: pullback-pending signals OR strong picks within 2.5% of entry.
+    if action_tag == "WAIT_FOR_RETEST" and confidence >= 50:
+        return "NEAR_ENTRY"
+    if confidence >= 70 and rr >= 1.5 and abs(gap_pct) <= 2.5:
+        return "NEAR_ENTRY"
+
+    if confidence >= 60:
+        return "FORMING"
+
+    # Legacy readiness_pct fallback (kept as a safety net for paths that
+    # don't carry action_tag).
     if confidence >= 76 and readiness_pct >= 72:
         return "READY"
     if confidence >= 62 and readiness_pct >= 52:
@@ -372,24 +415,46 @@ def _monitor_state_label(
     deteriorating: bool,
     active_trade: bool,
     trend: str,
+    idea: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Single human-readable badge label for the watchlist card.
 
-    Drives the GOOD ENTRY / WATCH / AVOID / WEAK / BREAKOUT SOON UI state.
+    Calibrated against *actual* recommendation signals (action_tag) rather
+    than the readiness_pct that always reads ~21% because smc_evidence
+    isn't populated by current scanner agents.
+
     Order is intentional — actionable signals take precedence.
     """
     if active_trade:
         return _MONITOR_LABELS["ACTIVE"]
-    if setup_status in ("READY",) and rr >= 1.5 and confidence >= 55 and not deteriorating:
+
+    action_tag = str((idea or {}).get("action_tag") or "").upper()
+
+    # GOOD ENTRY: published research says enter NOW, with sensible RR/conviction.
+    if action_tag == "EXECUTE_NOW" and rr >= 1.2 and confidence >= 55 and not deteriorating:
         return _MONITOR_LABELS["GOOD_ENTRY"]
-    if setup_status in ("INVALIDATED", "FAILED"):
+    if setup_status == "READY" and rr >= 1.2 and confidence >= 55 and not deteriorating:
+        return _MONITOR_LABELS["GOOD_ENTRY"]
+
+    # AVOID: structure broken / setup invalidated / missed window.
+    if setup_status in ("INVALIDATED", "FAILED") or action_tag == "MISSED":
         return _MONITOR_LABELS["AVOID"]
+
+    # WEAK: deterioration flagged or weak RR + bearish trend.
     if deteriorating:
         return _MONITOR_LABELS["WEAK"]
-    if setup_status == "NEAR_ENTRY" and readiness >= 60:
+    if rr and rr < 1.0 and trend == "bearish":
+        return _MONITOR_LABELS["WEAK"]
+
+    # BREAKOUT SOON: pullback-pending OR near entry with strong conviction.
+    if action_tag == "WAIT_FOR_RETEST" and confidence >= 50:
         return _MONITOR_LABELS["BREAKOUT_SOON"]
-    if setup_status in ("NEAR_ENTRY", "FORMING") or readiness >= 40:
-        return _MONITOR_LABELS["WATCH"]
+    if setup_status == "NEAR_ENTRY":
+        return _MONITOR_LABELS["BREAKOUT_SOON"]
+    if readiness >= 60:
+        return _MONITOR_LABELS["BREAKOUT_SOON"]
+
+    # WATCH: forming/early, structure intact but timing not ready.
     return _MONITOR_LABELS["WATCH"]
 
 
@@ -404,32 +469,105 @@ def _smart_summary_sentence(
     idea: Optional[Dict[str, Any]],
     sym: str,
 ) -> str:
-    """One short, professional sentence — no AI essays, no jargon.
+    """One short, professional, human sentence (12-20 words preferred).
 
-    Replaces the multi-paragraph 'Decision Intelligence' dump on the card.
+    No ML jargon: no probability dumps, no lifecycle/maturity/calibration words.
+    Picks the dominant input (RR / volume / trend / sector / proximity /
+    deterioration / breakout pressure / momentum) and crafts a contextual
+    one-liner.
     """
+    idea = idea or {}
+    sector = (idea.get("sector") or "").strip()
+    action_tag = str(idea.get("action_tag") or "").upper()
+
+    # Pull contextual signals from technical_signals dict if present
+    tech = idea.get("technical_signals") if isinstance(idea.get("technical_signals"), dict) else {}
+    tech_blob = " ".join(str(v) for v in tech.values()).lower() if tech else ""
+    fund = idea.get("fundamental_signals") if isinstance(idea.get("fundamental_signals"), dict) else {}
+    fund_blob = " ".join(str(v) for v in fund.values()).lower() if fund else ""
+
+    has_volume = any(k in tech_blob for k in ("volume breakout", "volume expansion", "above-avg volume", "above avg volume", "accumulation"))
+    has_breakout = any(k in tech_blob for k in ("breakout", "bos", "structural breakout"))
+    has_rs = any(k in tech_blob for k in ("outperform", "relative strength", "rs ", "rs+"))
+    has_pullback = any(k in tech_blob for k in ("pullback", "retest", "demand zone", "support test"))
+    has_sector_strength = "sector" in fund_blob and any(k in fund_blob for k in ("outperform", "strong", "improving"))
+
+    rr_clean = f"{rr:.1f}R RR" if rr and rr >= 1.0 else None
+    sector_part = f" in {sector}" if sector and len(sector) < 30 else ""
+
+    # ── GOOD ENTRY ─────────────────────────────────────────────
     if monitor_state == _MONITOR_LABELS["GOOD_ENTRY"]:
-        rr_part = f" with {rr:.1f}R reward-to-risk" if rr else ""
-        return f"Clean setup{rr_part} — entry window is active."
+        if has_volume and has_breakout:
+            return f"Clean breakout setup with volume confirmation and {rr_clean or 'favorable risk-reward'}."
+        if has_pullback:
+            return f"Pullback into demand zone — entry active with {rr_clean or 'controlled downside'}."
+        if rr and rr >= 2.5:
+            return f"Strong structure with {rr_clean} reward-to-risk — entry window active{sector_part}."
+        if confidence >= 80:
+            return f"High-conviction setup{sector_part} — entry zone active now."
+        return f"Clean setup with {rr_clean or 'favorable risk-reward'} — entry window active."
+
+    # ── ACTIVE ─────────────────────────────────────────────────
     if monitor_state == _MONITOR_LABELS["ACTIVE"]:
-        return "Position already open — manage via active positions."
+        if action_tag == "IN_MOTION":
+            return "Trade in motion vs plan — manage via active positions."
+        return "Position already open — manage in active positions section."
+
+    # ── AVOID ──────────────────────────────────────────────────
     if monitor_state == _MONITOR_LABELS["AVOID"]:
-        return "Setup invalidated — wait for fresh structure before re-entering."
+        if action_tag == "MISSED":
+            return "Move extended past entry — wait for fresh structure or pullback."
+        if not idea:
+            return "Setup invalidated — avoid until fresh structure forms."
+        return "Setup invalidated or broken — avoid entries until structure resets."
+
+    # ── WEAK ───────────────────────────────────────────────────
     if monitor_state == _MONITOR_LABELS["WEAK"]:
-        return "Setup quality deteriorating — avoid new entries until structure re-confirms."
+        if deteriorating and has_volume:
+            return "Momentum fading despite volume — avoid new entries until structure re-confirms."
+        if rr and rr < 1.0:
+            return f"Risk-reward weakened to {rr:.1f}R — better setups available elsewhere."
+        if trend == "bearish":
+            return "Bearish bias with weakening structure — stand down on long entries."
+        return "Setup quality deteriorating — wait for re-confirmation."
+
+    # ── BREAKOUT SOON ──────────────────────────────────────────
     if monitor_state == _MONITOR_LABELS["BREAKOUT_SOON"]:
-        trigger = ""
-        if idea and idea.get("entry_price"):
-            trigger = f" above ₹{float(idea['entry_price']):.2f}"
+        entry = idea.get("entry_price")
+        trigger = f" above ₹{float(entry):.2f}" if entry else ""
+        try:
+            gap_pct = float(idea.get("entry_gap_pct") or 0)
+        except (TypeError, ValueError):
+            gap_pct = 0.0
+        if gap_pct > 4:
+            return f"Price extended {gap_pct:.1f}% past entry — wait for pullback to plan."
+        if has_volume and has_breakout:
+            return f"Range tightening{trigger} — watch for confirmation volume."
+        if has_pullback:
+            return f"Pullback in progress{trigger} — wait for support to hold."
+        if action_tag == "WAIT_FOR_RETEST":
+            return f"Awaiting retest near entry{trigger} — patience for clean fill."
+        if has_rs:
+            return f"Building beneath resistance{trigger} with improving relative strength."
         return f"Approaching trigger{trigger} — monitor for breakout confirmation."
-    # WATCH default
+
+    # ── WATCH (default) ────────────────────────────────────────
+    if not idea:
+        return "Monitoring — no published research setup yet for this symbol."
+    # Idea exists but no clear actionable hook
+    if has_sector_strength and trend == "bullish":
+        return "Bullish structure forming with sector tailwind — waiting for better entry."
+    if has_volume and not has_breakout:
+        return "Volume accumulating but no clean trigger yet — patience for breakout."
+    if trend == "bullish" and confidence >= 60:
+        return "Bullish trend intact — wait for cleaner entry or pullback to plan."
     if trend == "bullish":
-        return "Structure forming with bullish bias — waiting for trigger confirmation."
+        return "Trend intact, but current entry is not favorable — wait for pullback."
     if trend == "bearish":
         return "Bearish bias — no actionable long setup currently."
-    if not idea:
-        return "Monitoring — no published research setup yet."
-    return "Setup still building — waiting for liquidity and structure to align."
+    if rr and rr < 1.5:
+        return "Healthy structure, waiting for better risk-reward alignment."
+    return "Structure okay but timing not ready — monitor for clearer trigger."
 
 
 def build_symbol_intel(
@@ -507,6 +645,7 @@ def build_symbol_intel(
         deteriorating=deteriorating,
         active_trade=bool(active_trade),
         trend=trend,
+        idea=idea,
     )
     smart_sentence = _smart_summary_sentence(
         monitor_state=monitor_state,
