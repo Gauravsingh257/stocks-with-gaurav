@@ -255,18 +255,34 @@ export default function MarketIntelligencePage() {
           </div>
         </Card>
 
-        {/* ── US Macro (FRED) ────────────────────────── */}
-        <Card title="US Macro Indicators" icon={TrendingUp}>
-          <div className="grid grid-cols-2 gap-4">
-            <Stat label="Fed Funds Rate" value={macro?.fed_funds_rate != null ? `${fmt(macro.fed_funds_rate)}%` : "—"} />
-            <Stat label="US 10Y Yield" value={macro?.us_10y_yield != null ? `${fmt(macro.us_10y_yield)}%` : "—"} />
-            <Stat label="DXY Index" value={macro?.dxy_index != null ? fmt(macro.dxy_index) : "—"} />
-            <Stat label="US CPI (Index)" value={macro?.us_cpi_yoy != null ? fmt(macro.us_cpi_yoy, 1) : "—"} />
-          </div>
-          <div className="mt-3 text-[0.65rem]" style={{ color: "var(--text-dim, #64748b)" }}>
-            Source: FRED · {macro?.fetched_at ? new Date(macro.fetched_at).toLocaleTimeString() : "No API key set"}
-          </div>
-        </Card>
+        {/* ── US Macro (FRED) — hide entirely when no values are available so we
+            never claim to source FRED data and then show four dashes. ── */}
+        {(macro?.fed_funds_rate != null ||
+          macro?.us_10y_yield != null ||
+          macro?.dxy_index != null ||
+          macro?.us_cpi_yoy != null) && (
+          <Card title="US Macro Indicators" icon={TrendingUp}>
+            <div className="grid grid-cols-2 gap-4">
+              {macro?.fed_funds_rate != null && (
+                <Stat label="Fed Funds Rate" value={`${fmt(macro.fed_funds_rate)}%`} />
+              )}
+              {macro?.us_10y_yield != null && (
+                <Stat label="US 10Y Yield" value={`${fmt(macro.us_10y_yield)}%`} />
+              )}
+              {macro?.dxy_index != null && (
+                <Stat label="DXY Index" value={fmt(macro.dxy_index)} />
+              )}
+              {macro?.us_cpi_yoy != null && (
+                <Stat label="US CPI (Index)" value={fmt(macro.us_cpi_yoy, 1)} />
+              )}
+            </div>
+            {macro?.fetched_at && (
+              <div className="mt-3 text-[0.65rem]" style={{ color: "var(--text-dim, #64748b)" }}>
+                Source: FRED · {new Date(macro.fetched_at).toLocaleTimeString()}
+              </div>
+            )}
+          </Card>
+        )}
 
         {/* ── Next Holiday Card ──────────────────────── */}
         <Card title="Next Holiday" icon={Calendar}>

@@ -1185,6 +1185,21 @@ def _start_research_scan_background(agent_name: str, label: str) -> dict:
             else:
                 summary = out.get("summary", str(out)) if isinstance(out, dict) else str(out)
                 log.info("[%s] background scan finished: %s", agent_name, summary)
+                # Refresh Redis-cached payload from DB so /api/research/{swing,longterm}
+                # returns the new picks immediately. Without this, scan saved to DB but
+                # the GET path serves stale/empty cache until next snapshot writer cycle.
+                try:
+                    if horizon == "SWING":
+                        full_payload = _swing_payload(100)
+                    elif horizon == "LONGTERM":
+                        full_payload = _longterm_payload(100)
+                    else:
+                        full_payload = None
+                    if isinstance(full_payload, dict) and full_payload.get("items"):
+                        finalize_endpoint(horizon.lower(), full_payload, valid_research_list_payload)
+                        log.info("[%s] redis snapshot refreshed (%d items)", horizon, len(full_payload["items"]))
+                except Exception:
+                    log.exception("[%s] redis snapshot refresh after scan failed", horizon)
                 _scan_history_set(horizon, {
                     "status": "success",
                     "started_at": started_at,
