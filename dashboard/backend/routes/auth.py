@@ -354,6 +354,8 @@ def add_to_watchlist(
         ack = _bump_watchlist_os(uid)
         resp: dict = {"ok": True, "symbol": symbol}
         resp["persisted"] = ack.get("persisted", False)
+        if ack.get("stage"):
+            resp["persist_stage_failed"] = ack["stage"]
         if ack.get("global_state_version") is not None:
             resp["global_state_version"] = ack["global_state_version"]
         if ack.get("bundle_revision") is not None:
