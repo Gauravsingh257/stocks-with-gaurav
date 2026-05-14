@@ -325,17 +325,17 @@ def _refresh_watchlist_os(uid: int, trigger: str = "background") -> Dict[str, An
     """
     try:
         body = _build_watchlist_os_payload(uid)
-    except Exception:
+    except Exception as exc:
         logger.exception("watchlist_os build failed uid=%s trigger=%s", uid, trigger)
-        _append_event_trace(uid, f"refresh_{trigger}_build_error", None)
-        return {"persisted": False, "stage": "build"}
+        _append_event_trace(uid, f"refresh_{trigger}_build_error", None, {"err": f"{type(exc).__name__}: {exc}"[:200]})
+        return {"persisted": False, "stage": "build", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
     try:
         _persist_watchlist_os(uid, body)
-    except Exception:
+    except Exception as exc:
         logger.exception("watchlist_os persist failed uid=%s trigger=%s", uid, trigger)
-        _append_event_trace(uid, f"refresh_{trigger}_persist_error", None)
-        return {"persisted": False, "stage": "persist"}
+        _append_event_trace(uid, f"refresh_{trigger}_persist_error", None, {"err": f"{type(exc).__name__}: {exc}"[:200]})
+        return {"persisted": False, "stage": "persist", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
     gv = body.get("_global_state_version", 0)
     rev = (body.get("_trust") or {}).get("bundle_revision", 0)

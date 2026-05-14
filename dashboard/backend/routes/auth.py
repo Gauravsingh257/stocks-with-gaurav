@@ -173,8 +173,8 @@ def _bump_watchlist_os(uid: int) -> dict:
         invalidate_watchlist_os_cache(uid)
         return _refresh_watchlist_os(uid, trigger="mutation")
     except Exception as exc:
-        log.warning("watchlist OS refresh after mutation failed uid=%s: %s", uid, exc)
-        return {"persisted": False}
+        log.exception("watchlist OS refresh after mutation failed uid=%s", uid)
+        return {"persisted": False, "stage": "bump", "error": f"{type(exc).__name__}: {exc}"}
 
 
 _DECODE_OPTS = {
@@ -356,6 +356,8 @@ def add_to_watchlist(
         resp["persisted"] = ack.get("persisted", False)
         if ack.get("stage"):
             resp["persist_stage_failed"] = ack["stage"]
+        if ack.get("error"):
+            resp["persist_error"] = ack["error"]
         if ack.get("global_state_version") is not None:
             resp["global_state_version"] = ack["global_state_version"]
         if ack.get("bundle_revision") is not None:
