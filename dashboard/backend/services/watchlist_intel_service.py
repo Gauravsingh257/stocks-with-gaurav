@@ -353,6 +353,85 @@ def _invalidation_copy(idea: Optional[Dict[str, Any]], setup_status: str) -> Opt
     return "Score or structure dropped below watchlist retention threshold."
 
 
+_MONITOR_LABELS = {
+    "GOOD_ENTRY": "GOOD ENTRY",
+    "WATCH": "WATCH",
+    "AVOID": "AVOID",
+    "WEAK": "WEAK",
+    "BREAKOUT_SOON": "BREAKOUT SOON",
+    "ACTIVE": "ACTIVE",
+}
+
+
+def _monitor_state_label(
+    *,
+    setup_status: str,
+    readiness: float,
+    confidence: float,
+    rr: float,
+    deteriorating: bool,
+    active_trade: bool,
+    trend: str,
+) -> str:
+    """Single human-readable badge label for the watchlist card.
+
+    Drives the GOOD ENTRY / WATCH / AVOID / WEAK / BREAKOUT SOON UI state.
+    Order is intentional — actionable signals take precedence.
+    """
+    if active_trade:
+        return _MONITOR_LABELS["ACTIVE"]
+    if setup_status in ("READY",) and rr >= 1.5 and confidence >= 55 and not deteriorating:
+        return _MONITOR_LABELS["GOOD_ENTRY"]
+    if setup_status in ("INVALIDATED", "FAILED"):
+        return _MONITOR_LABELS["AVOID"]
+    if deteriorating:
+        return _MONITOR_LABELS["WEAK"]
+    if setup_status == "NEAR_ENTRY" and readiness >= 60:
+        return _MONITOR_LABELS["BREAKOUT_SOON"]
+    if setup_status in ("NEAR_ENTRY", "FORMING") or readiness >= 40:
+        return _MONITOR_LABELS["WATCH"]
+    return _MONITOR_LABELS["WATCH"]
+
+
+def _smart_summary_sentence(
+    *,
+    monitor_state: str,
+    readiness: float,
+    rr: float,
+    confidence: float,
+    trend: str,
+    deteriorating: bool,
+    idea: Optional[Dict[str, Any]],
+    sym: str,
+) -> str:
+    """One short, professional sentence — no AI essays, no jargon.
+
+    Replaces the multi-paragraph 'Decision Intelligence' dump on the card.
+    """
+    if monitor_state == _MONITOR_LABELS["GOOD_ENTRY"]:
+        rr_part = f" with {rr:.1f}R reward-to-risk" if rr else ""
+        return f"Clean setup{rr_part} — entry window is active."
+    if monitor_state == _MONITOR_LABELS["ACTIVE"]:
+        return "Position already open — manage via active positions."
+    if monitor_state == _MONITOR_LABELS["AVOID"]:
+        return "Setup invalidated — wait for fresh structure before re-entering."
+    if monitor_state == _MONITOR_LABELS["WEAK"]:
+        return "Setup quality deteriorating — avoid new entries until structure re-confirms."
+    if monitor_state == _MONITOR_LABELS["BREAKOUT_SOON"]:
+        trigger = ""
+        if idea and idea.get("entry_price"):
+            trigger = f" above ₹{float(idea['entry_price']):.2f}"
+        return f"Approaching trigger{trigger} — monitor for breakout confirmation."
+    # WATCH default
+    if trend == "bullish":
+        return "Structure forming with bullish bias — waiting for trigger confirmation."
+    if trend == "bearish":
+        return "Bearish bias — no actionable long setup currently."
+    if not idea:
+        return "Monitoring — no published research setup yet."
+    return "Setup still building — waiting for liquidity and structure to align."
+
+
 def build_symbol_intel(
     symbol: str,
     idea: Optional[Dict[str, Any]],
@@ -417,12 +496,38 @@ def build_symbol_intel(
 
     inv_detail = _invalidation_copy(idea, setup_status)
 
+    # ── Clean monitor state for the new watchlist terminal UI ─────────
+    # Single human-readable label that drives the front-end badge.
+    # Order matters: actionable > weakening > avoid > forming > monitoring.
+    monitor_state = _monitor_state_label(
+        setup_status=setup_status,
+        readiness=readiness_weighted,
+        confidence=confidence,
+        rr=rr,
+        deteriorating=deteriorating,
+        active_trade=bool(active_trade),
+        trend=trend,
+    )
+    smart_sentence = _smart_summary_sentence(
+        monitor_state=monitor_state,
+        readiness=readiness_weighted,
+        rr=rr,
+        confidence=confidence,
+        trend=trend,
+        deteriorating=deteriorating,
+        idea=idea,
+        sym=sym,
+    )
+
     out: Dict[str, Any] = {
         "symbol": sym,
         "quote_ltp": _try_quote_ltp(sym),
         "horizon": horizon,
         "trend_state": trend,
         "setup_status": setup_status,
+        # NEW clean fields for the redesigned watchlist UI
+        "monitor_state": monitor_state,
+        "smart_sentence": smart_sentence,
         "lifecycle_stage": lifecycle_stage_from_setup_status(setup_status),
         "current_stage": lifecycle_stage_from_setup_status(setup_status),
         "progression": steps,

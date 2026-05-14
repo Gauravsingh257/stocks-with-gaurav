@@ -124,6 +124,26 @@ CREATE TABLE IF NOT EXISTS user_watchlist (
     UNIQUE(user_id, symbol)
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
+
+CREATE TABLE IF NOT EXISTS user_positions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL,
+    symbol          TEXT NOT NULL,
+    entry_price     REAL NOT NULL,
+    stop_loss       REAL,
+    target_1        REAL,
+    target_2        REAL,
+    holding_period  TEXT NOT NULL DEFAULT 'Swing',
+    taken_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    status          TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','TARGET_HIT','SL_HIT','CLOSED')),
+    exit_price      REAL,
+    exit_reason     TEXT,
+    exited_at       TEXT,
+    pnl_r           REAL,
+    notes           TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_positions_user ON user_positions(user_id, status);
 """
 
 
@@ -396,5 +416,272 @@ def remove_from_watchlist(
         if ack.get("bundle_revision") is not None:
             resp["snapshot_version"] = ack["bundle_revision"]
         return resp
+    finally:
+        conn.close()
+
+
+# ── User Positions (Take Entry → live tracking) ───────────────────────────────
+
+class TakeEntryRequest(BaseModel):
+    symbol: str
+    entry_price: float
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    holding_period: str | None = "Swing"
+    notes: str | None = None
+
+
+def _normalize_symbol(s: str) -> str:
+    return str(s or "").strip().upper().replace("NSE:", "").replace(" ", "")
+
+
+@router.post("/api/watchlist/positions")
+def take_entry(req: TakeEntryRequest, user: dict = Depends(get_current_user)):
+    """Open a new active position from the watchlist 'Take Entry' button.
+    Persists to user_positions SQLite table. CMP + P&L computed at read time.
+    """
+    sym = _normalize_symbol(req.symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    if not req.entry_price or req.entry_price <= 0:
+        raise HTTPException(status_code=400, detail="entry_price must be > 0")
+    conn = get_connection()
+    try:
+        # Block duplicate active positions for the same symbol per user
+        existing = conn.execute(
+            "SELECT id FROM user_positions WHERE user_id = ? AND symbol = ? AND status = 'ACTIVE'",
+            (user["sub"], sym),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Active position already exists for {sym}")
+
+        cur = conn.execute(
+            """
+            INSERT INTO user_positions
+                (user_id, symbol, entry_price, stop_loss, target_1, target_2, holding_period, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user["sub"], sym,
+                float(req.entry_price),
+                float(req.stop_loss) if req.stop_loss is not None else None,
+                float(req.target_1) if req.target_1 is not None else None,
+                float(req.target_2) if req.target_2 is not None else None,
+                (req.holding_period or "Swing").strip()[:32],
+                (req.notes or "").strip()[:240] or None,
+            ),
+        )
+        conn.commit()
+        pos_id = cur.lastrowid
+        return {
+            "ok": True,
+            "id": pos_id,
+            "symbol": sym,
+            "entry_price": req.entry_price,
+            "status": "ACTIVE",
+        }
+    finally:
+        conn.close()
+
+
+def _resolve_position_cmp(symbol: str) -> tuple[float | None, str | None]:
+    """Best-effort CMP for an active position. Returns (price, source)."""
+    sym = _normalize_symbol(symbol)
+    # 1. Engine snapshot equity_ltp (freshest during market hours)
+    try:
+        from dashboard.backend.state_bridge import get_engine_snapshot
+        snap = get_engine_snapshot() or {}
+        eq = snap.get("equity_ltp")
+        if isinstance(eq, dict):
+            v = eq.get(sym) or eq.get(f"NSE:{sym}")
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v), "engine_ltp"
+    except Exception:
+        pass
+    # 2. Redis ltp:{SYM}
+    try:
+        from dashboard.backend.cache import get_ltp
+        p = get_ltp(sym)
+        if p is not None:
+            return float(p), "redis_ltp"
+    except Exception:
+        pass
+    # 3. equity:ltp:latest hash
+    try:
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+        if r is not None:
+            raw = r.hget("equity:ltp:latest", sym)
+            if raw is not None:
+                return float(raw if isinstance(raw, (int, float, str)) else raw.decode()), "ltp_hash"
+    except Exception:
+        pass
+    return None, None
+
+
+def _classify_position(entry: float, cmp: float | None, sl: float | None, t1: float | None, t2: float | None) -> str:
+    """Derive a status hint independent of stored status — for live display."""
+    if cmp is None or entry <= 0:
+        return "Active"
+    if sl is not None and cmp <= sl * 1.005:
+        return "SL Risk"
+    target = t2 or t1
+    if target is not None and cmp >= target * 0.995:
+        return "Near Target"
+    pnl_pct = (cmp - entry) / entry * 100
+    if pnl_pct >= 5:
+        return "Running"
+    if pnl_pct <= -3:
+        return "Underwater"
+    return "Active"
+
+
+@router.get("/api/watchlist/positions")
+def list_positions(
+    status: str = "ACTIVE",
+    user: dict = Depends(get_current_user),
+):
+    """Return user's active (or closed) positions enriched with live CMP + P&L."""
+    valid = {"ACTIVE", "CLOSED", "ALL"}
+    s = status.upper()
+    if s not in valid:
+        raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
+    conn = get_connection()
+    try:
+        if s == "ALL":
+            rows = conn.execute(
+                "SELECT * FROM user_positions WHERE user_id = ? ORDER BY taken_at DESC",
+                (user["sub"],),
+            ).fetchall()
+        elif s == "CLOSED":
+            rows = conn.execute(
+                "SELECT * FROM user_positions WHERE user_id = ? AND status != 'ACTIVE' ORDER BY taken_at DESC",
+                (user["sub"],),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM user_positions WHERE user_id = ? AND status = 'ACTIVE' ORDER BY taken_at DESC",
+                (user["sub"],),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    items: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        d = dict(row)
+        entry = float(d["entry_price"])
+        cmp_val, cmp_src = _resolve_position_cmp(d["symbol"]) if d.get("status") == "ACTIVE" else (None, None)
+        sl = float(d["stop_loss"]) if d.get("stop_loss") is not None else None
+        t1 = float(d["target_1"]) if d.get("target_1") is not None else None
+        t2 = float(d["target_2"]) if d.get("target_2") is not None else None
+        risk = abs(entry - sl) if sl is not None else None
+        pnl_pct = None
+        pnl_r = None
+        if cmp_val is not None and entry > 0:
+            pnl_pct = round((cmp_val - entry) / entry * 100, 2)
+            if risk and risk > 0:
+                pnl_r = round((cmp_val - entry) / risk, 2)
+        # Holding days
+        try:
+            taken_dt = datetime.fromisoformat(str(d.get("taken_at")).replace(" ", "T"))
+            if taken_dt.tzinfo is None:
+                taken_dt = taken_dt.replace(tzinfo=timezone.utc)
+            holding_days = max(0, (now - taken_dt).days)
+        except Exception:
+            holding_days = None
+
+        live_status = _classify_position(entry, cmp_val, sl, t1, t2) if d.get("status") == "ACTIVE" else d.get("status")
+        items.append({
+            "id": d.get("id"),
+            "symbol": d.get("symbol"),
+            "entry_price": entry,
+            "stop_loss": sl,
+            "target_1": t1,
+            "target_2": t2,
+            "holding_period": d.get("holding_period"),
+            "taken_at": d.get("taken_at"),
+            "status": d.get("status"),
+            "live_status": live_status,
+            "cmp": cmp_val,
+            "cmp_source": cmp_src,
+            "pnl_pct": pnl_pct,
+            "pnl_r": pnl_r,
+            "holding_days": holding_days,
+            "exit_price": d.get("exit_price"),
+            "exit_reason": d.get("exit_reason"),
+            "exited_at": d.get("exited_at"),
+            "notes": d.get("notes"),
+        })
+    return {"items": items, "count": len(items), "status_filter": s}
+
+
+class ClosePositionRequest(BaseModel):
+    exit_price: float | None = None
+    exit_reason: str | None = None  # e.g. "manual", "target_hit", "sl_hit"
+
+
+@router.delete("/api/watchlist/positions/{position_id}")
+def close_position(
+    position_id: int,
+    body: ClosePositionRequest | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """Close an active position. If exit_price not supplied, uses live CMP."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM user_positions WHERE id = ? AND user_id = ?",
+            (position_id, user["sub"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="position not found")
+        if row["status"] != "ACTIVE":
+            raise HTTPException(status_code=409, detail=f"position already {row['status']}")
+
+        exit_price = None
+        exit_reason = (body.exit_reason if body else None) or "manual"
+        if body and body.exit_price is not None:
+            exit_price = float(body.exit_price)
+        else:
+            cmp_val, _ = _resolve_position_cmp(row["symbol"])
+            if cmp_val is not None:
+                exit_price = cmp_val
+
+        entry = float(row["entry_price"])
+        sl = float(row["stop_loss"]) if row["stop_loss"] is not None else None
+        pnl_r = None
+        new_status = "CLOSED"
+        if exit_price is not None:
+            risk = abs(entry - sl) if sl else None
+            if risk and risk > 0:
+                pnl_r = round((exit_price - entry) / risk, 2)
+            # Auto-classify if hit target/SL
+            t1 = float(row["target_1"]) if row["target_1"] is not None else None
+            t2 = float(row["target_2"]) if row["target_2"] is not None else None
+            target = t2 or t1
+            if sl is not None and exit_price <= sl * 1.005:
+                new_status = "SL_HIT"
+            elif target is not None and exit_price >= target * 0.995:
+                new_status = "TARGET_HIT"
+
+        conn.execute(
+            """
+            UPDATE user_positions
+            SET status = ?, exit_price = ?, exit_reason = ?, pnl_r = ?, exited_at = datetime('now')
+            WHERE id = ?
+            """,
+            (new_status, exit_price, exit_reason, pnl_r, position_id),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "id": position_id,
+            "symbol": row["symbol"],
+            "status": new_status,
+            "exit_price": exit_price,
+            "pnl_r": pnl_r,
+        }
     finally:
         conn.close()

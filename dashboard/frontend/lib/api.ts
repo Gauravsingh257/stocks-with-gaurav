@@ -587,6 +587,10 @@ export interface WatchlistIntelItem {
   horizon?: string | null;
   trend_state?: string;
   setup_status?: string;
+  /** Clean monitor state for the redesigned watchlist UI: GOOD ENTRY | WATCH | AVOID | WEAK | BREAKOUT SOON | ACTIVE */
+  monitor_state?: string;
+  /** One-sentence professional summary — replaces the AI dump on the card */
+  smart_sentence?: string;
   /** Institutional lifecycle label (DISCOVERY → ENTRY_READY → ACTIVE …) */
   lifecycle_stage?: string;
   current_stage?: string;
@@ -1384,6 +1388,62 @@ export const api = {
   removeFromWatchlist: (token: string, symbol: string) =>
     fetch(`${BASE}/api/watchlist/${encodeURIComponent(symbol)}`, {
       method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json()),
+
+  /** Take Entry — open an active position from the watchlist. */
+  takeEntry: (
+    token: string,
+    payload: {
+      symbol: string;
+      entry_price: number;
+      stop_loss?: number | null;
+      target_1?: number | null;
+      target_2?: number | null;
+      holding_period?: string;
+      notes?: string;
+    },
+  ) =>
+    fetch(`${BASE}/api/watchlist/positions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => r.json()),
+
+  listPositions: (token: string, status: "ACTIVE" | "CLOSED" | "ALL" = "ACTIVE") =>
+    fetch(`${BASE}/api/watchlist/positions?status=${status}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json() as Promise<{
+      items: Array<{
+        id: number;
+        symbol: string;
+        entry_price: number;
+        stop_loss: number | null;
+        target_1: number | null;
+        target_2: number | null;
+        holding_period: string | null;
+        taken_at: string;
+        status: string;
+        live_status: string | null;
+        cmp: number | null;
+        cmp_source: string | null;
+        pnl_pct: number | null;
+        pnl_r: number | null;
+        holding_days: number | null;
+        exit_price: number | null;
+        exit_reason: string | null;
+        exited_at: string | null;
+        notes: string | null;
+      }>;
+      count: number;
+      status_filter: string;
+    }>),
+
+  closePosition: (token: string, positionId: number, body?: { exit_price?: number; exit_reason?: string }) =>
+    fetch(`${BASE}/api/watchlist/positions/${positionId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
     }).then((r) => r.json()),
 
   /** Phase 2 — AI watchlist operating system (enriched items + feed + retention). */
