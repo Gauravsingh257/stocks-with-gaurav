@@ -154,7 +154,9 @@ def _verify_password(password: str, hashed: str) -> bool:
 
 def _create_token(user_id: int, email: str, role: str) -> str:
     payload = {
-        "sub": user_id,
+        # Encode as string — PyJWT 2.10+ rejects integer `sub` on decode with
+        # InvalidSubjectError. We coerce back to int in decode_token below.
+        "sub": str(user_id),
         "email": email,
         "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRY_DAYS),
@@ -175,22 +177,34 @@ def _bump_watchlist_os(uid: int) -> dict:
         return {"persisted": False}
 
 
+_DECODE_OPTS = {
+    # PyJWT 2.10+ raises InvalidSubjectError when `sub` is a non-string.
+    # Existing tokens in the wild have integer `sub`; disable strict sub typing.
+    "verify_sub": False,
+}
+
+
+def _coerce_user(payload: dict) -> dict:
+    """Normalize `sub` to integer for downstream code that expects int user_id."""
+    sub = payload.get("sub")
+    if isinstance(sub, str) and sub.isdigit():
+        payload["sub"] = int(sub)
+    return payload
+
+
 def decode_token(token: str) -> dict:
-    """Decode JWT. Tries the resolved (shared) secret first, then the fallback
-    so tokens issued by old replicas using the fallback still validate during
-    the migration window. New tokens always sign with the resolved secret.
+    """Decode JWT. Disables strict sub-as-string check so existing integer-sub
+    tokens validate, and coerces `sub` back to int for downstream consumers.
     """
     secret = _resolve_jwt_secret()
     try:
-        return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        return _coerce_user(jwt.decode(token, secret, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTS))
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
-        # Fallback to the deterministic default — only useful during the
-        # rollout window before all replicas converge on the Redis secret.
         if secret != _JWT_SECRET_FALLBACK:
             try:
-                return jwt.decode(token, _JWT_SECRET_FALLBACK, algorithms=[JWT_ALGORITHM])
+                return _coerce_user(jwt.decode(token, _JWT_SECRET_FALLBACK, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTS))
             except jwt.ExpiredSignatureError:
                 raise HTTPException(status_code=401, detail="Token expired")
             except jwt.InvalidTokenError:
@@ -231,52 +245,6 @@ class LoginRequest(BaseModel):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-
-@router.get("/api/auth/_debug/secret-fingerprint")
-def auth_secret_fingerprint():
-    """Returns a SHA-256 fingerprint of the JWT secret currently used by this
-    worker, plus the secret source. Lets ops verify all replicas agree without
-    leaking the secret itself."""
-    import hashlib
-    s = _resolve_jwt_secret()
-    return {
-        "fingerprint": hashlib.sha256(s.encode()).hexdigest()[:16],
-        "secret_length": len(s),
-        "env_jwt_secret_set": bool(os.getenv("JWT_SECRET", "").strip()),
-        "cached": _jwt_secret_cache is not None,
-        "is_fallback": s == _JWT_SECRET_FALLBACK,
-    }
-
-
-@router.post("/api/auth/_debug/decode")
-def auth_decode_probe(body: dict):
-    """Diagnostic: returns *which* secret successfully decodes the given token,
-    and the resolved fingerprint. Never returns the secret value itself.
-    Safe to deploy because the body must contain a valid token (auth is required)."""
-    import hashlib
-    token = str(body.get("token") or "")
-    if not token:
-        return {"error": "no token"}
-    resolved = _resolve_jwt_secret()
-    fp = hashlib.sha256(resolved.encode()).hexdigest()[:16]
-    out: dict = {"resolved_fingerprint": fp}
-    for name, sec in (("resolved", resolved), ("fallback", _JWT_SECRET_FALLBACK)):
-        try:
-            jwt.decode(token, sec, algorithms=[JWT_ALGORITHM])
-            out[name] = "valid"
-        except jwt.InvalidSignatureError:
-            out[name] = "invalid_signature"
-        except jwt.ExpiredSignatureError:
-            out[name] = "expired"
-        except Exception as e:
-            out[name] = f"err:{type(e).__name__}"
-    # Token header
-    try:
-        out["header"] = jwt.get_unverified_header(token)
-    except Exception as e:
-        out["header_err"] = str(e)
-    return out
-
 
 @router.post("/api/auth/register")
 def register(req: RegisterRequest):
