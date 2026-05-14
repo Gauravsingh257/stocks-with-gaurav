@@ -41,6 +41,15 @@ function stripNse(s: string): string {
   return s.replace(/^NSE:/i, "").trim().toUpperCase();
 }
 
+// Institutional-terminal feel: monospaced tabular numerals for every price.
+// Matches the aesthetic of Bloomberg/Zerodha/TradingView — numbers line up
+// vertically across rows so the eye scans P&L without re-anchoring.
+const MONO_NUMS: React.CSSProperties = {
+  fontFamily: "ui-monospace, 'JetBrains Mono', 'SF Mono', 'Geist Mono', Menlo, monospace",
+  fontVariantNumeric: "tabular-nums slashed-zero",
+  fontFeatureSettings: '"tnum", "zero"',
+};
+
 function fmtPrice(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   return `₹${n.toFixed(2)}`;
@@ -52,28 +61,33 @@ function fmtPct(n: number | null | undefined): string {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-const STATE_STYLE: Record<string, { bg: string; border: string; text: string }> = {
-  "GOOD ENTRY": { bg: "rgba(0,224,150,0.12)", border: "rgba(0,224,150,0.45)", text: "#00e096" },
-  WATCH: { bg: "rgba(0,212,255,0.10)", border: "rgba(0,212,255,0.35)", text: "#00d4ff" },
-  "BREAKOUT SOON": { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.42)", text: "#ffa502" },
-  WEAK: { bg: "rgba(255,71,87,0.10)", border: "rgba(255,71,87,0.42)", text: "#ff4757" },
-  AVOID: { bg: "rgba(255,71,87,0.14)", border: "rgba(255,71,87,0.5)", text: "#ff5e7e" },
-  ACTIVE: { bg: "rgba(0,224,150,0.10)", border: "rgba(0,224,150,0.35)", text: "#00e096" },
+// State badge: border-only, no background fill. Reads as a classification
+// label rather than an action button — matches the institutional aesthetic
+// where status labels are restrained and the data does the talking.
+const STATE_STYLE: Record<string, { border: string; text: string }> = {
+  "GOOD ENTRY":    { border: "rgba(0,224,150,0.55)",  text: "#00e096" },
+  WATCH:           { border: "rgba(148,163,184,0.45)", text: "#94a3b8" },
+  "BREAKOUT SOON": { border: "rgba(245,158,11,0.55)", text: "#ffa502" },
+  WEAK:            { border: "rgba(255,71,87,0.5)",   text: "#ff4757" },
+  AVOID:           { border: "rgba(255,71,87,0.65)",  text: "#ff5e7e" },
+  ACTIVE:          { border: "rgba(0,224,150,0.45)",  text: "#00e096" },
 };
 
 function StateBadge({ state }: { state: string }) {
-  const s = STATE_STYLE[state] || { bg: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.1)", text: "var(--text-secondary)" };
+  const s = STATE_STYLE[state] || { border: "rgba(255,255,255,0.18)", text: "var(--text-secondary)" };
   return (
     <span
       style={{
-        padding: "4px 10px",
-        borderRadius: 6,
-        background: s.bg,
+        padding: "2px 8px",
+        borderRadius: 3,
+        background: "transparent",
         border: `1px solid ${s.border}`,
         color: s.text,
-        fontSize: "0.68rem",
-        fontWeight: 800,
-        letterSpacing: 0.4,
+        fontSize: "0.6rem",
+        fontWeight: 700,
+        letterSpacing: 0.8,
+        textTransform: "uppercase",
+        lineHeight: 1.4,
       }}
     >
       {state}
@@ -117,11 +131,19 @@ function StockCard({
 
   return (
     <div
-      className="glass"
+      className="wl-card"
       style={{
-        padding: 14,
+        padding: "14px 16px",
+        background: "rgba(255,255,255,0.015)",
         border: "1px solid rgba(255,255,255,0.06)",
-        borderRadius: 10,
+        borderLeft: state === "GOOD ENTRY"
+          ? "2px solid rgba(0,224,150,0.55)"
+          : state === "AVOID" || state === "WEAK"
+            ? "2px solid rgba(255,71,87,0.45)"
+            : state === "BREAKOUT SOON"
+              ? "2px solid rgba(245,158,11,0.45)"
+              : "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 6,
         display: "flex",
         flexDirection: "column",
         gap: 10,
@@ -130,45 +152,54 @@ function StockCard({
       {/* Top row: symbol + CMP + remove */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <a
               href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(row.symbol)}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: "var(--text-primary)", fontWeight: 800, fontSize: "1.05rem", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}
+              style={{
+                color: "var(--text-primary)",
+                fontWeight: 700,
+                fontSize: "1rem",
+                letterSpacing: 0.4,
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
             >
-              {row.symbol} <ExternalLink size={11} color="var(--text-dim)" />
+              {row.symbol} <ExternalLink size={10} color="var(--text-dim)" />
             </a>
             <StateBadge state={state} />
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.68rem", color: "var(--text-dim)", letterSpacing: 0.2 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               <TrendIcon trend={row.trend_state} />
               {row.trend_state || "—"}
             </span>
-            {row.horizon && <span style={{ color: "var(--text-dim)" }}>· {row.horizon}</span>}
+            {row.horizon && <span>· {row.horizon}</span>}
             {row.intelligence?.risk_grade && (
-              <span style={{ color: "var(--text-dim)" }}>· Grade {row.intelligence.risk_grade}</span>
+              <span>· Grade {row.intelligence.risk_grade}</span>
             )}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: "1.15rem", fontWeight: 800, color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
+            <div style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", ...MONO_NUMS }}>
               {cmp != null ? `₹${cmp.toFixed(2)}` : "—"}
             </div>
             {pctChange != null && (
               <div
                 style={{
-                  fontSize: "0.7rem",
+                  fontSize: "0.66rem",
                   color: pctChange >= 0 ? "#00e096" : "#ff4757",
-                  fontVariantNumeric: "tabular-nums",
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 2,
+                  ...MONO_NUMS,
                 }}
               >
-                {pctChange >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                {pctChange >= 0 ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}
                 {pctChange >= 0 ? "+" : ""}
                 {pctChange.toFixed(2)}% vs entry
               </div>
@@ -181,47 +212,46 @@ function StockCard({
             title="Remove"
             aria-label={`Remove ${row.symbol}`}
           >
-            <Trash2 size={14} />
+            <Trash2 size={13} />
           </button>
         </div>
       </div>
 
-      {/* Smart sentence */}
-      <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+      {/* Smart sentence — restrained, single source of editorial truth */}
+      <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5, letterSpacing: 0.05 }}>
         {sentence}
       </div>
 
-      {/* Actionable levels */}
+      {/* Actionable levels — institutional row: thin top divider, mono nums,
+          restrained accents. Reads like a Bloomberg ticket. */}
       {showLevels && entry && sl && (
         <div
           style={{
-            padding: "10px 12px",
-            background: "rgba(0,224,150,0.06)",
-            border: "1px solid rgba(0,224,150,0.2)",
-            borderRadius: 8,
+            paddingTop: 10,
+            borderTop: "1px dashed rgba(0,224,150,0.22)",
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr) auto",
-            gap: 10,
-            alignItems: "center",
-            fontSize: "0.72rem",
-            fontVariantNumeric: "tabular-nums",
+            gap: 12,
+            alignItems: "end",
+            fontSize: "0.78rem",
+            ...MONO_NUMS,
           }}
         >
           <div>
-            <div style={{ color: "var(--text-dim)", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: 0.5 }}>Entry</div>
-            <strong style={{ color: "var(--text-primary)" }}>{fmtPrice(entry)}</strong>
+            <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 2 }}>Entry</div>
+            <strong style={{ color: "var(--text-primary)", fontWeight: 600 }}>{fmtPrice(entry)}</strong>
           </div>
           <div>
-            <div style={{ color: "var(--text-dim)", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: 0.5 }}>SL</div>
-            <strong style={{ color: "#ff4757" }}>{fmtPrice(sl)}</strong>
+            <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 2 }}>SL</div>
+            <strong style={{ color: "#ff4757", fontWeight: 600 }}>{fmtPrice(sl)}</strong>
           </div>
           <div>
-            <div style={{ color: "var(--text-dim)", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: 0.5 }}>Target</div>
-            <strong style={{ color: "#00e096" }}>{fmtPrice(target)}</strong>
+            <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 2 }}>Target</div>
+            <strong style={{ color: "#00e096", fontWeight: 600 }}>{fmtPrice(target)}</strong>
           </div>
           <div>
-            <div style={{ color: "var(--text-dim)", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: 0.5 }}>R:R</div>
-            <strong style={{ color: "var(--text-primary)" }}>{rr ? `1:${rr.toFixed(2)}` : "—"}</strong>
+            <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 2 }}>R:R</div>
+            <strong style={{ color: "var(--text-primary)", fontWeight: 600 }}>{rr ? `1:${rr.toFixed(2)}` : "—"}</strong>
           </div>
           {hasActivePosition ? (
             <button
@@ -306,42 +336,43 @@ function PositionRow({
         gridTemplateColumns: "1.2fr 0.8fr 0.8fr 0.7fr 0.7fr 0.7fr 0.7fr auto",
         gap: 10,
         alignItems: "center",
-        padding: "10px 12px",
-        background: "rgba(255,255,255,0.02)",
+        padding: "10px 14px",
+        background: "rgba(255,255,255,0.015)",
         border: "1px solid rgba(255,255,255,0.05)",
-        borderRadius: 8,
-        fontSize: "0.74rem",
-        fontVariantNumeric: "tabular-nums",
+        borderLeft: "2px solid rgba(0,224,150,0.35)",
+        borderRadius: 4,
+        fontSize: "0.72rem",
+        ...MONO_NUMS,
       }}
     >
-      <div>
-        <strong style={{ color: "var(--text-primary)" }}>{pos.symbol}</strong>
-        <div style={{ fontSize: "0.6rem", color: "var(--text-dim)" }}>
+      <div style={{ fontFamily: "inherit" }}>
+        <strong style={{ color: "var(--text-primary)", letterSpacing: 0.3, fontFamily: "var(--font-sans, system-ui)" }}>{pos.symbol}</strong>
+        <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.2, fontFamily: "var(--font-sans, system-ui)" }}>
           {pos.holding_period || "Swing"} · {pos.holding_days ?? 0}d
         </div>
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>Entry</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>Entry</div>
         {fmtPrice(entry)}
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>CMP</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>CMP</div>
         <strong>{fmtPrice(cmp)}</strong>
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>SL</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>SL</div>
         <span style={{ color: "#ff4757" }}>{fmtPrice(pos.stop_loss)}</span>
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>Target</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>Target</div>
         <span style={{ color: "#00e096" }}>{fmtPrice(pos.target_2 ?? pos.target_1)}</span>
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>P&amp;L</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>P&amp;L</div>
         <strong style={{ color: (pnlPct ?? 0) >= 0 ? "#00e096" : "#ff4757" }}>{fmtPct(pnlPct)}</strong>
       </div>
       <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.6rem" }}>R</div>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>R</div>
         <span style={{ color: (pnlR ?? 0) >= 0 ? "#00e096" : "#ff4757" }}>{pnlR != null ? pnlR.toFixed(2) : "—"}</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
@@ -592,23 +623,44 @@ export default function WatchlistPage() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {intel.map((row) => {
+            {intel.map((row, i) => {
               const cmp = marketLtp[stripNse(row.symbol)] ?? row.quote_ltp ?? null;
               return (
-                <StockCard
+                <div
                   key={row.symbol}
-                  row={row}
-                  cmp={cmp}
-                  onRemove={handleRemove}
-                  onTakeEntry={handleTakeEntry}
-                  takingEntry={takingEntry === row.symbol}
-                  hasActivePosition={activePositionSymbols.has(stripNse(row.symbol))}
-                />
+                  className="wl-card-enter"
+                  style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}
+                >
+                  <StockCard
+                    row={row}
+                    cmp={cmp}
+                    onRemove={handleRemove}
+                    onTakeEntry={handleTakeEntry}
+                    takingEntry={takingEntry === row.symbol}
+                    hasActivePosition={activePositionSymbols.has(stripNse(row.symbol))}
+                  />
+                </div>
               );
             })}
           </div>
         )}
       </section>
+
+      {/* Subtle staggered fade-in on initial mount — the one "high-impact
+          moment" the frontend-design skill calls for. Restrained per the
+          institutional aesthetic; no spring physics, no scale, no rotation. */}
+      <style jsx global>{`
+        @keyframes wlCardEnter {
+          from { opacity: 0; transform: translateY(4px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        .wl-card-enter {
+          animation: wlCardEnter 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .wl-card-enter { animation: none; }
+        }
+      `}</style>
     </div>
   );
 }
