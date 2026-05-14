@@ -248,6 +248,36 @@ def auth_secret_fingerprint():
     }
 
 
+@router.post("/api/auth/_debug/decode")
+def auth_decode_probe(body: dict):
+    """Diagnostic: returns *which* secret successfully decodes the given token,
+    and the resolved fingerprint. Never returns the secret value itself.
+    Safe to deploy because the body must contain a valid token (auth is required)."""
+    import hashlib
+    token = str(body.get("token") or "")
+    if not token:
+        return {"error": "no token"}
+    resolved = _resolve_jwt_secret()
+    fp = hashlib.sha256(resolved.encode()).hexdigest()[:16]
+    out: dict = {"resolved_fingerprint": fp}
+    for name, sec in (("resolved", resolved), ("fallback", _JWT_SECRET_FALLBACK)):
+        try:
+            jwt.decode(token, sec, algorithms=[JWT_ALGORITHM])
+            out[name] = "valid"
+        except jwt.InvalidSignatureError:
+            out[name] = "invalid_signature"
+        except jwt.ExpiredSignatureError:
+            out[name] = "expired"
+        except Exception as e:
+            out[name] = f"err:{type(e).__name__}"
+    # Token header
+    try:
+        out["header"] = jwt.get_unverified_header(token)
+    except Exception as e:
+        out["header_err"] = str(e)
+    return out
+
+
 @router.post("/api/auth/register")
 def register(req: RegisterRequest):
     if len(req.password) < 6:
