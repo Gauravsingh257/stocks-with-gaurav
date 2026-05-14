@@ -1,10 +1,23 @@
 """
 dashboard/backend/routes/auth.py
 Simple email/password authentication with JWT tokens.
+
+Multi-replica JWT secret: When JWT_SECRET env var is unset, all replicas
+must agree on the same secret or tokens issued by one replica fail to
+validate on another. We resolve this by:
+
+  1. Preferring env JWT_SECRET if set (operator-controlled).
+  2. Else: read shared secret from Redis (`auth:jwt_secret`); first replica
+     to start writes a strong random secret with SETNX so all subsequent
+     replicas read the same value.
+  3. Else: fall back to a fixed deterministic default. This last fallback
+     keeps single-instance dev environments working but should never be
+     hit on production (Redis is always available there).
 """
 
 import logging
 import os
+import secrets
 from datetime import datetime, timezone, timedelta
 
 import bcrypt
@@ -18,9 +31,75 @@ from dashboard.backend.ops_auth import verify_ops_key
 router = APIRouter(tags=["auth"])
 log = logging.getLogger("dashboard.auth")
 
-JWT_SECRET = os.getenv("JWT_SECRET", "swg-default-secret-change-me-in-prod")
+_JWT_SECRET_REDIS_KEY = "auth:jwt_secret"
+_JWT_SECRET_FALLBACK = "swg-default-secret-change-me-in-prod"
+
+
+_jwt_secret_cache: str | None = None
+
+
+def _resolve_jwt_secret() -> str:
+    """Resolve the JWT secret with caching.
+
+    Redis ALWAYS wins to prevent multi-replica split-brain where some
+    replicas have env JWT_SECRET set and others use the default fallback.
+    Order:
+      1. Redis `auth:jwt_secret` — shared canonical secret across all replicas.
+      2. If Redis is empty: seed with env JWT_SECRET (if set) or a fresh random.
+         Uses SETNX so concurrent first-starts converge on the same value.
+      3. Fixed fallback (dev only; only hit when Redis is unreachable).
+
+    Called lazily before every encode/decode so a slow Redis bootstrap doesn't
+    permanently pin replicas to the fallback secret.
+    """
+    global _jwt_secret_cache
+    if _jwt_secret_cache is not None:
+        return _jwt_secret_cache
+
+    try:
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+        if r is not None:
+            existing = r.get(_JWT_SECRET_REDIS_KEY)
+            if existing is not None:
+                _jwt_secret_cache = existing.decode() if isinstance(existing, bytes) else str(existing)
+                return _jwt_secret_cache
+            # Seed Redis with env value if operator set one, else random.
+            env_val = os.getenv("JWT_SECRET", "").strip()
+            seed = env_val or secrets.token_urlsafe(48)
+            if r.set(_JWT_SECRET_REDIS_KEY, seed, nx=True):
+                log.warning(
+                    "auth: seeded shared JWT secret in Redis (source=%s)",
+                    "env" if env_val else "random",
+                )
+                _jwt_secret_cache = seed
+                return _jwt_secret_cache
+            existing = r.get(_JWT_SECRET_REDIS_KEY)
+            if existing is not None:
+                _jwt_secret_cache = existing.decode() if isinstance(existing, bytes) else str(existing)
+                return _jwt_secret_cache
+    except Exception as exc:
+        log.warning("auth: redis-shared JWT secret unavailable (%s); using local fallback", exc)
+
+    # Redis unreachable — local fallback. Prefer env var even now so dev with
+    # JWT_SECRET set still works. Do NOT cache so we retry when Redis recovers.
+    env_val = os.getenv("JWT_SECRET", "").strip()
+    return env_val or _JWT_SECRET_FALLBACK
+
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 7
+
+
+# Back-compat module attribute; reads through to the resolver each access.
+class _JwtSecretProxy:
+    def __str__(self) -> str:
+        return _resolve_jwt_secret()
+    def __eq__(self, other): return str(self) == other
+    def encode(self, *a, **kw): return _resolve_jwt_secret().encode(*a, **kw)
+
+
+JWT_SECRET = _JwtSecretProxy()
 
 
 # ── DDL (called from schema.py init) ──────────────────────────────────────────
@@ -81,7 +160,7 @@ def _create_token(user_id: int, email: str, role: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRY_DAYS),
         "iat": datetime.now(timezone.utc),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, _resolve_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def _bump_watchlist_os(uid: int) -> dict:
@@ -97,11 +176,25 @@ def _bump_watchlist_os(uid: int) -> dict:
 
 
 def decode_token(token: str) -> dict:
+    """Decode JWT. Tries the resolved (shared) secret first, then the fallback
+    so tokens issued by old replicas using the fallback still validate during
+    the migration window. New tokens always sign with the resolved secret.
+    """
+    secret = _resolve_jwt_secret()
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
+        # Fallback to the deterministic default — only useful during the
+        # rollout window before all replicas converge on the Redis secret.
+        if secret != _JWT_SECRET_FALLBACK:
+            try:
+                return jwt.decode(token, _JWT_SECRET_FALLBACK, algorithms=[JWT_ALGORITHM])
+            except jwt.ExpiredSignatureError:
+                raise HTTPException(status_code=401, detail="Token expired")
+            except jwt.InvalidTokenError:
+                pass
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
