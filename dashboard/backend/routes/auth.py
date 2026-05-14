@@ -232,6 +232,22 @@ class LoginRequest(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@router.get("/api/auth/_debug/secret-fingerprint")
+def auth_secret_fingerprint():
+    """Returns a SHA-256 fingerprint of the JWT secret currently used by this
+    worker, plus the secret source. Lets ops verify all replicas agree without
+    leaking the secret itself."""
+    import hashlib
+    s = _resolve_jwt_secret()
+    return {
+        "fingerprint": hashlib.sha256(s.encode()).hexdigest()[:16],
+        "secret_length": len(s),
+        "env_jwt_secret_set": bool(os.getenv("JWT_SECRET", "").strip()),
+        "cached": _jwt_secret_cache is not None,
+        "is_fallback": s == _JWT_SECRET_FALLBACK,
+    }
+
+
 @router.post("/api/auth/register")
 def register(req: RegisterRequest):
     if len(req.password) < 6:
