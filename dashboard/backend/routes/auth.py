@@ -593,6 +593,23 @@ def list_positions(
             holding_days = None
 
         live_status = _classify_position(entry, cmp_val, sl, t1, t2) if d.get("status") == "ACTIVE" else d.get("status")
+
+        # For CLOSED positions, prefer stored exit-based P&L (DB pnl_r); also
+        # derive pnl_pct from exit_price so the UI doesn't show '—'.
+        if d.get("status") != "ACTIVE":
+            stored_pnl_r = d.get("pnl_r")
+            if stored_pnl_r is not None:
+                try:
+                    pnl_r = float(stored_pnl_r)
+                except (TypeError, ValueError):
+                    pass
+            exit_price = d.get("exit_price")
+            if exit_price is not None and pnl_pct is None and entry > 0:
+                try:
+                    pnl_pct = round((float(exit_price) - entry) / entry * 100, 2)
+                except (TypeError, ValueError):
+                    pass
+
         items.append({
             "id": d.get("id"),
             "symbol": d.get("symbol"),
