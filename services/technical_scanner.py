@@ -147,11 +147,11 @@ def _snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | No
         ]
     )
 
-
-def snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | None:
-    """Public wrapper used by validation/backtest paths that already have OHLC slices."""
-    return _snapshot_from_ohlc(symbol, df)
-
+    # PHASE F1 FIX: this return was previously DEAD CODE — it sat after the
+    # `snapshot_from_ohlc` wrapper's own `return`, so `_snapshot_from_ohlc`
+    # implicitly returned None for every symbol and the entire real-OHLC
+    # technical path silently fell back to sha256(ticker) hash noise.
+    # Restored to its correct position as the function's return value.
     return TechnicalSnapshot(
         symbol=symbol,
         trend_structure=trend,
@@ -166,6 +166,11 @@ def snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | Non
         technical_score=score,
         data_source="ohlc",
     )
+
+
+def snapshot_from_ohlc(symbol: str, df: pd.DataFrame) -> TechnicalSnapshot | None:
+    """Public wrapper used by validation/backtest paths that already have OHLC slices."""
+    return _snapshot_from_ohlc(symbol, df)
 
 
 def _snapshot_hash(symbol: str) -> TechnicalSnapshot:
