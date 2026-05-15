@@ -747,9 +747,37 @@ async def _collect_watchlist_fallback(
     return out
 
 
+def _maybe_apply_alpha_v2_universe(symbols: list[str]) -> list[str]:
+    """PHASE F3 shadow hook. Default OFF (ALPHA_V2 unset) → returns `symbols`
+    unchanged, so the live scan path is byte-identical to pre-F3.
+
+    When ALPHA_V2=1: intersect with the F2-cached quality universe. If the
+    cache is cold or empty we deliberately return `symbols` unchanged — a
+    missing quality cache must never empty the live scan.
+    """
+    try:
+        from services.universe_quality import (
+            alpha_v2_enabled,
+            get_quality_universe_symbols_cached,
+        )
+
+        if not alpha_v2_enabled():
+            return symbols
+        keep = set(get_quality_universe_symbols_cached())
+        if not keep:
+            log.warning("[ALPHA_V2] quality universe cache empty — falling back to unfiltered")
+            return symbols
+        filtered = [s for s in symbols if s in keep]
+        log.info("[ALPHA_V2] quality filter: %d → %d symbols", len(symbols), len(filtered))
+        return filtered or symbols
+    except Exception as exc:
+        log.warning("[ALPHA_V2] universe hook failed (%s) — unfiltered fallback", exc)
+        return symbols
+
+
 async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: int = 2200, exclude_symbols: list[str] | None = None) -> RankingResult:
     universe = load_nse_universe(target_universe)
-    symbols = universe.symbols
+    symbols = _maybe_apply_alpha_v2_universe(universe.symbols)
     # Exclude symbols already in active slots
     if exclude_symbols:
         excluded_set = set(exclude_symbols)

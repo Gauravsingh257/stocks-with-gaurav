@@ -211,15 +211,33 @@ async def run_backtest(
     log_scans: bool = False,
     transaction_cost_pct: float = 0.10,
     slippage_pct: float = 0.05,
+    universe_quality_filter: bool = False,
+    quality_min_tier: str = "Good",
 ) -> dict[str, Any]:
     """Historical validation/backtest using the same 3-layer scan engine.
 
     Each scan uses OHLC data sliced to that date, selects only all-layer-pass
     names, enters at next day's open, then exits on target, stop, or time.
+
+    When ``universe_quality_filter`` is set, the symbol set is pre-filtered
+    by the Phase F2 Quality Universe Engine using ONLY OHLC up to
+    ``start_date`` (point-in-time, no look-ahead). This isolates the effect
+    of selection quality vs the unfiltered baseline.
     """
     universe = load_nse_universe(target_universe)
     symbols = universe.symbols
     frames = await _fetch_frames(symbols, source, days=900, as_of=None)
+
+    quality_filter_stats: dict[str, Any] | None = None
+    if universe_quality_filter:
+        from services.universe_quality import filter_symbols_by_quality
+
+        symbols, quality_filter_stats = filter_symbols_by_quality(
+            symbols, frames, cutoff=start_date, min_tier=quality_min_tier
+        )
+        # keep only kept symbols' frames for the scan loop
+        frames = {s: frames.get(s) for s in symbols}
+
     dates = _scan_dates(frames, start_date, end_date)
     if scan_step_days > 1:
         dates = dates[::scan_step_days]
@@ -285,6 +303,8 @@ async def run_backtest(
             "exit_model": "target_stop_or_time_minus_slippage",
         },
         "coverage": coverage or {},
+        "universe_quality_filter": universe_quality_filter,
+        "quality_filter_stats": quality_filter_stats,
         "funnel_by_day": daily_funnels,
         "walk_forward": _walk_forward(trades),
         "metrics": metrics,

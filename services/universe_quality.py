@@ -295,8 +295,95 @@ async def build_quality_universe(
     }
 
 
+def filter_symbols_by_quality(
+    symbols: list[str],
+    frames_by_symbol: dict[str, "pd.DataFrame | None"],
+    *,
+    cutoff: str | None = None,
+    min_tier: str = "Good",
+) -> tuple[list[str], dict[str, Any]]:
+    """Point-in-time quality filter for the backtest path.
+
+    For each symbol, scores tradability using ONLY its OHLC up to `cutoff`
+    (no look-ahead into the test window — this is the whole point: the
+    universe is curated using information that was available at backtest
+    start, exactly as it would be live). Returns (kept_symbols, stats).
+
+    Pure / read-only. Reuses already-fetched frames so it adds zero network.
+    """
+    tier_rank = {"Reject": 0, "Watchlist": 1, "Good": 2, "Strong": 3, "Elite": 4}
+    floor = tier_rank.get(min_tier, 2)
+    kept: list[tuple[str, float]] = []
+    tier_counts: dict[str, int] = {}
+    rejected = 0
+
+    for sym in symbols:
+        df = frames_by_symbol.get(sym)
+        if df is None:
+            rejected += 1
+            continue
+        sliced = df
+        if cutoff is not None:
+            try:
+                d = df.copy()
+                d.columns = [str(c).lower() for c in d.columns]
+                if "date" in d.columns:
+                    ds = pd.to_datetime(d["date"], errors="coerce", utc=True).dt.tz_convert(None)
+                    sliced = d.loc[ds <= pd.Timestamp(cutoff)]
+                elif isinstance(d.index, pd.DatetimeIndex):
+                    idx = d.index.tz_convert(None) if d.index.tz is not None else d.index
+                    sliced = d.loc[idx <= pd.Timestamp(cutoff)]
+            except Exception:
+                sliced = df
+        ts = score_tradability(sym, sliced)
+        tier_counts[ts.tier] = tier_counts.get(ts.tier, 0) + 1
+        if tier_rank.get(ts.tier, 0) >= floor and ts.qualified:
+            kept.append((sym, ts.score))
+        else:
+            rejected += 1
+
+    kept.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in kept], {
+        "input_count": len(symbols),
+        "kept_count": len(kept),
+        "rejected_count": rejected,
+        "min_tier": min_tier,
+        "cutoff": cutoff,
+        "tier_counts": tier_counts,
+    }
+
+
 def _redis_key() -> str:
     return f"{REDIS_KEY_PREFIX}{date.today().isoformat()}"
+
+
+def alpha_v2_enabled() -> bool:
+    """Master flag for the F3 shadow rollout. Default OFF — when off, every
+    caller is a no-op and live behaviour is byte-identical to pre-F3."""
+    return os.getenv("ALPHA_V2", "0").strip().lower() in ("1", "true", "yes")
+
+
+def get_quality_universe_symbols_cached(min_tier: str = "Good") -> list[str]:
+    """Synchronous, non-blocking read of today's cached quality universe
+    (Redis `universe:quality:{date}`). Returns [] if not yet built — callers
+    MUST treat [] as 'no opinion' and fall back to the unfiltered list, so a
+    cold cache can never empty the live scan."""
+    try:
+        from dashboard.backend.cache import get as cache_get
+
+        cached = cache_get(_redis_key())
+        if not isinstance(cached, dict):
+            return []
+        rank = {"Reject": 0, "Watchlist": 1, "Good": 2, "Strong": 3, "Elite": 4}
+        floor = rank.get(min_tier, 2)
+        out = [
+            q["symbol"]
+            for q in cached.get("qualified", [])
+            if rank.get(q.get("tier", "Reject"), 0) >= floor and q.get("symbol")
+        ]
+        return out
+    except Exception:
+        return []
 
 
 async def get_quality_universe(

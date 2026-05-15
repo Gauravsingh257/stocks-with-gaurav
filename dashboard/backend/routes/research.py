@@ -1711,8 +1711,15 @@ async def run_research_backtest(
     source: str = Query("yfinance"),
     transaction_cost_pct: float = Query(0.10, ge=0.0, le=5.0),
     slippage_pct: float = Query(0.05, ge=0.0, le=5.0),
+    universe_quality_filter: bool = Query(False, description="F3: pre-filter universe via F2 Quality Engine (point-in-time, no look-ahead)"),
+    quality_min_tier: str = Query("Good", pattern="^(Good|Strong|Elite)$"),
 ):
-    """Run an OHLC-sliced historical backtest of the 3-layer strategy."""
+    """Run an OHLC-sliced historical backtest of the 3-layer strategy.
+
+    F3: pass universe_quality_filter=true to run the SAME backtest on the
+    F2-filtered universe — the filtered-vs-unfiltered delta is the proof of
+    whether selection quality produces edge.
+    """
     from services.backtest_engine import run_backtest
 
     try:
@@ -1728,6 +1735,8 @@ async def run_research_backtest(
             log_scans=False,
             transaction_cost_pct=transaction_cost_pct,
             slippage_pct=slippage_pct,
+            universe_quality_filter=universe_quality_filter,
+            quality_min_tier=quality_min_tier,
         )
     except Exception as exc:
         log.exception("research backtest failed: %s", exc)
