@@ -1663,6 +1663,41 @@ def get_layer_report(
     return finalize_endpoint("layer_report", rep, valid_layer_report_payload)
 
 
+@router.get("/api/research/quality-universe")
+@router.get("/research/quality-universe")
+async def get_quality_universe_endpoint(
+    limit: int = Query(120, ge=10, le=2500, description="symbols to score (bounded for interactive use)"),
+    min_score: float = Query(0.0, ge=0.0, le=100.0, description="filter qualified list to score >= this"),
+    refresh: bool = Query(False, description="bypass 24h Redis cache and rebuild"),
+    source: str = Query("yfinance"),
+):
+    """PHASE F2 — Quality Universe Engine inspection (read-only, no look-ahead,
+    no production mutation). Scores the live NSE universe on real OHLCV
+    tradability factors. `limit` bounds the symbol count so the endpoint
+    returns within the HTTP timeout; the full daily build is intended to run
+    as a background job that populates the 24h Redis cache."""
+    from services.universe_manager import load_nse_universe
+    from services.universe_quality import build_quality_universe
+
+    try:
+        universe = load_nse_universe(limit)
+        result = await build_quality_universe(universe.symbols[:limit], source=source)
+        if min_score > 0:
+            result["qualified"] = [
+                q for q in result.get("qualified", []) if q.get("score", 0) >= min_score
+            ]
+            result["qualified_count"] = len(result["qualified"])
+        result["_served_from"] = "fresh_build"
+        result["_note"] = (
+            "Bounded interactive run. Delivery% and bid/ask spread are "
+            "intentionally excluded — no real data source in repo; not synthesized."
+        )
+        return result
+    except Exception as exc:
+        log.exception("quality-universe failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"quality_universe_failed: {exc}")
+
+
 @router.get("/api/research/backtest")
 @router.get("/research/backtest")
 async def run_research_backtest(
