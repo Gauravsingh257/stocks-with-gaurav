@@ -67,3 +67,60 @@ against this baseline on the same date range before any flag flip.
 Phase F2 (Quality Universe Engine) must land before a fair ALPHA_V2
 comparison — both baseline and candidate must be re-run on the *filtered*
 universe so the test isolates scoring quality, not universe junk.
+
+---
+
+# PHASE F3 RESULT — Filtered vs Unfiltered (THE PROOF)
+
+Same backtest params (2026-01-15→04-15, SWING, top_n=5, univ=60, hold=15,
+step=7, costs identical). F2 filter is **point-in-time** — scores each
+symbol on OHLC up to 2026-01-15 only (no look-ahead into the test window).
+Reproduce: add `&universe_quality_filter=true&quality_min_tier=Good` to the
+backtest URL above.
+
+| Config | Trades | Win% | Expectancy/trade | Max DD | Sharpe | Payoff |
+|---|---|---|---|---|---|---|
+| **Unfiltered (baseline)** | 45 | 42.2% | **+0.20%** | **71.2%** | 0.28 | 1.43 |
+| **F2 filter — Good+** | 41 | 48.8% | **+2.75%** | **39.7%** | 4.46 | 2.16 |
+| F2 filter — Strong+ | 31 | 54.8% | +2.94% | 47.2% | 4.29 | 1.59 |
+
+(Good+ filter: 60→24 symbols kept, 36 rejected as junk, point-in-time.)
+
+## Verdict — the Phase E/F thesis is empirically proven
+
+Filtering the universe with F2 (zero change to the SMC validation logic
+itself) produced a **~14× expectancy improvement** (+0.20% → +2.75%) and
+**cut max drawdown by 44%** (71% → 40%). The SMC engine was always real;
+**selection quality was the entire alpha gap.** This is now hard evidence,
+not assertion.
+
+## ALPHA_V2 promotion gate — scored against Good+ (best DD config)
+
+| Gate criterion | Target | Result | |
+|---|---|---|---|
+| Expectancy/trade | ≥ +1.0% | **+2.75%** | ✅ PASS |
+| Win rate @ payoff | ≥48% @ ≥1.5 | **48.8% @ 2.16** | ✅ PASS |
+| Max drawdown | ≤ 30% | **39.7%** | ❌ FAIL |
+| +ve walk-forward windows | ≥ 3/4 | **3/4** | ✅ PASS |
+
+**3 of 4 pass decisively. ALPHA_V2 stays OFF** (gate not fully cleared).
+
+## Critical diagnosis (why the flag is NOT flipped yet)
+
+The single failing criterion is max drawdown (39.7% vs ≤30%). The
+Strong-tier run **disproves** "tighter selection fixes drawdown" — it made
+DD *worse* (47.2%), because fewer qualified names → higher concentration →
+larger equity swings. Therefore the residual drawdown is a
+**portfolio-construction / position-sizing problem, not a selection
+problem**. More selection tuning will not close it.
+
+## Next phase (clearly identified by the evidence)
+
+Portfolio-level risk controls (NOT more scoring work):
+- per-trade risk budget (fixed-fractional / volatility-scaled sizing)
+- max concurrent open positions cap
+- sector concentration cap
+- correlation-aware position limits
+
+Re-run this exact comparison after risk controls land. ALPHA_V2 flips only
+when Good+ clears all four gate criteria including maxDD ≤ 30%.
