@@ -875,32 +875,42 @@ def _gate_research_items(result: dict, is_premium: bool) -> dict:
 @router.get("/api/research/swing")
 @router.get("/research/swing")
 def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
-    if not RESEARCH_SNAPSHOT_ONLY:
-        _maybe_auto_scan("SWING")
-    is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+    # Hardening (trust > features): a stale/corrupt swing cache or a throw in
+    # finalize/gate must degrade to an empty 200, never a 500. Mirrors the
+    # _safe_json_response guard added for running-trades in Phase F.
+    try:
+        if not RESEARCH_SNAPSHOT_ONLY:
+            _maybe_auto_scan("SWING")
+        is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
 
-    if RESEARCH_SNAPSHOT_ONLY:
-        snap = serve_cached_research_list("swing")
+        if RESEARCH_SNAPSHOT_ONLY:
+            snap = serve_cached_research_list("swing")
+            if snap is not None:
+                return _gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium)
+            merged = finalize_endpoint("swing", {}, valid_research_list_payload)
+            return _gate_research_items(dict(merged), is_premium)
+
+        full = _swing_payload(limit)
+        snap = serve_cached_endpoint("swing")
         if snap is not None:
-            return _gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium)
-        merged = finalize_endpoint("swing", {}, valid_research_list_payload)
-        return _gate_research_items(dict(merged), is_premium)
-
-    full = _swing_payload(limit)
-    snap = serve_cached_endpoint("swing")
-    if snap is not None:
-        result = dict(snap)
-    else:
-        result = dict(full)
-    if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
-        result = dict(result)
-        result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
-        result["gated"] = True
-        result["total_available"] = full.get("count", len(full.get("items", [])))
-        result["count"] = FREE_TIER_LIMIT
-    if snap is not None:
-        return result
-    return finalize_endpoint("swing", full, valid_research_list_payload)
+            result = dict(snap)
+        else:
+            result = dict(full)
+        if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+            result = dict(result)
+            result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
+            result["gated"] = True
+            result["total_available"] = full.get("count", len(full.get("items", [])))
+            result["count"] = FREE_TIER_LIMIT
+        if snap is not None:
+            return result
+        return finalize_endpoint("swing", full, valid_research_list_payload)
+    except Exception:
+        log.exception("get_swing_research failed; serving safe empty payload")
+        return _safe_json_response({
+            "items": [], "count": 0, "last_scan_time": None,
+            "snapshot_stale": True, "error": "transient_serve_error",
+        })
 
 
 @router.get("/api/search-stock/suggestions")
@@ -935,32 +945,40 @@ def search_stock(symbol: str = Query(..., min_length=1, max_length=32)):
 @router.get("/api/research/longterm")
 @router.get("/research/longterm")
 def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | None = Depends(get_optional_user)):
-    if not RESEARCH_SNAPSHOT_ONLY:
-        _maybe_auto_scan("LONGTERM")
-    is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+    # Same trust-first hardening as get_swing_research (defensive symmetry).
+    try:
+        if not RESEARCH_SNAPSHOT_ONLY:
+            _maybe_auto_scan("LONGTERM")
+        is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
 
-    if RESEARCH_SNAPSHOT_ONLY:
-        snap = serve_cached_research_list("longterm")
+        if RESEARCH_SNAPSHOT_ONLY:
+            snap = serve_cached_research_list("longterm")
+            if snap is not None:
+                return _gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium)
+            merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
+            return _gate_research_items(dict(merged), is_premium)
+
+        full = _longterm_payload(limit)
+        snap = serve_cached_endpoint("longterm")
         if snap is not None:
-            return _gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium)
-        merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
-        return _gate_research_items(dict(merged), is_premium)
-
-    full = _longterm_payload(limit)
-    snap = serve_cached_endpoint("longterm")
-    if snap is not None:
-        result = dict(snap)
-    else:
-        result = dict(full)
-    if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
-        result = dict(result)
-        result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
-        result["gated"] = True
-        result["total_available"] = full.get("count", len(full.get("items", [])))
-        result["count"] = FREE_TIER_LIMIT
-    if snap is not None:
-        return result
-    return finalize_endpoint("longterm", full, valid_research_list_payload)
+            result = dict(snap)
+        else:
+            result = dict(full)
+        if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+            result = dict(result)
+            result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
+            result["gated"] = True
+            result["total_available"] = full.get("count", len(full.get("items", [])))
+            result["count"] = FREE_TIER_LIMIT
+        if snap is not None:
+            return result
+        return finalize_endpoint("longterm", full, valid_research_list_payload)
+    except Exception:
+        log.exception("get_longterm_research failed; serving safe empty payload")
+        return _safe_json_response({
+            "items": [], "count": 0, "last_scan_time": None,
+            "snapshot_stale": True, "error": "transient_serve_error",
+        })
 
 
 @router.get("/api/research/live-signals")
