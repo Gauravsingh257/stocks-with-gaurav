@@ -323,6 +323,7 @@ async def run_backtest(
     universe_quality_filter: bool = False,
     quality_min_tier: str = "Good",
     portfolio_cfg: PortfolioConfig | None = None,
+    gated_only: bool = False,
 ) -> dict[str, Any]:
     """Historical validation/backtest using the same 3-layer scan engine.
 
@@ -367,6 +368,7 @@ async def run_backtest(
             as_of=scan_date,
             log_scan=log_scans,
             historical_frames=frames,
+            disable_fallback_levels=gated_only,
         )
         coverage = result.coverage.to_dict()
         daily_funnels.append({"date": scan_date, **result.funnel.to_dict()})
@@ -420,6 +422,7 @@ async def run_backtest(
         "coverage": coverage or {},
         "universe_quality_filter": universe_quality_filter,
         "quality_filter_stats": quality_filter_stats,
+        "gated_only": gated_only,
         "funnel_by_day": daily_funnels,
         "walk_forward": _walk_forward(trades),
         "metrics": metrics,

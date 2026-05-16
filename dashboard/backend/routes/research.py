@@ -1717,6 +1717,7 @@ async def run_research_backtest(
     max_position_pct: float = Query(20.0, ge=2.0, le=100.0, description="F-Risk: hard cap on single position weight"),
     max_concurrent_positions: int = Query(8, ge=1, le=50, description="F-Risk: concurrent open positions cap"),
     max_per_sector: int = Query(3, ge=1, le=20, description="F-Risk: sector concentration cap"),
+    gated_only: bool = Query(False, description="F-XRAY: disable ungated _scored_smc_levels fallback — measure ONLY the strict gated scorer"),
 ):
     """Run an OHLC-sliced historical backtest of the 3-layer strategy.
 
@@ -1747,6 +1748,7 @@ async def run_research_backtest(
                 max_concurrent_positions=max_concurrent_positions,
                 max_per_sector=max_per_sector,
             ),
+            gated_only=gated_only,
         )
     except Exception as exc:
         log.exception("research backtest failed: %s", exc)

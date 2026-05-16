@@ -514,6 +514,7 @@ async def run_validation_scan(
     min_turnover_cr: float = 1.0,
     log_scan: bool = True,
     historical_frames: dict[str, pd.DataFrame] | None = None,
+    disable_fallback_levels: bool = False,
 ) -> ValidationScanResult:
     """Run every symbol through Discovery, Quality, and SMC, then log each row.
 
@@ -622,7 +623,11 @@ async def run_validation_scan(
                         merged_meta["confirmation_score"] = max(float(smc_confirmation.get("confirmation_score", 0.0) or 0.0), 70.0)
                         merged_meta["tier"] = "HIGH_CONVICTION" if merged_meta["confirmation_score"] > 70 else "CONFIRMED"
                         record.smc = merged_meta
-            if record.entry is None:
+            # F-ENGINE-XRAY isolation: when disable_fallback_levels is set
+            # (backtest research only), the ungated _scored_smc_levels path
+            # is skipped entirely so ONLY strict gated build_*_trade_levels
+            # trades survive. Default False → production path unchanged.
+            if record.entry is None and not disable_fallback_levels:
                 scored_levels = _scored_smc_levels(symbol, df, horizon, smc_confirmation)
                 if scored_levels:
                     entry, stop, targets, setup, meta = scored_levels
