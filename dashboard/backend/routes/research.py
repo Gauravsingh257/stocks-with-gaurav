@@ -886,9 +886,9 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("swing")
             if snap is not None:
-                return _gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium)
+                return _safe_json_response(_gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium))
             merged = finalize_endpoint("swing", {}, valid_research_list_payload)
-            return _gate_research_items(dict(merged), is_premium)
+            return _safe_json_response(_gate_research_items(dict(merged), is_premium))
 
         full = _swing_payload(limit)
         snap = serve_cached_endpoint("swing")
@@ -903,8 +903,8 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
             result["total_available"] = full.get("count", len(full.get("items", [])))
             result["count"] = FREE_TIER_LIMIT
         if snap is not None:
-            return result
-        return finalize_endpoint("swing", full, valid_research_list_payload)
+            return _safe_json_response(result)
+        return _safe_json_response(finalize_endpoint("swing", full, valid_research_list_payload))
     except Exception:
         log.exception("get_swing_research failed; serving safe empty payload")
         return _safe_json_response({
@@ -954,9 +954,9 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("longterm")
             if snap is not None:
-                return _gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium)
+                return _safe_json_response(_gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium))
             merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
-            return _gate_research_items(dict(merged), is_premium)
+            return _safe_json_response(_gate_research_items(dict(merged), is_premium))
 
         full = _longterm_payload(limit)
         snap = serve_cached_endpoint("longterm")
@@ -971,8 +971,8 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
             result["total_available"] = full.get("count", len(full.get("items", [])))
             result["count"] = FREE_TIER_LIMIT
         if snap is not None:
-            return result
-        return finalize_endpoint("longterm", full, valid_research_list_payload)
+            return _safe_json_response(result)
+        return _safe_json_response(finalize_endpoint("longterm", full, valid_research_list_payload))
     except Exception:
         log.exception("get_longterm_research failed; serving safe empty payload")
         return _safe_json_response({
