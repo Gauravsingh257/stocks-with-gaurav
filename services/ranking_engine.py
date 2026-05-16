@@ -33,6 +33,21 @@ log = logging.getLogger("services.ranking_engine")
 Horizon = Literal["SWING", "LONGTERM"]
 
 
+def _ungated_fallback_allowed() -> bool:
+    """PHASE G2-1: by default the ungated _scored_smc_levels fallback is
+    DISABLED in the production recommendation path. F-ENGINE-XRAY proved it
+    produced ~92% of trades at -0.39% expectancy (junk) because it has no
+    rr>=2.5 / score>=7 gate. With it off, generate_rankings emits ONLY
+    strict gated build_*_trade_levels ideas — fewer (often far fewer)
+    recommendations, but real ones. "Zero qualifying = show zero" is the
+    canonical, intended behaviour.
+
+    Fully reversible: set RANKING_ALLOW_UNGATED_FALLBACK=1 to restore the
+    old behaviour (or revert this commit). Default = gated only.
+    """
+    return os.getenv("RANKING_ALLOW_UNGATED_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
+
+
 def _empty_watchlist_fallback_enabled() -> bool:
     return os.getenv("RESEARCH_EMPTY_FALLBACK", "1").strip().lower() in ("1", "true", "yes")
 
@@ -333,8 +348,9 @@ async def _materialize_swing_idea(
         return None
     levels = build_swing_trade_levels(symbol, daily_df, nifty_daily)
     if not levels:
-        confirmation = _smc_confirmation(daily_df)
-        levels = _scored_smc_levels(symbol, daily_df, "SWING", confirmation)
+        if _ungated_fallback_allowed():
+            confirmation = _smc_confirmation(daily_df)
+            levels = _scored_smc_levels(symbol, daily_df, "SWING", confirmation)
         if not levels:
             _log_swing_materialize_miss(symbol, daily_df)
             return None
@@ -420,13 +436,14 @@ async def _materialize_longterm_idea(
         return None
     lt = build_longterm_trade_levels(symbol, daily_df, nifty_daily)
     if not lt:
-        confirmation = _smc_confirmation(daily_df)
-        scored = _scored_smc_levels(symbol, daily_df, "LONGTERM", confirmation)
-        if scored:
-            entry, stop, targets, setup, lt_meta = scored
-            long_target = targets[-1] if targets else entry
-            entry_zone = [entry, entry]
-            lt = (entry, stop, targets, long_target, entry_zone, setup, lt_meta)
+        if _ungated_fallback_allowed():
+            confirmation = _smc_confirmation(daily_df)
+            scored = _scored_smc_levels(symbol, daily_df, "LONGTERM", confirmation)
+            if scored:
+                entry, stop, targets, setup, lt_meta = scored
+                long_target = targets[-1] if targets else entry
+                entry_zone = [entry, entry]
+                lt = (entry, stop, targets, long_target, entry_zone, setup, lt_meta)
         if not lt:
             log.debug("No OHLC long-term levels for %s", symbol)
             return None
