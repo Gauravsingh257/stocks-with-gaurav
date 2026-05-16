@@ -29,6 +29,7 @@ class BacktestTrade:
     slippage_pct: float
     confidence: float
     setup: str | None
+    sector: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -150,7 +151,21 @@ def _simulate_long_trade(
         slippage_pct=round(float(slippage_pct), 4),
         confidence=round(float(confidence), 2),
         setup=setup,
+        sector=_safe_sector(symbol),
     )
+
+
+def _safe_sector(symbol: str) -> str | None:
+    """Pure symbol→sector lookup (read-only). 'Others' is a mixed catch-all,
+    not a real concentrated sector, so we return None there to exempt it
+    from the sector concentration cap rather than fake a bucket."""
+    try:
+        from engine.swing import get_sector
+
+        s = get_sector(symbol)
+        return None if not s or s == "Others" else s
+    except Exception:
+        return None
 
 
 def _max_drawdown(returns_pct: list[float]) -> float:
@@ -198,6 +213,100 @@ def _walk_forward(trades: list[BacktestTrade]) -> list[dict[str, Any]]:
     return output
 
 
+@dataclass(slots=True)
+class PortfolioConfig:
+    """F-Risk: realistic capital-constrained portfolio model. Replaces the
+    naive 'whole account in every trade, compounded sequentially' drawdown
+    (which produced the inflated 40-71% numbers — an artifact of an
+    unrealistic model, not a real risk measure)."""
+    risk_per_trade_pct: float = 1.0      # % of equity lost if the stop is hit
+    max_position_pct: float = 20.0       # hard cap on a single position weight
+    max_concurrent_positions: int = 8    # capital is finite
+    max_per_sector: int = 3              # sector concentration cap (Others exempt)
+    starting_equity: float = 1.0
+
+
+def _simulate_portfolio(trades: list[BacktestTrade], cfg: PortfolioConfig) -> dict[str, Any]:
+    """Replay the trade list as a real risk-sized, capacity-constrained
+    portfolio. Account equity moves by (position_weight x trade_return), and
+    drawdown is measured on the ACCOUNT curve — the number a real trader
+    would actually experience."""
+    ordered = sorted(trades, key=lambda t: (t.entry_date, t.scan_date, t.symbol))
+    equity = cfg.starting_equity
+    peak = equity
+    max_dd = 0.0
+    open_pos: list[dict[str, Any]] = []  # {exit_date, weight, ret_pct, sector}
+    curve: list[dict[str, Any]] = []
+    taken = 0
+    skipped_capacity = 0
+    skipped_capital = 0
+    concurrent_samples: list[int] = []
+
+    def _close_due(as_of: str) -> None:
+        nonlocal equity, peak, max_dd, open_pos
+        still: list[dict[str, Any]] = []
+        for p in open_pos:
+            if p["exit_date"] <= as_of:
+                equity *= 1.0 + (p["weight"] * p["ret_pct"] / 100.0)
+                peak = max(peak, equity)
+                dd = (equity - peak) / peak * 100.0
+                max_dd = min(max_dd, dd)
+                curve.append({"date": p["exit_date"], "equity": round(equity, 5)})
+            else:
+                still.append(p)
+        open_pos = still
+
+    for t in ordered:
+        _close_due(t.entry_date)
+        risk_dist_pct = abs(t.entry - t.stop_loss) / t.entry * 100.0 if t.entry > 0 else 0.0
+        if risk_dist_pct <= 0:
+            continue
+        weight = min(cfg.max_position_pct, cfg.risk_per_trade_pct / risk_dist_pct * 100.0) / 100.0
+        committed = sum(p["weight"] for p in open_pos)
+        sector_n = sum(1 for p in open_pos if p["sector"] and p["sector"] == t.sector)
+        concurrent_samples.append(len(open_pos))
+
+        if len(open_pos) >= cfg.max_concurrent_positions:
+            skipped_capacity += 1
+            continue
+        if t.sector and sector_n >= cfg.max_per_sector:
+            skipped_capacity += 1
+            continue
+        if committed + weight > 1.0:
+            skipped_capital += 1
+            continue
+
+        open_pos.append({
+            "exit_date": t.exit_date,
+            "weight": weight,
+            "ret_pct": t.return_pct,
+            "sector": t.sector,
+        })
+        taken += 1
+
+    # close any still-open at the end (exit-date order)
+    for p in sorted(open_pos, key=lambda x: x["exit_date"]):
+        equity *= 1.0 + (p["weight"] * p["ret_pct"] / 100.0)
+        peak = max(peak, equity)
+        max_dd = min(max_dd, (equity - peak) / peak * 100.0)
+        curve.append({"date": p["exit_date"], "equity": round(equity, 5)})
+
+    total_ret = (equity / cfg.starting_equity - 1.0) * 100.0
+    avg_conc = (sum(concurrent_samples) / len(concurrent_samples)) if concurrent_samples else 0.0
+    return {
+        "model": "risk_sized_capacity_constrained_portfolio",
+        "config": asdict(cfg),
+        "positions_taken": taken,
+        "skipped_capacity": skipped_capacity,
+        "skipped_capital": skipped_capital,
+        "avg_concurrent_positions": round(avg_conc, 2),
+        "account_total_return_pct": round(total_ret, 2),
+        "account_max_drawdown_pct": round(abs(max_dd), 2),
+        "final_equity_multiple": round(equity / cfg.starting_equity, 4),
+        "equity_curve_points": len(curve),
+    }
+
+
 async def run_backtest(
     start_date: str,
     end_date: str,
@@ -213,6 +322,7 @@ async def run_backtest(
     slippage_pct: float = 0.05,
     universe_quality_filter: bool = False,
     quality_min_tier: str = "Good",
+    portfolio_cfg: PortfolioConfig | None = None,
 ) -> dict[str, Any]:
     """Historical validation/backtest using the same 3-layer scan engine.
 
@@ -224,6 +334,7 @@ async def run_backtest(
     ``start_date`` (point-in-time, no look-ahead). This isolates the effect
     of selection quality vs the unfiltered baseline.
     """
+    portfolio_cfg = portfolio_cfg or PortfolioConfig()
     universe = load_nse_universe(target_universe)
     symbols = universe.symbols
     frames = await _fetch_frames(symbols, source, days=900, as_of=None)
@@ -286,9 +397,13 @@ async def run_backtest(
         "win_rate": round(len(wins) / total * 100.0, 2) if total else 0.0,
         "avg_return": round(sum(returns) / total, 2) if total else 0.0,
         "avg_gross_return": round(sum(gross_returns) / total, 2) if total else 0.0,
+        # NOTE: this max_drawdown is the legacy NAIVE model (whole account in
+        # every trade, sequential compounding) — kept for continuity with the
+        # F8/F3 baseline numbers. The realistic figure is in portfolio_metrics.
         "max_drawdown": _max_drawdown(returns),
         "sharpe_ratio": _sharpe(returns),
     }
+    portfolio_metrics = _simulate_portfolio(trades, portfolio_cfg) if trades else None
     return {
         "start_date": start_date,
         "end_date": end_date,
@@ -308,6 +423,7 @@ async def run_backtest(
         "funnel_by_day": daily_funnels,
         "walk_forward": _walk_forward(trades),
         "metrics": metrics,
+        "portfolio_metrics": portfolio_metrics,
         "trades": [trade.to_dict() for trade in trades],
         "data_notes": [
             "OHLC is sliced to each scan date to avoid price lookahead.",

@@ -1713,6 +1713,10 @@ async def run_research_backtest(
     slippage_pct: float = Query(0.05, ge=0.0, le=5.0),
     universe_quality_filter: bool = Query(False, description="F3: pre-filter universe via F2 Quality Engine (point-in-time, no look-ahead)"),
     quality_min_tier: str = Query("Good", pattern="^(Good|Strong|Elite)$"),
+    risk_per_trade_pct: float = Query(1.0, ge=0.1, le=5.0, description="F-Risk: % of equity risked if SL hit"),
+    max_position_pct: float = Query(20.0, ge=2.0, le=100.0, description="F-Risk: hard cap on single position weight"),
+    max_concurrent_positions: int = Query(8, ge=1, le=50, description="F-Risk: concurrent open positions cap"),
+    max_per_sector: int = Query(3, ge=1, le=20, description="F-Risk: sector concentration cap"),
 ):
     """Run an OHLC-sliced historical backtest of the 3-layer strategy.
 
@@ -1720,7 +1724,7 @@ async def run_research_backtest(
     F2-filtered universe — the filtered-vs-unfiltered delta is the proof of
     whether selection quality produces edge.
     """
-    from services.backtest_engine import run_backtest
+    from services.backtest_engine import PortfolioConfig, run_backtest
 
     try:
         return await run_backtest(
@@ -1737,6 +1741,12 @@ async def run_research_backtest(
             slippage_pct=slippage_pct,
             universe_quality_filter=universe_quality_filter,
             quality_min_tier=quality_min_tier,
+            portfolio_cfg=PortfolioConfig(
+                risk_per_trade_pct=risk_per_trade_pct,
+                max_position_pct=max_position_pct,
+                max_concurrent_positions=max_concurrent_positions,
+                max_per_sector=max_per_sector,
+            ),
         )
     except Exception as exc:
         log.exception("research backtest failed: %s", exc)
