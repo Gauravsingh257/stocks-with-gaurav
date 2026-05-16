@@ -174,3 +174,73 @@ Required before flip:
 
 Discipline holds: huge proven improvement, flag still OFF until robustness
 is demonstrated across regimes and a wider universe.
+
+---
+
+# PHASE F-Robust RESULT — multi-window / regime / horizon (THE HONEST VERDICT)
+
+Same engine, Good+ filter, realistic portfolio model, point-in-time (no
+look-ahead), universe=150, weekly scans. Seven independent windows.
+
+## SWING — 5 non-overlapping windows
+
+| Window | WR | Expectancy/trade | Account ret | Account maxDD | Gate? |
+|---|---|---|---|---|---|
+| 2026-01-15→04-15 (original "validation") | 48.8% | **+2.75%** | +10.89% | 5.0% | ✅ |
+| 2025-02-01→05-01 | 55.6% | **+0.78%** | +1.52% | 7.6% | ❌ |
+| 2024-06-01→09-01 | 40.0% | **−1.45%** | −4.9% | 5.3% | ❌ |
+| 2024-10-01→2025-01-01 | 35.6% | **−0.60%** | −7.2% | 7.2% | ❌ |
+| 2025-09-01→12-01 | 44.4% | **−0.69%** | +0.9% | 4.1% | ❌ |
+
+SWING mean expectancy ≈ **+0.16%/trade**. **1 of 5** windows clears the
+gate; **3 of 5 are negative**.
+
+## LONGTERM — 2 windows (hold 90d)
+
+| Window | WR | Expectancy/trade | Account ret | Account maxDD | Gate? |
+|---|---|---|---|---|---|
+| 2025-01-01→03-01 | 33.3% | **−6.48%** | −4.1% | 7.2% | ❌ |
+| 2025-06-01→08-01 | 55.0% | **+0.72%** | +4.1% | 1.8% | ❌ |
+
+LONGTERM: **0 of 2** clear the gate; one strongly negative.
+
+## VERDICT — brutal honesty (as required)
+
+1. **The alpha/selection edge is NOT robust.** Across 7 windows × 2
+   horizons, only the single original validation window cleared the gate.
+   The +2.75% "gate cleared" headline from F-Risk was **overfit to one
+   favourable 3-month window**. Mean expectancy is breakeven-to-negative.
+   The multi-window discipline correctly exposed this — exactly what it
+   was designed to do.
+
+2. **The F-Risk portfolio model IS robust and validated.** Account max
+   drawdown stayed **1.8%–7.6% in every window**, including the heavily
+   losing ones (vs 71% under the old naive model). The risk engineering
+   is sound and genuinely valuable.
+
+3. This empirically reconfirms the Phase E audit: **the platform's real
+   moat is the operating-system / workflow / risk-engineering layer, NOT
+   signal alpha.** F-Risk = real value. The SMC+F2 selection = no durable
+   edge on this evidence.
+
+## DECISION
+
+- **ALPHA_V2 stays OFF — decisively and indefinitely.** The selection
+  pipeline does not have cross-regime edge. Do not flip the flag.
+- **F-Risk is promoted as the canonical drawdown metric** (the naive
+  model was simply wrong; the portfolio model is correct and robust).
+- We found "no durable alpha" in a *backtest*, not with real user
+  capital. That is the entire point of this discipline and a major win
+  despite the disappointing headline.
+
+## Strategic fork (needs a human product decision)
+
+A. Invest in genuinely better alpha — regime-adaptive scoring (Phase F3
+   adaptive engine), better entry timing, alternative signals. High
+   effort, uncertain payoff.
+B. Accept Phase E's conclusion: the moat is the OS/workflow/trust +
+   risk engineering. Stop chasing signal alpha; double down on the
+   watchlist/lifecycle/position-tracking product that already works.
+
+Recommendation: **B for the product, A only as scoped R&D** — never
+again with a single-window gate.
