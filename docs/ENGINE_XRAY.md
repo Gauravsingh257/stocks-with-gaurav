@@ -263,3 +263,69 @@ ALPHA_V2 remains OFF. This phase strengthens that and exposes that three
 prior phases over-claimed "no alpha" while measuring a fallback that is
 not the strategy. Intellectual honesty requires that correction be on
 the record.
+
+---
+
+# ADDENDUM — ISOLATED GATED SCORER RESULT (the definitive answer)
+
+`gated_only=true` flag added (validation_engine.py:disable_fallback_levels,
+default off, backtest-only, commit 1048b62). Re-ran the full 7-window
+matrix with the ungated `_scored_smc_levels` fallback DISABLED, so ONLY
+strict `build_*_trade_levels` (rr≥2.5 / score≥7) trades survive.
+Universe = 300, Good+ quality filter, point-in-time.
+
+| Window | Horizon | Gated trades (n) | win% | expectancy |
+|---|---|---|---|---|
+| bull 2026Q1 | SWING | 4 | 25% | +0.06% |
+| choppy 2025Q1 | SWING | 3 | 67% | +2.55% |
+| bear 2024Q3 | SWING | **0** | — | — |
+| sideways 2024Q4 | SWING | **0** | — | — |
+| deteriorating 2025Q4 | SWING | 6 | 50% | −0.15% |
+| lt_early 2025Q1 | LONGTERM | **0** | — | — |
+| lt_mid 2025Q2 | LONGTERM | 12 | 58% | +0.22% |
+| **TOTAL** | — | **25** | 52% | **+0.39%** |
+
+## The definitive verdict — the alpha question is now CLOSED
+
+**25 trades across 7 quarters and a 300-stock universe** (~2,100
+symbol-quarters of opportunity) ≈ **0.012 trades per symbol-quarter**.
+**4 of 7 windows produced ZERO gated trades.** n=25 expectancy +0.39%
+is statistically meaningless.
+
+The real gated SMC scorer is **not "broken alpha" — it is not a
+deployable strategy by volume.** A system that fires 25 times in 7
+quarters across 300 stocks cannot be traded, validated, or backtested
+regardless of its per-trade numbers. The two engines are now fully
+characterised:
+
+| Engine | n (real DB) | expectancy | verdict |
+|---|---|---|---|
+| Ungated `_scored_smc_levels` fallback | 240 (92%) | **−0.39%** | junk — DELETE |
+| Real gated `score_swing_candidate` | 25 in 7 quarters | +0.39% (n→noise) | **inert — not a strategy by volume** |
+
+There is no third option. Loosening the gate to get volume *reproduces
+the −0.39% fallback* (the strictness is the only thing separating it
+from junk). The strictness that makes it not-junk also makes it inert.
+**This is a structural dead end for SMC swing alpha on NSE daily.**
+
+One genuine positive: the gate requires bullish weekly structure, so it
+self-regime-gates (0 trades in bear/sideways/lt_early). That *instinct*
+— "do nothing in non-bull regimes" — is correct and reusable as a
+regime overlay on a *different* engine; it is the only salvageable idea.
+
+## FINAL POSITION (6 research phases, now conclusive)
+
+1. Selection alpha does not exist in deployable form. Proven, not asserted.
+2. The risk engine is robust, real, deterministic (DD 1.8–7.6% all windows).
+3. The OS / workflow / trust layer is the moat. Reconfirmed every phase.
+4. **Recommended: STOP alpha R&D on this SMC approach.** The evidence is
+   complete; "try harder" is not warranted. Delete the ungated fallback
+   (it is −0.39% junk serving 92% of production trades — actively
+   harmful). Adopt OS-first definitively. Keep the F-Risk engine. Reuse
+   only the "off in non-bull regimes" instinct if a future, different
+   signal is ever explored — never the single-window gate again.
+
+ALPHA_V2: OFF, permanently, for this engine. The honest answer to "does
+this engine have alpha?" is: **no — and we now know that conclusively,
+from the backtest, having never risked a rupee of user capital. That is
+the entire value of this discipline.**
