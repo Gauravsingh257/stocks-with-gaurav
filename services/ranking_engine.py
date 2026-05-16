@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Literal
@@ -31,6 +32,68 @@ from services.validation_engine import _scored_smc_levels, _smc_confirmation
 log = logging.getLogger("services.ranking_engine")
 
 Horizon = Literal["SWING", "LONGTERM"]
+
+
+def _shadow_log_regime_sector(horizon: str, ideas: list) -> None:
+    """G2-2 read-only shadow: compute the regime + sector verdict each pick
+    WOULD get under the canonical mandatory pre-gate, log it, and persist to
+    Redis `shadow:regime_sector:{horizon}:{date}`. Never mutates `ideas`."""
+    from datetime import date as _date
+
+    from services.market_regime import detect_regime
+    from services.sector_strength import classify_symbol, compute_sector_strength
+
+    reg = detect_regime()
+    # Canonical rule: longs OK in TRENDING_UP/SIDEWAYS; TRENDING_DOWN blocks.
+    # UNKNOWN does not block (no data ≠ bad regime) — logged as unknown.
+    regime_blocks = reg.regime == "TRENDING_DOWN"
+    strength = compute_sector_strength()
+
+    rows = []
+    killed_regime = killed_sector = would_survive = 0
+    for idea in ideas or []:
+        sym = getattr(idea, "symbol", None)
+        if not sym:
+            continue
+        sc = classify_symbol(sym, strength)
+        sector_blocks = sc["band"] == "lagging"  # only hard-lagging would be cut
+        survives = not regime_blocks and not sector_blocks
+        killed_regime += 1 if regime_blocks else 0
+        killed_sector += 1 if (not regime_blocks and sector_blocks) else 0
+        would_survive += 1 if survives else 0
+        rows.append({
+            "symbol": sym, "sector": sc["sector"], "sector_band": sc["band"],
+            "sector_leading": sc["is_leading"],
+            "regime_verdict": "block" if regime_blocks else "pass",
+            "sector_verdict": "block" if sector_blocks else ("unknown" if sc["band"] == "unknown" else "pass"),
+            "would_survive_gate": survives,
+        })
+
+    payload = {
+        "scan_ts": time.time(),
+        "horizon": horizon,
+        "regime": {"label": reg.regime, "confidence": round(reg.confidence, 3), "blocks_longs": regime_blocks},
+        "leading_sectors": strength.get("leading", []),
+        "n_ideas": len(rows),
+        "would_survive": would_survive,
+        "killed_by_regime": killed_regime,
+        "killed_by_sector": killed_sector,
+        "picks": rows,
+    }
+    log.info(
+        "[%s][G2-2 SHADOW] regime=%s(blocks=%s) ideas=%d would_survive=%d killed_regime=%d killed_sector=%d leading=%s",
+        horizon, reg.regime, regime_blocks, len(rows), would_survive,
+        killed_regime, killed_sector, strength.get("leading", []),
+    )
+    try:
+        from dashboard.backend.cache import set as cache_set
+
+        cache_set(
+            f"shadow:regime_sector:{horizon}:{_date.today().isoformat()}",
+            payload, ttl_seconds=7 * 86400,
+        )
+    except Exception:
+        pass
 
 
 def _ungated_fallback_allowed() -> bool:
@@ -885,6 +948,14 @@ async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: 
             "%d scored, but none materialized into valid trade levels.",
             horizon, len(symbols), quality_passed, len(scored),
         )
+
+    # PHASE G2-2 — read-only regime+sector SHADOW. Records what a future
+    # mandatory pre-gate WOULD do to these picks. Does NOT filter `ideas`.
+    # Best-effort: any failure here must never affect the scan.
+    try:
+        _shadow_log_regime_sector(horizon, ideas)
+    except Exception as exc:
+        log.debug("[%s] regime/sector shadow log skipped: %s", horizon, exc)
 
     return RankingResult(
         horizon=horizon,

@@ -1681,6 +1681,33 @@ def get_layer_report(
     return finalize_endpoint("layer_report", rep, valid_layer_report_payload)
 
 
+@router.get("/api/research/regime-sector-shadow")
+@router.get("/research/regime-sector-shadow")
+def get_regime_sector_shadow(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):
+    """PHASE G2-2 (read-only): inspect the latest regime+sector SHADOW —
+    what the canonical mandatory pre-gate WOULD have done to the most recent
+    scan's picks. Pure observability; nothing was filtered."""
+    try:
+        from datetime import date as _date
+
+        from dashboard.backend.cache import get as cache_get
+        from services.market_regime import get_regime_summary
+        from services.sector_strength import compute_sector_strength
+
+        shadow = cache_get(f"shadow:regime_sector:{horizon.upper()}:{_date.today().isoformat()}")
+        return {
+            "horizon": horizon.upper(),
+            "shadow_available": shadow is not None,
+            "shadow": shadow,
+            "regime_now": get_regime_summary(),
+            "sector_strength_now": compute_sector_strength(),
+            "_note": "Read-only. No recommendations were filtered by regime/sector yet (G2-2 is shadow only).",
+        }
+    except Exception as exc:
+        log.exception("regime-sector-shadow failed: %s", exc)
+        return _safe_json_response({"error": "shadow_unavailable", "detail": str(exc)})
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(
