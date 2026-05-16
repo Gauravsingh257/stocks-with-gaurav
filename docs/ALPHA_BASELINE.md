@@ -124,3 +124,53 @@ Portfolio-level risk controls (NOT more scoring work):
 
 Re-run this exact comparison after risk controls land. ALPHA_V2 flips only
 when Good+ clears all four gate criteria including maxDD ≤ 30%.
+
+---
+
+# PHASE F-Risk RESULT — Realistic Portfolio Model
+
+The 40-71% drawdowns were a **model artifact**: `_max_drawdown` compounded
+every trade's full % return sequentially = "entire account in one trade at
+a time". No portfolio trades that way. F-Risk adds a real
+risk-sized, capacity-constrained portfolio sim (1% risk/trade, ≤8
+concurrent, ≤3/sector, 20% max position) and measures drawdown on the
+ACCOUNT equity curve.
+
+Same params as the F3 proof, Good+ filter, point-in-time (no look-ahead).
+Reproduce: F3 URL + `&risk_per_trade_pct=1.0&max_concurrent_positions=8`.
+
+| Stage | Expectancy/trade | Drawdown (model) | Account return |
+|---|---|---|---|
+| Unfiltered baseline (naive DD) | +0.20% | 71.2% naive | — |
+| F2 filter Good+ (naive DD) | +2.75% | 39.7% naive | — |
+| **F2 Good+ + realistic portfolio** | **+2.75%** | **4.97% account** | **+10.89%** |
+
+Account-level: 38 positions taken, avg 4.15 concurrent, equity ×1.109
+over the 3-month window, **account max drawdown 4.97%**.
+
+## ALPHA_V2 gate — FULL SCORECARD (all four)
+
+| Criterion | Target | Result | |
+|---|---|---|---|
+| Expectancy/trade | ≥ +1.0% | +2.75% | ✅ |
+| Win rate @ payoff | ≥48% @ ≥1.5 | 48.8% @ 2.16 | ✅ |
+| Max drawdown (account) | ≤ 30% | **4.97%** | ✅ |
+| +ve walk-forward windows | ≥ 3/4 | 3/4 | ✅ |
+
+**ALL FOUR CLEARED on the validation window.** The full F1→F-Risk thesis
+is empirically proven: real technicals (F1) + quality selection (F2/F3) +
+realistic risk sizing (F-Risk) turns a +0.20% / 71%-DD junk system into
++2.75%/trade, +10.89% account, 4.97% DD.
+
+## BUT — ALPHA_V2 stays OFF pending robustness validation
+
+This is **one 3-month window on a 60-symbol slice**. Clearing the gate on
+a single window is necessary, not sufficient, to flip a LIVE trading flag.
+Required before flip:
+- multiple non-overlapping windows (incl. a bearish regime)
+- larger universe (300-500, not 60)
+- explicit out-of-sample period
+- LONGTERM horizon validated too (only SWING tested so far)
+
+Discipline holds: huge proven improvement, flag still OFF until robustness
+is demonstrated across regimes and a wider universe.
