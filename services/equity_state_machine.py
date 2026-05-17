@@ -190,6 +190,10 @@ def replay_fires(
 
 _SHADOW_SOURCE = "g2_6_sm_shadow"
 _SHADOW_SETUP = "SMC_STATE_MACHINE_LONG_ONLINE"
+# Rung B: isolated recommendation identity — distinct agent_type keeps
+# state-machine picks fully separate from the legacy SWING slot machine.
+_SM_AGENT_TYPE = "SWING_SM"
+_ALERT_SETUP = "SMC_STATE_MACHINE_LONG"
 
 
 def shadow_flag() -> str:
@@ -263,15 +267,30 @@ async def run_equity_sm_shadow_tick(
     target_universe: int | None = None,
     source: str | None = None,
 ) -> dict:
-    """Rung A shadow tick. Runs the ONLINE engine over the F2-Good+
-    universe on the data available NOW (point-in-time is inherent — no
-    future bars exist live), logging every new FIRE to the canonical
-    ledger. Idempotent per IST day. Best-effort: ANY failure is swallowed
-    (shadow must never disturb the live agent). Returns a summary dict."""
-    if shadow_flag() != "shadow":
+    """Rung A/B tick. Runs the ONLINE engine over the F2-Good+ universe
+    on the data available NOW (point-in-time is inherent — no future bars
+    exist live).
+
+    mode = `EQUITY_STATE_MACHINE`:
+      "shadow" → log every new FIRE to the canonical ledger ONLY
+                 (invisible; scorecard validation).
+      "alert"  → ALL of shadow, PLUS publish *recent* fires as isolated
+                 `SWING_SM` recommendations (visible on the website via
+                 /api/research/state-machine-signals). NO position, NO
+                 auto-trade, NO Telegram-into-the-live-engine. The ledger
+                 log stays unconditional so the parallel scorecard
+                 validation keeps running in alert mode too.
+
+    Idempotent per IST day. Best-effort: ANY failure is swallowed (must
+    never disturb the live agent). Returns a summary dict."""
+    mode = shadow_flag()
+    if mode not in ("shadow", "alert"):
         return {"status": "disabled"}
+    publish = mode == "alert"
     import os
     try:
+        from datetime import date as _date
+
         from dashboard.backend.db import get_connection
         from dashboard.backend.lifecycle_ledger import record_lifecycle_event
         from services.universe_manager import load_nse_universe
@@ -281,6 +300,10 @@ async def run_equity_sm_shadow_tick(
 
         uni_n = target_universe or int(os.getenv("EQUITY_SM_SHADOW_UNIVERSE", "150"))
         src = source or os.getenv("EQUITY_SM_SHADOW_SOURCE", "yfinance")
+        # Only fires whose confirmation printed within this many calendar
+        # days of the latest bar are "actionable now" — prevents dumping
+        # a backlog of historical fires onto the site on first activation.
+        max_age = int(os.getenv("EQUITY_SM_ALERT_MAX_AGE_DAYS", "7"))
         today = _ist_today()
 
         universe = load_nse_universe(uni_n)
@@ -289,7 +312,7 @@ async def run_equity_sm_shadow_tick(
             universe.symbols, frames, cutoff=today, min_tier="Good"
         )
 
-        scanned = new_fires = 0
+        scanned = new_fires = published = 0
         conn = get_connection()
         try:
             _ensure_g26_tables(conn)  # self-sufficient: don't trust global init_db
@@ -305,11 +328,14 @@ async def run_equity_sm_shadow_tick(
                 weekly = daily_candles_to_weekly(daily)
                 fires = scan_fires_online(daily, weekly)
 
+                last_bar_date = str(daily[-1].get("date"))[:10]
                 max_fire_date = last_fire
                 for fr in fires:
                     fdate = str(daily[fr.entry_idx].get("date"))[:10]
                     if fdate <= last_fire:
                         continue  # already logged on a prior tick
+                    # Unconditional ledger log → parallel scorecard
+                    # validation runs in BOTH shadow and alert modes.
                     record_lifecycle_event(
                         sym, "ENTRY_ACTIVE", horizon="SWING",
                         prev_state="ARMED", source=_SHADOW_SOURCE,
@@ -318,11 +344,36 @@ async def run_equity_sm_shadow_tick(
                         setup=_SHADOW_SETUP,
                         details={"fire_date": fdate, "formed_idx": fr.formed_idx,
                                  "tapped_idx": fr.tapped_idx, "online": True,
-                                 "shadow": True},
+                                 "mode": mode},
                     )
                     new_fires += 1
                     if fdate > max_fire_date:
                         max_fire_date = fdate
+
+                    # Rung B: publish ONLY actionable-now fires as an
+                    # ISOLATED SWING_SM recommendation. Distinct
+                    # agent_type ⟹ zero entanglement with the legacy
+                    # SWING slot machine; create_stock_recommendation
+                    # dedups within symbol+agent_type. NO position, NO
+                    # auto-trade.
+                    if not publish:
+                        continue
+                    try:
+                        age = (_date.fromisoformat(last_bar_date)
+                               - _date.fromisoformat(fdate)).days
+                    except Exception:
+                        age = 999
+                    if age > max_age or age < 0:
+                        continue  # historical fire — not actionable now
+                    try:
+                        cmp_now = float(daily[-1].get("close"))
+                    except Exception:
+                        cmp_now = None
+                    rec_id = _publish_sm_recommendation(
+                        sym, fr, fdate, cmp_now,
+                    )
+                    if isinstance(rec_id, int) and rec_id > 0:
+                        published += 1
 
                 last = fires[-1] if fires else None
                 _upsert_sm_state(
@@ -337,11 +388,58 @@ async def run_equity_sm_shadow_tick(
             conn.commit()
         finally:
             conn.close()
-        return {"status": "ok", "scanned": scanned, "new_fires": new_fires,
+        return {"status": "ok", "mode": mode, "scanned": scanned,
+                "new_fires": new_fires, "published": published,
                 "universe": uni_n, "ist_day": today}
     except Exception as exc:  # never propagate — shadow only
-        log.warning("equity_sm shadow tick skipped: %s", exc)
+        log.warning("equity_sm tick skipped: %s", exc)
         return {"status": "error", "detail": str(exc)}
+
+
+def _publish_sm_recommendation(sym, fr, fire_date: str, cmp_now: float | None):
+    """Rung B: persist ONE planned-execution signal as an isolated
+    `SWING_SM` recommendation. Distinct agent_type so it can never
+    collide with or starve the legacy SWING slot machine.
+    entry_type='LIMIT' (planned FVG-mid) so the MARKET stale-entry hard
+    block is correctly skipped. Best-effort; never raises. Returns the
+    rec id (or None/-1)."""
+    try:
+        from dashboard.backend.db import create_stock_recommendation
+
+        risk = max(1e-9, float(fr.entry) - float(fr.stop_loss))
+        row = {
+            "symbol": sym,
+            "agent_type": _SM_AGENT_TYPE,
+            "entry_price": float(fr.entry),
+            "stop_loss": float(fr.stop_loss),
+            "targets": [float(fr.target)],
+            # Structural (planned-execution, fixed RR 2.0) — NOT a
+            # predictive/ML score. Stated honestly in `reasoning`.
+            "confidence_score": 60.0,
+            "setup": _ALERT_SETUP,
+            "entry_type": "LIMIT",
+            "scan_cmp": cmp_now,
+            "data_authenticity": "real",
+            "expected_holding_period": "1-6 weeks",
+            "technical_signals": [
+                "planned_execution_state_machine", "weekly_bull_gate",
+                "daily_order_block", "daily_fvg", "confirmation_candle",
+            ],
+            "reasoning": (
+                "VALIDATION PHASE — planned-execution state-machine signal "
+                "(canonical Engine A; backtest-proven 5/5 windows; LIVE "
+                "validation in progress). NOT auto-traded, NOT a position. "
+                f"Planned LIMIT entry {fr.entry} (FVG mid), SL {fr.stop_loss} "
+                f"(below order block), target {fr.target}, RR ~2.0. "
+                f"Confirmation printed {fire_date}; weekly-bull + F2-Good+ "
+                "gated. Confidence is structural (fixed RR), not predictive."
+            ),
+            "scan_run_id": None,
+        }
+        return create_stock_recommendation(row)
+    except Exception as exc:
+        log.warning("SM publish skipped (%s): %s", sym, exc)
+        return None
 
 
 def compute_shadow_scorecard(*, hold_days: int = 15, source: str = "yfinance") -> dict:

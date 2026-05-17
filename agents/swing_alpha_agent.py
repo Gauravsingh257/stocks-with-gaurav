@@ -188,18 +188,22 @@ class SwingTradeAlphaAgent(BaseAgent):
         except Exception:
             pass
 
-        # G2-6 Rung A (=shadow): run the ONLINE planned-execution engine
-        # over the F2-Good+ universe and log would-FIRE events to the
-        # canonical ledger ONLY. Gated by EQUITY_STATE_MACHINE=shadow —
+        # G2-6 Rung A/B: run the ONLINE planned-execution engine over the
+        # F2-Good+ universe. Gated by EQUITY_STATE_MACHINE:
+        #   "shadow" → log would-FIRE to the ledger ONLY (invisible).
+        #   "alert"  → ALSO publish recent fires as ISOLATED SWING_SM
+        #              recommendations (no position, no auto-trade); the
+        #              ledger log stays on so scorecard validation keeps
+        #              running in parallel.
         # unset/off ⟹ this block is never entered ⟹ byte-identical to
-        # today. Creates NO recommendation, alert, or position. Isolated:
-        # any failure is swallowed and can never affect the swing scan.
+        # today. Isolated: any failure is swallowed and can never affect
+        # the swing scan or the legacy slot machine.
         try:
             from services.equity_state_machine import (
                 run_equity_sm_shadow_tick, shadow_flag,
             )
 
-            if shadow_flag() == "shadow":
+            if shadow_flag() in ("shadow", "alert"):
                 tick = asyncio.run(run_equity_sm_shadow_tick())
                 result.metrics = {**(result.metrics or {}),
                                   "equity_sm_shadow": tick}

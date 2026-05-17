@@ -1769,6 +1769,37 @@ def get_sm_shadow_scorecard(
             {"error": "sm_shadow_unavailable", "detail": str(exc)})
 
 
+@router.get("/api/research/state-machine-signals")
+@router.get("/research/state-machine-signals")
+def get_state_machine_signals(limit: int = Query(50, ge=1, le=200)):
+    """PHASE G2-6 Rung B (read-only): the planned-execution state-machine
+    signals published in `=alert` mode, as an ISOLATED `SWING_SM`
+    stream (separate agent_type — never mixed with or counted against the
+    legacy SWING slot machine). These are PLANNED setups in validation
+    phase: no position is opened, nothing is auto-traded. Empty until
+    `EQUITY_STATE_MACHINE=alert` and a recent fire occurs."""
+    try:
+        rows = get_stock_recommendations("SWING_SM", limit=limit) or []
+        return {
+            "engine": "planned_state_machine",
+            "validation_phase": True,
+            "auto_traded": False,
+            "count": len(rows),
+            "signals": rows,
+            "_note": (
+                "Backtest-proven (5/5 windows) planned-execution signals, "
+                "LIVE validation in progress. Planned LIMIT entries — wait "
+                "for the zone; NOT auto-executed. Isolated from legacy "
+                "swing recommendations."
+            ),
+        }
+    except Exception as exc:
+        log.exception("state-machine-signals failed: %s", exc)
+        return _safe_json_response(
+            {"error": "sm_signals_unavailable", "detail": str(exc),
+             "signals": [], "count": 0})
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(
