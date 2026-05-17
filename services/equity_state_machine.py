@@ -203,6 +203,31 @@ def _ist_today() -> str:
     return datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
 
 
+def _ensure_g26_tables(conn) -> None:
+    """Idempotently ensure the G2-6 path's tables (lifecycle_events,
+    equity_sm_state) exist, INDEPENDENT of the global init_db — which on
+    production has been observed not to reach the tail of its DDL, so
+    G2-3's ledger silently never persisted. Reuses the canonical DDL
+    string verbatim (no schema drift); CREATE … IF NOT EXISTS so it is
+    harmless when the tables already exist. Best-effort."""
+    try:
+        from dashboard.backend.db.schema import DDL
+
+        for stmt in DDL.split(";"):
+            s = stmt.strip()
+            if not s or ("lifecycle_events" not in s and "equity_sm_state" not in s):
+                continue
+            if not s.upper().startswith(("CREATE TABLE", "CREATE INDEX")):
+                continue
+            try:
+                conn.execute(s)
+            except Exception:
+                pass
+        conn.commit()
+    except Exception:
+        pass
+
+
 def _get_sm_state(conn, symbol: str, horizon: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM equity_sm_state WHERE symbol=? AND horizon=?",
@@ -268,6 +293,7 @@ async def run_equity_sm_shadow_tick(
         scanned = new_fires = 0
         conn = get_connection()
         try:
+            _ensure_g26_tables(conn)  # self-sufficient: don't trust global init_db
             for sym in symbols:
                 daily = df_to_candles(frames.get(sym))
                 if len(daily) < 70:
@@ -338,11 +364,16 @@ def compute_shadow_scorecard(*, hold_days: int = 15, source: str = "yfinance") -
 
         conn = get_connection()
         try:
-            rows = [dict(r) for r in conn.execute(
-                "SELECT symbol, planned_entry, stop_loss, target_1, details, "
-                "created_at FROM lifecycle_events WHERE source=? AND state="
-                "'ENTRY_ACTIVE' ORDER BY id ASC", (_SHADOW_SOURCE,),
-            ).fetchall()]
+            _ensure_g26_tables(conn)  # missing table ⟹ empty, not error
+            try:
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT symbol, planned_entry, stop_loss, target_1, "
+                    "details, created_at FROM lifecycle_events WHERE "
+                    "source=? AND state='ENTRY_ACTIVE' ORDER BY id ASC",
+                    (_SHADOW_SOURCE,),
+                ).fetchall()]
+            except Exception:
+                rows = []
         finally:
             conn.close()
 
