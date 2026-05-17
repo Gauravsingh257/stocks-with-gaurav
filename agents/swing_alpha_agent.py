@@ -110,7 +110,21 @@ class SwingTradeAlphaAgent(BaseAgent):
                 "entry_type": idea.entry_type,
                 "scan_cmp": idea.scan_cmp,
             }
-            create_stock_recommendation(row)
+            _rec_id = create_stock_recommendation(row)
+            # G2-3 SHADOW: canonical FILTERED event (best-effort, never raises).
+            try:
+                from dashboard.backend.lifecycle_ledger import record_lifecycle_event
+
+                record_lifecycle_event(
+                    symbol, "FILTERED", horizon="SWING", source="swing_agent",
+                    recommendation_id=_rec_id if isinstance(_rec_id, int) else None,
+                    planned_entry=row.get("entry_price"), stop_loss=row.get("stop_loss"),
+                    target_1=(row.get("targets") or [None])[0],
+                    confidence=row.get("confidence_score"),
+                    setup=row.get("setup"), sector=getattr(idea, "sector", None),
+                )
+            except Exception:
+                pass
             saved += 1
             active_symbols.append(symbol)
             findings.append(

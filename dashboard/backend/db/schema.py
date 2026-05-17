@@ -279,6 +279,44 @@ CREATE TABLE IF NOT EXISTS signals_log (
 CREATE INDEX IF NOT EXISTS idx_signals_log_scan ON signals_log(scan_id, horizon);
 CREATE INDEX IF NOT EXISTS idx_signals_log_symbol ON signals_log(symbol, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signals_log_layers ON signals_log(horizon, final_selected, layer1_pass, layer2_pass, layer3_pass);
+
+-- ─────────────────────────────────────────
+-- TABLE 13: lifecycle_events — PHASE G2-3 canonical lifecycle (append-only)
+-- Single source of truth for the planned-execution state machine. Written
+-- in SHADOW only (G2-3): nothing reads it for behaviour yet; it accumulates
+-- the real FILTERED→ARMED→ENTRY_ACTIVE→LIVE_TRACKING→CLOSED/EXPIRED stream
+-- so later phases have a real data foundation. Append-only; never updated.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lifecycle_events (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol            TEXT NOT NULL,
+    horizon           TEXT NOT NULL DEFAULT 'SWING',
+    state             TEXT NOT NULL,
+    prev_state        TEXT,
+    source            TEXT NOT NULL DEFAULT 'system',
+    recommendation_id INTEGER,
+    position_id       INTEGER,
+    user_id           INTEGER,
+    planned_entry     REAL,
+    zone_low          REAL,
+    zone_high         REAL,
+    stop_loss         REAL,
+    target_1          REAL,
+    target_2          REAL,
+    cmp_at_event      REAL,
+    rr_planned        REAL,
+    regime            TEXT,
+    sector            TEXT,
+    sector_band       TEXT,
+    setup             TEXT,
+    confidence        REAL,
+    manual_override   INTEGER NOT NULL DEFAULT 0,
+    details           TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_symbol ON lifecycle_events(symbol, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_state ON lifecycle_events(state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_horizon ON lifecycle_events(horizon, created_at DESC);
 """
 
 

@@ -1681,6 +1681,30 @@ def get_layer_report(
     return finalize_endpoint("layer_report", rep, valid_layer_report_payload)
 
 
+@router.get("/api/research/lifecycle-events")
+@router.get("/research/lifecycle-events")
+def get_lifecycle_events(
+    limit: int = Query(100, ge=1, le=1000),
+    symbol: str | None = Query(None),
+    state: str | None = Query(None),
+):
+    """PHASE G2-3 (read-only): inspect the canonical lifecycle ledger.
+    Append-only shadow stream — nothing reads it for behaviour yet; it
+    accumulates the real FILTERED→ENTRY_ACTIVE→CLOSED transitions so later
+    phases have a real data foundation."""
+    try:
+        from dashboard.backend.lifecycle_ledger import recent_events, summary
+
+        return {
+            "summary": summary(),
+            "events": recent_events(limit, symbol, state),
+            "_note": "Read-only shadow. No behaviour is driven by this table in G2-3.",
+        }
+    except Exception as exc:
+        log.exception("lifecycle-events failed: %s", exc)
+        return _safe_json_response({"error": "lifecycle_unavailable", "detail": str(exc)})
+
+
 @router.get("/api/research/regime-sector-shadow")
 @router.get("/research/regime-sector-shadow")
 def get_regime_sector_shadow(horizon: str = Query("SWING", pattern="^(SWING|LONGTERM)$")):

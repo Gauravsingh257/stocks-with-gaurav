@@ -474,6 +474,22 @@ def take_entry(req: TakeEntryRequest, user: dict = Depends(get_current_user)):
         )
         conn.commit()
         pos_id = cur.lastrowid
+        # G2-3 SHADOW: record canonical lifecycle event (best-effort, never raises).
+        try:
+            from dashboard.backend.lifecycle_ledger import record_lifecycle_event
+
+            record_lifecycle_event(
+                sym, "ENTRY_ACTIVE",
+                source="take_entry", position_id=pos_id, user_id=user["sub"],
+                planned_entry=float(req.entry_price),
+                stop_loss=float(req.stop_loss) if req.stop_loss is not None else None,
+                target_1=float(req.target_1) if req.target_1 is not None else None,
+                target_2=float(req.target_2) if req.target_2 is not None else None,
+                manual_override=True,  # user-clicked, not zone-activated (pre-canonical)
+                details={"holding_period": req.holding_period},
+            )
+        except Exception:
+            pass
         return {
             "ok": True,
             "id": pos_id,
@@ -692,6 +708,25 @@ def close_position(
             (new_status, exit_price, exit_reason, pnl_r, position_id),
         )
         conn.commit()
+        # G2-3 SHADOW: canonical close event (best-effort, never raises).
+        try:
+            from dashboard.backend.lifecycle_ledger import record_lifecycle_event
+
+            canon = (
+                "CLOSED_WIN" if new_status == "TARGET_HIT"
+                else "CLOSED_LOSS" if new_status == "SL_HIT"
+                else "CLOSED_EXIT"
+            )
+            record_lifecycle_event(
+                row["symbol"], canon,
+                prev_state="ENTRY_ACTIVE", source="close_position",
+                position_id=position_id, user_id=user["sub"],
+                planned_entry=entry, stop_loss=sl,
+                cmp_at_event=exit_price, rr_planned=pnl_r,
+                details={"exit_reason": exit_reason, "raw_status": new_status},
+            )
+        except Exception:
+            pass
         return {
             "ok": True,
             "id": position_id,
