@@ -18,6 +18,18 @@ class SwingTradeAlphaAgent(BaseAgent):
     priority = "high"
 
     def run(self, result: AgentResult) -> None:
+        # The legacy swing scan has early returns (slots full / 0 saved).
+        # The G2-6 state-machine tick is a SEPARATE engine and MUST run on
+        # every invocation regardless of legacy slot state. finally{}
+        # guarantees it runs exactly once — genuinely isolated from the
+        # legacy slot machine (it was previously coupled via those early
+        # returns, so a full legacy slot table silently starved it).
+        try:
+            self._run_legacy(result)
+        finally:
+            self._g2_6_tick(result)
+
+    def _run_legacy(self, result: AgentResult) -> None:
         # Slot-aware scanning: only fill empty slots
         active_recs = get_stock_recommendations("SWING", limit=MAX_SWING_SLOTS)
         active_count = len(active_recs)
@@ -188,16 +200,18 @@ class SwingTradeAlphaAgent(BaseAgent):
         except Exception:
             pass
 
-        # G2-6 Rung A/B: run the ONLINE planned-execution engine over the
-        # F2-Good+ universe. Gated by EQUITY_STATE_MACHINE:
-        #   "shadow" → log would-FIRE to the ledger ONLY (invisible).
+    def _g2_6_tick(self, result: AgentResult) -> None:
+        # G2-6 Rung A/B: SEPARATE planned-execution engine. Invoked from
+        # run()'s finally{} so it executes on EVERY swing-agent run —
+        # independent of the legacy slot machine and its early returns.
+        # Gated by EQUITY_STATE_MACHINE:
+        #   "shadow" → log would-FIRE to the canonical ledger ONLY.
         #   "alert"  → ALSO publish recent fires as ISOLATED SWING_SM
         #              recommendations (no position, no auto-trade); the
-        #              ledger log stays on so scorecard validation keeps
-        #              running in parallel.
-        # unset/off ⟹ this block is never entered ⟹ byte-identical to
-        # today. Isolated: any failure is swallowed and can never affect
-        # the swing scan or the legacy slot machine.
+        #              ledger log stays on so scorecard validation runs
+        #              in parallel.
+        # unset/off ⟹ never entered ⟹ byte-identical. Best-effort: any
+        # failure is swallowed and can never affect the swing scan.
         try:
             from services.equity_state_machine import (
                 run_equity_sm_shadow_tick, shadow_flag,
