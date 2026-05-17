@@ -237,7 +237,7 @@ then cut; nothing removed before its replacement is proven).
 |---|---|---|
 | **0** ✅ | Recompute profit factor for 5 SWING windows; freeze G2-6 gate row in ALPHA_BASELINE.md; **Gaurav approves gate** | **DONE 2026-05-17 — gate approved, 5/5 clear** |
 | **1** ✅ | `equity_state_machine.py` (ONLINE-correct) + `equity_sm_state` DDL + equivalence test (3/3) + online re-backtest. No agent wiring. | **DONE — `391fcf2`. Test surfaced batch≠online; online engine clears the gate 5/5 SWING (ALPHA_BASELINE.md G2-6 ONLINE)** |
-| **2** | Rung A `=shadow` wiring in `SwingTradeAlphaAgent` (guarded, never raises) + `/api/research/sm-shadow-scorecard` | ≥4wk live shadow ≈ backtest gate |
+| **2** ✅ | Rung A `=shadow` wiring in `SwingTradeAlphaAgent` (guarded, never raises) + `/api/research/sm-shadow-scorecard` | **CODE DONE — `f9e220e`,`7d87748`. Scorecard live (`initialising`), prod byte-identical. SOAK pending: set `EQUITY_STATE_MACHINE=shadow` then ≥4wk live ≈ gate** |
 | **3** | Rung B `=alert` (recs + notify, no auto-position) | ≥4–8wk armed cohort matches gate |
 | **4** | Rung C `=live` (TASK 6 activation + `take_entry` repoint, `LEGACY_INSTANT_ENTRY` escape) | soak; then G2-7/G2-8 |
 
@@ -268,8 +268,25 @@ them — it is the map, per the established design-only pattern
   → PHASE G2-6 ONLINE, which now supersedes the batch baseline). No
   agent wiring, no flag, no DB writes, no live behaviour.
 
-**Step 2** (Rung A `=shadow`: wire the online engine into
-`SwingTradeAlphaAgent` guarded + default-OFF, write only
-`lifecycle_events`, add `/api/research/sm-shadow-scorecard`, soak ≥4 live
-weeks reproducing the online gate on real forward data) is unblocked and
-awaits a separate explicit go-ahead, per the per-step discipline.
+- Step 2 ✅ CODE (`f9e220e`, `7d87748`) — Rung A `=shadow` wired into
+  `SwingTradeAlphaAgent` (guarded, never raises, default-OFF →
+  byte-identical), `equity_sm_state` + scorecard endpoint live
+  (`initialising`, graceful). Verified prod unaffected.
+
+  **Latent G2-3 finding (honest):** the prod `dashboard.db` had **no
+  `lifecycle_events` table** — the global `init_db()` aborts before its
+  tail DDL, so since G2-3 every `record_lifecycle_event` (agents'
+  FILTERED, `auth.py` ENTRY_ACTIVE/CLOSED) has silently no-op'd. G2-6 is
+  now **self-sufficient** (`_ensure_g26_tables` recreates from the
+  canonical DDL), so the soak will actually record. A proper global
+  `init_db` robustness fix (so the *other* G2-3 writers also persist) is
+  a separate small task — flagged, not bundled here.
+
+**Step 2 SOAK (operational, the real gate to Step 3):** set
+`EQUITY_STATE_MACHINE=shadow` on the web service (the env that runs
+`SwingTradeAlphaAgent`). The daily 08:30 IST scan then logs would-FIRE
+events; `/api/research/sm-shadow-scorecard` must reach
+`soak_complete=true` (≥4 weeks, ≥20 scored) **and**
+`gate_pass_on_scored=true` on real forward data before Step 3 (Rung B
+`=alert`). Enabling the flag is a deliberate user action; until set,
+nothing collects. No user-facing effect at this rung regardless.
