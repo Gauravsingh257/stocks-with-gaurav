@@ -236,7 +236,7 @@ then cut; nothing removed before its replacement is proven).
 | Step | Deliverable | Gate to next |
 |---|---|---|
 | **0** ✅ | Recompute profit factor for 5 SWING windows; freeze G2-6 gate row in ALPHA_BASELINE.md; **Gaurav approves gate** | **DONE 2026-05-17 — gate approved, 5/5 clear** |
-| **1** | `equity_state_machine.py` + `equity_sm_state` DDL + sim-equivalence CI assertion. No agent wiring yet. | equivalence test green |
+| **1** ✅ | `equity_state_machine.py` (ONLINE-correct) + `equity_sm_state` DDL + equivalence test (3/3) + online re-backtest. No agent wiring. | **DONE — `391fcf2`. Test surfaced batch≠online; online engine clears the gate 5/5 SWING (ALPHA_BASELINE.md G2-6 ONLINE)** |
 | **2** | Rung A `=shadow` wiring in `SwingTradeAlphaAgent` (guarded, never raises) + `/api/research/sm-shadow-scorecard` | ≥4wk live shadow ≈ backtest gate |
 | **3** | Rung B `=alert` (recs + notify, no auto-position) | ≥4–8wk armed cohort matches gate |
 | **4** | Rung C `=live` (TASK 6 activation + `take_entry` repoint, `LEGACY_INSTANT_ENTRY` escape) | soak; then G2-7/G2-8 |
@@ -258,10 +258,18 @@ them — it is the map, per the established design-only pattern
 - Does **not** introduce new risk-sizing logic — F-Risk is reused as-is
   (it is the validated, robust component).
 
-## Step 0 closed — next gate is Step 1 go-ahead
+## Steps 0–1 closed — next gate is Step 2 go-ahead
 
-The corrected G2-6 gate was approved (2026-05-17) and its baseline frozen
-in ALPHA_BASELINE.md. **Step 1** (`equity_state_machine.py` +
-`equity_sm_state` DDL + sim-equivalence CI assertion — no agent wiring,
-no flag, no live behaviour) is now unblocked and awaits a separate
-explicit go-ahead, per the per-step approval discipline.
+- Step 0 ✅ — corrected gate approved 2026-05-17, baseline frozen.
+- Step 1 ✅ (`391fcf2`) — its equivalence test exposed that the batch
+  oracle ≠ a live engine; the ONLINE-correct `equity_state_machine.py`
+  was built, the test passes 3/3, and the engine's *own* trade set
+  clears the approved gate **5/5 SWING windows** (ALPHA_BASELINE.md
+  → PHASE G2-6 ONLINE, which now supersedes the batch baseline). No
+  agent wiring, no flag, no DB writes, no live behaviour.
+
+**Step 2** (Rung A `=shadow`: wire the online engine into
+`SwingTradeAlphaAgent` guarded + default-OFF, write only
+`lifecycle_events`, add `/api/research/sm-shadow-scorecard`, soak ≥4 live
+weeks reproducing the online gate on real forward data) is unblocked and
+awaits a separate explicit go-ahead, per the per-step discipline.

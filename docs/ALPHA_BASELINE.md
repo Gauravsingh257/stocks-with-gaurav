@@ -415,3 +415,83 @@ Lowest PF 1.73 (floor 1.30), max acct DD 5.79% (cap 15%), every window
   CI assertion). Step 1 is still code-gated by a separate explicit
   go-ahead; approval here unblocks it, it does not auto-start it. No
   live behaviour changed by this section.
+
+---
+
+# PHASE G2-6 ONLINE — the live-cadence trade set re-graded (THIS supersedes the batch baseline)
+
+Step 1's equivalence test surfaced a real finding: the G2-5 / batch
+"frozen baseline" above was measured on `state_machine_sim` — a **batch**
+algorithm that skips its scan pointer past fired setups and collapses
+setups still unresolved at the array end to "no fire". A live engine
+seeing one bar at a time cannot do that. A naive "replay the batch oracle
+daily" driver therefore fired *more* trades than the batch backtest
+measured (proven: 22 vs 20 on a fixture).
+
+`services/equity_state_machine.py` (`scan_fires_online`) is the
+ONLINE-correct engine — identical rules (detectors / confirmation /
+weekly / entry-SL-target are single-sourced from `state_machine_sim` +
+`engine.*`), one correction: act on a setup only when its outcome is
+**final**; never advance past an unresolved setup. Pinned by
+`tests/test_equity_state_machine_equivalence.py`: (A) online
+self-consistency (day-by-day == full array), (B) online fires ⊆ batch
+oracle, byte-identical (strict subset proven). The honest thing to grade
+against the gate is this engine's OWN trade set, not the batch oracle's.
+
+Re-run: `engine_mode=state_machine_online`, univ=150, Good+, hold=15,
+F-Risk portfolio defaults — identical params to the batch frozen table.
+
+## SWING — 5 windows, ONLINE engine, vs corrected G2-6 gate
+
+| Window | n | WR | Exp/trade | PF | Acct DD | Acct ret | WF | Gate |
+|---|---|---|---|---|---|---|---|---|
+| 2026-01-15→04-15 | 39 | 58.97% | +1.83% | 1.73 | 5.79% | +17.53% | 3/4 | ✅ |
+| 2025-02-01→05-01 | 37 | 72.97% | +3.31% | 3.91 | 1.88% | +13.82% | 3/3 | ✅ |
+| 2024-06-01→09-01 | 52 | 61.54% | +1.25% | 1.66 | 5.39% | +8.52% | 3/3 | ✅ |
+| 2024-10-01→2025-01-01 | 44 | 59.09% | +2.41% | 2.07 | 5.24% | +19.05% | 3/4 | ✅ |
+| 2025-09-01→12-01 | 53 | 67.92% | +1.37% | 2.04 | 3.92% | +15.16% | 3/4 | ✅ |
+
+**5 of 5 SWING windows clear the corrected G2-6 gate (needs ≥4/5).
+PASS.** Mean expectancy ≈ **+2.03%/trade**. Lowest PF 1.66 (floor 1.30),
+max acct DD 5.79% (cap 15%), every WR ≥58.97%, every WF ≥3/4.
+
+## Online vs batch — the correction did NOT erode the edge
+
+| Window | batch n → online n | batch exp → online exp |
+|---|---|---|
+| 2026-01 | 39 → 39 | +1.83% → +1.83% |
+| 2025-02 | 41 → 37 | +2.97% → +3.31% |
+| 2024-06 | 53 → 52 | +1.46% → +1.25% |
+| 2024-10 | 47 → 44 | +2.44% → +2.41% |
+| 2025-09 | 56 → 53 | +1.34% → +1.37% |
+
+The online engine takes marginally **fewer** trades (it correctly drops
+the batch-only phantom tail fires — exactly the test's ⊆ property);
+expectancy is essentially unchanged. **The G2-5 SWING edge survives
+online-correctness scrutiny.** The phantom fires were not load-bearing —
+the honest conclusion, found in backtest, not with capital.
+
+## LONGTERM — ONLINE engine, 2 windows (informational; excluded from gate)
+
+| Window | n | WR | Exp/trade | PF | Acct ret |
+|---|---|---|---|---|---|
+| 2025-01-01→03-01 (hold 90) | 12 | 41.67% | −1.60% | 0.69 | −1.0% |
+| 2025-06-01→08-01 (hold 90) | 67 | 44.78% | −0.55% | 0.76 | −0.34% |
+
+Still no edge — consistent with G2-5. **LONGTERM stays excluded** from
+the state-machine path (its own engine is G2-7).
+
+## DECISION / status
+
+- **`engine_mode=state_machine_online` is now the canonical reference**
+  for G2-6. The batch "frozen baseline" section above is retained for
+  provenance but is **superseded** by this online table.
+- **G2-6 Step 1 is COMPLETE**: online engine + `equity_sm_state` DDL +
+  3/3 green equivalence test + online re-backtest clears the approved
+  gate 5/5. Commit `391fcf2`.
+- Still **nothing live**: no agent wiring, no flag, no DB writes. Next
+  is G2-6 Step 2 (Rung A `=shadow`, ≥4 live weeks must reproduce this
+  online gate on real forward data) — separate explicit go-ahead.
+- Same honest limits hold: yfinance single source, 150 symbols, 5
+  windows, simulator-class (not yet the live agent). Necessary, not
+  sufficient — the live shadow soak is the real test.
