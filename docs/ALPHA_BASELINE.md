@@ -363,3 +363,55 @@ destructive than Engine B's −6.48% (account barely moved: −1.0% / +0.37%).
 - The F8 payoff sub-clause needs an explicit human ruling for a high-WR
   engine before G2-6 can define its activation gate. Recorded here, not
   silently reinterpreted.
+
+---
+
+# PHASE G2-6 GATE — FROZEN BASELINE (approved by Gaurav, 2026-05-17)
+
+The F8 payoff sub-clause was ruled mis-specified for a high-win-rate
+engine. **Approved corrected gate** (replaces the F8 gate for the equity
+state-machine activation path only — F8 still stands for the legacy
+validation engine):
+
+| # | Criterion | Threshold |
+|---|---|---|
+| 1 | Net expectancy / trade | ≥ **+1.0%** |
+| 2 | Win rate | ≥ **48%** |
+| 3 | Profit factor (Σwins ÷ Σ\|losses\|) | ≥ **1.30** |
+| 4 | Account max drawdown (F-Risk model) | ≤ **15%** |
+| 5 | Positive walk-forward sub-windows | ≥ **3/4** |
+| 6 | SWING windows clearing 1–5 | ≥ **4 of 5** |
+
+Profit factor **replaces** the `payoff ≥ 1.5` proxy (which assumed a
+low-WR/high-payoff shape). DD tightened 30%→15% and a ≥4/5-window rule
+added — the corrected gate is *stricter* overall, not a loosening.
+
+## Frozen baseline — exact run, engine_mode=state_machine, univ=150, Good+, hold=15
+
+| Window | n | WR | Exp/trade | Payoff | **PF** | Acct DD | Acct ret | WF | Gate |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-01-15→04-15 | 39 | 58.97% | +1.83% | 1.20 | **1.73** | 5.79% | +17.53% | 3/4 | ✅ |
+| 2025-02-01→05-01 | 41 | 70.73% | +2.97% | 1.51 | **3.65** | 1.88% | +14.13% | 3/3 | ✅ |
+| 2024-06-01→09-01 | 53 | 62.26% | +1.46% | 1.08 | **1.78** | 5.39% | +8.52% | 3/3 | ✅ |
+| 2024-10-01→2025-01-01 | 47 | 59.57% | +2.44% | 1.44 | **2.12** | 5.24% | +18.62% | 3/4 | ✅ |
+| 2025-09-01→12-01 | 56 | 67.86% | +1.34% | 0.98 | **2.07** | 4.57% | +12.89% | 3/4 | ✅ |
+
+**Result: 5 of 5 SWING windows clear (gate requires ≥4). PASS.**
+Lowest PF 1.73 (floor 1.30), max acct DD 5.79% (cap 15%), every window
++ve expectancy ≥+1.34%, WR ≥58.97%.
+
+## Honest notes on this frozen baseline
+
+- yfinance is a live source; figures vary marginally run-to-run (e.g.
+  the 2025-09 window read 55 trades / PF earlier vs 56 here as a late
+  bar settled). The gate clears with **wide margin** under either read;
+  this table is the exact most-recent run, frozen as the G2-6 reference.
+- This is the **simulator** (`state_machine_sim`), 150-symbol yfinance
+  universe, 5 windows. Necessary but not sufficient: G2-6 Step 2 (Rung A
+  `=shadow`, ≥4 live weeks) must reproduce this gate on real forward
+  production data before anything user-facing changes.
+- Gate approved ⟹ **G2-6 Step 1 unblocked** (build
+  `equity_state_machine.py` + `equity_sm_state` DDL + sim-equivalence
+  CI assertion). Step 1 is still code-gated by a separate explicit
+  go-ahead; approval here unblocks it, it does not auto-start it. No
+  live behaviour changed by this section.

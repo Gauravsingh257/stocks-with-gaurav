@@ -18,6 +18,12 @@ Inputs this builds on (already shipped, verified):
 
 ---
 
+> **STATUS: gate APPROVED by Gaurav 2026-05-17.** Frozen baseline (real
+> profit-factor numbers, 5/5 SWING windows clear) recorded in
+> [ALPHA_BASELINE.md → PHASE G2-6 GATE](ALPHA_BASELINE.md#phase-g2-6-gate--frozen-baseline-approved-by-gaurav-2026-05-17).
+> **Step 0 is complete. G2-6 Step 1 is unblocked** (still requires a
+> separate explicit go-ahead to begin code).
+
 ## TASK 0 — The gate ruling that MUST precede any code (human decision)
 
 G2-5 surfaced, and deliberately did **not** silently resolve, a
@@ -58,11 +64,10 @@ single-window F-Risk mistake.
 state machine activation is **SWING-only**. Long-term gets its own
 engine in G2-7 (Task 8 of the canonical doc), not this one.
 
-> **Decision required from Gaurav before TASK 1 code:** approve this
-> corrected gate (or amend the thresholds). Profit factor for the 5
-> SWING windows must be recomputed and recorded in ALPHA_BASELINE.md as
-> the frozen G2-6 baseline *before* any flag is built. No flag is
-> written until this row exists and the gate is approved.
+> **✅ DONE (2026-05-17):** Gaurav approved this corrected gate. Profit
+> factor recomputed from the live backtest for all 5 SWING windows and
+> frozen in ALPHA_BASELINE.md (lowest PF 1.73, max acct DD 5.79%, 5/5
+> windows clear — gate needs ≥4/5). The blocker is cleared.
 
 ---
 
@@ -230,7 +235,7 @@ then cut; nothing removed before its replacement is proven).
 
 | Step | Deliverable | Gate to next |
 |---|---|---|
-| **0** | Recompute profit factor for 5 SWING windows; freeze G2-6 gate row in ALPHA_BASELINE.md; **Gaurav approves gate** | gate approved |
+| **0** ✅ | Recompute profit factor for 5 SWING windows; freeze G2-6 gate row in ALPHA_BASELINE.md; **Gaurav approves gate** | **DONE 2026-05-17 — gate approved, 5/5 clear** |
 | **1** | `equity_state_machine.py` + `equity_sm_state` DDL + sim-equivalence CI assertion. No agent wiring yet. | equivalence test green |
 | **2** | Rung A `=shadow` wiring in `SwingTradeAlphaAgent` (guarded, never raises) + `/api/research/sm-shadow-scorecard` | ≥4wk live shadow ≈ backtest gate |
 | **3** | Rung B `=alert` (recs + notify, no auto-position) | ≥4–8wk armed cohort matches gate |
@@ -253,10 +258,10 @@ them — it is the map, per the established design-only pattern
 - Does **not** introduce new risk-sizing logic — F-Risk is reused as-is
   (it is the validated, robust component).
 
-## Open question for Gaurav (blocks Step 0)
+## Step 0 closed — next gate is Step 1 go-ahead
 
-Approve the **corrected G2-6 gate** in TASK 0 (expectancy + WR + profit
-factor + tightened account-DD + 4-of-5 windows, replacing the
-mis-specified `payoff ≥ 1.5` sub-clause), or amend the thresholds. Step 1
-code does not begin until this gate is approved and its baseline row is
-frozen in ALPHA_BASELINE.md.
+The corrected G2-6 gate was approved (2026-05-17) and its baseline frozen
+in ALPHA_BASELINE.md. **Step 1** (`equity_state_machine.py` +
+`equity_sm_state` DDL + sim-equivalence CI assertion — no agent wiring,
+no flag, no live behaviour) is now unblocked and awaits a separate
+explicit go-ahead, per the per-step approval discipline.
