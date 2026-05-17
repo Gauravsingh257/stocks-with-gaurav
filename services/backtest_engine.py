@@ -437,3 +437,153 @@ async def run_backtest(
 
 def run_backtest_sync(start_date: str, end_date: str, **kwargs) -> dict[str, Any]:
     return asyncio.run(run_backtest(start_date, end_date, **kwargs))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# PHASE G2-5 — planned-execution state-machine backtest (shadow / research)
+# Parallel path; run_backtest above is untouched. Same metrics + portfolio
+# model so results are DIRECTLY comparable to docs/ALPHA_BASELINE.md.
+# ─────────────────────────────────────────────────────────────────────────
+
+def _simulate_planned_entry_trade(
+    symbol: str, daily: list[dict], fire, hold_days: int,
+    transaction_cost_pct: float, slippage_pct: float,
+) -> "BacktestTrade | None":
+    """Enter at the PLANNED zone price (fire.entry, a LIMIT) starting the bar
+    AFTER the fire bar, then exit on stop/target/time. Stop counted first on
+    same-bar (conservative — identical convention to _simulate_long_trade).
+    This tests planned-zone execution, NOT next-open chasing."""
+    n = len(daily)
+    start = fire.entry_idx + 1
+    if start >= n:
+        return None
+    entry = float(fire.entry)
+    sl = float(fire.stop_loss)
+    target = float(fire.target)
+    if entry <= 0 or sl >= entry:
+        return None
+    eff_entry = entry * (1.0 + slippage_pct / 100.0)
+    end_idx = min(start + hold_days, n)
+    raw_exit = float(daily[min(start + hold_days - 1, n - 1)]["close"])
+    exit_date = str(daily[min(start + hold_days - 1, n - 1)].get("date"))[:10]
+    exit_reason = "TIME_EXIT"
+    for k in range(start, end_idx):
+        c = daily[k]
+        if float(c["low"]) <= sl:
+            raw_exit, exit_reason = sl, "STOP_LOSS"
+            exit_date = str(c.get("date"))[:10]
+            break
+        if float(c["high"]) >= target:
+            raw_exit, exit_reason = target, "TARGET_HIT"
+            exit_date = str(c.get("date"))[:10]
+            break
+    eff_exit = raw_exit * (1.0 - slippage_pct / 100.0)
+    net = (eff_exit - eff_entry) / eff_entry * 100.0 - 2.0 * transaction_cost_pct
+    gross = (raw_exit - entry) / entry * 100.0
+    return BacktestTrade(
+        symbol=symbol, scan_date=str(daily[fire.entry_idx].get("date"))[:10],
+        entry_date=str(daily[start].get("date"))[:10], exit_date=exit_date,
+        entry=round(eff_entry, 2), stop_loss=round(sl, 2), target=round(target, 2),
+        exit_price=round(eff_exit, 2), exit_reason=exit_reason,
+        return_pct=round(net, 2), gross_return_pct=round(gross, 2),
+        transaction_cost_pct=round(transaction_cost_pct, 4),
+        slippage_pct=round(slippage_pct, 4), confidence=0.0,
+        setup="SMC_STATE_MACHINE_LONG", sector=_safe_sector(symbol),
+    )
+
+
+async def run_state_machine_backtest(
+    start_date: str,
+    end_date: str,
+    *,
+    target_universe: int = 300,
+    hold_days: int = 15,
+    source: str = "yfinance",
+    transaction_cost_pct: float = 0.10,
+    slippage_pct: float = 0.05,
+    quality_min_tier: str = "Good",
+    portfolio_cfg: PortfolioConfig | None = None,
+) -> dict[str, Any]:
+    """G2-5: planned-execution state machine over the F2-filtered equity
+    universe, point-in-time. Records shadow lifecycle events. Read-only."""
+    from datetime import date as _date
+
+    from services.research_levels import daily_candles_to_weekly, df_to_candles
+    from services.universe_quality import filter_symbols_by_quality
+    from services.validation_engine import _fetch_frames, _slice_to_date
+    from services.state_machine_sim import simulate_state_machine_entries
+
+    portfolio_cfg = portfolio_cfg or PortfolioConfig()
+    universe = load_nse_universe(target_universe)
+    frames = await _fetch_frames(universe.symbols, source, days=900, as_of=None)
+    symbols, qstats = filter_symbols_by_quality(
+        universe.symbols, frames, cutoff=start_date, min_tier=quality_min_tier
+    )
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    trades: list[BacktestTrade] = []
+    armed = fired = 0
+
+    for sym in symbols:
+        df = _slice_to_date(frames.get(sym), end_date)
+        daily = df_to_candles(df)
+        if len(daily) < 70:
+            continue
+        weekly = daily_candles_to_weekly(daily)
+        try:
+            fire_list = simulate_state_machine_entries(daily, weekly, expiry_bars=15)
+        except Exception as exc:
+            log.debug("state-machine sim failed %s: %s", sym, exc)
+            continue
+        for fr in fire_list:
+            fdt = pd.Timestamp(str(daily[fr.entry_idx].get("date"))[:10])
+            if not (start_ts <= fdt <= end_ts):
+                continue
+            armed += 1
+            tr = _simulate_planned_entry_trade(
+                sym, daily, fr, hold_days, transaction_cost_pct, slippage_pct
+            )
+            if tr is not None:
+                fired += 1
+                trades.append(tr)
+                try:
+                    from dashboard.backend.lifecycle_ledger import record_lifecycle_event
+                    record_lifecycle_event(
+                        sym, "ENTRY_ACTIVE", horizon="SWING",
+                        source="g2_5_state_machine_shadow", prev_state="ARMED",
+                        planned_entry=tr.entry, stop_loss=tr.stop_loss,
+                        target_1=tr.target, setup=tr.setup,
+                        details={"backtest": True, "fire_date": tr.scan_date},
+                    )
+                except Exception:
+                    pass
+
+    returns = [t.return_pct for t in trades]
+    wins = [t for t in trades if t.return_pct > 0]
+    total = len(trades)
+    metrics = {
+        "total_trades": total,
+        "win_rate": round(len(wins) / total * 100.0, 2) if total else 0.0,
+        "avg_return": round(sum(returns) / total, 2) if total else 0.0,
+        "max_drawdown": _max_drawdown(returns),
+        "sharpe_ratio": _sharpe(returns),
+    }
+    portfolio_metrics = _simulate_portfolio(trades, portfolio_cfg) if trades else None
+    return {
+        "engine_mode": "state_machine",
+        "start_date": start_date, "end_date": end_date, "horizon": "SWING",
+        "hold_days": hold_days,
+        "quality_filter_stats": qstats,
+        "state_machine": {"armed": armed, "fired": fired},
+        "walk_forward": _walk_forward(trades),
+        "metrics": metrics,
+        "portfolio_metrics": portfolio_metrics,
+        "trades": [t.to_dict() for t in trades],
+        "data_notes": [
+            "Planned-execution: entry at the FVG-mid LIMIT, bar AFTER fire.",
+            "Faithful bar-clocked reproduction of detect_setup_a (see "
+            "services/state_machine_sim.py docstring). Point-in-time, no look-ahead.",
+            "Shadow only — zero production behaviour change.",
+        ],
+    }

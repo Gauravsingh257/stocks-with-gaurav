@@ -1787,16 +1787,43 @@ async def run_research_backtest(
     max_concurrent_positions: int = Query(8, ge=1, le=50, description="F-Risk: concurrent open positions cap"),
     max_per_sector: int = Query(3, ge=1, le=20, description="F-Risk: sector concentration cap"),
     gated_only: bool = Query(False, description="F-XRAY: disable ungated _scored_smc_levels fallback — measure ONLY the strict gated scorer"),
+    engine_mode: str = Query("validation", pattern="^(validation|state_machine)$", description="G2-5: state_machine = planned-execution simulator (shadow/research, no live behaviour change)"),
 ):
     """Run an OHLC-sliced historical backtest of the 3-layer strategy.
 
     F3: pass universe_quality_filter=true to run the SAME backtest on the
     F2-filtered universe — the filtered-vs-unfiltered delta is the proof of
     whether selection quality produces edge.
+
+    G2-5: pass engine_mode=state_machine to run the F2-filtered equity universe
+    through the planned-execution state-machine simulator (the canonical Engine A
+    logic, bar-clocked) instead of the validation/instant-entry path. Read-only
+    research — does not affect live recommendations.
     """
-    from services.backtest_engine import PortfolioConfig, run_backtest
+    from services.backtest_engine import (
+        PortfolioConfig,
+        run_backtest,
+        run_state_machine_backtest,
+    )
 
     try:
+        if engine_mode == "state_machine":
+            return await run_state_machine_backtest(
+                start_date=start_date,
+                end_date=end_date,
+                target_universe=target_universe,
+                hold_days=hold_days,
+                source=source,
+                transaction_cost_pct=transaction_cost_pct,
+                slippage_pct=slippage_pct,
+                quality_min_tier=quality_min_tier,
+                portfolio_cfg=PortfolioConfig(
+                    risk_per_trade_pct=risk_per_trade_pct,
+                    max_position_pct=max_position_pct,
+                    max_concurrent_positions=max_concurrent_positions,
+                    max_per_sector=max_per_sector,
+                ),
+            )
         return await run_backtest(
             start_date=start_date,
             end_date=end_date,
