@@ -273,14 +273,23 @@ them — it is the map, per the established design-only pattern
   byte-identical), `equity_sm_state` + scorecard endpoint live
   (`initialising`, graceful). Verified prod unaffected.
 
-  **Latent G2-3 finding (honest):** the prod `dashboard.db` had **no
-  `lifecycle_events` table** — the global `init_db()` aborts before its
-  tail DDL, so since G2-3 every `record_lifecycle_event` (agents'
-  FILTERED, `auth.py` ENTRY_ACTIVE/CLOSED) has silently no-op'd. G2-6 is
-  now **self-sufficient** (`_ensure_g26_tables` recreates from the
-  canonical DDL), so the soak will actually record. A proper global
-  `init_db` robustness fix (so the *other* G2-3 writers also persist) is
-  a separate small task — flagged, not bundled here.
+  **DB persistence incident — ROOT-CAUSED & FIXED (`0130220`):** the
+  prod `dashboard.db` had **no `lifecycle_events` / `equity_sm_state`
+  table** since G2-3 — so every canonical lifecycle write (agents'
+  FILTERED, `auth.py` ENTRY_ACTIVE/CLOSED, G2-6 shadow) was a silent
+  no-op for months. *Real* root cause (deeper than "abort on first
+  fail"): several table comments contain a semicolon (e.g.
+  `"Append-only; never updated."`); the naive `DDL.split(";")` severed
+  the `--` comment from its text and fed the next `CREATE TABLE`
+  malformed prose → syntax error → tail tables never created. Fix:
+  `iter_ddl_statements()` strips `--` comments before splitting (single
+  source), `init_db` isolates each statement (one failure can't abort
+  the tail) + isolated migrations + loud `_verify_core_tables()`.
+  `/api/research/lifecycle-events` now exposes `db_health`. Verified in
+  prod: `lifecycle_events_table_present:true`,
+  `equity_sm_state_table_present:true`, `core_tables_missing:[]`. The
+  whole G2-3 ledger (not just G2-6) now persists. Done **first**, before
+  the soak, exactly as instructed — lifecycle data is foundational.
 
 **Step 2 SOAK (operational, the real gate to Step 3):** set
 `EQUITY_STATE_MACHINE=shadow` on the web service (the env that runs
