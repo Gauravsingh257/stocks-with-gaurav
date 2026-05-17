@@ -396,6 +396,33 @@ async def run_equity_sm_shadow_tick(
         return {"status": "error", "detail": str(exc)}
 
 
+def _notify_sm_telegram(text: str) -> bool:
+    """Send ONE message via a FULLY ISOLATED Telegram channel — a
+    dedicated bot token + chat id (`EQUITY_SM_TG_TOKEN`,
+    `EQUITY_SM_TG_CHAT`). This deliberately does NOT touch
+    `services.signal_delivery` / the live index engine's shared worker or
+    queue, so it can never disturb production alerts. Opt-in: if either
+    env var is unset it is a silent no-op. Best-effort; never raises."""
+    import os
+    token = os.getenv("EQUITY_SM_TG_TOKEN", "").strip()
+    chat = os.getenv("EQUITY_SM_TG_CHAT", "").strip()
+    if not token or not chat:
+        return False
+    try:
+        import requests
+
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=8,
+        )
+        return r.status_code == 200
+    except Exception as exc:
+        log.warning("SM telegram skipped: %s", exc)
+        return False
+
+
 def _publish_sm_recommendation(sym, fr, fire_date: str, cmp_now: float | None):
     """Rung B: persist ONE planned-execution signal as an isolated
     `SWING_SM` recommendation. Distinct agent_type so it can never
@@ -436,7 +463,19 @@ def _publish_sm_recommendation(sym, fr, fire_date: str, cmp_now: float | None):
             ),
             "scan_run_id": None,
         }
-        return create_stock_recommendation(row)
+        rec_id = create_stock_recommendation(row)
+        if isinstance(rec_id, int) and rec_id > 0:
+            _notify_sm_telegram(
+                "🧪 <b>PLANNED-EXECUTION SIGNAL</b> "
+                "(validation — NOT auto-traded)\n"
+                f"<b>{sym}</b>  LONG · planned LIMIT\n"
+                f"Entry <b>{fr.entry}</b> · SL {fr.stop_loss} · "
+                f"T {fr.target} · RR ~2.0\n"
+                f"Confirmed {fire_date} · weekly-bull · F2-Good+\n"
+                "<i>Wait for the zone. Backtest-proven 5/5 windows; "
+                "live-validating. No position opened.</i>"
+            )
+        return rec_id
     except Exception as exc:
         log.warning("SM publish skipped (%s): %s", sym, exc)
         return None

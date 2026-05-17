@@ -476,8 +476,29 @@ def _maybe_auto_scan(horizon: str) -> None:
     log.info("[auto-scan %s] triggered — data is stale (>%dh)", horizon, STALE_THRESHOLD_HOURS)
 
 
+def _sm_alert_active() -> bool:
+    """True only when EQUITY_STATE_MACHINE=alert. Gates the swing-page
+    merge so it is BYTE-IDENTICAL to today in any other mode."""
+    return os.getenv("EQUITY_STATE_MACHINE", "").strip().lower() == "alert"
+
+
 def _swing_payload(limit: int) -> dict:
     rows = get_stock_recommendations("SWING", limit=limit)
+
+    # G2-6 Rung B: in =alert mode, surface the ISOLATED SWING_SM
+    # planned-execution signals on the SAME swing page. They run through
+    # the IDENTICAL transform below (no shape drift) and are tagged so
+    # the UI/users see they are validation-phase, not auto-traded. The
+    # legacy SWING slot machine is untouched (separate agent_type); when
+    # not in alert mode this block is skipped ⟹ byte-identical.
+    if _sm_alert_active():
+        try:
+            sm_rows = get_stock_recommendations("SWING_SM", limit=limit) or []
+            for _sr in sm_rows:
+                _sr["_sm_engine"] = True
+            rows = list(rows) + sm_rows
+        except Exception:
+            pass
     runs = get_ranking_runs(horizon="SWING", limit=1)
     last_scan = runs[0]["run_time"] if runs else None
 
@@ -598,6 +619,10 @@ def _swing_payload(limit: int) -> dict:
                 "action_tag": action_tag,
                 "smc_evidence": row.get("smc_evidence"),
                 **_extract_fundamentals(row),
+                # Tag ONLY state-machine items; legacy items unchanged.
+                **({"engine": "planned_state_machine",
+                    "validation_phase": True,
+                    "auto_traded": False} if row.get("_sm_engine") else {}),
             }
         )
     return {"items": items, "count": len(items), "last_scan_time": _utc_iso(last_scan)}
