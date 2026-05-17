@@ -1328,6 +1328,9 @@ export const api = {
     get<{ items: SwingIdea[]; count: number; gated?: boolean }>(`/api/research/swing?limit=${limit}`, authToken, 30_000),
   longtermResearch: (limit = 12, authToken?: string | null) =>
     get<{ items: LongTermIdea[]; count: number; last_scan_time?: string | null; slot_status?: { occupied: number; max: number; slots_full: boolean }; gated?: boolean }>(`/api/research/longterm?limit=${limit}`, authToken, 30_000),
+  /** G2-6: isolated planned-execution (state-machine) signals — validation phase, never auto-traded. */
+  stateMachineSignals: (limit = 50) =>
+    get<{ engine: string; validation_phase: boolean; auto_traded: boolean; count: number; signals: Array<Record<string, unknown>>; _note?: string; error?: string }>(`/api/research/state-machine-signals?limit=${limit}`, null, 25_000),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   liveSignals: (limit = 40) => get<{ items: Array<{ signal_id?: string; symbol?: string; direction?: string; strategy_name?: string; entry?: number | null; stop_loss?: number | null; target1?: number | null; target2?: number | null; score?: number | null; confidence?: number | null; timestamp?: string; signal_kind?: string }>; count: number; source?: string }>(`/api/research/live-signals?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
