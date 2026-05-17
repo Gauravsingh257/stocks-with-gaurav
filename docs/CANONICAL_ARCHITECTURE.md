@@ -282,6 +282,21 @@ enable; delete LONGTERM-SMC.
 **G2-8:** Remove slot machine + ungated fallback code + legacy instant
 entry (all replacements now proven). Final cleanup.
 
+**G2-9 (Intraday / MTF equity engine — added 2026-05-17 from
+[PRODUCT_VISION.md](PRODUCT_VISION.md)):** The vision mandates an
+**equity** intraday/MTF engine (holding intraday → 1–2 weeks) — ORB ·
+VWAP reclaim · liquidity sweeps · momentum continuation · volume
+expansion, planned entries only, fed by the same MARKET→SECTOR→STOCK→
+QUALITY funnel and the same canonical lifecycle + F-Risk. This did **not
+exist** in the original G2-1..G2-8 plan (the only intraday system is the
+NIFTY/BANKNIFTY index-options Telegram engine, `INDEX_ONLY`, separate and
+untouched). G2-9 follows the identical discipline: design-only doc →
+`state_machine_sim`-style intraday simulator → backtest gate
+([ALPHA_BASELINE.md](ALPHA_BASELINE.md), profile-appropriate gate like
+the G2-6 ruling) → shadow → alert → live, every step flag-gated
+default-OFF and reversible. Sequenced **after** G2-6 (SWING activation)
+proves the planned-execution pattern end-to-end in production.
+
 Rollback plan: every phase = one flag. Revert = flip flag (no redeploy
 needed if env-driven) or revert one commit. Index/live Telegram engine
 is on its own independent flag and is never touched by the equity
@@ -301,6 +316,42 @@ migration.
 | Long-term ≠ daily SMC | New macro/sector/fundamental engine (Task 8) |
 | Don't manufacture trades | Zero is a valid output; no fill-the-slot logic |
 | Reuse what works | Engine A state machine + F-Risk + OS kept and central |
+
+---
+
+## Vision → Phase Traceability Map (auditable, [PRODUCT_VISION.md](PRODUCT_VISION.md) is the north-star)
+
+Status legend: ✅ done · 🟡 designed/proven not live · ⛔ not started ·
+"shadow" = built, logging only, no user-facing effect.
+
+| Vision element (PRODUCT_VISION.md) | Delivering phase | Status (2026-05-17) |
+|---|---|---|
+| Kill ungated fallback systems (rule 4) | G2-1 | ✅ live |
+| MARKET REGIME gate | G2-2 → enforced in G2-6 | 🟡 shadow |
+| SECTOR STRENGTH gate | G2-2 → enforced in G2-6 | 🟡 shadow |
+| Full lifecycle tracking (rule 10) / ANALYTICS+HISTORY | G2-3 ledger; producer in G2-6 | 🟡 ledger live (shadow) |
+| Generalised planned-zone source | G2-4 | ✅ live (behaviour-preserving) |
+| SWING planned-execution engine, backtest-proven | G2-5 | 🟡 proven, not live |
+| Corrected activation gate (profile-aware) | G2-6 Step 0 | ✅ approved + frozen |
+| SWING: FIND→PLAN→WAIT→ACTIVATE→TRACK (state machine live) | G2-6 Steps 1–4 | ⛔ Step 1 next |
+| MONITORING state ("wait for 95, don't activate now") | G2-6 Rung B/C (Task 5/6) | ⛔ |
+| ENTRY ACTIVATION only at zone±tol+confirmation | G2-6 Rung C (Task 6) | ⛔ |
+| No instant entries (rule 3) — repoint `take_entry` | G2-6 Rung C / G2-8 | ⛔ |
+| LONGTERM = macro/sector/accumulation, not stretched SMC | G2-7 (Task 8) | ⛔ |
+| **INTRADAY / MTF equity engine** (ORB/VWAP/sweeps) | **G2-9 (new)** | ⛔ not started |
+| Dynamic inventory — no fixed 10/20/25 slots (rule 2) | G2-8 (Task 4/9) | ⛔ slot machine still live |
+| No over-engineered AI clutter (rule 5) | G2-8 cleanup | ⛔ |
+| F-Risk canonical risk engine (position/sector/DD caps) | F-Risk (validated) | ✅ canonical |
+| No fake recommendations / no synthetic data (rule 1) | enforced every phase | ✅ ongoing rule |
+| Reuse Engine A state machine + F-Risk + OS | whole G2 thesis | ✅ design principle |
+
+**Honest reading of this map:** the platform's *vision and design are
+fully aligned*, but most of the user-facing flow (PLAN→WAIT→ACTIVATE,
+dynamic inventory, real long-term, intraday) is 🟡/⛔ — designed/proven,
+**not yet live**. The live site still runs the legacy instant-entry,
+fixed-slot engine. G2-6→G2-9 is precisely the work of making the live
+product equal the vision. This gap is acknowledged, sequenced, and
+reversible — not hidden.
 
 The migration is mostly **connecting and redirecting components that
 already exist and are proven good** (Engine A state machine, F2 quality,
