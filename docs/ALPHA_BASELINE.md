@@ -244,3 +244,122 @@ B. Accept Phase E's conclusion: the moat is the OS/workflow/trust +
 
 Recommendation: **B for the product, A only as scoped R&D** — never
 again with a single-window gate.
+
+---
+
+# PHASE G2-5 RESULT — planned-execution state machine vs the validation engine
+
+The F-Robust verdict above ("no durable alpha", ALPHA_V2 OFF indefinitely)
+measured the **instant-entry validation engine** (Engine B). G2-5 re-runs
+the *exact same 7 windows*, same Good+ F2 filter, same realistic F-Risk
+portfolio model, same point-in-time slicing — but routes the F2-filtered
+equity universe through the **planned-execution state machine** (Engine A
+logic: weekly-bull gate → daily OB+FVG → tap → confirmation candle →
+FVG-mid LIMIT entry, rr=2.0), via `engine_mode=state_machine`.
+
+This is the empirical test of the entire Phase G / canonical-architecture
+thesis: *was the missing edge the planned-execution model itself, not just
+universe selection?*
+
+Reproduce (read-only, cloud):
+```
+GET .../api/research/backtest?engine_mode=state_machine
+    &start_date=<SD>&end_date=<ED>&target_universe=150&hold_days=<15|90>
+    &universe_quality_filter=true&quality_min_tier=Good
+```
+
+## SWING — same 5 windows as F-Robust (hold 15)
+
+| Window | Trades | WR | Exp/trade | Payoff | Acct ret | Acct maxDD | WF | Engine B (F-Robust) |
+|---|---|---|---|---|---|---|---|---|
+| 2026-01-15→04-15 | 39 | 58.97% | **+1.83%** | 1.20 | +17.53% | 5.79% | 3/4 | +2.75% / 48.8% ✅ |
+| 2025-02-01→05-01 | 41 | 70.73% | **+2.97%** | 1.51 | +14.13% | 1.88% | 3/3 | +0.78% / 55.6% ❌ |
+| 2024-06-01→09-01 | 53 | 62.26% | **+1.46%** | 1.08 | +8.52% | 5.39% | 3/3 | −1.45% / 40.0% ❌ |
+| 2024-10-01→2025-01-01 | 47 | 59.57% | **+2.44%** | 1.44 | +18.62% | 5.24% | 3/4 | −0.60% / 35.6% ❌ |
+| 2025-09-01→12-01 | 55 | 69.09% | **+1.37%** | 0.93 | +15.80% | 3.92% | 3/4 | −0.69% / 44.4% ❌ |
+
+**SWING mean expectancy ≈ +2.01%/trade. All 5 windows positive.**
+(Engine B over the identical windows: mean ≈ +0.16%, 3 of 5 negative.)
+
+## LONGTERM — same 2 windows (hold 90)
+
+| Window | Trades | WR | Exp/trade | Payoff | Acct ret | Acct maxDD | WF | Engine B (F-Robust) |
+|---|---|---|---|---|---|---|---|---|
+| 2025-01-01→03-01 | 12 | 41.67% | **−1.60%** | 0.96 | −1.0% | 3.97% | 1/2 | −6.48% ❌ |
+| 2025-06-01→08-01 | 70 | 44.29% | **−0.54%** | 0.96 | +0.37% | 7.52% | 2/3 | +0.72% ❌ |
+
+LONGTERM still has **no edge** (both windows negative), though far less
+destructive than Engine B's −6.48% (account barely moved: −1.0% / +0.37%).
+
+## Strict gate scorecard (the F8 gate, applied mechanically)
+
+| Window | Exp ≥+1.0% | WR≥48% @ payoff≥1.5 | acctDD ≤30% | WF ≥3/4 | Clears all 4? |
+|---|---|---|---|---|---|
+| SWING 2026-01 | ✅ | ❌ (payoff 1.20) | ✅ | ✅ | no (payoff only) |
+| SWING 2025-02 | ✅ | ✅ (1.51) | ✅ | ✅ | **YES** |
+| SWING 2024-06 | ✅ | ❌ (payoff 1.08) | ✅ | ✅ | no (payoff only) |
+| SWING 2024-10 | ✅ | ❌ (payoff 1.44) | ✅ | ✅ | no (payoff only) |
+| SWING 2025-09 | ✅ | ❌ (payoff 0.93) | ✅ | ✅ | no (payoff only) |
+| LONGTERM ×2 | ❌ | ❌ | ✅ | ❌ | no |
+
+## Honest interpretation (intellectual-honesty discipline)
+
+1. **The G2 / canonical-architecture thesis is empirically supported for
+   SWING.** Switching only the *entry model* — instant-entry → planned
+   state machine, on the identical universe / filter / risk model / windows
+   — turned F-Robust's "3 of 5 windows negative, mean +0.16%, no durable
+   edge" into **all 5 windows positive, mean +2.01%/trade, 1.9–5.8%
+   account drawdown**. This is the strongest cross-regime equity result the
+   project has produced, and it isolates the planned-execution model as the
+   source — not universe junk (F2 controlled) and not the risk layer
+   (F-Risk controlled).
+
+2. **The strict F8 gate's payoff sub-clause is mis-specified for this
+   engine — do not silently pass OR fail on it.** Criterion 2
+   ("WR ≥48% *at payoff ≥1.5*") was calibrated against Engine B's
+   low-WR / high-payoff profile (it needs big winners to survive a ~42% hit
+   rate). The state machine has the inverse profile: **high WR (59–71%)**,
+   modest payoff (0.93–1.51) — many wins time-exit before the rr=2.0
+   target. With WR ~65%, expectancy is solidly ≥+1.0% even at payoff ≈1.0.
+   Expectancy (the criterion that actually measures edge), account drawdown,
+   and walk-forward consistency are cleared in **all 5** SWING windows; only
+   the payoff threshold — a proxy designed for a different engine — is not.
+   Mechanically: 1 of 5 clears all four. Substantively: 5 of 5 clear the
+   three criteria that measure edge and survivability. This tension is a
+   **human decision**, surfaced not resolved.
+
+3. **LONGTERM remains a do-nothing.** Both 90-day windows are negative.
+   The audit-validated instinct holds: do not activate LONGTERM through
+   this engine. (It is, however, far less destructive than Engine B's
+   −6.48% — the planned model fails gracefully.)
+
+## Honest limitations (must not be hidden)
+
+- The backtest exercises `services/state_machine_sim.py` — a *faithful
+  bar-clocked reproduction* of `detect_setup_a`'s documented logic, NOT
+  the live function (which is coupled to wall-clock 1800s expiry +
+  index-options mechanics and cannot be replayed historically without
+  being broken). It measures the documented strategy, not literally the
+  deployed code path. This is a real limitation, stated by design (see the
+  module docstring).
+- Single data source (yfinance), 150-symbol universe, 7 windows. Larger
+  and more regime-diverse than any prior run, but directional — not a
+  promise.
+- Payoff clusters tightly around the 1.5 line (0.93 → 1.51); the strict
+  pass/fail on that sub-clause is fragile and should not be over-weighted
+  in either direction.
+
+## DECISION
+
+- **No production behaviour changed.** G2-5 is shadow/research only:
+  `engine_mode=state_machine` is a read-only backtest path; the live
+  recommendation/trade path is untouched; no flag routes real equities
+  through the state machine yet. Fully reversible.
+- **The SWING result is strong enough to justify proceeding to G2-6
+  (activation design) — behind a still-default-OFF, shadow-first flag**,
+  graded against this same 7-window matrix before any live flip. It does
+  **not** justify flipping anything live now.
+- **LONGTERM stays out** of the state-machine path.
+- The F8 payoff sub-clause needs an explicit human ruling for a high-WR
+  engine before G2-6 can define its activation gate. Recorded here, not
+  silently reinterpreted.
