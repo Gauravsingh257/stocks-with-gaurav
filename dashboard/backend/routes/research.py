@@ -1695,9 +1695,25 @@ def get_lifecycle_events(
     try:
         from dashboard.backend.lifecycle_ledger import recent_events, summary
 
+        # Foundational observability: prove the ledger TABLE actually
+        # exists (the G2-3 incident was a silently-missing table; readers
+        # fail-safe to empty, so "0 events" alone could not distinguish
+        # "no writes yet" from "table never created").
+        core_missing: list[str] = []
+        try:
+            from dashboard.backend.db.schema import _verify_core_tables
+            core_missing = _verify_core_tables()
+        except Exception:
+            core_missing = ["<verify_failed>"]
+
         return {
             "summary": summary(),
             "events": recent_events(limit, symbol, state),
+            "db_health": {
+                "lifecycle_events_table_present": "lifecycle_events" not in core_missing,
+                "equity_sm_state_table_present": "equity_sm_state" not in core_missing,
+                "core_tables_missing": core_missing,
+            },
             "_note": "Read-only shadow. No behaviour is driven by this table in G2-3.",
         }
     except Exception as exc:

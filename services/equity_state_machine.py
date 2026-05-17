@@ -211,11 +211,10 @@ def _ensure_g26_tables(conn) -> None:
     string verbatim (no schema drift); CREATE … IF NOT EXISTS so it is
     harmless when the tables already exist. Best-effort."""
     try:
-        from dashboard.backend.db.schema import DDL
+        from dashboard.backend.db.schema import DDL, iter_ddl_statements
 
-        for stmt in DDL.split(";"):
-            s = stmt.strip()
-            if not s or ("lifecycle_events" not in s and "equity_sm_state" not in s):
+        for s in iter_ddl_statements(DDL):
+            if "lifecycle_events" not in s and "equity_sm_state" not in s:
                 continue
             if not s.upper().startswith(("CREATE TABLE", "CREATE INDEX")):
                 continue

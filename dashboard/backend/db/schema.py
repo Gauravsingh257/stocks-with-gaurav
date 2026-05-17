@@ -7,6 +7,7 @@ Real-time sync: trade_ledger_2026.csv → trades table via mtime watcher.
 import sqlite3
 import csv
 import os
+import re
 import logging
 import threading
 import time
@@ -360,48 +361,119 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+# Core tables that MUST exist for the lifecycle/analytics architecture.
+# Verified loudly after init so a missing one can never be silent again
+# (the G2-3 incident: lifecycle_events never existed in prod for months
+# because one earlier DDL failure aborted the whole tail of the schema).
+_CORE_TABLES = (
+    "trades", "stock_recommendations", "running_trades", "ranking_runs",
+    "performance_snapshots", "signals_log", "recommendation_history",
+    "lifecycle_events", "equity_sm_state",
+)
+
+
+def iter_ddl_statements(ddl: str) -> list[str]:
+    """Split a DDL script into executable statements CORRECTLY.
+
+    The root cause of the G2-3 incident: several table comments contain a
+    semicolon (e.g. "Append-only; never updated."). A naive
+    `ddl.split(';')` severs the `--` line comment from its own text, so
+    the following `CREATE TABLE` is fed malformed prose and silently
+    never runs — `lifecycle_events` / `equity_sm_state` never existed in
+    production. Fix: strip `-- …` line comments FIRST (they never appear
+    inside SQL literals in this schema), THEN split on `;`. SQLite's own
+    parser handles comment-semicolons; our Python splitter must too.
+    """
+    no_comments = re.sub(r"--[^\n]*", "", ddl)
+    return [s.strip() for s in no_comments.split(";") if s.strip()]
+
+
+def _verify_core_tables() -> list[str]:
+    """Return (and loudly log) any core table still missing after init."""
+    try:
+        conn = get_connection()
+        try:
+            have = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+        missing = [t for t in _CORE_TABLES if t not in have]
+        if missing:
+            logger.warning("[DB] CORE TABLES MISSING after init: %s", missing)
+        else:
+            logger.info("[DB] all %d core tables present", len(_CORE_TABLES))
+        return missing
+    except Exception as exc:
+        logger.warning("[DB] core-table verification failed: %s", exc)
+        return []
+
+
 def init_db() -> None:
-    """Create all tables (idempotent — safe to call on every startup)."""
-    conn = get_connection()
-    try:
-        # Execute DDL, catching index errors for columns that need migration first
-        for statement in DDL.split(";"):
-            stmt = statement.strip()
-            if not stmt:
-                continue
-            try:
-                conn.execute(stmt)
-            except sqlite3.OperationalError as exc:
-                if "no such column" in str(exc):
-                    logger.debug("[DB] Skipping DDL (column not yet migrated): %s", exc)
-                else:
-                    raise
-        conn.commit()
-        logger.info(f"[DB] dashboard.db initialized at {DB_PATH}")
-    finally:
-        conn.close()
+    """Create all tables (idempotent — safe to call on every startup).
 
-    # Migrate agent_logs from old schema if needed
-    migrate_agent_logs()
-    migrate_stock_recommendations()
-    migrate_running_trades()
-    migrate_trade_screenshots()
-    migrate_signals_log()
+    ROBUSTNESS (post-G2-3 incident): a single failing DDL statement must
+    NEVER abort the rest of the schema. Every statement is
+    `… IF NOT EXISTS`, so isolating per-statement failures is safe and
+    cannot lose data. The prior code re-raised on the first unexpected
+    OperationalError, which silently dropped the entire tail of the DDL
+    (lifecycle_events / equity_sm_state never existed in production, so
+    every canonical lifecycle write since G2-3 was a silent no-op).
+    Failures are now logged at WARNING (visible, not swallowed) and the
+    loop continues; missing core tables are verified loudly at the end.
+    """
+    failures: list[str] = []
 
-    # Re-run DDL to create any indexes that failed before migration
-    conn = get_connection()
-    try:
-        for statement in DDL.split(";"):
-            stmt = statement.strip()
-            if not stmt or "CREATE INDEX" not in stmt.upper():
-                continue
-            try:
-                conn.execute(stmt)
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-    finally:
-        conn.close()
+    def _run_ddl(index_only: bool = False) -> None:
+        conn = get_connection()
+        try:
+            for stmt in iter_ddl_statements(DDL):
+                if index_only and "CREATE INDEX" not in stmt.upper():
+                    continue
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    # 'no such column' is expected before migrations run;
+                    # the index is re-created in the post-migration pass.
+                    if "no such column" not in str(exc):
+                        head = " ".join(stmt.split()[:6])
+                        logger.warning(
+                            "[DB] DDL failed (continuing): %s | %s", head, exc
+                        )
+                        failures.append(head)
+                except Exception as exc:  # never abort the remaining schema
+                    head = " ".join(stmt.split()[:6])
+                    logger.warning(
+                        "[DB] DDL error (continuing): %s | %s", head, exc
+                    )
+                    failures.append(head)
+            conn.commit()
+        finally:
+            conn.close()
+
+    _run_ddl()
+    logger.info(
+        "[DB] dashboard.db initialized at %s (%d DDL statement failures)",
+        DB_PATH, len(failures),
+    )
+
+    # Migrations — each isolated so a migration failure cannot prevent the
+    # post-migration index pass or the verification from running.
+    for _mig in (migrate_agent_logs, migrate_stock_recommendations,
+                 migrate_running_trades, migrate_trade_screenshots,
+                 migrate_signals_log):
+        try:
+            _mig()
+        except Exception as exc:
+            logger.warning("[DB] migration %s failed (continuing): %s",
+                            getattr(_mig, "__name__", _mig), exc)
+
+    # Re-run CREATE INDEX statements now that migrations added their columns.
+    _run_ddl(index_only=True)
+
+    _verify_core_tables()
 
 
 # ── CSV Watcher state ─────────────────────────────────────────────────────────
