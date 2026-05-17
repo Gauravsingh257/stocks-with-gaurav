@@ -1625,28 +1625,42 @@ def detect_hierarchical(symbol):
 # SETUP-A : HTF BOS CONTINUATION (FIXED)
 # -----------------------------------------------------
 
-def detect_setup_a(symbol: str, tf_data: dict):
+def detect_setup_a(symbol: str, tf_data: dict, tf_keys: dict | None = None):
     """
     Setup-A:
     - HTF BOS (1H + 4H aligned)
     - Order Block on 5m
     - Entry only near OB
     - Reject late entries
+
+    PHASE G2-4 — generalised zone source. `tf_keys` selects which
+    timeframe drives HTF bias vs zone/OB-FVG detection. Default is
+    {"htf": "1h", "ltf": "5m"} → byte-identical to the pre-G2-4 index
+    path (every current caller passes nothing). Future equity callers
+    (G2-5, shadow only) will pass e.g. {"htf": "1d", "ltf": "1d"} for
+    swing or {"htf": "1w", "ltf": "1w"} for long-term.
+    NOTE (G2-5): STRUCTURE_STATE key is `{symbol}_{bias}`. If/when a
+    non-index timeframe path is enabled it must namespace the key by
+    ltf to avoid colliding with the index path — handled when that path
+    is introduced, not here (this phase adds no new caller).
     """
-    
+    _tfk = tf_keys or {}
+    htf_key = _tfk.get("htf", "1h")
+    ltf_key = _tfk.get("ltf", "5m")
+
     # Required candles
-    if not tf_data.get("5m") or not tf_data.get("1h"):
-        logging.debug(f"[A] {symbol}: no 5m/1h data")
+    if not tf_data.get(ltf_key) or not tf_data.get(htf_key):
+        logging.debug(f"[A] {symbol}: no {ltf_key}/{htf_key} data")
         return None
 
-    # RELAXED BIAS: Use 1H Trend Only (Ignore 4H for now to increase frequency)
-    bias = detect_htf_bias(tf_data["1h"])
+    # RELAXED BIAS: Use HTF Trend Only (Ignore 4H for now to increase frequency)
+    bias = detect_htf_bias(tf_data[htf_key])
 
     if not bias:
-        logging.debug(f"[A] {symbol}: no HTF bias on 1h")
+        logging.debug(f"[A] {symbol}: no HTF bias on {htf_key}")
         return None
 
-    ltf = tf_data["5m"]
+    ltf = tf_data[ltf_key]
 
     # ❌ Liquidity filter
     if not is_index(symbol):
