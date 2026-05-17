@@ -1732,6 +1732,27 @@ def get_regime_sector_shadow(horizon: str = Query("SWING", pattern="^(SWING|LONG
         return _safe_json_response({"error": "shadow_unavailable", "detail": str(exc)})
 
 
+@router.get("/api/research/sm-shadow-scorecard")
+@router.get("/research/sm-shadow-scorecard")
+def get_sm_shadow_scorecard(
+    hold_days: int = Query(15, ge=1, le=120),
+    source: str = Query("yfinance"),
+):
+    """PHASE G2-6 Rung A (read-only): score the accumulated
+    `g2_6_sm_shadow` ONLINE-engine would-FIRE stream against the corrected
+    G2-6 gate using realised forward outcomes from later OHLC. This is the
+    LIVE confirmation Rung A must pass before Rung B. Nothing user-facing;
+    no recommendation/position/alert is driven by this."""
+    try:
+        from services.equity_state_machine import compute_shadow_scorecard
+
+        return compute_shadow_scorecard(hold_days=hold_days, source=source)
+    except Exception as exc:
+        log.exception("sm-shadow-scorecard failed: %s", exc)
+        return _safe_json_response(
+            {"error": "sm_shadow_unavailable", "detail": str(exc)})
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(

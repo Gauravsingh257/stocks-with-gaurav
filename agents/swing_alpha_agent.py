@@ -187,3 +187,21 @@ class SwingTradeAlphaAgent(BaseAgent):
             snapshot_performance()
         except Exception:
             pass
+
+        # G2-6 Rung A (=shadow): run the ONLINE planned-execution engine
+        # over the F2-Good+ universe and log would-FIRE events to the
+        # canonical ledger ONLY. Gated by EQUITY_STATE_MACHINE=shadow —
+        # unset/off ⟹ this block is never entered ⟹ byte-identical to
+        # today. Creates NO recommendation, alert, or position. Isolated:
+        # any failure is swallowed and can never affect the swing scan.
+        try:
+            from services.equity_state_machine import (
+                run_equity_sm_shadow_tick, shadow_flag,
+            )
+
+            if shadow_flag() == "shadow":
+                tick = asyncio.run(run_equity_sm_shadow_tick())
+                result.metrics = {**(result.metrics or {}),
+                                  "equity_sm_shadow": tick}
+        except Exception:
+            pass
