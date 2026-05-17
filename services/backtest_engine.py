@@ -503,15 +503,29 @@ async def run_state_machine_backtest(
     slippage_pct: float = 0.05,
     quality_min_tier: str = "Good",
     portfolio_cfg: PortfolioConfig | None = None,
+    online: bool = False,
 ) -> dict[str, Any]:
-    """G2-5: planned-execution state machine over the F2-filtered equity
-    universe, point-in-time. Records shadow lifecycle events. Read-only."""
+    """G2-5/G2-6: planned-execution state machine over the F2-filtered
+    equity universe, point-in-time. Records shadow lifecycle events.
+    Read-only.
+
+    online=False → the G2-5 batch oracle (state_machine_sim).
+    online=True  → the G2-6 ONLINE-correct engine (equity_state_machine):
+      only fires a setup once its outcome is final, never advancing past
+      an unresolved setup. This is the trade set a real daily live engine
+      would take — the honest thing to grade against the G2-6 gate (the
+      batch oracle's numbers include batch-only phantom tail fires; see
+      tests/test_equity_state_machine_equivalence.py)."""
     from datetime import date as _date
 
     from services.research_levels import daily_candles_to_weekly, df_to_candles
     from services.universe_quality import filter_symbols_by_quality
     from services.validation_engine import _fetch_frames, _slice_to_date
     from services.state_machine_sim import simulate_state_machine_entries
+    from services.equity_state_machine import scan_fires_online
+
+    _fire_fn = scan_fires_online if online else simulate_state_machine_entries
+    _mode = "state_machine_online" if online else "state_machine"
 
     portfolio_cfg = portfolio_cfg or PortfolioConfig()
     universe = load_nse_universe(target_universe)
@@ -532,7 +546,7 @@ async def run_state_machine_backtest(
             continue
         weekly = daily_candles_to_weekly(daily)
         try:
-            fire_list = simulate_state_machine_entries(daily, weekly, expiry_bars=15)
+            fire_list = _fire_fn(daily, weekly, expiry_bars=15)
         except Exception as exc:
             log.debug("state-machine sim failed %s: %s", sym, exc)
             continue
@@ -571,7 +585,7 @@ async def run_state_machine_backtest(
     }
     portfolio_metrics = _simulate_portfolio(trades, portfolio_cfg) if trades else None
     return {
-        "engine_mode": "state_machine",
+        "engine_mode": _mode,
         "start_date": start_date, "end_date": end_date, "horizon": "SWING",
         "hold_days": hold_days,
         "quality_filter_stats": qstats,
@@ -582,8 +596,12 @@ async def run_state_machine_backtest(
         "trades": [t.to_dict() for t in trades],
         "data_notes": [
             "Planned-execution: entry at the FVG-mid LIMIT, bar AFTER fire.",
-            "Faithful bar-clocked reproduction of detect_setup_a (see "
-            "services/state_machine_sim.py docstring). Point-in-time, no look-ahead.",
-            "Shadow only — zero production behaviour change.",
+            ("ONLINE-correct engine (services/equity_state_machine.py): "
+             "real live-cadence trade set, only final decisions."
+             if online else
+             "Batch oracle (services/state_machine_sim.py): includes "
+             "batch-only phantom tail fires — see G2-6 ONLINE finding."),
+            "Point-in-time, no look-ahead. Shadow only — zero production "
+            "behaviour change.",
         ],
     }

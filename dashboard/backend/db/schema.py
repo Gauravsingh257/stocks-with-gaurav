@@ -317,6 +317,37 @@ CREATE TABLE IF NOT EXISTS lifecycle_events (
 CREATE INDEX IF NOT EXISTS idx_lifecycle_symbol ON lifecycle_events(symbol, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lifecycle_state ON lifecycle_events(state, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lifecycle_horizon ON lifecycle_events(horizon, created_at DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 14: equity_sm_state — PHASE G2-6 Step 1 (mutable working state)
+-- Persistent per-(symbol,horizon) phase for the daily-bar-clocked equity
+-- planned-execution state machine. UNLIKE lifecycle_events (append-only
+-- audit log), this is the CURRENT working state, upserted each tick. It
+-- is a PROJECTION of services.state_machine_sim (the frozen oracle) — the
+-- prod engine never reimplements the transition rules, so it cannot
+-- silently diverge. Created additively in Step 1; NOTHING writes it until
+-- G2-6 Rung A (=shadow) is separately approved. Idempotent: re-running
+-- the same trading day is a no-op via last_eval_date.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS equity_sm_state (
+    symbol            TEXT NOT NULL,
+    horizon           TEXT NOT NULL DEFAULT 'SWING',
+    phase             TEXT NOT NULL DEFAULT 'IDLE',
+    ob_low            REAL,
+    fvg_low           REAL,
+    fvg_high          REAL,
+    formed_date       TEXT,
+    tapped_date       TEXT,
+    bars_since_formed INTEGER NOT NULL DEFAULT 0,
+    planned_entry     REAL,
+    stop_loss         REAL,
+    target            REAL,
+    last_fire_date    TEXT,
+    last_eval_date    TEXT,
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (symbol, horizon)
+);
+CREATE INDEX IF NOT EXISTS idx_equity_sm_phase ON equity_sm_state(phase, horizon);
 """
 
 

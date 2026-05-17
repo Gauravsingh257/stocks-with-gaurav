@@ -1787,7 +1787,7 @@ async def run_research_backtest(
     max_concurrent_positions: int = Query(8, ge=1, le=50, description="F-Risk: concurrent open positions cap"),
     max_per_sector: int = Query(3, ge=1, le=20, description="F-Risk: sector concentration cap"),
     gated_only: bool = Query(False, description="F-XRAY: disable ungated _scored_smc_levels fallback — measure ONLY the strict gated scorer"),
-    engine_mode: str = Query("validation", pattern="^(validation|state_machine)$", description="G2-5: state_machine = planned-execution simulator (shadow/research, no live behaviour change)"),
+    engine_mode: str = Query("validation", pattern="^(validation|state_machine|state_machine_online)$", description="G2-5: state_machine = batch planned-execution oracle. G2-6: state_machine_online = ONLINE-correct live-cadence engine (the honest set to grade vs the G2-6 gate). All shadow/research, no live behaviour change."),
 ):
     """Run an OHLC-sliced historical backtest of the 3-layer strategy.
 
@@ -1807,7 +1807,7 @@ async def run_research_backtest(
     )
 
     try:
-        if engine_mode == "state_machine":
+        if engine_mode in ("state_machine", "state_machine_online"):
             return await run_state_machine_backtest(
                 start_date=start_date,
                 end_date=end_date,
@@ -1823,6 +1823,7 @@ async def run_research_backtest(
                     max_concurrent_positions=max_concurrent_positions,
                     max_per_sector=max_per_sector,
                 ),
+                online=(engine_mode == "state_machine_online"),
             )
         return await run_backtest(
             start_date=start_date,
