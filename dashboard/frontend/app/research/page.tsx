@@ -8,6 +8,7 @@ import StockCard from "@/components/StockCard";
 
 import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { isMarketLive, offHoursNotice } from "@/lib/marketSession";
 
 function formatScanAge(isoTime: string | null): { label: string; stale: boolean } {
   if (!isoTime) return { label: "No scan yet", stale: false };
@@ -139,6 +140,7 @@ export default function ResearchPage() {
   const [loading, setLoading] = useState(true);
   const [decisionFeedLoading, setDecisionFeedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [lastSwingScan, setLastSwingScan] = useState<string | null>(null);
   const [lastLongtermScan, setLastLongtermScan] = useState<string | null>(null);
   const [longtermSlotStatus, setLongtermSlotStatus] = useState<{ occupied: number; max: number; slots_full: boolean } | null>(null);
@@ -169,13 +171,17 @@ export default function ResearchPage() {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     setError(null);
+    setNotice(null);
     try {
       if (!decisionFeedLoadingRef.current) {
         decisionFeedLoadingRef.current = true;
         setDecisionFeedLoading(true);
         api.researchDecisionFeed(DECISION_FEED_LIMIT)
           .then((feed) => setDecisionFeed(feed ?? null))
-          .catch(() => setError("Decision feed is still warming up. Other research data loaded."))
+          .catch(() => {
+            if (!isMarketLive()) setNotice(offHoursNotice());
+            else setError("Decision feed is still warming up. Other research data loaded.");
+          })
           .finally(() => {
             decisionFeedLoadingRef.current = false;
             setDecisionFeedLoading(false);
@@ -226,7 +232,16 @@ export default function ResearchPage() {
       }
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
-        setError("Some data could not be loaded. Run a scan or refresh — backend may still be syncing.");
+        // Off-hours, partial/empty data is EXPECTED — present it calmly,
+        // never as a red failure. A genuine red error only when the
+        // market is live AND everything failed (a real outage).
+        if (!isMarketLive()) {
+          setNotice(offHoursNotice());
+        } else if (failed >= results.length) {
+          setError("Backend is syncing — please Retry in a few seconds.");
+        } else {
+          setNotice("Some data is still syncing — showing what loaded.");
+        }
       }
       setLastRefresh(new Date());
     } finally {
@@ -725,6 +740,16 @@ export default function ResearchPage() {
       </StaggerItem>
 
       {/* â”€â”€ ERROR / LOADING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {notice && !error && (
+        <StaggerItem>
+          <div className="glass" style={{ padding: 12, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <span>{notice}</span>
+            <button onClick={refresh} style={{ ...SCAN_BTN, flexShrink: 0 }}>
+              <RefreshCw size={12} /> Refresh
+            </button>
+          </div>
+        </StaggerItem>
+      )}
       {error && (
         <StaggerItem>
           <div className="glass" style={{ padding: 12, color: "var(--danger)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>

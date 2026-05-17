@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, Sparkles, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { api, type ResearchDecisionFeedResponse } from "@/lib/api";
+import { isMarketLive, offHoursNotice } from "@/lib/marketSession";
 
 import OpportunityCard from "./_components/OpportunityCard";
 import TradeExplanationDrawer from "./_components/TradeExplanationDrawer";
@@ -24,6 +25,7 @@ export default function TerminalPage() {
   const [feed, setFeed] = useState<ResearchDecisionFeedResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   // Debounced filters sent to the API (300 ms delay)
   const [apiFilters, setApiFilters] = useState<TradeFilters>({});
@@ -75,8 +77,18 @@ export default function TerminalPage() {
       const res = await api.researchDecisionFeed(40, 1);
       setFeed(res);
       setError(null);
+      setNotice(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load opportunities");
+      // Off-hours an empty/slow feed is EXPECTED, not an error — keep
+      // the UI calm and trustworthy. Only surface a real error when the
+      // market is actually live.
+      if (!isMarketLive()) {
+        setNotice(offHoursNotice());
+        setError(null);
+      } else {
+        setNotice(null);
+        setError(e instanceof Error ? e.message : "Couldn't load opportunities — retrying shortly.");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -196,6 +208,26 @@ export default function TerminalPage() {
       <div style={{ marginTop: 18, marginBottom: 18 }}>
         <AdvancedFilterBar value={filters} onChange={handleFilterChange} total={finalOpps.length} visible={filteredHero.length} />
       </div>
+
+      {notice && !error && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: 12,
+            marginBottom: 18,
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            color: "var(--text-secondary)",
+            fontSize: "0.78rem",
+          }}
+        >
+          <Sparkles size={16} />
+          {notice} No actionable setups currently — the engine publishes only high-quality planned setups.
+        </div>
+      )}
 
       {error && (
         <div
