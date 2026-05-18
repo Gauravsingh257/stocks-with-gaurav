@@ -190,6 +190,123 @@ def _structural_features(trade, data: dict) -> dict | None:
     else:
         sess = "CLOSE(15+)"
 
+    # ==================================================================
+    # INSTITUTIONAL DEEPENING — measurable, transparent rules. NOT fitted
+    # weights, NOT a scorer; these are fixed definitional classifiers for
+    # observation only (per directive: no optimization).
+    # ==================================================================
+    imp_start = bos_idx if bos_idx is not None else origin_idx
+    impulse = ltf[imp_start:] if imp_start < len(ltf) - 1 else ltf[-3:]
+
+    # (1) STRUCTURE LIFECYCLE — fresh / mid-cycle / exhausted-late.
+    # HTF equilibrium = midpoint of HTF dealing range; how far price has
+    # drifted from it (premium/discount of the larger structure).
+    if htf and len(htf) >= 20:
+        h_hi = max(x["high"] for x in htf[-40:])
+        h_lo = min(x["low"] for x in htf[-40:])
+        h_eq = (h_hi + h_lo) / 2
+        hatr = smc.calculate_atr(htf) or atr
+        dist_htf_eq_atr = abs(entry - h_eq) / (hatr or atr)
+    else:
+        dist_htf_eq_atr = 0.0
+    if (bars_since_bos != -1 and bars_since_bos <= 8 and extension_atr <= 2.0
+            and legs <= 1):
+        lifecycle = "FRESH"
+    elif (extension_atr >= 4.0 or legs >= 3 or bars_since_bos >= 25
+          or dist_htf_eq_atr >= 4.0):
+        lifecycle = "LATE"
+    else:
+        lifecycle = "MID"
+
+    # (2) EXPANSION QUALITY — clean vs messy displacement.
+    if len(impulse) >= 3:
+        body_ratio = sum(abs(c["close"] - c["open"])
+                         / max(c["high"] - c["low"], 1e-9)
+                         for c in impulse) / len(impulse)
+        overlaps = 0
+        for i in range(1, len(impulse)):
+            a, b = impulse[i - 1], impulse[i]
+            ov = min(a["high"], b["high"]) - max(a["low"], b["low"])
+            if ov > 0.5 * (a["high"] - a["low"] + 1e-9):
+                overlaps += 1
+        overlap_frac = overlaps / max(1, len(impulse) - 1)
+    else:
+        body_ratio, overlap_frac = 0.0, 1.0
+    expansion_clean = 1 if (body_ratio >= 0.55 and overlap_frac <= 0.40) else 0
+    # follow-through right after BOS (consecutive dir closes)
+    ft = 0
+    if bos_idx is not None:
+        for j in range(bos_idx, min(bos_idx + 6, len(ltf) - 1)):
+            up = ltf[j + 1]["close"] > ltf[j]["close"]
+            if (up and direction == "LONG") or (not up and direction == "SHORT"):
+                ft += 1
+            else:
+                break
+    follow_through = ft
+
+    # (3) RE-ENTRY vs FIRST-TOUCH — count distinct entries into the OB
+    # zone (a "touch" = a fresh crossing into the zone from outside).
+    touch_count = 1
+    if ob:
+        o_lo, o_hi = ob
+        if o_hi >= o_lo:
+            crossings = 0
+            for k in range(1, len(ltf)):
+                now_in = ltf[k]["low"] <= o_hi and ltf[k]["high"] >= o_lo
+                prev_in = ltf[k - 1]["low"] <= o_hi and ltf[k - 1]["high"] >= o_lo
+                if now_in and not prev_in:
+                    crossings += 1
+            touch_count = max(1, crossings)
+    touch_bucket = "1st" if touch_count <= 1 else ("2nd" if touch_count == 2 else "3rd+")
+
+    # (4) VOLATILITY REGIME — current ATR vs ~1-session trailing ATR.
+    atr_ref = smc.calculate_atr(ltf[-90:-15]) if len(ltf) >= 105 else atr
+    vol_ratio = atr / atr_ref if atr_ref > 0 else 1.0
+    vol_regime = ("LOW" if vol_ratio < 0.8
+                  else "HIGH" if vol_ratio > 1.3 else "NORMAL")
+
+    # (5) HTF CONTEXT QUALITY — structural, not just "trend bullish".
+    htf_trend_clean = 0
+    htf_fvg_fresh = 0
+    htf_liq_atr = 0.0
+    if htf and len(htf) >= 20:
+        hsh, hsl = smc.detect_swing_points(htf, 2, 2)
+        if direction == "LONG" and len(hsl) >= 2 and len(hsh) >= 2:
+            htf_trend_clean = 1 if (hsl[-1][1] > hsl[-2][1]
+                                    and hsh[-1][1] >= hsh[-2][1]) else 0
+        elif direction == "SHORT" and len(hsh) >= 2 and len(hsl) >= 2:
+            htf_trend_clean = 1 if (hsh[-1][1] < hsh[-2][1]
+                                    and hsl[-1][1] <= hsl[-2][1]) else 0
+        hfvg = smc.detect_fvg(htf, direction)
+        if hfvg:
+            for j in range(len(htf) - 3, max(2, len(htf) - 12), -1):
+                a, c = htf[j - 1], htf[j + 1]
+                if ((a["high"] < c["low"]) if direction == "LONG"
+                        else (a["low"] > c["high"])):
+                    htf_fvg_fresh = 1
+                    break
+        tgt = (max(p for _, p in hsh) if direction == "LONG" and hsh
+               else min(p for _, p in hsl) if hsl else entry)
+        htf_liq_atr = abs(tgt - entry) / (hatr or atr)
+    htf_ctx_score = htf_trend_clean + htf_fvg_fresh + (1 if 0 < htf_liq_atr <= 6 else 0)
+
+    # (6) TOO-LATE DETECTOR — the key concept. 3 measurable booleans.
+    extended = 1 if extension_atr >= 3.0 else 0
+    max_body = max((abs(c["close"] - c["open"]) for c in impulse), default=0.0)
+    displaced_already = 1 if max_body >= 1.8 * atr else 0
+    streak = 0
+    for k in range(len(ltf) - 1, 0, -1):
+        up = ltf[k]["close"] > ltf[k]["open"]
+        if (up and direction == "LONG") or (not up and direction == "SHORT"):
+            streak += 1
+        else:
+            break
+    retail_obvious = 1 if streak >= 4 else 0
+    too_late_count = extended + displaced_already + retail_obvious
+    too_late_bucket = ("EARLY" if too_late_count == 0
+                       else "DEVELOPING" if too_late_count == 1
+                       else "TOO_LATE")
+
     return {
         "r": float(trade.r_multiple),
         "win": 1 if trade.r_multiple > 0 else 0,
@@ -207,14 +324,39 @@ def _structural_features(trade, data: dict) -> dict | None:
         "maturity_raw": round(maturity_raw, 2),
         "reaction_quality": reaction_quality,
         "session": sess,
+        # institutional deepening
+        "lifecycle": lifecycle,
+        "dist_htf_eq_atr": round(dist_htf_eq_atr, 2),
+        "body_ratio": round(body_ratio, 2),
+        "overlap_frac": round(overlap_frac, 2),
+        "expansion_clean": expansion_clean,
+        "follow_through": follow_through,
+        "touch_count": touch_count,
+        "touch_bucket": touch_bucket,
+        "vol_ratio": round(vol_ratio, 2),
+        "vol_regime": vol_regime,
+        "htf_trend_clean": htf_trend_clean,
+        "htf_fvg_fresh": htf_fvg_fresh,
+        "htf_liq_atr": round(htf_liq_atr, 2),
+        "htf_ctx_score": htf_ctx_score,
+        "extended": extended,
+        "displaced_already": displaced_already,
+        "retail_obvious": retail_obvious,
+        "too_late_count": too_late_count,
+        "too_late_bucket": too_late_bucket,
     }
 
 
 NUMERIC = ["dist_from_origin_atr", "bars_from_origin", "bars_since_bos",
            "imbalance_fresh_bars", "compression", "htf_quality",
            "entry_eff", "legs_since_bos", "extension_atr",
-           "maturity_raw", "reaction_quality"]
-BINARY = ["fvg_first_tap", "ob_fresh"]
+           "maturity_raw", "reaction_quality", "dist_htf_eq_atr",
+           "body_ratio", "overlap_frac", "follow_through",
+           "touch_count", "vol_ratio", "htf_liq_atr",
+           "htf_ctx_score", "too_late_count"]
+BINARY = ["fvg_first_tap", "ob_fresh", "expansion_clean",
+          "htf_trend_clean", "htf_fvg_fresh", "extended",
+          "displaced_already", "retail_obvious"]
 
 
 def _wl(rows):
@@ -321,6 +463,49 @@ def main() -> None:
             print(f"    {s:<16} n={len(g):>3}  win={100*sum(r['win'] for r in g)/len(g):>5.1f}%"
                   f"  expR={_mean([r['r'] for r in g]):+.3f}")
 
+    def _by(title, key, order):
+        print("\n" + "=" * 72)
+        print(f"  {title}")
+        print("=" * 72)
+        seen = {}
+        for cat in order:
+            g = [r for r in rows if r.get(key) == cat]
+            if not g:
+                continue
+            rs = [r["r"] for r in g]
+            wr = 100 * sum(r["win"] for r in g) / len(g)
+            thin = "  (thin)" if len(g) < 8 else ""
+            print(f"  {str(cat):<22} n={len(g):>3}  win={wr:>5.1f}%  "
+                  f"expR={_mean(rs):+.3f}  totR={sum(rs):+.1f}{thin}")
+            seen[cat] = {"n": len(g), "win": round(wr, 1),
+                         "expR": _mean(rs), "totR": round(sum(rs), 1)}
+        return seen
+
+    # (1) Structure lifecycle — THE headline hypothesis test
+    lc = _by("STRUCTURE LIFECYCLE  (fresh accumulation vs late chase)",
+             "lifecycle", ["FRESH", "MID", "LATE"])
+    print("\n  Thesis: if FRESH expR >> LATE expR, the edge is early")
+    print("  institutional behaviour BEFORE expansion is obvious.")
+
+    # (6) Too-late detector — the key concept
+    tl = _by("TOO-LATE DETECTOR  (extended + displaced + retail-obvious)",
+             "too_late_bucket", ["EARLY", "DEVELOPING", "TOO_LATE"])
+    print("  EARLY=0 flags · DEVELOPING=1 · TOO_LATE=2-3. Monotonic decay")
+    print("  EARLY->TOO_LATE would confirm 'enters after the move is obvious'.")
+
+    # (2) Expansion quality
+    eq = _by("EXPANSION QUALITY  (clean displacement vs messy/choppy)",
+             "expansion_clean", [1, 0])
+    # (3) Re-entry vs first-touch
+    tb = _by("RE-ENTRY vs FIRST-TOUCH (OB zone)", "touch_bucket",
+             ["1st", "2nd", "3rd+"])
+    # (4) Volatility regime
+    vr = _by("VOLATILITY REGIME (ATR now vs trailing)", "vol_regime",
+             ["LOW", "NORMAL", "HIGH"])
+    # (5) HTF context quality
+    hc = _by("HTF CONTEXT QUALITY (trend-clean + fresh-imbalance + liq-target)",
+             "htf_ctx_score", [0, 1, 2, 3])
+
     op = Path(args.output)
     op.parent.mkdir(parents=True, exist_ok=True)
     op.write_text(json.dumps({
@@ -335,6 +520,8 @@ def main() -> None:
             "late": {"n": len(late),
                      "expR": _mean([r["r"] for r in late]) if late else 0},
         },
+        "lifecycle": lc, "too_late": tl, "expansion_quality": eq,
+        "touch": tb, "vol_regime": vr, "htf_context": hc,
         "rows": rows,
     }, indent=2), encoding="utf-8")
     print(f"\nWrote {op}  (per-trade rows included for Phase B chart replay)")
