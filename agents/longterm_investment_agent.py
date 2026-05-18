@@ -19,6 +19,17 @@ class LongTermInvestmentAgent(BaseAgent):
     priority = "high"
 
     def run(self, result: AgentResult) -> None:
+        # Mirror of SwingTradeAlphaAgent: the legacy slot machine has an early
+        # return (slots full). _research_feed_tick — the LONGTERM validation
+        # log (signals_log) + coverage log (ranking_runs) — MUST run on every
+        # invocation regardless of slot state, so it lives in finally{} and is
+        # never starved by that guard.
+        try:
+            self._run_legacy(result)
+        finally:
+            self._research_feed_tick(result)
+
+    def _run_legacy(self, result: AgentResult) -> None:
         # Slot-aware scanning: only fill empty slots (unless force-scan flag is set)
         force_scan = __import__("os").environ.pop("LONGTERM_FORCE_SCAN", "").strip() == "1"
         active_recs = get_stock_recommendations("LONGTERM", limit=MAX_LONGTERM_SLOTS)
@@ -54,20 +65,9 @@ class LongTermInvestmentAgent(BaseAgent):
             exclude_symbols=exclude_set,
         ))
 
-        validation_logged_rows = 0
-        if os.getenv("RESEARCH_AGENT_VALIDATION_LOG", "1").strip().lower() in ("1", "true", "yes"):
-            try:
-                from services.validation_engine import run_validation_scan
-
-                validation = asyncio.run(run_validation_scan(
-                    "LONGTERM",
-                    top_k=max(scan_top_k, 1),
-                    target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
-                    log_scan=True,
-                ))
-                validation_logged_rows = validation.logged_rows
-            except Exception as exc:
-                result.metrics = {**(result.metrics or {}), "validation_log_error": str(exc)}
+        # NOTE: the LONGTERM validation scan + signals_log write is no longer
+        # done here — it moved to _research_feed_tick (run() finally{}) so it
+        # is never starved by the slots-full early return above.
 
         # Log ranking run upfront to get scan_run_id for all recommendations
         run_id = log_ranking_run(
@@ -179,7 +179,6 @@ class LongTermInvestmentAgent(BaseAgent):
             "actual_universe_size": ranking.universe.actual_size,
             "active_slots": active_count + saved,
             "empty_slots": empty_slots - saved,
-            "validation_logged_rows": validation_logged_rows,
         }
 
         result.findings = findings
@@ -208,3 +207,48 @@ class LongTermInvestmentAgent(BaseAgent):
                 _log.getLogger("LongTermInvestmentAgent").info("Portfolio: promoted %d longterm positions", promoted)
         except Exception:
             pass
+
+    def _research_feed_tick(self, result: AgentResult) -> None:
+        # LONGTERM mirror of SwingTradeAlphaAgent._research_feed_tick. The
+        # public LONGTERM research surface + its coverage number are fed only
+        # by a logged LONGTERM validation scan (signals_log) plus a
+        # ranking_runs row. Both used to sit BELOW _run_legacy's slots-full
+        # early return and silently froze once the slots filled. Invoked from
+        # run()'s finally{} so they refresh on EVERY invocation regardless of
+        # slot state. Flag-gated by RESEARCH_AGENT_VALIDATION_LOG (byte-
+        # identical when off) and fully exception-isolated.
+        if os.getenv("RESEARCH_AGENT_VALIDATION_LOG", "1").strip().lower() not in (
+            "1", "true", "yes",
+        ):
+            return
+        try:
+            from services.validation_engine import run_validation_scan
+
+            scan_k = int(os.getenv("RESEARCH_FEED_SCAN_K", "25"))
+            validation = asyncio.run(run_validation_scan(
+                "LONGTERM",
+                top_k=scan_k,
+                target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
+                log_scan=True,
+            ))
+            try:
+                log_ranking_run(
+                    horizon="LONGTERM",
+                    universe_requested=validation.universe.requested_size,
+                    universe_scanned=validation.coverage.scanned,
+                    quality_passed=validation.funnel.layer1_pass,
+                    ranked_candidates=validation.funnel.layer2_pass,
+                    selected_count=validation.funnel.final_selected,
+                    notes=f"research_feed_tick|scan_id={validation.scan_id}",
+                )
+            except Exception as exc:
+                result.metrics = {**(result.metrics or {}),
+                                  "research_feed_ranking_log_error": str(exc)}
+            result.metrics = {**(result.metrics or {}), "research_feed": {
+                "validation_logged_rows": validation.logged_rows,
+                "scanned": validation.coverage.scanned,
+                "final": validation.funnel.final_selected,
+            }}
+        except Exception as exc:
+            result.metrics = {**(result.metrics or {}),
+                              "research_feed_error": str(exc)}
