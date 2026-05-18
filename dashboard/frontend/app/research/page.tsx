@@ -25,7 +25,6 @@ import { PerformanceOverview } from "./PerformanceOverview";
 import { PortfolioSection } from "./PortfolioSection";
 import { ResearchCoverageCard } from "./ResearchCoverageCard";
 import { ResearchLayerDebugPanel } from "./ResearchLayerDebugPanel";
-import { ResearchConversionPanel } from "./ResearchConversionPanel";
 import { RetentionPanel } from "./RetentionPanel";
 import { RunningTradesMonitor } from "./RunningTradesMonitor";
 import LiveSignals from "./LiveSignals";
@@ -575,14 +574,6 @@ export default function ResearchPage() {
       {currentTab === "research" && (<>
       <StaggerItem>
         <SelectionCriteriaPanel items={analysis?.criteria_not_met} />
-      </StaggerItem>
-
-      <StaggerItem>
-        <ResearchConversionPanel
-          perf={perf}
-          coverage={coverage}
-          user={user}
-        />
       </StaggerItem>
 
       {/* â”€â”€ GLOBAL NSE STOCK SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
