@@ -38,9 +38,16 @@ import smc_detectors as smc
 from backtest.engine import BacktestEngine, BacktestConfig
 import setup_a_frequency_probe as probe
 
-# Fixed, transparent thresholds (NOT fitted — definitional, per directive).
-MAX_EXT_AT_ENTRY_ATR = 1.5   # fresh = entry before price extends > this
-MAX_BARS_GRAB_TO_ENTRY = 30  # the reclaim must come reasonably soon
+# Fixed, transparent STRUCTURAL definitions (NOT fitted to outcomes, per
+# directive). Chosen once on structural reasoning; never swept for profit.
+GRAB_RECLAIM_BARS = 4        # sweep may reclaim over up to 4 bars (multi-bar
+                             # grab — funnel proved 1-bar was too strict)
+MAX_BARS_GRAB_TO_ENTRY = 30  # CHoCH + first retest must be timely
+# "Continuation has clearly begun" = price pushed > CONT_ATR ATR beyond the
+# broken swing high. Pre-continuation = the pullback into the OB happened
+# BEFORE that. This REPLACES the logically self-contradictory
+# "pre-ANY-expansion" gate (the CHoCH itself is the first expansion).
+CONT_ATR = 1.0
 FORWARD_BARS = 80            # outcome resolution horizon
 SWING_L = 3
 SWING_R = 3
@@ -57,21 +64,35 @@ def _atr_at(candles, i, period=14):
     return sum(trs[-period:]) / period
 
 
-def detect_fresh_longs(c: list) -> list:
-    """First-touch fresh-reclaim longs on raw 5m data.
+def _multi_grab(c, i, swing_low):
+    """Multi-bar sweep+reclaim: bar i breaks below swing_low; a bar within
+    GRAB_RECLAIM_BARS closes back above it. Returns (grab_low, reclaim_idx)
+    or None. (The funnel proved the 1-bar rule was structurally too strict
+    — grab_multi 501 vs grab_single 239 on real data.)"""
+    if c[i]["low"] >= swing_low:
+        return None
+    lo = c[i]["low"]
+    for k in range(i, min(i + GRAB_RECLAIM_BARS + 1, len(c))):
+        lo = min(lo, c[k]["low"])
+        if c[k]["close"] > swing_low:
+            return lo, k
+    return None
 
-    Phase definition (measurable, no scoring):
-      1. GRAB   — a prior swing low is swept (bar low < swing low) AND that
-                  bar closes back ABOVE it (sweep + reclaim of sell-side
-                  liquidity).
-      2. CHoCH  — first close back ABOVE the most recent swing high after
-                  the grab (the early structure shift — NOT a full
-                  displacement BOS).
-      3. ENTRY  — FIRST return into the fresh demand zone (last down candle
-                  before the CHoCH leg = origin OB), taken BEFORE the move
-                  extends ( <= MAX_EXT_AT_ENTRY_ATR ) and before a
-                  displacement candle prints. SL below the grab low,
-                  target = 2R. Forward-simulated outcome (first touch).
+
+def detect_fresh_longs(c: list) -> list:
+    """Post-CHoCH / pre-continuation fresh-reclaim longs (the structurally
+    coherent definition chosen from funnel evidence).
+
+      1. GRAB  — prior swing low swept then reclaimed within a few bars
+                 (multi-bar; sell-side liquidity grab).
+      2. CHoCH — first close back ABOVE the prior swing high (this IS the
+                 first expansion — accepted, not gated against).
+      3. ENTRY — FIRST retest into the origin OB AFTER the CHoCH, taken
+                 BEFORE the continuation leg (price has NOT yet pushed
+                 > CONT_ATR ATR beyond the broken swing high). If price ran
+                 the continuation FIRST and only deep-retraced later, that
+                 is the LATE case (what Setup-A does) — excluded.
+      SL below the grab low, target 2R, forward-simulated (first touch).
     """
     out = []
     n = len(c)
@@ -90,49 +111,40 @@ def detect_fresh_longs(c: list) -> list:
         swing_low_idx, swing_low = sl[-1]
         if swing_low_idx >= i:
             continue
-        # 1. GRAB: this bar sweeps + reclaims the last swing low.
-        if not (c[i]["low"] < swing_low and c[i]["close"] > swing_low):
+        g = _multi_grab(c, i, swing_low)
+        if g is None:
             continue
-        grab_idx, grab_low = i, c[i]["low"]
-        # most recent swing high before the grab (the level CHoCH breaks)
-        prior_high = None
-        for hi_idx, hi_px in reversed(sh):
-            if hi_idx < grab_idx:
-                prior_high = (hi_idx, hi_px)
-                break
+        grab_low, reclaim_idx = g
+        grab_idx = i
+        prior_high = next(((hx, hp) for hx, hp in reversed(sh)
+                           if hx < grab_idx), None)
         if not prior_high:
             continue
-        # 2. CHoCH: first close above prior_high within a sane window.
+        ph_px = prior_high[1]
         choch = None
-        for j in range(grab_idx + 1, min(grab_idx + MAX_BARS_GRAB_TO_ENTRY, n)):
-            if c[j]["close"] > prior_high[1]:
+        for j in range(reclaim_idx, min(grab_idx + MAX_BARS_GRAB_TO_ENTRY, n)):
+            if c[j]["close"] > ph_px:
                 choch = j
                 break
         if choch is None:
             continue
-        # origin demand OB = last down candle in [grab, choch]
-        ob_idx = None
-        for k in range(choch, grab_idx - 1, -1):
-            if c[k]["close"] < c[k]["open"]:
-                ob_idx = k
-                break
-        if ob_idx is None:
-            ob_idx = grab_idx
+        ob_idx = next((k for k in range(choch, grab_idx - 1, -1)
+                       if c[k]["close"] < c[k]["open"]), grab_idx)
         ob_lo = min(c[ob_idx]["low"], grab_low)
         ob_hi = max(c[ob_idx]["open"], c[ob_idx]["close"])
         if ob_hi <= ob_lo:
             continue
-        # 3. FIRST retest into the fresh zone, before extension/displacement
+
+        # Pre-continuation gate: the FIRST OB retest must occur BEFORE the
+        # continuation leg (price pushing > CONT_ATR ATR beyond ph_px).
+        cont_level = ph_px + CONT_ATR * atr
         entry_k = None
         for k in range(choch + 1, min(choch + MAX_BARS_GRAB_TO_ENTRY, n)):
-            run_high = max(x["high"] for x in c[choch:k + 1])
-            ext = (run_high - grab_low) / atr
-            max_body = max(abs(x["close"] - x["open"]) for x in c[choch:k + 1])
-            displaced = max_body >= 1.8 * atr
-            if c[k]["low"] <= ob_hi:               # tagged the zone
-                if ext <= MAX_EXT_AT_ENTRY_ATR and not displaced:
-                    entry_k = k
-                break  # only the FIRST retest counts (fresh, not re-entry)
+            if max(x["high"] for x in c[choch:k + 1]) >= cont_level:
+                break  # continuation already ran -> LATE, not fresh
+            if c[k]["low"] <= ob_hi:
+                entry_k = k
+                break  # FIRST retest only
         if entry_k is None:
             continue
 
@@ -142,7 +154,6 @@ def detect_fresh_longs(c: list) -> list:
         if risk <= 0:
             continue
         target = entry + 2.0 * risk
-        # forward outcome (first touch of SL or target)
         r = None
         for f in range(entry_k + 1, min(entry_k + 1 + FORWARD_BARS, n)):
             if c[f]["low"] <= sl:
@@ -160,9 +171,10 @@ def detect_fresh_longs(c: list) -> list:
             "sl": round(sl, 2), "target": round(target, 2), "r": r,
             "win": 1 if r > 0 else 0,
             "bars_grab_to_entry": entry_k - grab_idx,
+            "bars_choch_to_entry": entry_k - choch,
             "ext_at_entry_atr": round(ext_at_entry, 2),
         })
-        used_until = entry_k  # don't double-count the same structural move
+        used_until = entry_k
     return out
 
 
@@ -174,7 +186,7 @@ def funnel_diag(c: list) -> dict:
     grab, to test the prime suspect for the 0 result."""
     f = {"bars": 0, "swinglow_ok": 0, "grab_single": 0, "grab_multi": 0,
          "prior_high_ok": 0, "choch_ok": 0, "ob_ok": 0,
-         "first_retest_ok": 0, "fresh_gate_ok": 0, "resolved_ok": 0}
+         "first_retest_ok": 0, "pre_cont_ok": 0, "resolved_ok": 0}
     n = len(c)
     if n < 120:
         return f
@@ -190,28 +202,23 @@ def funnel_diag(c: list) -> dict:
         if swing_low_idx >= i:
             continue
         f["swinglow_ok"] += 1
-        single = c[i]["low"] < swing_low and c[i]["close"] > swing_low
-        # multi-bar sweep: this bar breaks below, a later bar (<=4) closes back
-        multi = False
-        if c[i]["low"] < swing_low:
-            for k in range(i, min(i + 5, n)):
-                if c[k]["close"] > swing_low:
-                    multi = True
-                    break
-        if single:
+        if c[i]["low"] < swing_low and c[i]["close"] > swing_low:
             f["grab_single"] += 1
-        if not multi:
+        g = _multi_grab(c, i, swing_low)
+        if g is None:
             continue
         f["grab_multi"] += 1
-        grab_idx, grab_low = i, c[i]["low"]
-        prior_high = next(((hi, hp) for hi, hp in reversed(sh)
-                           if hi < grab_idx), None)
+        grab_low, reclaim_idx = g
+        grab_idx = i
+        prior_high = next(((hx, hp) for hx, hp in reversed(sh)
+                           if hx < grab_idx), None)
         if not prior_high:
             continue
         f["prior_high_ok"] += 1
+        ph_px = prior_high[1]
         choch = None
-        for j in range(grab_idx + 1, min(grab_idx + MAX_BARS_GRAB_TO_ENTRY, n)):
-            if c[j]["close"] > prior_high[1]:
+        for j in range(reclaim_idx, min(grab_idx + MAX_BARS_GRAB_TO_ENTRY, n)):
+            if c[j]["close"] > ph_px:
                 choch = j
                 break
         if choch is None:
@@ -224,23 +231,20 @@ def funnel_diag(c: list) -> dict:
         if ob_hi <= ob_lo:
             continue
         f["ob_ok"] += 1
-        entry_k = None
+        cont_level = ph_px + CONT_ATR * atr
         for k in range(choch + 1, min(choch + MAX_BARS_GRAB_TO_ENTRY, n)):
-            run_high = max(x["high"] for x in c[choch:k + 1])
-            ext = (run_high - grab_low) / atr
-            mb = max(abs(x["close"] - x["open"]) for x in c[choch:k + 1])
+            if max(x["high"] for x in c[choch:k + 1]) >= cont_level:
+                break  # continuation ran first -> LATE
             if c[k]["low"] <= ob_hi:
                 f["first_retest_ok"] += 1
-                if ext <= MAX_EXT_AT_ENTRY_ATR and mb < 1.8 * atr:
-                    f["fresh_gate_ok"] += 1
-                    entry = ob_hi
-                    sl_ = grab_low - 0.10 * atr
-                    if entry - sl_ > 0:
-                        tgt = entry + 2.0 * (entry - sl_)
-                        for ff in range(k + 1, min(k + 1 + FORWARD_BARS, n)):
-                            if c[ff]["low"] <= sl_ or c[ff]["high"] >= tgt:
-                                f["resolved_ok"] += 1
-                                break
+                f["pre_cont_ok"] += 1
+                sl_ = grab_low - 0.10 * atr
+                if ob_hi - sl_ > 0:
+                    tgt = ob_hi + 2.0 * (ob_hi - sl_)
+                    for ff in range(k + 1, min(k + 1 + FORWARD_BARS, n)):
+                        if c[ff]["low"] <= sl_ or c[ff]["high"] >= tgt:
+                            f["resolved_ok"] += 1
+                            break
                 break
     return f
 
@@ -302,7 +306,7 @@ def main() -> None:
                 agg[k] = agg.get(k, 0) + v
         order = ["bars", "swinglow_ok", "grab_single", "grab_multi",
                  "prior_high_ok", "choch_ok", "ob_ok", "first_retest_ok",
-                 "fresh_gate_ok", "resolved_ok"]
+                 "pre_cont_ok", "resolved_ok"]
         base = max(agg.get("swinglow_ok", 0), 1)
         for k in order:
             v = agg.get(k, 0)
