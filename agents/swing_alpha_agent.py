@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from agents.base import BaseAgent, AgentResult
-from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, get_stock_recommendations
+from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, get_stock_recommendations, expire_old_recommendations
 from services import generate_rankings
 
 MAX_SWING_SLOTS = int(__import__("os").getenv("MAX_SWING_SLOTS", "25"))
@@ -33,6 +33,22 @@ class SwingTradeAlphaAgent(BaseAgent):
             self._g2_6_tick(result)
 
     def _run_legacy(self, result: AgentResult) -> None:
+        # Recycle stale slots BEFORE counting them, so the daily scan can
+        # refill freed slots with fresh names. expire_old_recommendations
+        # safely skips recs with a RUNNING trade. Env-tunable;
+        # RESEARCH_REC_MAX_AGE_DAYS<=0 disables it instantly (live kill
+        # switch, no redeploy). Best-effort — never blocks the scan.
+        try:
+            _max_age = int(os.getenv("RESEARCH_REC_MAX_AGE_DAYS", "7"))
+            if _max_age > 0:
+                _expired = expire_old_recommendations(max_age_days=_max_age)
+                if _expired:
+                    result.metrics = {**(result.metrics or {}),
+                                      "recommendations_expired": _expired}
+        except Exception as exc:
+            result.metrics = {**(result.metrics or {}),
+                              "rec_expiry_error": str(exc)}
+
         # Slot-aware scanning: only fill empty slots
         active_recs = get_stock_recommendations("SWING", limit=MAX_SWING_SLOTS)
         active_count = len(active_recs)
