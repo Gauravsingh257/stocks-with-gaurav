@@ -166,6 +166,85 @@ def detect_fresh_longs(c: list) -> list:
     return out
 
 
+def funnel_diag(c: list) -> dict:
+    """DIAGNOSIS ONLY — no outcome logic, no thresholds changed. Counts how
+    many candidates survive each detection stage so we can see exactly
+    WHERE the funnel collapses to zero. Also counts a MULTI-BAR grab
+    (break then close-back within 4 bars) alongside the strict SINGLE-bar
+    grab, to test the prime suspect for the 0 result."""
+    f = {"bars": 0, "swinglow_ok": 0, "grab_single": 0, "grab_multi": 0,
+         "prior_high_ok": 0, "choch_ok": 0, "ob_ok": 0,
+         "first_retest_ok": 0, "fresh_gate_ok": 0, "resolved_ok": 0}
+    n = len(c)
+    if n < 120:
+        return f
+    for i in range(40, n - FORWARD_BARS - 1):
+        f["bars"] += 1
+        sh, sl = smc.detect_swing_points(c[:i + 1], SWING_L, SWING_R)
+        if len(sl) < 2 or len(sh) < 1:
+            continue
+        atr = _atr_at(c, i)
+        if atr <= 0:
+            continue
+        swing_low_idx, swing_low = sl[-1]
+        if swing_low_idx >= i:
+            continue
+        f["swinglow_ok"] += 1
+        single = c[i]["low"] < swing_low and c[i]["close"] > swing_low
+        # multi-bar sweep: this bar breaks below, a later bar (<=4) closes back
+        multi = False
+        if c[i]["low"] < swing_low:
+            for k in range(i, min(i + 5, n)):
+                if c[k]["close"] > swing_low:
+                    multi = True
+                    break
+        if single:
+            f["grab_single"] += 1
+        if not multi:
+            continue
+        f["grab_multi"] += 1
+        grab_idx, grab_low = i, c[i]["low"]
+        prior_high = next(((hi, hp) for hi, hp in reversed(sh)
+                           if hi < grab_idx), None)
+        if not prior_high:
+            continue
+        f["prior_high_ok"] += 1
+        choch = None
+        for j in range(grab_idx + 1, min(grab_idx + MAX_BARS_GRAB_TO_ENTRY, n)):
+            if c[j]["close"] > prior_high[1]:
+                choch = j
+                break
+        if choch is None:
+            continue
+        f["choch_ok"] += 1
+        ob_idx = next((k for k in range(choch, grab_idx - 1, -1)
+                       if c[k]["close"] < c[k]["open"]), grab_idx)
+        ob_lo = min(c[ob_idx]["low"], grab_low)
+        ob_hi = max(c[ob_idx]["open"], c[ob_idx]["close"])
+        if ob_hi <= ob_lo:
+            continue
+        f["ob_ok"] += 1
+        entry_k = None
+        for k in range(choch + 1, min(choch + MAX_BARS_GRAB_TO_ENTRY, n)):
+            run_high = max(x["high"] for x in c[choch:k + 1])
+            ext = (run_high - grab_low) / atr
+            mb = max(abs(x["close"] - x["open"]) for x in c[choch:k + 1])
+            if c[k]["low"] <= ob_hi:
+                f["first_retest_ok"] += 1
+                if ext <= MAX_EXT_AT_ENTRY_ATR and mb < 1.8 * atr:
+                    f["fresh_gate_ok"] += 1
+                    entry = ob_hi
+                    sl_ = grab_low - 0.10 * atr
+                    if entry - sl_ > 0:
+                        tgt = entry + 2.0 * (entry - sl_)
+                        for ff in range(k + 1, min(k + 1 + FORWARD_BARS, n)):
+                            if c[ff]["low"] <= sl_ or c[ff]["high"] >= tgt:
+                                f["resolved_ok"] += 1
+                                break
+                break
+    return f
+
+
 def _agg(rows):
     if not rows:
         return {"n": 0, "win": 0.0, "expR": 0.0, "PF": 0.0, "totR": 0.0}
@@ -184,6 +263,8 @@ def main() -> None:
     ap.add_argument("--symbols", type=str, default=None)
     ap.add_argument("--yf", action="store_true")
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--funnel", action="store_true",
+                    help="diagnosis: print where detection collapses (no tuning)")
     ap.add_argument("--synthetic-days", type=int, default=90)
     ap.add_argument("--output", type=str,
                     default="backtest_results/fresh_phase.json")
@@ -209,6 +290,29 @@ def main() -> None:
         if not data:
             print("ERROR: no market data. Use --db / --yf / --synthetic.")
             sys.exit(1)
+
+    if args.funnel:
+        print("\nDETECTION FUNNEL  (diagnosis only — counts, no tuning)")
+        print("Shows exactly where candidates die. grab_single vs grab_multi")
+        print("tests whether the 1-bar grab rule is the killer.\n")
+        agg = {}
+        for sym, tf in data.items():
+            fn = funnel_diag(tf.get("5m") or [])
+            for k, v in fn.items():
+                agg[k] = agg.get(k, 0) + v
+        order = ["bars", "swinglow_ok", "grab_single", "grab_multi",
+                 "prior_high_ok", "choch_ok", "ob_ok", "first_retest_ok",
+                 "fresh_gate_ok", "resolved_ok"]
+        base = max(agg.get("swinglow_ok", 0), 1)
+        for k in order:
+            v = agg.get(k, 0)
+            pct = "" if k == "bars" else f"  ({100*v/base:.1f}% of valid scans)"
+            print(f"  {k:<16} {v:>7}{pct}")
+        print("\n  READ: the first stage that crashes to ~0 is the bug to")
+        print("  fix (detection-correctness only — NOT outcome tuning). If")
+        print("  grab_single<<grab_multi, the 1-bar grab rule is confirmed")
+        print("  as the cause and the fix is a multi-bar sweep window.")
+        return
 
     # 1. Independent fresh-phase entries on raw data
     all_fresh = []
