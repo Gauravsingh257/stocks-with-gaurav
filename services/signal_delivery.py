@@ -415,7 +415,16 @@ _last_heartbeat_check: float = 0.0
 
 
 def maybe_send_heartbeat(telegram_send_fn) -> bool:
-    """If no signal has been sent for HEARTBEAT_INTERVAL_SEC, send a heartbeat."""
+    """If no signal has been sent for HEARTBEAT_INTERVAL_SEC, send a heartbeat.
+
+    OFF by default — the positive "engine is fine" heartbeat is noise; only
+    errors/signals should ping Telegram. Re-enable live (no redeploy) by
+    setting ENGINE_SEND_HEARTBEAT=1.
+    """
+    if os.getenv("ENGINE_SEND_HEARTBEAT", "0").strip().lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        return False
     global _last_heartbeat_check
     now = time.time()
     if now - _last_heartbeat_check < 60:
@@ -475,7 +484,16 @@ def maybe_send_no_setup_report(
     data_ok_count: int,
     zero_signal_reason: str,
 ) -> bool:
-    """Throttled Telegram when no signals generated (Redis + local cooldown)."""
+    """Throttled Telegram when no signals generated (Redis + local cooldown).
+
+    OFF by default — "Scan Complete — No setups found" is normal-operation
+    noise, not an error. Re-enable live (no redeploy) by setting
+    ENGINE_SEND_NO_SETUP_REPORT=1.
+    """
+    if os.getenv("ENGINE_SEND_NO_SETUP_REPORT", "0").strip().lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        return False
     if signals_generated != 0:
         return False
 
