@@ -61,6 +61,44 @@ DEFAULT_THRESHOLDS = [40, 50, 55, 60, 65, 70, 75, 80, 85]
 GATE = {"win_rate": 0.48, "profit_factor": 1.30, "expectancy_r": 0.0}
 
 
+def _load_yfinance(symbol_label: str = "NSE:NIFTY 50"):
+    """Credential-free REAL data via yfinance (the system's default source).
+    HONEST LIMIT: Yahoo intraday history caps at ~60d for 5m and ~730d for
+    1h. So this is a trailing ~60-day REAL sample — decision-grade for a
+    FIRST MIN_SCORE calibration, NOT the multi-year frozen windows.
+    """
+    import yfinance as yf
+
+    def _norm(df):
+        if df is None or len(df) == 0:
+            return []
+        if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+            df = df.droplevel(1, axis=1)
+        try:
+            idx = df.index.tz_convert("Asia/Kolkata")
+        except (TypeError, AttributeError):
+            idx = df.index
+        out = []
+        for ts, row in zip(idx, df.itertuples(index=False)):
+            o, h, l, c = float(row.Open), float(row.High), float(row.Low), float(row.Close)
+            v = int(getattr(row, "Volume", 0) or 0)
+            if not (o > 0 and h > 0 and l > 0 and c > 0):
+                continue
+            out.append({
+                "date": ts.strftime("%Y-%m-%dT%H:%M:%S"),
+                "open": o, "high": h, "low": l, "close": c, "volume": v,
+            })
+        return out
+
+    five = _norm(yf.download("^NSEI", interval="5m", period="60d",
+                             progress=False, auto_adjust=False))
+    hour = _norm(yf.download("^NSEI", interval="60m", period="730d",
+                             progress=False, auto_adjust=False))
+    if not five:
+        raise RuntimeError("yfinance returned no 5m data for ^NSEI")
+    return {symbol_label: {"5m": five, "1h": hour}}
+
+
 def _is_setup_a(setup: str | None) -> bool:
     """Match Setup-A across both label conventions: the backtest engine
     emits 'SETUP-A'; the live engine emits 'A-FVG-BUY' / 'A-STRUCTURE' / 'A'.
@@ -170,6 +208,8 @@ def main() -> None:
     ap.add_argument("--db", type=str, default=None)
     ap.add_argument("--symbols", type=str, default=None)
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--yf", action="store_true",
+                    help="REAL data via yfinance (^NSEI, trailing ~60d 5m)")
     ap.add_argument("--synthetic-days", type=int, default=120)
     ap.add_argument("--thresholds", type=str,
                     default=",".join(map(str, DEFAULT_THRESHOLDS)))
@@ -182,6 +222,15 @@ def main() -> None:
         print("=" * 72)
         candles = generate_synthetic_candles(days=args.synthetic_days)
         data = {"SYNTHETIC:INDEX": {"5m": candles}}
+    elif args.yf:
+        print("=" * 72)
+        print("  REAL yfinance data (^NSEI). Trailing ~60d 5m / ~730d 1h.")
+        print("  First-calibration grade — NOT the multi-year frozen windows.")
+        print("=" * 72)
+        data = _load_yfinance()
+        n5 = len(next(iter(data.values()))["5m"])
+        n1 = len(next(iter(data.values()))["1h"])
+        print(f"  Loaded ^NSEI: {n5} 5m candles, {n1} 1h candles\n")
     else:
         store = DataStore(args.db) if args.db else DataStore()
         syms = args.symbols.split(",") if args.symbols else None
