@@ -186,12 +186,14 @@ def _stats(trades: list) -> dict:
     wins = [r for r in rs if r > 0]
     losses = [r for r in rs if r <= 0]
     gp = sum(wins)
-    gl = abs(sum(losses)) or 1e-9
+    # No losers => PF is undefined/infinite; report a 999 sentinel instead
+    # of an astronomical division artifact.
+    pf = 999.0 if not losses else round(gp / abs(sum(losses)), 3)
     return {
         "n": len(trades),
         "win_rate": round(len(wins) / len(rs), 4),
         "expectancy_r": round(sum(rs) / len(rs), 4),
-        "profit_factor": round(gp / gl, 3),
+        "profit_factor": pf,
         "total_r": round(sum(rs), 2),
         "avg_rr": round(sum(t.rr for t in trades) / len(trades), 2),
     }
@@ -203,6 +205,89 @@ def _gate_pass(s: dict) -> bool:
             and s["expectancy_r"] > GATE["expectancy_r"])
 
 
+def _row(label, trades, n_total):
+    s = _stats(trades)
+    flag = "  (thin)" if s["n"] < 8 else ""
+    return (f"  {label:<22} n={s['n']:>3} ({100*s['n']/max(n_total,1):>4.0f}%)  "
+            f"win={s['win_rate']*100:>5.1f}%  expR={s['expectancy_r']:>7.3f}  "
+            f"PF={s['profit_factor']:>5.2f}  totR={s['total_r']:>6.1f}{flag}")
+
+
+def _diagnose(scored: list) -> None:
+    """Per-feature outcome breakdown — explains WHY the scorer's mid-band
+    selects losers. Honest: with a ~40-trade sample every split is thin;
+    this shows DIRECTION (which features are inversely related to outcome),
+    not statistically conclusive magnitudes."""
+    n = len(scored)
+    print("=" * 72)
+    print(f"  FEATURE DIAGNOSTIC  ({n} Setup-A trades — small sample, "
+          "DIRECTIONAL only)")
+    print("=" * 72)
+
+    bin_feats = [
+        ("sweep_detected", lambda f: f.sweep_detected),
+        ("ob_is_origin", lambda f: f.ob_is_origin),
+        ("fvg_present", lambda f: f.fvg_present),
+        ("regime_aligned", lambda f: f.regime_aligned),
+    ]
+    deltas = []
+    for name, get in bin_feats:
+        pres = [t for t, f, _ in scored if get(f)]
+        abss = [t for t, f, _ in scored if not get(f)]
+        ep = _stats(pres)["expectancy_r"]
+        ea = _stats(abss)["expectancy_r"]
+        deltas.append((name, ep - ea, len(pres), len(abss)))
+        print(f"\n[{name}]  prevalence {len(pres)}/{n}")
+        print(_row("present", pres, n))
+        print(_row("absent", abss, n))
+        d = ep - ea
+        verdict = ("HELPS" if d > 0.03 else "HURTS (anti-correlated)"
+                   if d < -0.03 else "neutral / no signal")
+        print(f"  -> expR(present) - expR(absent) = {d:+.3f}  => {verdict}")
+
+    print("\n" + "-" * 72)
+    print("  RR buckets:")
+    for lo, hi, lab in [(0, 1.5, "rr <1.5"), (1.5, 2.0, "rr 1.5-2.0"),
+                        (2.0, 2.5, "rr 2.0-2.5"), (2.5, 99, "rr >=2.5")]:
+        sub = [t for t, f, _ in scored if lo <= (f.rr or 0) < hi]
+        if sub:
+            print(_row(lab, sub, n))
+
+    print("\n  Entry-distance (|cmp-entry|/ATR) buckets:")
+    for lo, hi, lab in [(-1, 0, "dist = None"), (0, 0.5, "dist <=0.5"),
+                        (0.5, 1.0, "dist 0.5-1"), (1.0, 2.0, "dist 1-2"),
+                        (2.0, 3.0, "dist 2-3"), (3.0, 1e9, "dist >3")]:
+        if lab == "dist = None":
+            sub = [t for t, f, _ in scored if f.dist_from_cmp_atr is None]
+        else:
+            sub = [t for t, f, _ in scored
+                   if f.dist_from_cmp_atr is not None
+                   and lo <= f.dist_from_cmp_atr < hi]
+        if sub:
+            print(_row(lab, sub, n))
+
+    print("\n" + "-" * 72)
+    print("  SCORE buckets vs outcome (THE direct mid-band explanation —")
+    print("  a healthy scorer should be MONOTONIC: higher score => higher expR):")
+    for lo, hi, lab in [(0, 55, "score <55"), (55, 70, "score 55-69"),
+                        (70, 80, "score 70-79"), (80, 101, "score >=80")]:
+        sub = [t for t, _f, q in scored if lo <= q.score < hi]
+        if sub:
+            print(_row(lab, sub, n))
+
+    print("\n" + "=" * 72)
+    print("  READ: any binary feature marked HURTS is anti-correlated with")
+    print("  winning ON THIS SAMPLE — the scorer currently REWARDS it, which")
+    print("  is exactly why the mid-band underperforms. If the SCORE buckets")
+    print("  are non-monotonic, the weighting itself is wrong (not just one")
+    print("  feature). Small sample => treat as a hypothesis to test on the")
+    print("  full frozen windows, not a verdict.")
+    deltas.sort(key=lambda x: x[1])
+    worst = deltas[0]
+    print(f"\n  Most anti-correlated feature here: {worst[0]} "
+          f"(deltaExpR {worst[1]:+.3f})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Setup-A frequency/quality probe")
     ap.add_argument("--db", type=str, default=None)
@@ -210,6 +295,8 @@ def main() -> None:
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--yf", action="store_true",
                     help="REAL data via yfinance (^NSEI, trailing ~60d 5m)")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="Per-feature outcome breakdown (why the mid-band loses)")
     ap.add_argument("--synthetic-days", type=int, default=120)
     ap.add_argument("--thresholds", type=str,
                     default=",".join(map(str, DEFAULT_THRESHOLDS)))
@@ -256,12 +343,16 @@ def main() -> None:
         if feats is None:
             skipped += 1
             continue
-        scored.append((t, score_setup_a(feats)))
+        scored.append((t, feats, score_setup_a(feats)))
     print(f"Scored {len(scored)} Setup-A trades ({skipped} skipped: short window)\n")
     if not scored:
         sys.exit(0)
 
-    baseline = _stats([t for t, _ in scored])
+    if args.diagnose:
+        _diagnose(scored)
+        return
+
+    baseline = _stats([t for t, _f, _q in scored])
     thresholds = [int(x) for x in args.thresholds.split(",")]
 
     rows = []
@@ -275,8 +366,8 @@ def main() -> None:
           f"{baseline['profit_factor']:>7.2f} {baseline['total_r']:>8.1f} "
           f"{'Y' if _gate_pass(baseline) else 'N':>5}")
     for thr in sorted(thresholds):
-        fired = [t for t, q in scored if q.score >= thr]
-        watch = [t for t, q in scored
+        fired = [t for t, _f, q in scored if q.score >= thr]
+        watch = [t for t, _f, q in scored
                  if q.score < thr and q.score >= thr - 12]
         s = _stats(fired)
         pct = round(100.0 * s["n"] / max(baseline["n"], 1), 1)
