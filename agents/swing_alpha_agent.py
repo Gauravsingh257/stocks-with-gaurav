@@ -19,14 +19,17 @@ class SwingTradeAlphaAgent(BaseAgent):
 
     def run(self, result: AgentResult) -> None:
         # The legacy swing scan has early returns (slots full / 0 saved).
-        # The G2-6 state-machine tick is a SEPARATE engine and MUST run on
-        # every invocation regardless of legacy slot state. finally{}
-        # guarantees it runs exactly once — genuinely isolated from the
-        # legacy slot machine (it was previously coupled via those early
-        # returns, so a full legacy slot table silently starved it).
+        # Two SEPARATE consumers MUST run on every invocation regardless of
+        # legacy slot state, so they live in finally{} (genuinely isolated
+        # from the legacy slot machine, which previously starved them via
+        # those early returns):
+        #   _research_feed_tick — refreshes the public Research funnel
+        #     (signals_log) + the "X/Y scanned" coverage number (ranking_runs).
+        #   _g2_6_tick — the G2-6 planned-execution state machine.
         try:
             self._run_legacy(result)
         finally:
+            self._research_feed_tick(result)
             self._g2_6_tick(result)
 
     def _run_legacy(self, result: AgentResult) -> None:
@@ -50,20 +53,9 @@ class SwingTradeAlphaAgent(BaseAgent):
             exclude_symbols=active_symbols,
         ))
 
-        validation_logged_rows = 0
-        if os.getenv("RESEARCH_AGENT_VALIDATION_LOG", "1").strip().lower() in ("1", "true", "yes"):
-            try:
-                from services.validation_engine import run_validation_scan
-
-                validation = asyncio.run(run_validation_scan(
-                    "SWING",
-                    top_k=max(empty_slots, 1),
-                    target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
-                    log_scan=True,
-                ))
-                validation_logged_rows = validation.logged_rows
-            except Exception as exc:
-                result.metrics = {**(result.metrics or {}), "validation_log_error": str(exc)}
+        # NOTE: the SWING validation scan + signals_log write is no longer
+        # done here — it moved to _research_feed_tick (run() finally{}) so it
+        # is never starved by the slots-full early return above.
 
         # Log ranking run upfront to get scan_run_id for all recommendations
         run_id = log_ranking_run(
@@ -169,7 +161,6 @@ class SwingTradeAlphaAgent(BaseAgent):
             "actual_universe_size": ranking.universe.actual_size,
             "active_slots": active_count + saved,
             "empty_slots": empty_slots - saved,
-            "validation_logged_rows": validation_logged_rows,
         }
         result.findings = findings
         if saved == 0:
@@ -199,6 +190,54 @@ class SwingTradeAlphaAgent(BaseAgent):
             snapshot_performance()
         except Exception:
             pass
+
+    def _research_feed_tick(self, result: AgentResult) -> None:
+        # The public Research funnel (Discovery → Watchlist → Final) and the
+        # "Market coverage X/Y scanned" number are fed ONLY by a logged SWING
+        # validation scan (signals_log) plus a ranking_runs row. Both writes
+        # used to sit BELOW _run_legacy's `if empty_slots <= 0: return` guard,
+        # so once the swing slots filled with non-recycling recs the entire
+        # funnel AND the coverage number silently froze. This tick runs from
+        # run()'s finally{} on EVERY invocation regardless of legacy slot
+        # state. Flag-gated by RESEARCH_AGENT_VALIDATION_LOG (byte-identical
+        # when off) and fully exception-isolated — it can never break the
+        # legacy scan or the live index engine.
+        if os.getenv("RESEARCH_AGENT_VALIDATION_LOG", "1").strip().lower() not in (
+            "1", "true", "yes",
+        ):
+            return
+        try:
+            from services.validation_engine import run_validation_scan
+
+            scan_k = int(os.getenv("RESEARCH_FEED_SCAN_K", "25"))
+            validation = asyncio.run(run_validation_scan(
+                "SWING",
+                top_k=scan_k,
+                target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
+                log_scan=True,
+            ))
+            # Keep the coverage card fresh from the SAME scan — no second pass.
+            try:
+                log_ranking_run(
+                    horizon="SWING",
+                    universe_requested=validation.universe.requested_size,
+                    universe_scanned=validation.coverage.scanned,
+                    quality_passed=validation.funnel.layer1_pass,
+                    ranked_candidates=validation.funnel.layer2_pass,
+                    selected_count=validation.funnel.final_selected,
+                    notes=f"research_feed_tick|scan_id={validation.scan_id}",
+                )
+            except Exception as exc:
+                result.metrics = {**(result.metrics or {}),
+                                  "research_feed_ranking_log_error": str(exc)}
+            result.metrics = {**(result.metrics or {}), "research_feed": {
+                "validation_logged_rows": validation.logged_rows,
+                "scanned": validation.coverage.scanned,
+                "final": validation.funnel.final_selected,
+            }}
+        except Exception as exc:
+            result.metrics = {**(result.metrics or {}),
+                              "research_feed_error": str(exc)}
 
     def _g2_6_tick(self, result: AgentResult) -> None:
         # G2-6 Rung A/B: SEPARATE planned-execution engine. Invoked from
