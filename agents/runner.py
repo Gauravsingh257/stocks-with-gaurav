@@ -164,6 +164,31 @@ def start_scheduler() -> None:
         misfire_grace_time=30,
     )
 
+    # FVG-Tap: every 5 min during market hours. ISOLATED — flag-gated
+    # (FVG_TAP_MODE; off ⟹ instant no-op), best-effort, never touches the
+    # live index engine or its Telegram worker. Mirrors the OI pattern.
+    def _run_fvg_tap():
+        if not _market_hours():
+            return
+        try:
+            from services.fvg_tap_engine import run_fvg_tap_tick
+            res = run_fvg_tap_tick()
+            if res.get("status") not in ("off", "ok"):
+                logger.warning("[FVG-Tap] %s", res)
+            elif res.get("new_signals"):
+                logger.info("[FVG-Tap] %s", res)
+        except Exception:
+            logger.exception("[FVG-Tap] tick failed")
+
+    _scheduler.add_job(
+        _run_fvg_tap,
+        CronTrigger(minute="*/5", day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="fvg_tap",
+        name="FVG-Tap (index 5m, flag-gated)",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
+
     # Swing alpha scan: daily before market open (Mon–Fri)
     _scheduler.add_job(
         weekly_swing_scan,
