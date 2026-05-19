@@ -222,6 +222,8 @@ def main() -> None:
     ap.add_argument("--tf", choices=["5m", "15m", "1h"], default="1h")
     ap.add_argument("--yf", action="store_true")
     ap.add_argument("--matrix", action="store_true")
+    ap.add_argument("--index5m", action="store_true",
+                    help="re-scoped domain test: NIFTY + BANKNIFTY 5m only")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--synthetic-days", type=int, default=120)
     ap.add_argument("--diag", action="store_true")
@@ -248,6 +250,49 @@ def main() -> None:
         raw = load_data_from_store(store, syms.split(",") if syms else None)
         store.close()
         return {s: v.get("5m") or [] for s, v in raw.items()}
+
+    if args.index5m:
+        print("\n  RE-SCOPED DOMAIN TEST — index 5m only (the live engine's")
+        print("  actual domain). GATE (locked before results): BOTH NIFTY 5m")
+        print("  AND BANKNIFTY 5m must clear PF>=1.30 & expR>0 & win>=40% &")
+        print("  non-thin n. One passing alone = single-instrument artifact.\n")
+        print(f"  {'index':<14}{'n':>5}{'win%':>7}{'expR':>9}{'PF':>7}"
+              f"{'totR':>8}  gate")
+        print("  " + "-" * 53)
+        res = {}
+        for label, tk in [("NIFTY 5m", "^NSEI"), ("BANKNIFTY 5m", "^NSEBANK")]:
+            try:
+                data = fp._load_yf_multi(tk, "5m")
+            except Exception as exc:
+                print(f"  {label:<14}  unavailable: {exc}")
+                continue
+            allr = []
+            for _sym, c in data.items():
+                rr, _ = _both(c)
+                allr += rr
+            s = fp._agg(allr)
+            res[label] = s
+            g = "Y" if _gate(s) else "N"
+            thin = " thin" if s["n"] < 60 else ""
+            print(f"  {label:<14}{s['n']:>5}{s['win']:>7.1f}{s['expR']:>+9.3f}"
+                  f"{s['PF']:>7.2f}{s['totR']:>+8.1f}   {g}{thin}")
+        both_pass = (len(res) == 2 and all(_gate(v) for v in res.values())
+                     and all(v["n"] >= 60 for v in res.values()))
+        print(f"\n  DOMAIN VERDICT: "
+              + ("PASS — both indices clear; supports a SHADOW-FIRST build "
+                 "(still not live auto-fire until forward-shadow validates)."
+                 if both_pass else
+                 "NOT PASS — needs BOTH NIFTY & BANKNIFTY 5m to clear on "
+                 "non-thin n. One alone = regime/instrument artifact."))
+        print("  Honest limit: yfinance 5m ~60d = ONE regime. Even a PASS "
+              "is 'build+shadow', not 'wire live'. Use --db for more history.")
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(
+            {"generated_at": datetime.now().isoformat(),
+             "index5m": res, "both_pass": both_pass}, indent=2),
+            encoding="utf-8")
+        print(f"\nWrote {args.output}")
+        return
 
     if args.matrix:
         configs = [("NIFTY 5m", "5m", "^NSEI"),
