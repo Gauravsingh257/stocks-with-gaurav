@@ -64,6 +64,50 @@ def _atr_at(candles, i, period=14):
     return sum(trs[-period:]) / period
 
 
+_TF_MAP = {"5m": ("5m", "60d"), "15m": ("15m", "60d"), "1h": ("60m", "730d")}
+
+
+def _load_yf_multi(symbols_csv: str, tf: str) -> dict:
+    """Configurable REAL data via yfinance for the timeframe/instrument
+    rethink. HONEST LIMITS: Yahoo intraday caps ~60d for 5m/15m, ~730d for
+    1h(=60m). 1h therefore gives BOTH a slower timeframe AND ~12x more
+    history than the 5m run — the right test for 'is 5m too fast for an
+    early entry to exist'. No tuning; same fixed detector definition."""
+    import yfinance as yf
+    interval, period = _TF_MAP[tf]
+
+    def _norm(df):
+        if df is None or len(df) == 0:
+            return []
+        if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+            df = df.droplevel(1, axis=1)
+        try:
+            idx = df.index.tz_convert("Asia/Kolkata")
+        except (TypeError, AttributeError):
+            idx = df.index
+        out = []
+        for ts, row in zip(idx, df.itertuples(index=False)):
+            o, h, l, c = float(row.Open), float(row.High), float(row.Low), float(row.Close)
+            if not (o > 0 and h > 0 and l > 0 and c > 0):
+                continue
+            out.append({"date": ts.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "open": o, "high": h, "low": l, "close": c,
+                        "volume": int(getattr(row, "Volume", 0) or 0)})
+        return out
+
+    out = {}
+    for sym in [s.strip() for s in symbols_csv.split(",") if s.strip()]:
+        cs = _norm(yf.download(sym, interval=interval, period=period,
+                               progress=False, auto_adjust=False))
+        if len(cs) >= 200:
+            out[sym] = cs
+        else:
+            print(f"  (skip {sym}: only {len(cs)} {tf} candles)")
+    if not out:
+        raise RuntimeError("yfinance returned no usable data for given symbols/tf")
+    return out
+
+
 def _multi_grab(c, i, swing_low):
     """Multi-bar sweep+reclaim: bar i breaks below swing_low; a bar within
     GRAB_RECLAIM_BARS closes back above it. Returns (grab_low, reclaim_idx)
@@ -261,11 +305,37 @@ def _agg(rows):
             "totR": round(sum(rs), 1)}
 
 
+# Leading liquid NSE names — slower-moving than the index intraday.
+STOCK_BASKET = ("RELIANCE.NS,HDFCBANK.NS,ICICIBANK.NS,INFY.NS,TCS.NS,"
+                "SBIN.NS,LT.NS,ITC.NS")
+
+
+def _run_fresh(data: dict) -> tuple[list, dict]:
+    """data = {symbol: candles_list}. Returns (all_fresh_rows, summary)."""
+    rows = []
+    for sym, c in data.items():
+        for x in detect_fresh_longs(c):
+            x["symbol"] = sym
+            rows.append(x)
+    s = _agg(rows)
+    if rows:
+        s["avg_ext_atr"] = round(sum(x["ext_at_entry_atr"] for x in rows) / len(rows), 2)
+        s["avg_bars"] = round(sum(x["bars_grab_to_entry"] for x in rows) / len(rows), 1)
+    else:
+        s["avg_ext_atr"] = 0.0
+        s["avg_bars"] = 0.0
+    return rows, s
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fresh-phase (one phase earlier) research")
     ap.add_argument("--db", type=str, default=None)
     ap.add_argument("--symbols", type=str, default=None)
+    ap.add_argument("--tf", choices=["5m", "15m", "1h"], default="1h",
+                    help="timeframe for --yf (1h=~730d, 5m/15m=~60d)")
     ap.add_argument("--yf", action="store_true")
+    ap.add_argument("--matrix", action="store_true",
+                    help="comparative run: NIFTY 5m / NIFTY 15m / stock 15m / stock 1h")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--funnel", action="store_true",
                     help="diagnosis: print where detection collapses (no tuning)")
@@ -274,35 +344,84 @@ def main() -> None:
                     default="backtest_results/fresh_phase.json")
     args = ap.parse_args()
 
+    # ---- MATRIX: the timeframe/instrument comparative study -----------
+    if args.matrix:
+        print("=" * 78)
+        print("  FRESH-PHASE COMPARATIVE MATRIX — pure observation, no tuning")
+        print("  Q: does the early-reclaim edge exist more clearly in slower")
+        print("     equities / higher timeframes, or is the thesis invalid?")
+        print("=" * 78)
+        configs = [
+            ("NIFTY 5m", "5m", "^NSEI"),
+            ("NIFTY 15m", "15m", "^NSEI"),
+            ("STOCK 15m", "15m", STOCK_BASKET),
+            ("STOCK 1h", "1h", STOCK_BASKET),
+        ]
+        results = {}
+        print(f"\n  {'config':<11}{'n':>5}{'win%':>7}{'expR':>9}{'PF':>7}"
+              f"{'avgExtATR':>11}{'avgBars':>9}")
+        print("  " + "-" * 58)
+        for label, tf, syms in configs:
+            try:
+                d = _load_yf_multi(syms, tf)
+            except Exception as exc:
+                print(f"  {label:<11}  data unavailable: {exc}")
+                continue
+            rows, s = _run_fresh(d)
+            results[label] = s
+            thin = " (thin)" if s["n"] < 25 else ""
+            print(f"  {label:<11}{s['n']:>5}{s['win']:>7.1f}{s['expR']:>+9.3f}"
+                  f"{s['PF']:>7.2f}{s['avg_ext_atr']:>11.2f}{s['avg_bars']:>9.1f}"
+                  f"{thin}")
+        print("\n  READ (the structural tell is avgExtATR):")
+        print("  - If avgExtATR stays ~3+ across ALL configs, a truly-early")
+        print("    entry does not structurally exist regardless of TF/instrument")
+        print("    => the thesis itself is likely invalid, not just on NIFTY 5m.")
+        print("  - If slower TF / stocks show LOWER avgExtATR *and* clearly")
+        print("    better expR/PF on a non-thin n, the early edge is real and")
+        print("    NIFTY-5m simply moves too fast for it.")
+        print("  Honest limits: 5m/15m ~60d (small n), 1h ~730d (better);")
+        print("  yfinance stock intraday can be patchy; DIRECTIONAL only;")
+        print("  no Setup-A comparison here (cross-TF/instrument is not")
+        print("  apples-to-apples); nothing tuned, nothing wired.")
+        op = Path(args.output)
+        op.parent.mkdir(parents=True, exist_ok=True)
+        op.write_text(json.dumps({"generated_at": datetime.now().isoformat(),
+                                  "matrix": results}, indent=2),
+                       encoding="utf-8")
+        print(f"\nWrote {op}")
+        return
+
+    # ---- single-config data load -------------------------------------
+    setup_a_ok = False
     if args.synthetic:
-        print("=" * 72)
         print("  SYNTHETIC — WIRING TEST ONLY. NOT decision-grade.")
-        print("=" * 72)
         from backtest.runner import generate_synthetic_candles
-        data = {"SYNTHETIC:INDEX": {"5m": generate_synthetic_candles(days=args.synthetic_days)}}
+        data = {"SYNTHETIC:INDEX": generate_synthetic_candles(days=args.synthetic_days)}
+        setup_a_ok = True
     elif args.yf:
-        print("=" * 72)
-        print("  REAL yfinance ^NSEI (~60d 5m). DIRECTIONAL, small sample.")
-        print("=" * 72)
-        data = probe._load_yfinance()
+        syms = args.symbols or "^NSEI"
+        print(f"  REAL yfinance {syms} @ {args.tf}. DIRECTIONAL, "
+              f"{'~730d' if args.tf == '1h' else '~60d'}.")
+        data = _load_yf_multi(syms, args.tf)
+        setup_a_ok = args.tf == "5m"  # Setup-A is a 5m engine only
     else:
         from backtest.data_store import DataStore
         from backtest.runner import load_data_from_store
         store = DataStore(args.db) if args.db else DataStore()
-        data = load_data_from_store(store, args.symbols.split(",") if args.symbols else None)
+        raw = load_data_from_store(store, args.symbols.split(",") if args.symbols else None)
         store.close()
-        if not data:
-            print("ERROR: no market data. Use --db / --yf / --synthetic.")
+        if not raw:
+            print("ERROR: no market data. Use --db / --yf / --synthetic / --matrix.")
             sys.exit(1)
+        data = {s: v.get("5m") or [] for s, v in raw.items()}
+        setup_a_ok = True
 
     if args.funnel:
-        print("\nDETECTION FUNNEL  (diagnosis only — counts, no tuning)")
-        print("Shows exactly where candidates die. grab_single vs grab_multi")
-        print("tests whether the 1-bar grab rule is the killer.\n")
+        print("\nDETECTION FUNNEL  (diagnosis only — counts, no tuning)\n")
         agg = {}
-        for sym, tf in data.items():
-            fn = funnel_diag(tf.get("5m") or [])
-            for k, v in fn.items():
+        for _sym, c in data.items():
+            for k, v in funnel_diag(c).items():
                 agg[k] = agg.get(k, 0) + v
         order = ["bars", "swinglow_ok", "grab_single", "grab_multi",
                  "prior_high_ok", "choch_ok", "ob_ok", "first_retest_ok",
@@ -312,92 +431,67 @@ def main() -> None:
             v = agg.get(k, 0)
             pct = "" if k == "bars" else f"  ({100*v/base:.1f}% of valid scans)"
             print(f"  {k:<16} {v:>7}{pct}")
-        print("\n  READ: the first stage that crashes to ~0 is the bug to")
-        print("  fix (detection-correctness only — NOT outcome tuning). If")
-        print("  grab_single<<grab_multi, the 1-bar grab rule is confirmed")
-        print("  as the cause and the fix is a multi-bar sweep window.")
         return
 
-    # 1. Independent fresh-phase entries on raw data
-    all_fresh = []
-    for sym, tf in data.items():
-        c = tf.get("5m") or []
-        fr = detect_fresh_longs(c)
-        for x in fr:
-            x["symbol"] = sym
-        all_fresh.extend(fr)
+    all_fresh, fa = _run_fresh(data)
+    print(f"\nFRESH-PHASE long entries: {fa['n']}  win={fa['win']}%  "
+          f"expR={fa['expR']:+.3f}  PF={fa['PF']}  totR={fa['totR']:+.1f}")
+    print(f"  avg bars grab->entry={fa['avg_bars']}  "
+          f"avg extension at entry={fa['avg_ext_atr']} ATR")
+    if len(data) > 1:
+        print("\n  Per instrument:")
+        for sym in data:
+            sub = [x for x in all_fresh if x["symbol"] == sym]
+            ss = _agg(sub)
+            if ss["n"]:
+                ee = sum(x["ext_at_entry_atr"] for x in sub) / len(sub)
+                print(f"    {sym:<14} n={ss['n']:>3} win={ss['win']:>5.1f}% "
+                      f"expR={ss['expR']:+.3f} PF={ss['PF']:>5.2f} "
+                      f"avgExt={ee:.2f}ATR")
 
-    # 2. Setup-A entries on the SAME data (for the lateness comparison)
-    sa = [t for t in BacktestEngine(BacktestConfig()).run_multi(data)
-          if probe._is_setup_a(t.setup) and t.direction == "LONG"]
-
-    fa = _agg(all_fresh)
-    saa = _agg([{"r": t.r_multiple} for t in sa])
-
-    print(f"\nFRESH-PHASE long entries (raw data, first-touch reclaim): {fa['n']}")
-    print(f"  win={fa['win']}%  expR={fa['expR']:+.3f}  PF={fa['PF']}  totR={fa['totR']:+.1f}")
-    if all_fresh:
-        be = sum(x["bars_grab_to_entry"] for x in all_fresh) / len(all_fresh)
-        ee = sum(x["ext_at_entry_atr"] for x in all_fresh) / len(all_fresh)
-        print(f"  avg bars grab->entry={be:.1f}  avg extension at entry={ee:.2f} ATR")
-    print(f"\nSetup-A LONG entries (same data, the LATE engine):     {saa['n']}")
-    print(f"  win={saa['win']}%  expR={saa['expR']:+.3f}  PF={saa['PF']}  totR={saa['totR']:+.1f}")
-
-    # 3. Lateness: for each fresh entry, did Setup-A fire LATER on the same
-    #    move? Quantify the structural delay.
-    print("\n" + "=" * 72)
-    print("  LATENESS — does Setup-A enter the SAME moves, but later?")
-    print("=" * 72)
-    sa_by_sym = {}
-    for t in sa:
-        sa_by_sym.setdefault(t.symbol, []).append(t)
     paired = []
-    for x in all_fresh:
-        sym = x["symbol"]
-        c = data[sym]["5m"]
-        fresh_dt = probe._parse_dt(x["entry_time"])
-        cand = []
-        for t in sa_by_sym.get(sym, []):
-            tdt = probe._parse_dt(t.entry_time)
-            if tdt and fresh_dt and 0 < (tdt - fresh_dt).total_seconds() <= 6 * 3600:
-                cand.append((t, (tdt - fresh_dt).total_seconds() / 300.0))
-        if cand:
-            t, lag_bars = min(cand, key=lambda z: z[1])
-            paired.append({"fresh_r": x["r"], "late_r": t.r_multiple,
-                           "lag_bars": round(lag_bars, 1),
-                           "fresh_ext": x["ext_at_entry_atr"]})
-    if paired:
-        avg_lag = sum(p["lag_bars"] for p in paired) / len(paired)
-        fr_w = 100 * sum(1 for p in paired if p["fresh_r"] > 0) / len(paired)
-        lt_w = 100 * sum(1 for p in paired if p["late_r"] > 0) / len(paired)
-        print(f"  Shared moves (fresh entry THEN a later Setup-A entry): {len(paired)}")
-        print(f"  Avg structural delay: Setup-A enters ~{avg_lag:.1f} 5m bars later")
-        print(f"  On those SAME moves:  fresh win={fr_w:.0f}%  vs  "
-              f"late Setup-A win={lt_w:.0f}%")
-        print(f"  fresh expR={sum(p['fresh_r'] for p in paired)/len(paired):+.3f}  "
-              f"vs late expR={sum(p['late_r'] for p in paired)/len(paired):+.3f}")
+    if setup_a_ok:
+        sa_data = {s: {"5m": c} for s, c in data.items()}
+        sa = [t for t in BacktestEngine(BacktestConfig()).run_multi(sa_data)
+              if probe._is_setup_a(t.setup) and t.direction == "LONG"]
+        saa = _agg([{"r": t.r_multiple} for t in sa])
+        print(f"\nSetup-A LONG (same 5m data): {saa['n']}  win={saa['win']}%  "
+              f"expR={saa['expR']:+.3f}  PF={saa['PF']}")
+        sa_by = {}
+        for t in sa:
+            sa_by.setdefault(t.symbol, []).append(t)
+        for x in all_fresh:
+            fdt = probe._parse_dt(x["entry_time"])
+            cand = []
+            for t in sa_by.get(x["symbol"], []):
+                tdt = probe._parse_dt(t.entry_time)
+                if tdt and fdt and 0 < (tdt - fdt).total_seconds() <= 6 * 3600:
+                    cand.append((t, (tdt - fdt).total_seconds() / 300.0))
+            if cand:
+                t, lag = min(cand, key=lambda z: z[1])
+                paired.append({"fresh_r": x["r"], "late_r": t.r_multiple,
+                               "lag_bars": round(lag, 1)})
+        if paired:
+            print(f"  Lateness: {len(paired)} shared moves, Setup-A ~"
+                  f"{sum(p['lag_bars'] for p in paired)/len(paired):.1f} bars later"
+                  f"  | fresh expR="
+                  f"{sum(p['fresh_r'] for p in paired)/len(paired):+.3f}"
+                  f" vs late "
+                  f"{sum(p['late_r'] for p in paired)/len(paired):+.3f}")
     else:
-        print("  No directly pairable shared moves in this window (small "
-              "sample / index-only). Phase C multi-symbol will populate this.")
+        print(f"\n  (Setup-A comparison skipped: Setup-A is a 5m-index engine;"
+              f" comparing it at {args.tf}/equities is not apples-to-apples.)")
 
-    print("\n" + "=" * 72)
-    print("  READ: if FRESH expR/PF clearly beats Setup-A AND Setup-A is")
-    print("  shown entering the same moves N bars later with worse stats,")
-    print("  that is direct evidence the edge lives one phase EARLIER and")
-    print("  the current engine is structurally too late. Small sample =>")
-    print("  DIRECTIONAL; confirm on Phase C frozen-window multi-symbol.")
-    print("  Nothing here is wired to production. Pure research.")
-
+    print("\n  DIRECTIONAL only — no tuning, no wiring, scorer frozen.")
     op = Path(args.output)
     op.parent.mkdir(parents=True, exist_ok=True)
     op.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(),
-        "synthetic": args.synthetic,
-        "fresh_phase": fa, "setup_a_long": saa,
-        "paired_shared_moves": paired,
+        "tf": args.tf, "synthetic": args.synthetic,
+        "fresh_phase": fa, "paired_shared_moves": paired,
         "fresh_rows": all_fresh,
     }, indent=2), encoding="utf-8")
-    print(f"\nWrote {op}")
+    print(f"Wrote {op}")
 
 
 if __name__ == "__main__":
