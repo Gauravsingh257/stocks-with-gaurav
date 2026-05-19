@@ -1825,6 +1825,38 @@ def get_state_machine_signals(limit: int = Query(50, ge=1, le=200)):
              "signals": [], "count": 0})
 
 
+@router.get("/api/research/fvg-tap-signals")
+@router.get("/research/fvg-tap-signals")
+def get_fvg_tap_signals(limit: int = Query(50, ge=1, le=200)):
+    """FVG-Tap (read-only): the index-5m FVG-Tap signals published in
+    `FVG_TAP_MODE=alert`, as an ISOLATED `FVG_TAP` stream (separate
+    agent_type — never mixed with Setup-A, SWING, or SWING_SM). Backtest
+    cleared the pre-committed index-domain gate (NIFTY 5m PF 2.07,
+    BANKNIFTY 5m PF 2.33, criteria locked before results). VALIDATION
+    phase: forward-validating on live bars; NOT auto-traded, no position.
+    Empty until FVG_TAP_MODE=alert and a fresh confirmation occurs."""
+    try:
+        rows = get_stock_recommendations("FVG_TAP", limit=limit) or []
+        return {
+            "engine": "fvg_tap",
+            "validation_phase": True,
+            "auto_traded": False,
+            "count": len(rows),
+            "signals": rows,
+            "_note": (
+                "FVG-Tap index-5m signals (NIFTY/BANKNIFTY). Backtest "
+                "cleared the locked index-domain gate; LIVE forward-"
+                "validation in progress. MARKET-on-confirmation entries — "
+                "NOT auto-executed. Isolated from all other engines."
+            ),
+        }
+    except Exception as exc:
+        log.exception("fvg-tap-signals failed: %s", exc)
+        return _safe_json_response(
+            {"error": "fvg_tap_signals_unavailable", "detail": str(exc),
+             "signals": [], "count": 0})
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(

@@ -6,6 +6,7 @@ import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronD
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 import StateMachineSignals from "@/components/StateMachineSignals";
+import FvgTapSignals from "@/components/FvgTapSignals";
 
 import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -533,6 +534,10 @@ export default function ResearchPage() {
            cannot affect the rest of the page. ─────────────────────── */}
       <StaggerItem>
         <StateMachineSignals />
+      </StaggerItem>
+
+      <StaggerItem>
+        <FvgTapSignals />
       </StaggerItem>
 
       {/* ── TAB BAR (logged-in users only) ──────────────────── */}
