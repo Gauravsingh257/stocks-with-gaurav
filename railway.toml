@@ -8,6 +8,10 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "python scripts/start_web.py"
 healthcheckPath = "/health"
-healthcheckTimeout = 120
+# 300s: lifespan blocks on slow external calls (Kite broker API,
+# scheduler init) at startup. Diagnosed by Railway 2026-05-20 after
+# /health timed out at 120s when Kite was slow. 300s gives lifespan
+# room to complete without aborting the deploy.
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
