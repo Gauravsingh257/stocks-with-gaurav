@@ -1,8 +1,15 @@
 "use client";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
+import { useAuth } from "@/lib/auth";
 import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
+
+// Admin-only operator controls (Connect Kite, etc.) are gated by exact
+// email match. Anyone else logged in or anonymous never sees them.
+const ADMIN_EMAILS = new Set<string>([
+  "hellogaurav2577@gmail.com",
+]);
 
 function regimeBadge(r: string) {
   if (r === "BULLISH") return { cls: "badge badge-win", dot: "var(--success)", label: "BULLISH" };
@@ -20,6 +27,8 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   const { theme, toggle: toggleTheme } = useTheme();
   const { snapshot, status, globalStateVersion } = useEngineSocket();
   const health = useHealth();
+  const { user } = useAuth();
+  const isAdmin = !!user && ADMIN_EMAILS.has((user.email || "").trim().toLowerCase());
 
   const regime = snapshot?.market_regime ?? "NEUTRAL";
   const rb = regimeBadge(regime);
@@ -144,14 +153,14 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
           {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
         </button>
 
-        {/* Connect Kite — ALWAYS visible to the admin. The previous condition
-            (hide when health.token_present===true && health.kite_connected===true)
-            hid it for ~5 minutes after the token expired, because token_present
-            only reflects Redis presence (not validity) and kite_connected is
-            cached optimistically with a 3-failure threshold. The operator must
-            always be able to refresh on demand. When the session is healthy
-            the button styling fades; when disconnected it lights up. */}
-        {health && (() => {
+        {/* Connect / Refresh Kite — ADMIN-ONLY (exact email match in
+            ADMIN_EMAILS). Hidden completely for anonymous visitors and any
+            non-admin user — they will never see operator controls. Always
+            visible to the admin (the prior "hide when healthy" condition
+            hid it for 5+ min after a token expired, because token_present
+            only reflects Redis presence (not validity) and kite_connected
+            is cached optimistically with a 3-failure threshold). */}
+        {isAdmin && health && (() => {
           const healthy = health.kite_connected === true && health.token_present === true;
           return (
             <button
