@@ -189,6 +189,38 @@ def start_scheduler() -> None:
         misfire_grace_time=60,
     )
 
+    # Kite auto-login: daily 08:50 IST, runs IN THE CLOUD (this web service)
+    # so token refresh never depends on the user's PC being on. Previously
+    # auto_login.py was scheduled via Windows Task Scheduler on the user's
+    # laptop — when the PC was off/asleep at 08:50 the refresh silently
+    # missed, leaving the engine with an expired Kite token (root cause of
+    # 2026-05-20 "ENGINE STOPPED — TOKEN INVALID"). The existing
+    # auto_login() function is idempotent (it checks for an active session
+    # first), so running it both here AND from the local task is safe — but
+    # ONCE this is confirmed working in cloud, the local Windows Task can be
+    # disabled. Required env vars on Railway (web service): KITE_API_KEY,
+    # KITE_API_SECRET, KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET. If any
+    # are missing, auto_login() exits cleanly; the job logs FAILED and the
+    # web service keeps running.
+    def _run_kite_auto_login():
+        try:
+            from auto_login import auto_login as _kite_auto_login
+            ok = _kite_auto_login()
+            logger.info("[Kite auto-login] %s", "OK" if ok else "FAILED")
+        except Exception:
+            logger.exception("[Kite auto-login] crashed")
+
+    _scheduler.add_job(
+        _run_kite_auto_login,
+        CronTrigger(hour=8, minute=50, day_of_week="mon-fri",
+                    timezone="Asia/Kolkata"),
+        id="kite_auto_login",
+        name="Kite Auto-Login (08:50 IST, cloud)",
+        replace_existing=True,
+        misfire_grace_time=600,
+        max_instances=1,
+    )
+
     # Swing alpha scan: daily before market open (Mon–Fri)
     _scheduler.add_job(
         weekly_swing_scan,
