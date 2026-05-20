@@ -115,22 +115,36 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.debug("Realtime market data service not started: %s", exc)
 
-    # ── Kite: log status and validate session ────────────────────────────────
-    try:
-        from config.kite_auth import log_kite_status, is_kite_available
-        log_kite_status()
-        if is_kite_available():
+    # ── Kite: validate session in a DAEMON THREAD ────────────────────────────
+    # Why a thread: k.profile() is a synchronous HTTP call into Kite with no
+    # timeout. When the token is expired or Kite is slow/unreachable, it can
+    # block for minutes — Railway diagnosed exactly this on 2026-05-20 (deploy
+    # failed at 04:53 even with healthcheckTimeout=300). The web service must
+    # come up regardless of Kite health (Kite is for trade execution from the
+    # engine; the dashboard must serve without it). Validation now runs in the
+    # background; lifespan returns in seconds.
+    def _validate_kite_async():
+        try:
+            from config.kite_auth import log_kite_status, is_kite_available
+            log_kite_status()
+            if not is_kite_available():
+                log.warning("Kite: credentials missing — OHLC/Charts will show "
+                            "offline until set")
+                return
             from dashboard.backend.routes.charts import _get_kite
             k = _get_kite()
-            if k is not None:
-                k.profile()
-                log.info("Kite: session validated (profile() OK)")
-            else:
-                log.warning("Kite: client init failed — check KITE_API_KEY and KITE_ACCESS_TOKEN")
-        else:
-            log.warning("Kite: credentials missing — OHLC/Charts will show offline until set")
-    except Exception as exc:
-        log.warning("Kite: startup validation failed — %s", exc)
+            if k is None:
+                log.warning("Kite: client init failed — check KITE_API_KEY "
+                            "and KITE_ACCESS_TOKEN")
+                return
+            k.profile()
+            log.info("Kite: session validated (profile() OK)")
+        except Exception as exc:
+            log.warning("Kite: startup validation failed — %s", exc)
+
+    import threading as _kth
+    _kth.Thread(target=_validate_kite_async, daemon=True,
+                name="kite-validate").start()
 
     try:
         from agents.runner import start_scheduler
