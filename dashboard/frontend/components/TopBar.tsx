@@ -144,29 +144,40 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
           {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
         </button>
 
-        {/* Connect Kite — show when Kite disconnected or token missing; uses /api/kite/login proxy */}
-        {health && (health.kite_connected === false || health.token_present === false) && (
-          <button
-            type="button"
-            onClick={() => { window.location.href = "/api/kite/login"; }}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              color: "var(--accent)",
-              background: "transparent",
-              border: "1px solid var(--accent)",
-              borderRadius: 6,
-              cursor: "pointer",
-            }}
-          >
-            <Wifi size={12} />
-            Connect Kite
-          </button>
-        )}
+        {/* Connect Kite — ALWAYS visible to the admin. The previous condition
+            (hide when health.token_present===true && health.kite_connected===true)
+            hid it for ~5 minutes after the token expired, because token_present
+            only reflects Redis presence (not validity) and kite_connected is
+            cached optimistically with a 3-failure threshold. The operator must
+            always be able to refresh on demand. When the session is healthy
+            the button styling fades; when disconnected it lights up. */}
+        {health && (() => {
+          const healthy = health.kite_connected === true && health.token_present === true;
+          return (
+            <button
+              type="button"
+              onClick={() => { window.location.href = "/api/kite/login"; }}
+              title={healthy ? "Kite session active — click to refresh manually" : "Kite disconnected — click to connect"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 12px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                color: healthy ? "var(--text-secondary)" : "var(--accent)",
+                background: "transparent",
+                border: `1px solid ${healthy ? "var(--border)" : "var(--accent)"}`,
+                borderRadius: 6,
+                cursor: "pointer",
+                opacity: healthy ? 0.65 : 1,
+              }}
+            >
+              <Wifi size={12} />
+              {healthy ? "Refresh Kite" : "Connect Kite"}
+            </button>
+          );
+        })()}
 
         {/* System health dots */}
         {health && (
