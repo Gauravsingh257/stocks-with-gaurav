@@ -34,9 +34,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import smc_detectors as smc
 from engine.fvg_tap_setup import (
-    SWING, CONFIRM_WIN, TAP_WIN, CHOCH_RECENCY, CONT_ATR, SL_BUF_ATR,
+    SWING, CONFIRM_WIN, TAP_WIN, CHOCH_RECENCY, SL_BUF_ATR,
     R_MULT, _atr_at, _bull_engulf, _bear_engulf,
 )
+
+# Diagnostic-only — defines the "pre-continuation" gate width in ATR
+# multiples beyond the broken CHoCH level. Mirrors the same constant in
+# scripts/fresh_phase_research.py; intentionally NOT exported from the
+# production detector (engine.fvg_tap_setup) since the live rule does not
+# evaluate this gate — it exists here only to flag near-misses where price
+# extended past the CHoCH break before the first FVG tap (= late entry).
+CONT_ATR = 1.0
 
 YF = {"NIFTY 50 (^NSEI)": "^NSEI", "BANKNIFTY (^NSEBANK)": "^NSEBANK"}
 
