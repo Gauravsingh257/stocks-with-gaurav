@@ -304,6 +304,55 @@ def _gate(s: dict) -> tuple[bool, list]:
     return (len(fails) == 0, fails)
 
 
+def walk_forward(data: dict, n_windows: int = 3) -> list:
+    """Split each symbol's 1H candles into N non-overlapping equal
+    sequential windows; run the scan independently in each. Returns a
+    list of per-window results: [{window_idx, start_date, end_date,
+    summary, passed, per_symbol_n}, ...]. Each window is an
+    out-of-sample test for the others — passing 1/3 = window-specific
+    artifact; 2/3 or 3/3 = regime-robust edge."""
+    if n_windows < 2:
+        raise ValueError("walk_forward needs >=2 windows")
+
+    # Per-symbol slice plan (each symbol's bar count may differ).
+    results = []
+    for w in range(n_windows):
+        window_rows: list = []
+        per_sym: dict = {}
+        start_dates, end_dates = [], []
+        for sym, c in data.items():
+            n = len(c)
+            if n < 600:  # need enough for warmup + weekly_trend + scan
+                continue
+            slice_size = n // n_windows
+            lo = w * slice_size
+            hi = (w + 1) * slice_size if w < n_windows - 1 else n
+            window_slice = c[lo:hi]
+            if len(window_slice) < 200:
+                continue
+            start_dates.append(window_slice[0]["date"])
+            end_dates.append(window_slice[-1]["date"])
+            rows, _ = scan_swing_fvg_tap(window_slice)
+            for r in rows:
+                r["symbol"] = sym
+                r["window"] = w + 1
+            window_rows.extend(rows)
+            per_sym[sym] = _aggregate(rows)
+        summary = _aggregate(window_rows)
+        passed, failures = _gate(summary)
+        results.append({
+            "window": w + 1,
+            "start": min(start_dates) if start_dates else None,
+            "end": max(end_dates) if end_dates else None,
+            "summary": summary,
+            "passed": passed,
+            "failures": failures,
+            "per_symbol_n": {s: v["n"] for s, v in per_sym.items()},
+            "rows": window_rows,
+        })
+    return results
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Swing FVG-Tap (1H stocks, weekly-bull gate) — pre-committed backtest")
@@ -311,6 +360,10 @@ def main() -> None:
                     help="comma-separated yfinance symbols (default: 12-stock universe)")
     ap.add_argument("--diag", action="store_true",
                     help="print per-symbol funnel + per-symbol breakdown")
+    ap.add_argument("--walk-forward", action="store_true",
+                    help="split history into N non-overlapping windows + gate each")
+    ap.add_argument("--n-windows", type=int, default=3,
+                    help="number of walk-forward windows (default 3)")
     ap.add_argument("--output", type=str,
                     default="backtest_results/swing_fvg_tap.json")
     args = ap.parse_args()
@@ -333,6 +386,56 @@ def main() -> None:
         print(f"  ERROR: {exc}")
         return
     print(f"  Loaded {len(data)} symbols.")
+
+    # ─── WALK-FORWARD MODE ────────────────────────────────────────────
+    if args.walk_forward:
+        print(f"\n  WALK-FORWARD: {args.n_windows} non-overlapping windows. "
+              f"Each window is an out-of-sample test for the others; an")
+        print(f"  edge that only passes the full single-window aggregate is "
+              f"regime-specific and should NOT ship.")
+        wf = walk_forward(data, n_windows=args.n_windows)
+        print(f"\n  {'win':<5}{'period':<48}{'n':>5}{'win%':>7}{'expR':>9}"
+              f"{'PF':>7}{'totR':>8}  gate")
+        print("  " + "-" * 95)
+        for w in wf:
+            s = w["summary"]
+            period = f"{w['start'][:10]} - {w['end'][:10]}" if w["start"] else "n/a"
+            g = "PASS" if w["passed"] else "FAIL"
+            print(f"  {w['window']:<5}{period:<48}{s['n']:>5}{s['win']:>7.1f}"
+                  f"{s['expR']:>+9.3f}{s['PF']:>7.2f}{s['totR']:>+8.1f}  {g}")
+        n_pass = sum(1 for w in wf if w["passed"])
+        print(f"\n  WALK-FORWARD VERDICT: {n_pass}/{len(wf)} windows PASS")
+        if n_pass == len(wf):
+            print("    ROBUST PASS — edge survives in every independent window.")
+            print("    JUSTIFIES building SHADOW engine. Soak + scorecard next.")
+        elif n_pass >= (len(wf) + 1) // 2:
+            print("    MAJORITY PASS — edge present but regime-sensitive.")
+            print("    Build SHADOW for forward validation; cautiously.")
+            print("    Per-window failures expose the regime risk; do NOT")
+            print("    paper over by relaxing gates.")
+        else:
+            print("    FAIL — edge does NOT survive walk-forward.")
+            print("    The single-window aggregate that 'passed' was a")
+            print("    window-specific artifact. Do NOT ship. Either")
+            print("    propose a different rule and re-validate from scratch,")
+            print("    or accept this approach is not the answer.")
+        # For walk-forward failures, list the specific failed criteria
+        for w in wf:
+            if not w["passed"]:
+                print(f"    Window {w['window']} failures: {'; '.join(w['failures'])}")
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps({
+            "generated_at": datetime.now().isoformat(),
+            "rule": "swing_fvg_tap_1h_weekly_bull_gated_walkforward",
+            "universe": list(data.keys()),
+            "gate": {"n": 30, "PF": 1.30, "expR": 0.20, "win": 40.0},
+            "n_windows": args.n_windows,
+            "windows": [{k: v for k, v in w.items() if k != "rows"} for w in wf],
+            "windows_passed": n_pass,
+            "rows": [r for w in wf for r in w["rows"]],
+        }, indent=2), encoding="utf-8")
+        print(f"\n  Results written: {args.output}")
+        return
 
     all_rows: list = []
     per_symbol: dict = {}
