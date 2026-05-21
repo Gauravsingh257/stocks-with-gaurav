@@ -173,9 +173,14 @@ def start_scheduler() -> None:
         try:
             from services.fvg_tap_engine import run_fvg_tap_tick
             res = run_fvg_tap_tick()
-            if res.get("status") not in ("off", "ok"):
+            status = res.get("status")
+            if status not in ("off", "ok"):
                 logger.warning("[FVG-Tap] %s", res)
-            elif res.get("new_signals"):
+            elif status == "ok":
+                # Log every successful tick — evaluated count distinguishes
+                # "detector ran, no setups" from a silent yfinance fetch
+                # failure (evaluated=0 with no error). Necessary
+                # observability for the validation-phase soak.
                 logger.info("[FVG-Tap] %s", res)
         except Exception:
             logger.exception("[FVG-Tap] tick failed")

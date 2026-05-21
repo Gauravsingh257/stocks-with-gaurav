@@ -51,6 +51,37 @@ _prev_strike_oi: dict = {}   # {"NIFTY": {"24500_CE": 1000000, "24500_PE": 80000
 # -- Cached snapshot
 _cached_snapshot: dict | None = None
 
+# -- Cached KiteConnect client. Re-created once per process and reused
+#    across every tick to (a) avoid the per-tick handshake cost and
+#    (b) prevent urllib3 connection-pool exhaustion against api.kite.trade
+#    (default pool_maxsize=10 was overflowing under the 60-second OI tick
+#    that fans out into spot + instruments + per-strike quote calls,
+#    producing "Connection pool is full, discarding connection" warnings
+#    that throttled the OI feed and risked Kite-side 429s). The pool is
+#    bumped on the underlying reqsession; access_token is refreshed on
+#    every call so daily token rotation is honoured.
+_KITE_CACHE: dict = {"kite": None, "api_key": None}
+
+
+def _get_kite_client(api_key: str, access_token: str):
+    cached = _KITE_CACHE.get("kite")
+    if cached is None or _KITE_CACHE.get("api_key") != api_key:
+        from kiteconnect import KiteConnect
+        from requests.adapters import HTTPAdapter
+
+        client = KiteConnect(api_key=api_key)
+        try:
+            adapter = HTTPAdapter(pool_connections=10, pool_maxsize=50)
+            client.reqsession.mount("https://", adapter)
+            client.reqsession.mount("http://", adapter)
+        except AttributeError:
+            pass
+        _KITE_CACHE["kite"] = client
+        _KITE_CACHE["api_key"] = api_key
+        cached = client
+    cached.set_access_token(access_token)
+    return cached
+
 
 def _is_market_hours() -> bool:
     """True during 09:15–15:31 IST Mon–Fri."""
@@ -85,7 +116,6 @@ def _get_kite_direct_data() -> dict | None:
     Returns a dict matching _get_oi_sentiment_data() shape, or None on failure.
     """
     try:
-        from kiteconnect import KiteConnect
         from config.kite_auth import get_api_key
 
         api_key = get_api_key()
@@ -99,8 +129,7 @@ def _get_kite_direct_data() -> dict | None:
         if not api_key or not access_token:
             return None
 
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
+        kite = _get_kite_client(api_key, access_token)
 
         # Fetch spot prices
         indices = kite.ltp(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
