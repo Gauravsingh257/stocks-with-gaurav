@@ -91,6 +91,26 @@ SWING_UNIVERSE = (
 HORIZON = 60  # forward outcome resolution in 1H bars (~2 trading weeks)
 
 
+def aggregate_to_4h(candles_1h: list) -> list:
+    """Group every 4 consecutive 1H bars into one 4H OHLC bar. Drops
+    the final incomplete group. Chronological grouping (no fancy
+    session alignment) — NSE 6h sessions make true session-aligned 4H
+    awkward, and chronological preserves OHLC integrity. Used for the
+    4H variant of the same locked rule."""
+    out = []
+    for i in range(0, len(candles_1h) - 3, 4):
+        chunk = candles_1h[i:i + 4]
+        out.append({
+            "date": chunk[0]["date"],
+            "open": chunk[0]["open"],
+            "high": max(b["high"] for b in chunk),
+            "low": min(b["low"] for b in chunk),
+            "close": chunk[-1]["close"],
+            "volume": sum(b.get("volume", 0) for b in chunk),
+        })
+    return out
+
+
 def build_weekly_trends(candles_1h: list) -> list:
     """Resample 1H candles to weekly (W-FRI close), then compute
     detect_weekly_trend AT EACH completed week using only weeks at or
@@ -151,10 +171,18 @@ def get_trend_at(trends: list, ts_iso: str) -> str:
     return trends[idx][1]
 
 
-def scan_swing_fvg_tap(candles_1h: list) -> tuple[list, dict]:
+def scan_swing_fvg_tap(candles_1h: list,
+                       trends: list | None = None) -> tuple[list, dict]:
     """Scan 1H bars for the swing FVG-Tap rule under the weekly bull
     gate. Returns (trades, funnel_counts). Trades have realised R
-    (first-touch SL or 2R target within HORIZON). LONG only."""
+    (first-touch SL or 2R target within HORIZON). LONG only.
+
+    `trends`: optional pre-computed weekly trend series (from
+    build_weekly_trends on the FULL history). When the caller passes
+    a small slice (walk-forward windowing, especially on 4H where
+    each window has <12 weeks), pre-computing on full history avoids
+    a starvation of trend signal without introducing lookahead —
+    get_trend_at is still point-in-time per bar."""
     out: list = []
     f = {"scans": 0, "weekly_bull": 0, "choch": 0, "fvg": 0,
          "tap": 0, "confirm": 0, "entry": 0, "resolved": 0}
@@ -164,7 +192,8 @@ def scan_swing_fvg_tap(candles_1h: list) -> tuple[list, dict]:
     if n < 200:
         return out, f
 
-    trends = build_weekly_trends(c)
+    if trends is None:
+        trends = build_weekly_trends(c)
     if not trends:
         return out, f
 
@@ -305,14 +334,23 @@ def _gate(s: dict) -> tuple[bool, list]:
 
 
 def walk_forward(data: dict, n_windows: int = 3) -> list:
-    """Split each symbol's 1H candles into N non-overlapping equal
+    """Split each symbol's candles into N non-overlapping equal
     sequential windows; run the scan independently in each. Returns a
     list of per-window results: [{window_idx, start_date, end_date,
     summary, passed, per_symbol_n}, ...]. Each window is an
     out-of-sample test for the others — passing 1/3 = window-specific
-    artifact; 2/3 or 3/3 = regime-robust edge."""
+    artifact; 2/3 or 3/3 = regime-robust edge.
+
+    Pre-computes weekly trends from each symbol's FULL series and
+    passes them into scan_swing_fvg_tap so per-window slices (which
+    may be shorter than the 12-week minimum for detect_weekly_trend,
+    especially on 4H) still have a usable point-in-time trend lookup.
+    No lookahead — get_trend_at honours the bar's date."""
     if n_windows < 2:
         raise ValueError("walk_forward needs >=2 windows")
+
+    # Pre-compute full-series weekly trends per symbol.
+    trends_by_sym = {sym: build_weekly_trends(c) for sym, c in data.items()}
 
     # Per-symbol slice plan (each symbol's bar count may differ).
     results = []
@@ -322,7 +360,7 @@ def walk_forward(data: dict, n_windows: int = 3) -> list:
         start_dates, end_dates = [], []
         for sym, c in data.items():
             n = len(c)
-            if n < 600:  # need enough for warmup + weekly_trend + scan
+            if n < 200:  # need enough for the scan to be valid
                 continue
             slice_size = n // n_windows
             lo = w * slice_size
@@ -332,7 +370,8 @@ def walk_forward(data: dict, n_windows: int = 3) -> list:
                 continue
             start_dates.append(window_slice[0]["date"])
             end_dates.append(window_slice[-1]["date"])
-            rows, _ = scan_swing_fvg_tap(window_slice)
+            rows, _ = scan_swing_fvg_tap(
+                window_slice, trends=trends_by_sym.get(sym))
             for r in rows:
                 r["symbol"] = sym
                 r["window"] = w + 1
@@ -360,6 +399,8 @@ def main() -> None:
                     help="comma-separated yfinance symbols (default: 12-stock universe)")
     ap.add_argument("--diag", action="store_true",
                     help="print per-symbol funnel + per-symbol breakdown")
+    ap.add_argument("--tf", choices=["1h", "4h"], default="1h",
+                    help="bar timeframe (1h native, 4h aggregated from 1h)")
     ap.add_argument("--walk-forward", action="store_true",
                     help="split history into N non-overlapping windows + gate each")
     ap.add_argument("--n-windows", type=int, default=3,
@@ -386,6 +427,15 @@ def main() -> None:
         print(f"  ERROR: {exc}")
         return
     print(f"  Loaded {len(data)} symbols.")
+
+    if args.tf == "4h":
+        print("  Aggregating 1H -> 4H bars (4-bar chronological groups)...")
+        data = {sym: aggregate_to_4h(c) for sym, c in data.items()}
+        sizes = [len(c) for c in data.values()]
+        if sizes:
+            print(f"  Post-aggregation: {len(data)} symbols, "
+                  f"bars/symbol min={min(sizes)} avg={sum(sizes)//len(sizes)} "
+                  f"max={max(sizes)}")
 
     # ─── WALK-FORWARD MODE ────────────────────────────────────────────
     if args.walk_forward:
