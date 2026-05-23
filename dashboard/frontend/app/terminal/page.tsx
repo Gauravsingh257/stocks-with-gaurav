@@ -102,6 +102,27 @@ export default function TerminalPage() {
     return () => clearInterval(id);
   }, [load]);
 
+  // Portfolio counts (separate endpoint, fast cached) — refreshed on the
+  // same cadence as the discovery feed so the SystemFlowDiagram's
+  // Portfolio card stays live too.
+  const [portfolioTotal, setPortfolioTotal] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const loadPortfolio = async () => {
+      try {
+        const c = await api.portfolioCounts();
+        if (!cancelled) {
+          setPortfolioTotal((c.swing ?? 0) + (c.longterm ?? 0));
+        }
+      } catch {
+        if (!cancelled) setPortfolioTotal(null);
+      }
+    };
+    loadPortfolio();
+    const id = setInterval(loadPortfolio, REFRESH_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // Phase 2 — live trades from /ws/trades (with /api/trades fallback)
   // Filters are sent as query params so the backend does the actual filtering.
   const live = useLiveTrades(undefined, apiFilters);
@@ -224,6 +245,8 @@ export default function TerminalPage() {
           }
           finalCount={finalOpps.length}
           watchlistCount={watchOpps.length}
+          portfolioCount={portfolioTotal}
+          generatedAt={feed?.generated_at ?? null}
         />
       </div>
 

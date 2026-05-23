@@ -17,12 +17,17 @@
  * /api/research/discovery payload). When the prop is absent (cold
  * load / off-hours) the diagram renders with placeholder counts.
  *
+ * Counts are LIVE: smooth count-up animation on change, floating
+ * "+N / -N" delta badge for ~1.8s after each change, brief glow
+ * pulse on the card whose value moved, and a "Live · updated Xs
+ * ago" pill in the header backed by the feed's generated_at.
+ *
  * Collapsible — default expanded for first visit, then user choice
  * is remembered in localStorage so the dashboard doesn't lecture
  * every refresh.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
@@ -34,6 +39,7 @@ import {
   Globe2,
   HelpCircle,
   Layers,
+  Radio,
   Search,
   ShieldCheck,
   Zap,
@@ -57,7 +63,8 @@ interface Props {
   funnel?: FunnelCounts | null;
   finalCount?: number;
   watchlistCount?: number;
-  portfolioCount?: number; // optional, only if you already have it
+  portfolioCount?: number | null; // total active positions (swing + longterm)
+  generatedAt?: string | null; // ISO from the discovery feed
 }
 
 // ── Stage definitions ────────────────────────────────────────────────
@@ -69,12 +76,19 @@ interface Stage {
   short: string;
   desc: string;
   detail: string;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: ComponentType<{ size?: number }>;
   color: StageColor;
   endpoint?: string;
 }
 
-const COLOR_MAP: Record<StageColor, { glow: string; border: string; text: string; bg: string }> = {
+interface StageColors {
+  glow: string;
+  border: string;
+  text: string;
+  bg: string;
+}
+
+const COLOR_MAP: Record<StageColor, StageColors> = {
   cyan:    { glow: "rgba(34,211,238,0.45)",  border: "rgba(34,211,238,0.55)",  text: "#67e8f9", bg: "rgba(34,211,238,0.10)" },
   blue:    { glow: "rgba(59,130,246,0.45)",  border: "rgba(59,130,246,0.55)",  text: "#93c5fd", bg: "rgba(59,130,246,0.10)" },
   violet:  { glow: "rgba(168,85,247,0.45)",  border: "rgba(168,85,247,0.55)",  text: "#c4b5fd", bg: "rgba(168,85,247,0.10)" },
@@ -107,19 +121,341 @@ const SIDE_ENGINES = [
   },
 ];
 
-// ── Component ────────────────────────────────────────────────────────
+// ── Animated count: tween from old to new value over 800ms ──────────
+function AnimatedCount({ value }: { value: number | null | undefined }) {
+  const [displayed, setDisplayed] = useState<number>(
+    typeof value === "number" ? value : 0,
+  );
+  const prevRef = useRef<number>(typeof value === "number" ? value : 0);
+
+  useEffect(() => {
+    if (typeof value !== "number") {
+      setDisplayed(0);
+      return;
+    }
+    const from = prevRef.current;
+    const to = value;
+    if (from === to) {
+      setDisplayed(to);
+      return;
+    }
+    const duration = 800;
+    const start = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const elapsed = now - start;
+      const t = Math.min(1, elapsed / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const current = Math.round(from + (to - from) * eased);
+      setDisplayed(current);
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        prevRef.current = to;
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  if (typeof value !== "number") return <>—</>;
+  return <>{displayed > 999 ? displayed.toLocaleString() : displayed}</>;
+}
+
+// ── Delta hook: emit a transient (+N / -N) every time value changes ──
+function useDelta(value: number | null | undefined): {
+  delta: number | null;
+  key: number;
+} {
+  const prevRef = useRef<number | null>(typeof value === "number" ? value : null);
+  const [state, setState] = useState<{ delta: number | null; key: number }>({
+    delta: null,
+    key: 0,
+  });
+
+  useEffect(() => {
+    if (typeof value !== "number") return;
+    const prev = prevRef.current;
+    if (prev === null) {
+      prevRef.current = value;
+      return;
+    }
+    const diff = value - prev;
+    if (diff === 0) return;
+    prevRef.current = value;
+    setState({ delta: diff, key: Date.now() });
+    const t = setTimeout(() => setState((s) => ({ ...s, delta: null })), 1800);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  return state;
+}
+
+// ── Single stage card with hover + animated count + delta + pulse ──
+function StageCard({
+  stage,
+  idx,
+  total,
+  color,
+  Icon,
+  count,
+  isHovered,
+  onHoverStart,
+  onHoverEnd,
+}: {
+  stage: Stage;
+  idx: number;
+  total: number;
+  color: StageColors;
+  Icon: ComponentType<{ size?: number }>;
+  count: number | null;
+  isHovered: boolean;
+  onHoverStart: () => void;
+  onHoverEnd: () => void;
+}) {
+  const { delta, key: deltaKey } = useDelta(count);
+
+  // Brief glow pulse whenever count changes — keyed off the delta key
+  const pulseShadow = delta !== null
+    ? `0 0 0 2px ${color.border}, 0 18px 48px ${color.glow}, 0 0 32px ${color.glow}`
+    : isHovered
+      ? `0 18px 48px ${color.glow}, 0 0 26px ${color.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`
+      : `0 8px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)`;
+
+  return (
+    <motion.div
+      onHoverStart={onHoverStart}
+      onHoverEnd={onHoverEnd}
+      whileHover={{
+        translateY: -6,
+        rotateY: 0,
+        scale: 1.04,
+      }}
+      transition={{ type: "spring", stiffness: 320, damping: 22 }}
+      style={{
+        position: "relative",
+        zIndex: isHovered ? 10 : 1,
+        transformStyle: "preserve-3d",
+        transform: `rotateY(${(idx - (total - 1) / 2) * 1.5}deg)`,
+      }}
+    >
+      <motion.div
+        animate={{
+          boxShadow: pulseShadow,
+        }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        style={{
+          background: `linear-gradient(160deg, ${color.bg}, rgba(0,0,0,0.25))`,
+          border: `1px solid ${color.border}`,
+          borderRadius: 14,
+          padding: 12,
+          minHeight: 140,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          cursor: "default",
+          position: "relative",
+          overflow: "visible",
+        }}
+      >
+        {/* Top: icon + short label */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div
+            style={{
+              padding: 6,
+              borderRadius: 8,
+              background: color.bg,
+              border: `1px solid ${color.border}`,
+              display: "grid",
+              placeItems: "center",
+            }}
+          >
+            <Icon size={14} />
+          </div>
+          <span
+            style={{
+              fontSize: "0.58rem",
+              color: color.text,
+              textTransform: "uppercase",
+              fontWeight: 800,
+              letterSpacing: 1,
+            }}
+          >
+            {stage.short}
+          </span>
+        </div>
+
+        {/* Name */}
+        <div
+          style={{
+            fontSize: "0.86rem",
+            fontWeight: 800,
+            color: "var(--text-primary)",
+            lineHeight: 1.2,
+          }}
+        >
+          {stage.name}
+        </div>
+
+        {/* Count (live + animated) + transient delta badge */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 6,
+            marginTop: 2,
+            position: "relative",
+          }}
+        >
+          <span
+            style={{
+              fontSize: count !== null ? "1.4rem" : "1rem",
+              fontWeight: 900,
+              color: color.text,
+              lineHeight: 1,
+              textShadow: `0 0 12px ${color.glow}`,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            <AnimatedCount value={count} />
+          </span>
+          <AnimatePresence>
+            {delta !== null && (
+              <motion.span
+                key={deltaKey}
+                initial={{ opacity: 0, y: 6, scale: 0.85 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.85 }}
+                transition={{ duration: 0.28, ease: "easeOut" }}
+                style={{
+                  fontSize: "0.65rem",
+                  fontWeight: 800,
+                  padding: "2px 7px",
+                  borderRadius: 999,
+                  color: delta > 0 ? "#34d399" : "#ff7787",
+                  background:
+                    delta > 0
+                      ? "rgba(16,185,129,0.18)"
+                      : "rgba(255,71,87,0.18)",
+                  border: `1px solid ${delta > 0 ? "rgba(16,185,129,0.6)" : "rgba(255,71,87,0.6)"}`,
+                  boxShadow: `0 0 12px ${delta > 0 ? "rgba(16,185,129,0.4)" : "rgba(255,71,87,0.4)"}`,
+                  letterSpacing: 0.3,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {delta > 0 ? "+" : ""}{delta}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Description */}
+        <div
+          style={{
+            fontSize: "0.66rem",
+            color: "var(--text-dim)",
+            lineHeight: 1.35,
+            marginTop: 2,
+          }}
+        >
+          {stage.desc}
+        </div>
+
+        {/* Hover detail (absolute overlay) */}
+        <AnimatePresence>
+          {isHovered && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.18 }}
+              style={{
+                position: "absolute",
+                top: "calc(100% + 8px)",
+                left: "50%",
+                transform: "translateX(-50%)",
+                width: 260,
+                padding: 12,
+                background: "rgba(11,15,28,0.96)",
+                border: `1px solid ${color.border}`,
+                borderRadius: 10,
+                boxShadow: `0 16px 40px ${color.glow}`,
+                zIndex: 20,
+                fontSize: "0.7rem",
+                color: "var(--text-secondary)",
+                lineHeight: 1.5,
+                pointerEvents: "none",
+              }}
+            >
+              <div
+                style={{
+                  color: color.text,
+                  fontWeight: 800,
+                  marginBottom: 6,
+                  fontSize: "0.74rem",
+                }}
+              >
+                {stage.name}
+              </div>
+              {stage.detail}
+              {stage.endpoint && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    paddingTop: 8,
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                    fontSize: "0.6rem",
+                    color: "var(--text-dim)",
+                    fontFamily: "ui-monospace, monospace",
+                  }}
+                >
+                  {stage.endpoint}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ── Main component ───────────────────────────────────────────────────
 export default function SystemFlowDiagram({
   funnel,
   finalCount = 0,
   watchlistCount = 0,
   portfolioCount,
+  generatedAt,
 }: Props) {
   const [expanded, setExpanded] = useState<boolean>(true);
   const [hoveredStage, setHoveredStage] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  // Hydrate expanded state from localStorage on first render only.
-  // Always default to "expanded" for users who have never seen the diagram.
+  // Liveness indicator — re-tick every second so the "Xs ago" updates.
+  const lastChangeRef = useRef<number>(Date.now());
+  useEffect(() => {
+    lastChangeRef.current = Date.now();
+  }, [funnel]);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const lastUpdateMs = generatedAt
+    ? new Date(generatedAt).getTime()
+    : lastChangeRef.current;
+  const ageSec = Math.max(0, Math.floor((Date.now() - lastUpdateMs) / 1000));
+  const ageLabel =
+    ageSec < 2 ? "just now" : ageSec < 60 ? `${ageSec}s ago` : `${Math.floor(ageSec / 60)}m ago`;
+  const liveHealthy = ageSec < 180;
+
+  // Suppress the unused warning for finalCount/watchlistCount — they're
+  // kept in the API so the parent can pass them when the funnel field is
+  // absent (legacy / pre-Phase-2 payload). Funnel takes priority.
+  void finalCount;
+  void watchlistCount;
+
   useEffect(() => {
     setMounted(true);
     if (typeof window === "undefined") return;
@@ -148,8 +484,7 @@ export default function SystemFlowDiagram({
   const qualityPass = funnel?.layer2_pass ?? null;
   const smcPass = funnel?.layer3_pass ?? null;
   const finalN = funnel?.final_returned ?? finalCount;
-  const watchN = funnel?.watchlist_returned ?? watchlistCount;
-  const portN = portfolioCount;
+  const portN = typeof portfolioCount === "number" ? portfolioCount : null;
 
   const stages: Stage[] = [
     {
@@ -206,7 +541,7 @@ export default function SystemFlowDiagram({
       detail: "Persistent positions you've added (manually or via promote). Separate from the live research feed — survives across scans.",
       icon: Briefcase,
       color: "amber",
-      endpoint: "/api/portfolio/swing + /longterm",
+      endpoint: "/api/portfolio/counts (swing + longterm)",
     },
   ];
 
@@ -223,7 +558,6 @@ export default function SystemFlowDiagram({
         overflow: "hidden",
       }}
     >
-      {/* Subtle animated background gradient */}
       <div
         aria-hidden
         style={{
@@ -235,7 +569,6 @@ export default function SystemFlowDiagram({
         }}
       />
 
-      {/* Header */}
       <header
         style={{
           display: "flex",
@@ -282,26 +615,69 @@ export default function SystemFlowDiagram({
             </h2>
           </div>
         </div>
-        <button
-          onClick={toggle}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 12px",
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            color: "var(--text-secondary)",
-            fontSize: "0.72rem",
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-          aria-label={expanded ? "Collapse explainer" : "Expand explainer"}
-        >
-          {expanded ? "Hide" : "Show"}
-          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Live timestamp pill. Render only after mount: the "Xs ago"
+              and the title use the client's clock + locale, which
+              differs from the SSR render and would cause a hydration
+              mismatch. Skipping until mounted is safe because the
+              entire ticker only makes sense client-side anyway. */}
+          {mounted && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "5px 10px",
+                borderRadius: 999,
+                background: liveHealthy
+                  ? "rgba(0,224,150,0.10)"
+                  : "rgba(255,165,2,0.10)",
+                border: `1px solid ${liveHealthy ? "rgba(0,224,150,0.4)" : "rgba(255,165,2,0.4)"}`,
+                fontSize: "0.65rem",
+                color: liveHealthy ? "#00e096" : "#ffa502",
+                fontWeight: 700,
+                letterSpacing: 0.4,
+              }}
+              title={`Last update: ${new Date(lastUpdateMs).toLocaleTimeString()}`}
+              suppressHydrationWarning
+            >
+              <motion.span
+                animate={{ opacity: liveHealthy ? [0.4, 1, 0.4] : 1 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: liveHealthy ? "#00e096" : "#ffa502",
+                  boxShadow: `0 0 8px ${liveHealthy ? "#00e096" : "#ffa502"}`,
+                }}
+              />
+              <Radio size={10} />
+              <span>{liveHealthy ? "LIVE" : "STALE"}</span>
+              <span style={{ opacity: 0.7 }}>· {ageLabel}</span>
+            </div>
+          )}
+          <button
+            onClick={toggle}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              color: "var(--text-secondary)",
+              fontSize: "0.72rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            aria-label={expanded ? "Collapse explainer" : "Expand explainer"}
+          >
+            {expanded ? "Hide" : "Show"}
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        </div>
       </header>
 
       <AnimatePresence initial={false}>
@@ -362,9 +738,6 @@ export default function SystemFlowDiagram({
                     stroke="url(#flowGrad)"
                     strokeWidth="2"
                   />
-                  {/* Flowing particles. cx is set initially to 0 so the
-                      circle is valid on first paint before framer-motion's
-                      animate loop starts overriding it. */}
                   {[0, 0.33, 0.66].map((delay, i) => (
                     <motion.circle
                       key={`particle-${i}`}
@@ -414,163 +787,19 @@ export default function SystemFlowDiagram({
                     stage.id === "final" ? finalN :
                     stage.id === "portfolio" ? portN :
                     null;
-                  const isHovered = hoveredStage === stage.id;
-
                   return (
-                    <motion.div
+                    <StageCard
                       key={stage.id}
+                      stage={stage}
+                      idx={idx}
+                      total={stages.length}
+                      color={c}
+                      Icon={Icon}
+                      count={count}
+                      isHovered={hoveredStage === stage.id}
                       onHoverStart={() => setHoveredStage(stage.id)}
                       onHoverEnd={() => setHoveredStage(null)}
-                      whileHover={{
-                        translateY: -6,
-                        rotateY: 0,
-                        scale: 1.04,
-                      }}
-                      transition={{ type: "spring", stiffness: 320, damping: 22 }}
-                      style={{
-                        position: "relative",
-                        zIndex: isHovered ? 10 : 1,
-                        transformStyle: "preserve-3d",
-                        transform: `rotateY(${(idx - (stages.length - 1) / 2) * 1.5}deg)`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          background: `linear-gradient(160deg, ${c.bg}, rgba(0,0,0,0.25))`,
-                          border: `1px solid ${c.border}`,
-                          borderRadius: 14,
-                          padding: 12,
-                          minHeight: 140,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          boxShadow: isHovered
-                            ? `0 18px 48px ${c.glow}, 0 0 26px ${c.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`
-                            : `0 8px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)`,
-                          transition: "box-shadow 0.2s ease",
-                          cursor: "default",
-                          position: "relative",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {/* Top: icon + short label */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div
-                            style={{
-                              padding: 6,
-                              borderRadius: 8,
-                              background: c.bg,
-                              border: `1px solid ${c.border}`,
-                              display: "grid",
-                              placeItems: "center",
-                            }}
-                          >
-                            <Icon size={14} />
-                          </div>
-                          <span
-                            style={{
-                              fontSize: "0.58rem",
-                              color: c.text,
-                              textTransform: "uppercase",
-                              fontWeight: 800,
-                              letterSpacing: 1,
-                            }}
-                          >
-                            {stage.short}
-                          </span>
-                        </div>
-
-                        {/* Name */}
-                        <div
-                          style={{
-                            fontSize: "0.86rem",
-                            fontWeight: 800,
-                            color: "var(--text-primary)",
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {stage.name}
-                        </div>
-
-                        {/* Count (the live data point) */}
-                        <div
-                          style={{
-                            fontSize: count !== null && count !== undefined ? "1.4rem" : "1rem",
-                            fontWeight: 900,
-                            color: c.text,
-                            lineHeight: 1,
-                            marginTop: 2,
-                            textShadow: `0 0 12px ${c.glow}`,
-                          }}
-                        >
-                          {count !== null && count !== undefined
-                            ? typeof count === "number" && count > 999
-                              ? count.toLocaleString()
-                              : count
-                            : "—"}
-                        </div>
-
-                        {/* Description */}
-                        <div
-                          style={{
-                            fontSize: "0.66rem",
-                            color: "var(--text-dim)",
-                            lineHeight: 1.35,
-                            marginTop: 2,
-                          }}
-                        >
-                          {stage.desc}
-                        </div>
-
-                        {/* Hover detail (absolute overlay) */}
-                        <AnimatePresence>
-                          {isHovered && (
-                            <motion.div
-                              initial={{ opacity: 0, y: 6 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: 6 }}
-                              transition={{ duration: 0.18 }}
-                              style={{
-                                position: "absolute",
-                                top: "calc(100% + 8px)",
-                                left: "50%",
-                                transform: "translateX(-50%)",
-                                width: 260,
-                                padding: 12,
-                                background: "rgba(11,15,28,0.96)",
-                                border: `1px solid ${c.border}`,
-                                borderRadius: 10,
-                                boxShadow: `0 16px 40px ${c.glow}`,
-                                zIndex: 20,
-                                fontSize: "0.7rem",
-                                color: "var(--text-secondary)",
-                                lineHeight: 1.5,
-                                pointerEvents: "none",
-                              }}
-                            >
-                              <div style={{ color: c.text, fontWeight: 800, marginBottom: 6, fontSize: "0.74rem" }}>
-                                {stage.name}
-                              </div>
-                              {stage.detail}
-                              {stage.endpoint && (
-                                <div
-                                  style={{
-                                    marginTop: 8,
-                                    paddingTop: 8,
-                                    borderTop: "1px solid rgba(255,255,255,0.08)",
-                                    fontSize: "0.6rem",
-                                    color: "var(--text-dim)",
-                                    fontFamily: "ui-monospace, monospace",
-                                  }}
-                                >
-                                  {stage.endpoint}
-                                </div>
-                              )}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    </motion.div>
+                    />
                   );
                 })}
               </div>
