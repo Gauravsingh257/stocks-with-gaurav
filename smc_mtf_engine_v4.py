@@ -5562,70 +5562,64 @@ def _attempt_auto_login() -> bool:
         return False
 
 
-def check_token_age(max_hours=20) -> bool:
-    """
-    F4.4: Check if Kite token is stale (>20 hours old OR from a previous calendar day).
-    Zerodha tokens expire at midnight IST (00:00) regardless of when they were issued,
-    so a token issued yesterday is ALWAYS expired even if it's only a few hours old.
-    - Redis token: check kite:token_ts. Reject if age > max_hours OR date != today.
-    - Env var / file: assume user manages freshness (no calendar check).
-    Returns True if token is fresh enough, False if expired.
-    """
-    try:
-        # Redis timestamp (set alongside token by auto_login.py / zerodha_login.py)
-        redis_url = os.getenv("REDIS_URL", "").strip()
-        if redis_url:
-            try:
-                import redis as _redis
-                r = _redis.from_url(redis_url, decode_responses=True)
-                tok = r.get("kite:access_token")
-                if tok and tok.strip():
-                    ts = r.get("kite:token_ts")
-                    if ts:
-                        from datetime import datetime as _dt
-                        token_time = _dt.fromisoformat(ts)
-                        now_ist_dt = now_ist()
-                        age_hours = (now_ist_dt - token_time).total_seconds() / 3600
-                        # Zerodha kills tokens at midnight IST — reject if from a previous day
-                        if token_time.date() < now_ist_dt.date():
-                            print(f"❌ Redis token is from {token_time.date()} (today is {now_ist_dt.date()}) — EXPIRED at midnight")
-                            logging.critical("Token from previous day — expired at midnight IST")
-                            return False
-                        if age_hours > max_hours:
-                            print(f"❌ Redis token is {age_hours:.1f}h old (max {max_hours}h) — STALE")
-                            logging.critical("Token expired: %.1fh old (Redis)", age_hours)
-                            return False
-                        print(f"✅ Token age (Redis): {age_hours:.1f}h (max: {max_hours}h, date: {token_time.date()})")
-                        return True
-                    # No timestamp stored — trust the profile() call in _reinit_kite
-                    print("✅ Token from Redis (no age info — validated by profile())")
-                    return True
-            except Exception as redis_e:
-                logging.debug("Redis token age check: %s", redis_e)
+_TOKEN_ALERT_COOLDOWN_SEC = 3600  # 1h cooldown per alert reason — avoid Telegram spam
+_TOKEN_ALERT_LAST_SENT: dict[str, float] = {}  # reason -> last-sent epoch
 
-        if os.getenv("KITE_ACCESS_TOKEN", "").strip():
-            print("✅ Token from KITE_ACCESS_TOKEN env (refresh daily via zerodha_login)")
-            return True
-        token_file = "access_token.txt"
-        if not os.path.exists(token_file):
-            print("❌ access_token.txt NOT FOUND — run zerodha_login.py or set KITE_ACCESS_TOKEN")
-            telegram_send("🛑 <b>TOKEN MISSING</b>\naccess_token.txt not found. Run zerodha_login.py!")
-            return False
-        mod_time = datetime.fromtimestamp(os.path.getmtime(token_file))
-        age_hours = (now_ist() - mod_time).total_seconds() / 3600
-        if age_hours > max_hours:
-            msg = (f"🛑 <b>TOKEN EXPIRED</b>\n"
-                   f"access_token.txt is {age_hours:.1f} hours old (max: {max_hours}h)\n"
-                   f"Run zerodha_login.py to refresh!")
-            print(f"❌ Token is {age_hours:.1f} hours old (max {max_hours}h) — STALE")
-            telegram_send(msg)
-            logging.critical("Token expired: %.1fh old", age_hours)
-            return False
-        print(f"✅ Token age: {age_hours:.1f}h (max: {max_hours}h)")
+
+def _maybe_alert_token_issue(reason: str, msg: str) -> None:
+    """Send a Telegram alert only if we haven't sent the same `reason`
+    in the last hour. Prevents the engine's restart-loop from spamming
+    the channel with duplicate TOKEN MISSING messages every 6 seconds.
+
+    First incident still pings immediately so we never lose visibility
+    on a genuine outage — only deduplicates rapid repeats."""
+    now = t.time()
+    last = _TOKEN_ALERT_LAST_SENT.get(reason, 0.0)
+    if now - last < _TOKEN_ALERT_COOLDOWN_SEC:
+        logging.debug("[token-alert] suppressed (cooldown): %s", reason)
+        return
+    _TOKEN_ALERT_LAST_SENT[reason] = now
+    try:
+        telegram_send(msg)
+    except Exception as exc:
+        logging.warning("[token-alert] telegram send failed: %s", exc)
+
+
+def check_token_age(max_hours=20) -> bool:
+    """Single-source-of-truth wrapper around config.kite_auth.is_token_fresh.
+
+    Was the source of the 2026-05-24 incident (PR hotfix-token-validation-tz-and-centralize):
+    inline tz-aware-vs-naive datetime subtraction raised TypeError silently,
+    fell through to legacy access_token.txt check, sent a 'TOKEN MISSING'
+    Telegram alert every 6 seconds in an infinite auto-login retry loop.
+
+    Now delegates the entire freshness decision to config.kite_auth (which
+    handles both tz-aware and tz-naive timestamps robustly), and dedupes
+    any user-facing Telegram alert via _maybe_alert_token_issue (1-hour
+    cooldown per distinct reason). Visible WARN-level logs on every
+    failure so a future regression cannot hide at DEBUG level.
+
+    Returns True if token is fresh enough to keep trading, else False."""
+    from config.kite_auth import is_token_fresh
+    fresh, reason = is_token_fresh(max_hours=max_hours)
+    if fresh:
+        # Single-line INFO observability so production logs show token health
+        logging.info("[token] fresh — %s", reason)
         return True
-    except Exception as e:
-        logging.error("Token age check failed: %s", e)
-        return True
+    logging.warning("[token] STALE — %s", reason)
+    # Cloud-aware user-facing alert. Telegram tells the user what will
+    # happen next (cloud auto-login), NOT to run a local script —
+    # there is no laptop to run zerodha_login.py on for production users.
+    _maybe_alert_token_issue(
+        reason,
+        "🛑 <b>KITE TOKEN STALE</b>\n"
+        f"<i>Reason:</i> {reason}\n"
+        "Engine will retry via cloud auto-login (next scheduled "
+        "fire: 08:15 IST). If this alert repeats after the next morning "
+        "cron window, the Kite credentials in Railway env need attention.",
+    )
+    return False
+
 
 def test_data_connection():
     """
