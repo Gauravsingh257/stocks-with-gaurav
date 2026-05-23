@@ -76,7 +76,7 @@ def main() -> None:
         last_idx = len(bars) - 1
         todays_n = last_idx - today_idx + 1
         print(f"\n  {label}: {todays_n} 5m bars today "
-              f"({bars[today_idx]['date'][11:16]} → "
+              f"({bars[today_idx]['date'][11:16]} -> "
               f"{bars[last_idx]['date'][11:16]})")
 
         fires = []
@@ -90,12 +90,12 @@ def main() -> None:
                     fires.append((bars[i]["date"], direction, sig))
 
         if not fires:
-            print(f"    → NO FVG-Tap signal triggered today on {label}.")
-            print(f"      (the 4-condition sequence — 5m CHoCH → FVG → "
-                  f"first tap → engulfing — was not satisfied at any bar)")
+            print(f"    -> NO FVG-Tap signal triggered today on {label}.")
+            print(f"      (the 4-condition sequence — 5m CHoCH -> FVG -> "
+                  f"first tap -> engulfing — was not satisfied at any bar)")
             continue
 
-        print(f"    → {len(fires)} FVG-Tap signal(s) would have fired today:")
+        print(f"    -> {len(fires)} FVG-Tap signal(s) would have fired today:")
         for ts, direction, sig in fires:
             print(f"      [{ts[11:16]}] {direction}  entry={sig['entry']}  "
                   f"SL={sig['sl']}  T={sig['target']}  RR={sig['rr']}  "
