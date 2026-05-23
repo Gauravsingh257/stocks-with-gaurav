@@ -12,6 +12,7 @@ import SmartWatchlistPanel from "./_components/SmartWatchlistPanel";
 import AdvancedFilterBar, { DEFAULT_FILTERS, type FilterState } from "./_components/AdvancedFilterBar";
 import DiscoveryFeed from "./_components/DiscoveryFeed";
 import AISummaryPanel from "./_components/AISummaryPanel";
+import SystemFlowDiagram from "./_components/SystemFlowDiagram";
 import AlertsBell from "./_components/AlertsBell";
 import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
@@ -100,6 +101,27 @@ export default function TerminalPage() {
     const id = setInterval(load, REFRESH_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // Portfolio counts (separate endpoint, fast cached) — refreshed on the
+  // same cadence as the discovery feed so the SystemFlowDiagram's
+  // Portfolio card stays live too.
+  const [portfolioTotal, setPortfolioTotal] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const loadPortfolio = async () => {
+      try {
+        const c = await api.portfolioCounts();
+        if (!cancelled) {
+          setPortfolioTotal((c.swing ?? 0) + (c.longterm ?? 0));
+        }
+      } catch {
+        if (!cancelled) setPortfolioTotal(null);
+      }
+    };
+    loadPortfolio();
+    const id = setInterval(loadPortfolio, REFRESH_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Phase 2 — live trades from /ws/trades (with /api/trades fallback)
   // Filters are sent as query params so the backend does the actual filtering.
@@ -204,6 +226,29 @@ export default function TerminalPage() {
           if (match) setActiveOpp(match);
         }}
       />
+
+      <div style={{ marginTop: 18 }}>
+        <SystemFlowDiagram
+          funnel={
+            feed
+              ? {
+                  universe_size: feed.universe_size,
+                  scanned: feed.scanned,
+                  layer1_pass: feed.funnel?.layer1_pass,
+                  layer2_pass: feed.funnel?.layer2_pass,
+                  layer3_pass: feed.funnel?.layer3_pass,
+                  final_returned: feed.funnel?.final_selected ?? feed.returned,
+                  watchlist_returned: feed.watchlist_returned,
+                  discovery_returned: feed.discovery_returned,
+                }
+              : null
+          }
+          finalCount={finalOpps.length}
+          watchlistCount={watchOpps.length}
+          portfolioCount={portfolioTotal}
+          generatedAt={feed?.generated_at ?? null}
+        />
+      </div>
 
       <div style={{ marginTop: 18, marginBottom: 18 }}>
         <AdvancedFilterBar value={filters} onChange={handleFilterChange} total={finalOpps.length} visible={filteredHero.length} />
