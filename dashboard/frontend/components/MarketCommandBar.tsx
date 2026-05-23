@@ -214,24 +214,35 @@ export default function MarketCommandBar() {
   const maxSig = snapshot?.max_daily_signals ?? 5;
   const ds = dataSourceConfig[dataSource];
   const streamIdleClosed = dataSource === "disconnected" && session === "CLOSED";
+  // When the market itself is CLOSED, there are no live ticks to receive —
+  // showing "DELAYED" (yellow, implies-broken) is misleading. Reframe as
+  // "STANDBY · LAST CLOSE" so first-time visitors don't think the system
+  // is malfunctioning on weekends / off-hours.
+  const closedWithCache = session === "CLOSED" && dataSource !== "disconnected";
   const streamLabel =
     dataSource === "disconnected"
       ? streamIdleClosed
         ? "STANDBY"
         : "CONNECTING"
-      : ds.label;
+      : closedWithCache
+        ? "STANDBY"
+        : ds.label;
   const streamTitle =
     dataSource === "disconnected"
       ? streamIdleClosed
         ? "Session closed — live stream often idle; REST/API may still serve research data."
         : "Waiting for backend snapshot or WebSocket."
-      : ds.title;
+      : closedWithCache
+        ? "Market closed — showing last verified snapshot. Live stream resumes when NSE opens (Mon-Fri 09:15 IST)."
+        : ds.title;
   const streamColorClass =
     dataSource === "disconnected"
       ? streamIdleClosed
         ? "text-slate-400"
         : "text-yellow-400"
-      : ds.color;
+      : closedWithCache
+        ? "text-slate-400"
+        : ds.color;
 
   return (
     <div
@@ -271,7 +282,10 @@ export default function MarketCommandBar() {
                 {price != null && (
                   <>
                     {" "}
-                    <span aria-hidden>{change >= 0 ? "▲" : "▼"}</span>
+                    {/* No arrow when change is exactly zero — green ▲ next
+                        to +0.00% reads as "broken" to first-time visitors
+                        (especially over weekend when no trading happens). */}
+                    <span aria-hidden>{change > 0 ? "▲" : change < 0 ? "▼" : "—"}</span>
                     <span className="ml-1 text-xs">{formatPercent(percentChange)}</span>
                     <span className={`ml-2 text-xs font-semibold ${deltaColor}`}>
                       {deltaText}
