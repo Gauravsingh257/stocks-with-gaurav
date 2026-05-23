@@ -47,7 +47,20 @@ export default function LiveSignals() {
         setItems(r.items || []);
         setError(null);
       })
-      .catch((e) => setError(String(e?.message || e)))
+      .catch((e) => {
+        // Never expose backend internals (status codes, paths, etc.) to
+        // end users. A transient 429/5xx is reconnect-able state, not a
+        // bug. Show a calm reconnecting message; keep last-known items
+        // visible so the panel doesn't blank out on a single hiccup.
+        const raw = String(e?.message || e);
+        const isThrottle = /429|too many requests/i.test(raw);
+        const isTimeout = /timed out|timeout/i.test(raw);
+        if (isThrottle || isTimeout) {
+          setError("Reconnecting to live feed…");
+        } else {
+          setError("Live feed temporarily unavailable — retrying.");
+        }
+      })
       .finally(() => setLoading(false));
   };
 
@@ -97,9 +110,9 @@ export default function LiveSignals() {
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
-      {error && (
-        <div style={{ fontSize: "0.7rem", color: "var(--warning)" }}>
-          Could not load live signals: {error}
+      {error && items.length === 0 && (
+        <div style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
+          {error}
         </div>
       )}
       {items.length === 0 && !error && (

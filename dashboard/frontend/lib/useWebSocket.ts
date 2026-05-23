@@ -38,7 +38,12 @@ import {
 /** Index labels from dashboard realtime ticks — everything else in unified LTP is treated as equity. */
 const INDEX_LTP_LABELS = new Set(["NIFTY 50", "NIFTY BANK"]);
 
-const POLL_INTERVAL_MS = 5_000;
+// Polling fallback fires only when the WebSocket is down. Was 5s, which
+// burned 12 req/min/tab just from this one source — a major contributor
+// to the 2026-05-24 rate-limit incident where users saw 429 on
+// /api/research/live-signals. 15s is the right trade-off: still fresh
+// enough for a live trading dashboard, ~3x less traffic.
+const POLL_INTERVAL_MS = 15_000;
 const MAX_WS_RETRIES_BEFORE_POLLING = 3;
 const WS_BACKOFF_BASE_MS = 3000;
 const WS_BACKOFF_MAX_MS = 30000;

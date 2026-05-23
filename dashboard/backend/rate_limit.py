@@ -1,7 +1,21 @@
 """
 dashboard/backend/rate_limit.py
-Per-IP rate limit: 60 requests per minute (sliding window).
-Returns 429 Too Many Requests with Retry-After when exceeded.
+Per-IP rate limit (sliding-window) sized for an interactive analytics
+dashboard, not a public write API.
+
+Sizing rationale (post 2026-05-24 audit):
+A single user on /research holds ~10 live components that poll every
+5–120 s. Steady state ~32 req/min/tab; with one extra tab or WS-fallback
+spike, total exceeds the old 60/min ceiling and the user sees their own
+backend throttle them with "429 Too many requests" in the UI. We raise
+the per-IP ceiling to 300/min (5 req/sec) — comfortable headroom for
+3 simultaneous tabs even when the WebSocket fallback polling is active —
+while keeping a real ceiling against abuse / scrapers. High-frequency
+read-only paths (snapshot + signal panels) are exempted entirely; they
+are backend-cached and safe to bombard, and rate-limiting them was the
+direct cause of user-visible UI errors.
+
+Returns 429 Too Many Requests with Retry-After when the ceiling is hit.
 """
 
 import logging
@@ -15,7 +29,7 @@ from starlette.responses import JSONResponse, Response
 
 log = logging.getLogger("dashboard.ratelimit")
 
-LIMIT_PER_MINUTE = 60
+LIMIT_PER_MINUTE = 300
 WINDOW_SECONDS = 60
 
 # ip -> list of request timestamps (pruned to last WINDOW_SECONDS)
@@ -35,13 +49,37 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-# Paths that do not count toward rate limit (health checks, readiness)
+# Exact paths exempted from the limit — health endpoints called by
+# uptime monitors / orchestrators that we never want to throttle.
 SKIP_PATHS = {"/health", "/api/system/health"}
+
+# Path PREFIXES exempted from the limit — read-only endpoints that
+# (a) have their own backend cache (so DOS surface is bounded) and
+# (b) are polled by every live dashboard component. Throttling these
+# at the middleware layer is what surfaced "429" to end users.
+SKIP_PATH_PREFIXES: tuple[str, ...] = (
+    "/api/snapshot",                # market snapshot — every 10s per tab
+    "/api/research/discovery",      # main decision feed — every 60s per tab
+    "/api/research/live-signals",   # telegram-mirror signals — every 30s
+    "/api/research/fvg-tap-signals",
+    "/api/research/state-machine-signals",
+    "/api/research/running-trades",
+    "/api/market-intelligence/snapshot",
+)
+
+
+def _is_exempt(path: str) -> bool:
+    if path in SKIP_PATHS:
+        return True
+    for prefix in SKIP_PATH_PREFIXES:
+        if path.startswith(prefix):
+            return True
+    return False
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path in SKIP_PATHS:
+        if _is_exempt(request.url.path):
             return await call_next(request)
         ip = _client_ip(request)
         now = time.monotonic()
