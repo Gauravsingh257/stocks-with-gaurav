@@ -33,10 +33,122 @@ _YF = {"NSE:NIFTY 50": "^NSEI", "NSE:NIFTY BANK": "^NSEBANK"}
 _AGENT_TYPE = "FVG_TAP"
 _SEEN: set[str] = set()  # in-process dedup (single scheduler process)
 
+# Module-cached KiteConnect client + instrument-token map. Mirrors the
+# proven PR #3 pattern in agents/oi_intelligence_agent.py — one client
+# per process, refreshed access_token on every call (so daily token
+# rotation Just Works), urllib3 pool bumped to 50 to avoid the pool
+# exhaustion we hit on the OI tick. Cache is private to this module
+# (isolation by design — FVG-Tap engine never shares state with the
+# live SMC engine or its Kite session).
+_KITE_CACHE: dict = {"kite": None, "api_key": None}
+_KITE_TOKEN_CACHE: dict[str, int] = {}
 
-def _fetch_index_5m() -> dict:
-    """{display_symbol: candles[]} for the two indices, 5m, ~60d.
-    Same normalization as the validated backtest loader."""
+
+def _get_fvg_tap_kite_client():
+    """Lazy module-cached KiteConnect for FVG-Tap fetch. Returns None if
+    Kite is unavailable (no api_key, no token, init failure) — caller
+    falls back to yfinance. Best-effort; never raises into the tick."""
+    try:
+        from config.kite_auth import get_access_token, get_api_key
+        api_key = get_api_key()
+        token = get_access_token()
+        if not api_key or not token:
+            return None
+        cached = _KITE_CACHE.get("kite")
+        if cached is None or _KITE_CACHE.get("api_key") != api_key:
+            from kiteconnect import KiteConnect
+            from requests.adapters import HTTPAdapter
+            client = KiteConnect(api_key=api_key)
+            try:
+                adapter = HTTPAdapter(pool_connections=10, pool_maxsize=50)
+                client.reqsession.mount("https://", adapter)
+                client.reqsession.mount("http://", adapter)
+            except AttributeError:
+                pass
+            _KITE_CACHE["kite"] = client
+            _KITE_CACHE["api_key"] = api_key
+            cached = client
+        cached.set_access_token(token)
+        return cached
+    except Exception as exc:
+        log.warning("fvg_tap kite client unavailable: %s", exc)
+        return None
+
+
+def _kite_instrument_token(kite, sym: str) -> int | None:
+    """NSE:SYMBOL -> instrument_token. Result cached for process
+    lifetime — index instrument tokens never change."""
+    if sym in _KITE_TOKEN_CACHE:
+        return _KITE_TOKEN_CACHE[sym]
+    try:
+        d = kite.ltp(sym)
+        if not d:
+            return None
+        tok = int(list(d.values())[0]["instrument_token"])
+        _KITE_TOKEN_CACHE[sym] = tok
+        return tok
+    except Exception as exc:
+        log.warning("fvg_tap kite token lookup %s failed: %s", sym, exc)
+        return None
+
+
+def _fetch_index_5m_kite() -> dict:
+    """Kite historical_data 5m for the two indices, ~60d each. Returns
+    same dict shape as the yfinance path. Real-time (~5-30s lag for
+    the just-closed bar) — validated equivalent to yfinance per the
+    Phase 1 backtest: both indices clear the same locked gate on Kite
+    OHLC that they cleared on yfinance OHLC, with Kite actually
+    showing stronger PF (BANKNIFTY 4.00 vs 2.40). Filters Kite's
+    after-hours padded bars (O==H==L==C, volume=0) so they cannot
+    pollute the FVG/engulf logic. Returns {} on Kite unavailable so
+    caller falls back to yfinance. Never raises."""
+    from datetime import datetime, timedelta
+
+    kite = _get_fvg_tap_kite_client()
+    if kite is None:
+        return {}
+
+    out: dict = {}
+    to_dt = datetime.now()
+    from_dt = to_dt - timedelta(days=60)
+    for disp in _YF.keys():
+        try:
+            token = _kite_instrument_token(kite, disp)
+            if token is None:
+                continue
+            raw = kite.historical_data(token, from_dt, to_dt, "5minute")
+            cs: list = []
+            for bar in raw:
+                o = float(bar["open"]); h = float(bar["high"])
+                lo = float(bar["low"]); c = float(bar["close"])
+                if not (o > 0 and h > 0 and lo > 0 and c > 0):
+                    continue
+                vol = int(bar.get("volume", 0) or 0)
+                # Skip Kite's after-hours padded bars (flat OHLC, no
+                # volume). Real index bars practically never have all
+                # four prices exactly equal at the precision Kite returns.
+                if o == h == lo == c and vol == 0:
+                    continue
+                dt = bar["date"]
+                ts = (dt.strftime("%Y-%m-%dT%H:%M:%S")
+                      if hasattr(dt, "strftime") else str(dt))
+                cs.append({"date": ts,
+                           "open": round(o, 2), "high": round(h, 2),
+                           "low": round(lo, 2), "close": round(c, 2),
+                           "volume": vol})
+            if len(cs) >= 80:
+                out[disp] = cs
+        except Exception as exc:
+            log.warning("fvg_tap kite fetch %s failed: %s", disp, exc)
+    return out
+
+
+def _fetch_index_5m_yfinance() -> dict:
+    """yfinance fallback path. Same logic as the original (pre-Kite-switch)
+    function. Known to lag ~15+ min on free tier, which causes the strict
+    'engulf must be last closed bar' detector rule to systematically miss
+    signals (proven by 2026-05-22 forensic — 3 valid setups dropped). Use
+    only when Kite client is unavailable (token expired, API down)."""
     import yfinance as yf
 
     def _norm(df):
@@ -66,7 +178,53 @@ def _fetch_index_5m() -> dict:
             if len(cs) >= 80:
                 data[disp] = cs
         except Exception as exc:
-            log.warning("fvg_tap fetch %s failed: %s", tk, exc)
+            log.warning("fvg_tap yfinance fetch %s failed: %s", tk, exc)
+    return data
+
+
+def _fetch_index_5m() -> dict:
+    """{display_symbol: candles[]} for the two indices, 5m, ~60d.
+
+    Source priority (Phase 2 of the 2026-05-22 yfinance-lag fix):
+      1. Kite historical_data — real-time (~5-30s lag), Phase 1
+         backtest-validated equivalent (PR #5 — same locked gate
+         clears on Kite OHLC, both indices, with stronger PF).
+      2. yfinance fallback — only when Kite client unavailable
+         (e.g. token expired); known to lag ~15+ min which causes
+         the strict engulf-must-be-last-bar rule to miss signals.
+
+    Emits a per-fetch freshness INFO line (`source=...` +
+    `ages_sec=...`) so production logs can verify Kite is delivering
+    real-time bars vs falling back to laggy yfinance."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        _ist = ZoneInfo("Asia/Kolkata")
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+        _ist = ZoneInfo("Asia/Kolkata")
+
+    data = _fetch_index_5m_kite()
+    source = "kite"
+    if not data:
+        data = _fetch_index_5m_yfinance()
+        source = "yfinance"
+
+    # Freshness telemetry: how stale is the latest bar per symbol?
+    # Bar timestamps are stored as naive IST strings; compare against
+    # naive IST now so the delta is the actual lag in seconds.
+    if data:
+        try:
+            now_naive_ist = datetime.now(_ist).replace(tzinfo=None)
+            ages = {}
+            for disp, cs in data.items():
+                last_ts = datetime.strptime(cs[-1]["date"], "%Y-%m-%dT%H:%M:%S")
+                ages[disp] = round((now_naive_ist - last_ts).total_seconds(), 1)
+            log.info("[FVG-Tap fetch] source=%s latest_bar_age_sec=%s",
+                     source, ages)
+        except Exception:
+            pass
+
     return data
 
 
