@@ -1,18 +1,53 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+/**
+ * MarketCommandBar — institutional macro strip across the top of every page.
+ *
+ * Phase B redesign (2026-05-25):
+ * - Show a Bloomberg-style horizontal strip of live indices: NIFTY 50,
+ *   BANKNIFTY, GIFT NIFTY, INDIA VIX, USD/INR, GOLD, CRUDE OIL — driven
+ *   by whichever symbols the engine snapshot's `index_ltp` dict
+ *   actually contains. Symbols the user's Kite account can't see (e.g.
+ *   no MCX/CDS segment access) are silently absent.
+ * - All status fields (CLOSED / Engine ON / Signals / STANDBY / Kite ON)
+ *   are collapsed into ONE small colored status dot at the far right.
+ *   Hover reveals the full breakdown. Engine-health visibility is
+ *   preserved without cluttering the bar.
+ * - Sparklines removed — they wasted horizontal space and competed for
+ *   attention with the price + percent.
+ *
+ * Wiring preserved (intentionally untouched):
+ * - useEngineSocket() WebSocket subscription
+ * - useMergedIndexLtp() merge of WS + snapshot LTP
+ * - useHealth() backend health polling
+ * - /api/snapshot polling for signal_count
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useMergedIndexLtp } from "@/lib/realtimeRegistry";
 import { useHealth } from "@/lib/useHealth";
-import Sparkline from "@/components/Sparkline";
 import { API_BASE } from "@/lib/api";
 import { getMarketSession } from "@/lib/marketSession";
 
 const MAX_HISTORY = 40;
-const LABELS = ["NIFTY 50", "NIFTY BANK"] as const;
-const SHORT_KEYS = { "NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY" } as const;
 
-type DataSource = "live" | "delayed" | "disconnected";
+/**
+ * Indices rendered in order. `label` matches the key the engine writes
+ * into snapshot.index_ltp (see smc_mtf_engine_v4.py::_publish_redis_snapshot
+ * candle_to_label dict). `short` is what we render in the strip. A
+ * symbol missing from snapshot.index_ltp at render time simply does
+ * not appear — keeps the bar honest when Kite hasn't subscribed yet.
+ */
+const INDICES: ReadonlyArray<{ label: string; short: string; decimals: number }> = [
+  { label: "NIFTY 50",   short: "NIFTY",      decimals: 0 },
+  { label: "NIFTY BANK", short: "BANKNIFTY",  decimals: 0 },
+  { label: "GIFT NIFTY", short: "GIFT NIFTY", decimals: 0 },
+  { label: "INDIA VIX",  short: "INDIA VIX",  decimals: 2 },
+  { label: "USDINR",     short: "USD/INR",    decimals: 2 },
+  { label: "GOLD",       short: "GOLD",       decimals: 0 },
+  { label: "CRUDE OIL",  short: "CRUDE",      decimals: 2 },
+];
 
 interface TickData {
   price: number;
@@ -20,11 +55,12 @@ interface TickData {
   percentChange: number;
 }
 
-/** Full number only (no "k" shorthand). e.g. 23409, 54413 */
-function formatLtp(v: number): string {
+function formatLtp(v: number, decimals: number): string {
   if (typeof v !== "number" || Number.isNaN(v)) return "—";
-  const n = v >= 1 ? Math.round(v) : v;
-  return n >= 1 ? n.toLocaleString("en-IN", { maximumFractionDigits: 0 }) : v.toFixed(2);
+  if (decimals === 0) {
+    return Math.round(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  }
+  return v.toFixed(decimals);
 }
 
 function formatPercent(v: number): string {
@@ -42,23 +78,18 @@ export default function MarketCommandBar() {
   const { snapshot, status, snapshotReceivedAt } = useEngineSocket();
   const indexLtpMerged = useMergedIndexLtp(snapshot?.index_ltp);
   const health = useHealth();
-  const [history, setHistory] = useState<{ NIFTY: number[]; BANKNIFTY: number[] }>({
-    NIFTY: [],
-    BANKNIFTY: [],
-  });
-  const [flashClass, setFlashClass] = useState<{ NIFTY: string; BANKNIFTY: string }>({
-    NIFTY: "",
-    BANKNIFTY: "",
-  });
+
+  // Per-symbol history + flash class — dynamic over INDICES instead of
+  // hardcoded NIFTY/BANKNIFTY (the old shape).
+  const [history, setHistory] = useState<Record<string, number[]>>({});
+  const [flashClass, setFlashClass] = useState<Record<string, string>>({});
   const [backendTimestamp, setBackendTimestamp] = useState<string | null>(null);
-  const apiNifty = null;
-  const apiBanknifty = null;
   const [signalCount, setSignalCount] = useState<number>(0);
-  // Stores current time every second to drive "X sec ago" recomputation.
   const [tick, setTick] = useState(0);
   const prevPriceRef = useRef<Record<string, number>>({});
 
-  // Poll web backend for signal count (snapshot is primary for engine status)
+  // Snapshot poll (signal count + backend timestamp). Same cadence as
+  // before (10s) — already exempted from the rate limiter in PR #10.
   useEffect(() => {
     const base = API_BASE || "";
     const fetchSnap = () => {
@@ -76,87 +107,82 @@ export default function MarketCommandBar() {
     return () => clearInterval(t);
   }, []);
 
-  // 1-second ticker drives "X sec ago" label recomputation.
+  // 1s ticker drives "X sec ago" recomputation.
   useEffect(() => {
     const t = setInterval(() => setTick(Date.now()), 1_000);
     return () => clearInterval(t);
   }, []);
 
-  // Tick-based history and flash: merged registry + snapshot (ordered WS+LTP)
+  // Tick-based history + flash class. Iterates the full INDICES list
+  // — whichever symbols have data this tick get updated; others are
+  // left alone (so a temporary tick gap doesn't blank the strip).
   useEffect(() => {
     const indexLtp = indexLtpMerged;
     if (!indexLtp || typeof indexLtp !== "object") return;
 
-    const updates: { key: "NIFTY" | "BANKNIFTY"; price: number }[] = [];
-    if (typeof indexLtp["NIFTY 50"] === "number") {
-      updates.push({ key: "NIFTY", price: indexLtp["NIFTY 50"] });
+    const priceMap: Record<string, number> = {};
+    for (const { label, short } of INDICES) {
+      const p = (indexLtp as Record<string, unknown>)[label];
+      if (typeof p === "number" && Number.isFinite(p)) {
+        priceMap[short] = p;
+      }
     }
-    if (typeof indexLtp["NIFTY BANK"] === "number") {
-      updates.push({ key: "BANKNIFTY", price: indexLtp["NIFTY BANK"] });
-    }
-
-    if (updates.length === 0) return;
+    if (Object.keys(priceMap).length === 0) return;
 
     setHistory((prev) => {
       const next = { ...prev };
-      for (const { key, price } of updates) {
-        next[key] = pushTick(prev[key], price, MAX_HISTORY);
+      for (const [short, price] of Object.entries(priceMap)) {
+        next[short] = pushTick(prev[short] ?? [], price, MAX_HISTORY);
       }
       return next;
     });
 
-    // Flash class: compare with previous price
-    const nextFlash: { NIFTY: string; BANKNIFTY: string } = { NIFTY: "", BANKNIFTY: "" };
+    const nextFlash: Record<string, string> = {};
     let scheduleClear = false;
-    for (const { key, price } of updates) {
-      const label = key === "NIFTY" ? "NIFTY 50" : "NIFTY BANK";
-      const prev = prevPriceRef.current[label];
-      if (prev !== undefined && prev !== null) {
-        if (price > prev) nextFlash[key] = "price-up";
-        else if (price < prev) nextFlash[key] = "price-down";
+    for (const [short, price] of Object.entries(priceMap)) {
+      const prev = prevPriceRef.current[short];
+      if (prev !== undefined) {
+        if (price > prev) nextFlash[short] = "price-up";
+        else if (price < prev) nextFlash[short] = "price-down";
         scheduleClear = true;
       }
-      prevPriceRef.current[label] = price;
+      prevPriceRef.current[short] = price;
     }
-    setFlashClass((prev) => ({ ...prev, ...nextFlash }));
+    if (Object.keys(nextFlash).length > 0) {
+      setFlashClass((prev) => ({ ...prev, ...nextFlash }));
+    }
     if (scheduleClear) {
-      const t = setTimeout(() => setFlashClass({ NIFTY: "", BANKNIFTY: "" }), 600);
+      const t = setTimeout(() => setFlashClass({}), 600);
       return () => clearTimeout(t);
     }
   }, [indexLtpMerged]);
 
-  // Ticks derived from snapshot (for change/percent)
+  // Per-symbol tick data (price + change + percentChange)
   const ticks = useMemo(() => {
     const indexLtp = indexLtpMerged;
     if (!indexLtp || typeof indexLtp !== "object") return {} as Record<string, TickData>;
     const out: Record<string, TickData> = {};
-    for (const label of LABELS) {
-      const price = indexLtp[label];
+    for (const { label, short } of INDICES) {
+      const price = (indexLtp as Record<string, unknown>)[label];
       if (typeof price !== "number") continue;
-      const short = SHORT_KEYS[label];
-      const series = history[short];
+      const series = history[short] ?? [];
       const prev = series.length >= 2 ? series[series.length - 2] : undefined;
       const change = prev !== undefined ? price - prev : 0;
       const percentChange = prev !== undefined && prev !== 0 ? (change / prev) * 100 : 0;
-      out[label] = { price, change, percentChange };
+      out[short] = { price, change, percentChange };
     }
     return out;
   }, [history, indexLtpMerged]);
 
-  // ── Derived state ──────────────────────────────────────────────────────────
-
-  // Snapshot age in seconds (recomputes every tick via `tick` dependency)
+  // Snapshot freshness — same logic as before
   const snapshotAgeSeconds = useMemo(() => {
     if (tick <= 0) return null;
-    // Use the WS-received timestamp if available (most accurate), else fall back to
-    // the snapshot_time field from REST polling
     if (snapshotReceivedAt > 0) return Math.floor((tick - snapshotReceivedAt) / 1_000);
     const t = snapshot?.snapshot_time ?? backendTimestamp;
     if (!t) return null;
     return Math.floor((tick - new Date(t).getTime()) / 1_000);
   }, [tick, snapshotReceivedAt, snapshot?.snapshot_time, backendTimestamp]);
 
-  // Human-readable "X sec ago" label
   const ageLabel = useMemo(() => {
     if (snapshotAgeSeconds === null) return null;
     if (snapshotAgeSeconds < 5)    return "just now";
@@ -165,187 +191,116 @@ export default function MarketCommandBar() {
     return `${Math.floor(snapshotAgeSeconds / 3600)}h ago`;
   }, [snapshotAgeSeconds]);
 
-  // Data source badge: LIVE / DELAYED / DISCONNECTED
-  const dataSource = useMemo<DataSource>(() => {
-    // Redis unavailable flag from snapshot (backend populates this)
-    if ((snapshot as unknown as Record<string, unknown>)?.redis_available === false &&
-        (snapshot as unknown as Record<string, unknown>)?.data_source === "memory_cache")
-      return "delayed";
-    if (status === "connected" && snapshotAgeSeconds !== null && snapshotAgeSeconds < 15) return "live";
-    if (status === "polling"   && snapshotAgeSeconds !== null && snapshotAgeSeconds < 60) return "delayed";
-    if (snapshotAgeSeconds !== null && snapshotAgeSeconds < 60) return "delayed";
-    if (!snapshot) return "disconnected";
-    return "disconnected";
-  }, [status, snapshotAgeSeconds, snapshot]);
-
-  const dataSourceConfig = {
-    live:         { emoji: "🟢", label: "LIVE",         color: "text-green-400",  title: "WebSocket — real-time data" },
-    delayed:      { emoji: "🟡", label: "DELAYED",      color: "text-yellow-400", title: "REST polling or Redis cache — data may be a few seconds old" },
-    disconnected: { emoji: "🔴", label: "DISCONNECTED", color: "text-red-400",    title: "No data source connected" },
-  } as const;
-
-  // Kite / token badge
-  const kiteConfig = useMemo(() => {
-    if (health === null) return { text: "Kite …", color: "text-slate-400", title: undefined };
-    if (health.kite_connected === true)
-      return { text: "Kite ON",       color: "text-green-400",  title: "Kite API connected" };
-    if (health.token_present === false)
-      return {
-        text: "🔐 Login",
-        color: "text-yellow-400",
-        title: "Zerodha access token missing — complete your cloud login flow (Railway worker + Kite) to refresh the session.",
-      };
-    if (health.token_present === true && health.kite_connected === false) {
-      const ttl = (health as Record<string, unknown>).token_expires_in_hours as number | undefined;
-      if (ttl != null && ttl > 20)
-        return { text: "Kite checking…", color: "text-yellow-400", title: "Token present, verifying session — may take a minute" };
-      return { text: "Kite expired", color: "text-orange-400", title: "Token invalid or expired — refresh via your cloud Kite login flow." };
-    }
-    return { text: "Kite OFF", color: "text-gray-400", title: undefined };
-  }, [health]);
-
+  // ── Consolidated status dot ──────────────────────────────────────
+  // Replaces the old 5-badge clutter (CLOSED / Engine ON / Signals /
+  // STANDBY / Kite ON) with one colored dot. Hover reveals the full
+  // breakdown. Color logic:
+  //   GREEN  — engine running, kite connected, data fresh
+  //   YELLOW — at least one of: engine flag missing, kite degraded,
+  //            snapshot >60s old, market closed (everything else OK)
+  //   RED    — engine off, kite off, OR no snapshot at all
   const session = getMarketSession();
-  const marketStatusColor =
-    session === "OPEN" ? "text-green-400" : session === "PREOPEN" ? "text-yellow-400" : "text-gray-400";
-
   const hasSnapshot = snapshot != null;
   const engineOn = hasSnapshot ? Boolean(snapshot.engine_running ?? snapshot.engine_live) : null;
+  const kiteOn = health?.kite_connected === true;
   const sigToday = snapshot?.signals_today ?? signalCount;
   const maxSig = snapshot?.max_daily_signals ?? 5;
-  const ds = dataSourceConfig[dataSource];
-  const streamIdleClosed = dataSource === "disconnected" && session === "CLOSED";
-  // When the market itself is CLOSED, there are no live ticks to receive —
-  // showing "DELAYED" (yellow, implies-broken) is misleading. Reframe as
-  // "STANDBY · LAST CLOSE" so first-time visitors don't think the system
-  // is malfunctioning on weekends / off-hours.
-  const closedWithCache = session === "CLOSED" && dataSource !== "disconnected";
-  const streamLabel =
-    dataSource === "disconnected"
-      ? streamIdleClosed
-        ? "STANDBY"
-        : "CONNECTING"
-      : closedWithCache
-        ? "STANDBY"
-        : ds.label;
-  const streamTitle =
-    dataSource === "disconnected"
-      ? streamIdleClosed
-        ? "Session closed — live stream often idle; REST/API may still serve research data."
-        : "Waiting for backend snapshot or WebSocket."
-      : closedWithCache
-        ? "Market closed — showing last verified snapshot. Live stream resumes when NSE opens (Mon-Fri 09:15 IST)."
-        : ds.title;
-  const streamColorClass =
-    dataSource === "disconnected"
-      ? streamIdleClosed
-        ? "text-slate-400"
-        : "text-yellow-400"
-      : closedWithCache
-        ? "text-slate-400"
-        : ds.color;
+  const dataFresh = snapshotAgeSeconds !== null && snapshotAgeSeconds < 15;
+
+  type DotState = { color: string; bg: string; label: string };
+  const dot: DotState = useMemo(() => {
+    if (!hasSnapshot || engineOn === false || health?.token_present === false) {
+      return { color: "bg-red-500", bg: "bg-red-500/10", label: "Engine offline or token missing" };
+    }
+    const isHealthy = engineOn === true && kiteOn && (dataFresh || session === "CLOSED");
+    if (isHealthy) {
+      return {
+        color: "bg-green-400",
+        bg: "bg-green-500/10",
+        label: session === "CLOSED" ? "Healthy · market closed" : "Live · all systems normal",
+      };
+    }
+    return { color: "bg-yellow-400", bg: "bg-yellow-500/10", label: "Degraded — see details" };
+  }, [hasSnapshot, engineOn, kiteOn, dataFresh, session, health?.token_present]);
+
+  const statusTooltip = useMemo(() => {
+    const sessionText =
+      session === "OPEN" ? "OPEN" : session === "PREOPEN" ? "PREMARKET" : "CLOSED";
+    const lines = [
+      `Session: ${sessionText}`,
+      `Engine: ${engineOn === true ? "running" : engineOn === false ? "stopped" : "unknown"}`,
+      `Kite: ${kiteOn ? "connected" : health?.token_present === false ? "no token" : "disconnected"}`,
+      `Signals today: ${sigToday}/${maxSig}`,
+    ];
+    if (ageLabel) lines.push(`Snapshot: ${ageLabel}`);
+    return lines.join(" · ");
+  }, [session, engineOn, kiteOn, health?.token_present, sigToday, maxSig, ageLabel]);
 
   return (
     <div
-      className="w-full bg-black/50 backdrop-blur-md border-b border-cyan-500/20 px-3 py-1.5 md:px-4 md:py-2 flex flex-wrap gap-3 md:gap-6 text-xs md:text-sm items-center shrink-0 shadow-[0_0_10px_rgba(0,255,255,0.08)]"
+      className="w-full bg-black/55 backdrop-blur-md border-b border-cyan-500/15 px-3 py-1.5 md:px-4 md:py-2 flex items-center gap-4 md:gap-5 text-xs md:text-sm shrink-0 shadow-[0_0_10px_rgba(0,255,255,0.06)] overflow-x-auto"
       role="status"
-      aria-label="Market command bar"
+      aria-label="Macro market strip"
     >
-      <span className="text-gray-400 font-medium uppercase tracking-wider">Indices</span>
+      <span className="text-gray-500 font-medium uppercase tracking-[0.18em] text-[0.62rem] shrink-0">
+        Indices
+      </span>
 
-      {LABELS.map((label) => {
-        const tickData = ticks[label];
-        const short = SHORT_KEYS[label];
-        const priceOverride =
-          label === "NIFTY 50"
-            ? apiNifty ?? tickData?.price
-            : label === "NIFTY BANK"
-            ? apiBanknifty ?? tickData?.price
-            : tickData?.price;
-        const price = priceOverride ?? null;
-        const change = tickData?.change ?? 0;
-        const percentChange = tickData?.percentChange ?? 0;
-        const changeColor =
-          change > 0 ? "text-green-400" : change < 0 ? "text-red-400" : "text-gray-400";
-        const deltaText =
-          change > 0 ? `+${change.toFixed(0)}` : change < 0 ? `${change.toFixed(0)}` : "0";
-        const deltaColor =
-          change > 0 ? "text-green-400" : change < 0 ? "text-red-400" : "text-gray-400";
-        const historyData = history[short];
+      {INDICES.map(({ label, short, decimals }, idx) => {
+        const t = ticks[short];
+        const price = t?.price ?? null;
+        if (price == null) {
+          // Don't render placeholder cards for symbols Kite hasn't
+          // subscribed to (cleaner than rendering 7 "—" cards).
+          return null;
+        }
+        const change = t?.change ?? 0;
+        const percentChange = t?.percentChange ?? 0;
         const flash = flashClass[short] || "";
+        const dirColor =
+          change > 0 ? "text-green-400" : change < 0 ? "text-red-400" : "text-slate-400";
+        const arrow = change > 0 ? "▲" : change < 0 ? "▼" : "—";
 
         return (
-          <span key={label} className="inline-flex items-center">
-            <span className="font-mono font-semibold text-slate-200">
-              {short}{" "}
-              <span className={`${changeColor} ${flash}`}>
-                {price != null ? formatLtp(price) : "—"}
-                {price != null && (
-                  <>
-                    {" "}
-                    {/* No arrow when change is exactly zero — green ▲ next
-                        to +0.00% reads as "broken" to first-time visitors
-                        (especially over weekend when no trading happens). */}
-                    <span aria-hidden>{change > 0 ? "▲" : change < 0 ? "▼" : "—"}</span>
-                    <span className="ml-1 text-xs">{formatPercent(percentChange)}</span>
-                    <span className={`ml-2 text-xs font-semibold ${deltaColor}`}>
-                      {deltaText}
-                    </span>
-                  </>
-                )}
-              </span>
+          <div
+            key={label}
+            className="flex items-baseline gap-1.5 shrink-0 first:ml-0 ml-0"
+            title={`${label} · ${formatLtp(price, decimals)}`}
+          >
+            <span className="text-gray-400 font-medium uppercase tracking-wide text-[0.68rem] mr-1">
+              {short}
             </span>
-            {historyData.length >= 2 && (
-              <Sparkline
-                data={historyData}
-                positive={change >= 0}
-                className="hidden sm:inline-block"
-              />
+            <span className={`font-mono font-semibold text-slate-100 ${flash}`}>
+              {formatLtp(price, decimals)}
+            </span>
+            <span className={`text-[0.68rem] font-semibold tabular-nums ${dirColor}`}>
+              <span aria-hidden className="mr-0.5">{arrow}</span>
+              {formatPercent(percentChange)}
+            </span>
+            {idx < INDICES.length - 1 && (
+              <span className="text-slate-700 ml-2 select-none" aria-hidden>
+                ·
+              </span>
             )}
-          </span>
+          </div>
         );
       })}
 
-      <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={`font-semibold uppercase tracking-wide ${marketStatusColor}`}>
-        {session === "PREOPEN" ? "PREMARKET" : session === "OPEN" ? "OPEN" : "CLOSED"}
-      </span>
-
-      <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className={engineOn === true ? "text-green-400" : "text-slate-400"}>
-        Engine {engineOn === true ? "ON" : "…"}
-      </span>
-
-      <span className="text-slate-500 hidden sm:inline">|</span>
-      <span className="text-cyan-400 font-medium">
-        Signals <span className="text-slate-200">{sigToday}/{maxSig}</span>
-      </span>
-
-      <span className="text-slate-500 hidden sm:inline">|</span>
-      {/* Data source badge: LIVE / DELAYED / standby when closed */}
-      <span className={`flex items-center gap-1 font-semibold ${streamColorClass}`} title={streamTitle}>
-        <span aria-hidden>{dataSource === "disconnected" ? (streamIdleClosed ? "○" : "WAIT") : ds.emoji}</span>
-        <span className="uppercase tracking-wide text-xs">{streamLabel}</span>
-      </span>
-
-      <span className="text-slate-500 hidden sm:inline">|</span>
-      {/* Kite / token badge */}
-      <span className={kiteConfig.color} title={kiteConfig.title}>
-        {kiteConfig.text}
-      </span>
-
-      <span className="text-slate-600 ml-auto flex items-center gap-3">
-        {/* "Last updated: X sec ago" */}
+      {/* Far-right: consolidated status dot + last-updated label */}
+      <span className="ml-auto flex items-center gap-3 shrink-0">
         {ageLabel && (
           <span
-            className={`font-mono text-xs ${snapshotAgeSeconds !== null && snapshotAgeSeconds > 30 ? "text-yellow-500" : "text-slate-500"}`}
+            className={`font-mono text-[0.65rem] ${snapshotAgeSeconds !== null && snapshotAgeSeconds > 30 ? "text-yellow-500" : "text-slate-500"}`}
             title="Time since last data update"
           >
             {ageLabel}
           </span>
         )}
-        {health?.backend_version && (
-          <span className="text-slate-600">v{health.backend_version}</span>
-        )}
+        <span
+          className={`flex items-center justify-center w-2.5 h-2.5 rounded-full ${dot.color}`}
+          title={`${dot.label}\n${statusTooltip}`}
+          aria-label={dot.label}
+        />
       </span>
     </div>
   );

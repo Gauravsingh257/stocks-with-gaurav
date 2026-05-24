@@ -351,11 +351,56 @@ def _publish_redis_snapshot() -> None:
                 "equity_ltp": {},
                 "timestamp": now_ist().isoformat(),
             }
+        # ── index_ltp population ──────────────────────────────────────
+        # Primary: Redis candle:1m:* keys (written continuously by
+        # KiteTicker in dashboard/backend/realtime.py). This is the
+        # canonical real-time source — populated on every tick for
+        # every subscribed symbol, regardless of engine-loop state.
+        #
+        # Fallback: ENGINE_STATE.nifty / ENGINE_STATE.banknifty (legacy,
+        # only populated as a side-effect of arbitrary fetch_ltp calls).
+        # Pre-2026-05-25 this was the ONLY source; bug was that BANKNIFTY
+        # rarely got refreshed, so the dashboard header showed empty.
+        # Reading from candle:1m:* fixes that AND surfaces every other
+        # symbol KiteTicker is subscribed to without further code change.
+        try:
+            import json as _json
+            import redis as _redis
+            _redis_url = os.getenv("REDIS_URL", "").strip()
+            if _redis_url:
+                _r = _redis.from_url(_redis_url, decode_responses=True, socket_timeout=2)
+                # Map: KiteTicker Redis suffix → dashboard display key
+                _candle_to_label = {
+                    "NIFTY":     "NIFTY 50",
+                    "BANKNIFTY": "NIFTY BANK",
+                    "INDIA_VIX": "INDIA VIX",
+                    "USDINR":    "USDINR",
+                    "GIFTNIFTY": "GIFT NIFTY",
+                    "GOLDM":     "GOLD",
+                    "CRUDEOIL":  "CRUDE OIL",
+                }
+                for _suffix, _label in _candle_to_label.items():
+                    try:
+                        _raw = _r.get(f"candle:1m:{_suffix}")
+                        if not _raw:
+                            continue
+                        _candles = _json.loads(_raw)
+                        if not _candles:
+                            continue
+                        _last_close = _candles[-1].get("close")
+                        if _last_close is not None:
+                            _snap["index_ltp"][_label] = float(_last_close)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Legacy fallback (kept so the snapshot still populates if Redis
+        # is briefly unreachable). Won't overwrite the live values above.
         _n = ENGINE_STATE.get("nifty")
         _b = ENGINE_STATE.get("banknifty")
-        if _n is not None:
+        if _n is not None and "NIFTY 50" not in _snap["index_ltp"]:
             _snap["index_ltp"]["NIFTY 50"] = float(_n)
-        if _b is not None:
+        if _b is not None and "NIFTY BANK" not in _snap["index_ltp"]:
             _snap["index_ltp"]["NIFTY BANK"] = float(_b)
         # Collect equity LTP from active trades (current price field)
         _eq_ltp: dict = {}

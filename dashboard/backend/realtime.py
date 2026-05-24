@@ -27,9 +27,40 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-# Token to dashboard symbol (Redis key suffix)
-TOKEN_TO_SYMBOL: dict[int, str] = {}  # instrument_token -> "NIFTY" | "BANKNIFTY"
-SYMBOL_TO_LABEL = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK"}
+# Token to dashboard symbol (Redis key suffix).
+# Extended 2026-05-25: subscribe to the full macro strip Kite makes
+# available. Each (Kite ltp_symbol → dashboard_suffix → user_label)
+# is declared in INSTRUMENT_SPEC below; whichever Kite resolves
+# successfully get subscribed, others are silently skipped (e.g. user
+# doesn't have MCX or CDS segment access).
+TOKEN_TO_SYMBOL: dict[int, str] = {}
+SYMBOL_TO_LABEL: dict[str, str] = {
+    "NIFTY":      "NIFTY 50",
+    "BANKNIFTY":  "NIFTY BANK",
+    "INDIA_VIX":  "INDIA VIX",
+    "USDINR":     "USDINR",
+    "GIFTNIFTY":  "GIFT NIFTY",
+    "GOLDM":      "GOLD",
+    "CRUDEOIL":   "CRUDE OIL",
+}
+
+# Kite quote symbol → dashboard Redis suffix.
+# - NSE: index spot / equity
+# - NFO: F&O continuous index futures
+# - MCX: commodities (we use mini/standard with continuous future symbol)
+# - CDS: currency derivatives (USDINR future)
+INSTRUMENT_SPEC: list[tuple[str, str]] = [
+    ("NSE:NIFTY 50",         "NIFTY"),
+    ("NSE:NIFTY BANK",       "BANKNIFTY"),
+    ("NSE:INDIA VIX",        "INDIA_VIX"),
+    # Currency + commodity + GIFT-NIFTY require explicit segment access
+    # on the user's Zerodha account. If kite.ltp fails to resolve the
+    # token, the subscription is skipped — no error.
+    ("CDS:USDINR",           "USDINR"),
+    ("NSE:GIFTNIFTY",        "GIFTNIFTY"),
+    ("MCX:GOLDM",            "GOLDM"),
+    ("MCX:CRUDEOIL",         "CRUDEOIL"),
+]
 
 # Throttle LTP publish to avoid flooding WS (ms)
 LTP_PUBLISH_INTERVAL_MS = 200
@@ -42,7 +73,12 @@ _current_1m: dict[str, dict] = {}
 
 
 def _get_instrument_tokens() -> dict[int, str]:
-    """Resolve NIFTY 50 and NIFTY BANK to instrument_token via Kite REST. Returns {token: 'NIFTY'|'BANKNIFTY'}."""
+    """Resolve the configured macro-strip symbols to instrument tokens.
+
+    Returns {instrument_token: redis_suffix}. Resolves each Kite symbol
+    INDIVIDUALLY so that one missing segment (e.g. user has no MCX
+    access) does NOT prevent the others from being subscribed. Logs each
+    success/failure at INFO level for production observability."""
     out: dict[int, str] = {}
     try:
         from kiteconnect import KiteConnect
@@ -57,21 +93,31 @@ def _get_instrument_tokens() -> dict[int, str]:
 
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
-        ltp_data = kite.ltp(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
-        if not ltp_data:
-            return out
 
-        for key, val in ltp_data.items():
-            if not isinstance(val, dict):
+        for kite_sym, suffix in INSTRUMENT_SPEC:
+            try:
+                ltp_data = kite.ltp([kite_sym])
+                if not isinstance(ltp_data, dict) or not ltp_data:
+                    log.info("Realtime: %s — no data (skipped)", kite_sym)
+                    continue
+                # ltp_data shape: {"NSE:NIFTY 50": {"instrument_token": 256265, ...}}
+                payload = next(iter(ltp_data.values()), None)
+                if not isinstance(payload, dict):
+                    continue
+                token = payload.get("instrument_token")
+                if token is None:
+                    log.info("Realtime: %s — no instrument_token (skipped)", kite_sym)
+                    continue
+                out[int(token)] = suffix
+                log.info("Realtime: resolved %s → suffix=%s token=%s",
+                         kite_sym, suffix, token)
+            except Exception as exc:
+                # One symbol failing (e.g. CDS:USDINR for a user without
+                # CDS segment access) must not block the others.
+                log.info("Realtime: %s — resolution failed (%s) (skipped)",
+                         kite_sym, exc)
                 continue
-            token = val.get("instrument_token")
-            if token is None:
-                continue
-            if "NIFTY 50" in key:
-                out[int(token)] = "NIFTY"
-            elif "NIFTY BANK" in key or "BANK" in key:
-                out[int(token)] = "BANKNIFTY"
-        log.info("Realtime: resolved tokens %s", out)
+        log.info("Realtime: subscription set = %s", list(out.values()))
     except Exception as e:
         log.warning("Realtime: token resolution failed — %s", e)
     return out
