@@ -49,7 +49,7 @@ def promote_to_portfolio(
     if current >= max_pos:
         raise ValueError(f"{horizon} portfolio full ({current}/{max_pos}) — close a position first")
 
-    return add_position({
+    position_id = add_position({
         "symbol": symbol,
         "horizon": horizon,
         "entry_price": entry_price,
@@ -61,6 +61,28 @@ def promote_to_portfolio(
         "recommendation_id": recommendation_id,
         "current_price": current_price or entry_price,
     })
+
+    # User-facing Telegram alert on entry. Mirrors the existing
+    # _send_portfolio_exit_alert pattern so the user gets symmetric
+    # notification: previously exits notified, entries went silent.
+    # Best-effort: never raises into the caller — promotion already
+    # succeeded at this point; alert is purely a side-effect.
+    try:
+        _send_portfolio_entry_alert({
+            "position_id": position_id,
+            "symbol": symbol,
+            "horizon": horizon,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "target_1": target_1,
+            "target_2": target_2,
+            "confidence_score": confidence_score,
+        })
+    except Exception:
+        log.exception("Failed to send entry alert for position %s (%s)",
+                      position_id, symbol)
+
+    return position_id
 
 
 def close_portfolio_position(position_id: int, exit_price: float, reason: str = "MANUAL") -> dict:
@@ -158,6 +180,67 @@ def get_portfolio_summary() -> dict:
         },
         "overall_stats": overall_stats,
     }
+
+
+def _send_portfolio_entry_alert(position: dict) -> None:
+    """Send Telegram notification on portfolio ENTRY.
+
+    Added 2026-05-25 after user reported missing alerts. Previously the
+    portfolio_manager sent Telegram on close_position only — entries
+    (manual + auto-promoted from SwingTradeAlphaAgent) went silent, so
+    when 8 positions accumulated in the swing portfolio over the week
+    the user had never been pinged on any of them.
+
+    Posts to the same TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (MTF Alerts)
+    that exits use. Best-effort; never raises — promotion already
+    committed before this is called."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return
+
+    horizon = position.get("horizon", "SWING").upper()
+    horizon_emoji = "📈" if horizon == "SWING" else "🌱"
+    entry = position.get("entry_price", 0)
+    sl = position.get("stop_loss", 0)
+    t1 = position.get("target_1")
+    t2 = position.get("target_2")
+    conf = position.get("confidence_score", 0)
+
+    # Risk-reward on T1 (fall back to T2 if T1 absent)
+    rr_target = t1 if t1 is not None else t2
+    rr = None
+    if rr_target and entry and sl and (entry - sl) > 0:
+        rr = round((rr_target - entry) / (entry - sl), 2)
+
+    lines = [
+        f"{horizon_emoji} <b>Portfolio Entry — {horizon}</b>",
+        "",
+        f"<b>{position['symbol']}</b>",
+        f"Entry: ₹{entry:.2f}",
+        f"SL: ₹{sl:.2f}",
+    ]
+    if t1 is not None:
+        lines.append(f"Target 1: ₹{t1:.2f}")
+    if t2 is not None:
+        lines.append(f"Target 2: ₹{t2:.2f}")
+    if rr is not None:
+        lines.append(f"R:R: 1:{rr}")
+    if conf:
+        lines.append(f"Confidence: {conf:.0f}/100")
+
+    msg = "\n".join(lines)
+
+    import requests
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        requests.post(url, json={
+            "chat_id": chat_id,
+            "text": msg,
+            "parse_mode": "HTML",
+        }, timeout=10)
+    except Exception:
+        log.warning("Portfolio entry alert: Telegram post failed (best-effort)")
 
 
 def _send_portfolio_exit_alert(result: dict) -> None:

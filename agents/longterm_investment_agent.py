@@ -208,6 +208,18 @@ class LongTermInvestmentAgent(BaseAgent):
 
         result.summary = f"Long-term ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
 
+        # User-facing Telegram alert on scan completion. Same batched-
+        # summary helper the SWING agent uses — single message with the
+        # top N by confidence_score, never a per-symbol flood. Best-
+        # effort; never raises into the scan loop.
+        try:
+            from agents.swing_alpha_agent import _send_swing_scan_alert
+            _send_swing_scan_alert(findings, ranking.scanned, horizon="LONGTERM")
+        except Exception:
+            import logging as _log
+            _log.getLogger("LongTermInvestmentAgent").warning(
+                "Longterm scan alert: Telegram batch failed (best-effort)")
+
         try:
             from services.trade_tracker import seed_running_trades
             seed_running_trades()

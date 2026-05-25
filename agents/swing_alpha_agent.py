@@ -191,6 +191,17 @@ class SwingTradeAlphaAgent(BaseAgent):
 
         result.summary = f"Swing ranking completed. Saved top {saved} names from {ranking.scanned} scanned symbols."
 
+        # User-facing Telegram alert on scan completion. Sends ONE
+        # batched summary with the top N recommendations rather than
+        # per-symbol pings — avoids flooding the channel when a scan
+        # produces 10+ ideas at once. Best-effort; never raises.
+        try:
+            _send_swing_scan_alert(findings, ranking.scanned, horizon="SWING")
+        except Exception:
+            import logging as _log
+            _log.getLogger("SwingTradeAlphaAgent").warning(
+                "Swing scan alert: Telegram batch failed (best-effort)")
+
         # Seed running_trade tracker rows for the new recommendations
         try:
             from services.trade_tracker import seed_running_trades
@@ -278,3 +289,73 @@ class SwingTradeAlphaAgent(BaseAgent):
                                   "equity_sm_shadow": tick}
         except Exception:
             pass
+
+
+def _send_swing_scan_alert(findings: list, scanned: int, horizon: str = "SWING") -> None:
+    """Telegram batched summary of a scan's new recommendations.
+
+    Added 2026-05-25 after user reported missing alerts. Posts ONE
+    message per scan (not one per recommendation) with the top 5 by
+    confidence_score. Sends to TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
+    (the MTF Alerts channel). Best-effort; never raises into the
+    scan loop. If 0 ideas, sends nothing (no-op)."""
+    import os
+    if not findings:
+        return
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return
+
+    horizon = horizon.upper()
+    horizon_emoji = "📈" if horizon == "SWING" else "🌱"
+    top_n = sorted(
+        findings,
+        key=lambda f: float(f.get("confidence_score", 0) or 0),
+        reverse=True,
+    )[:5]
+
+    lines = [
+        f"{horizon_emoji} <b>{horizon} Scan — {len(findings)} new ideas</b>",
+        f"<i>Scanned {scanned} symbols. Top {len(top_n)} by confidence:</i>",
+        "",
+    ]
+    for i, f in enumerate(top_n, 1):
+        sym = str(f.get("symbol", "?")).replace("NSE:", "")
+        entry = f.get("entry_price")
+        sl = f.get("stop_loss")
+        t1 = f.get("target_1")
+        rr = f.get("risk_reward")
+        conf = f.get("confidence_score")
+        setup = f.get("setup") or ""
+        line = f"<b>{i}. {sym}</b>"
+        if entry is not None:
+            line += f" · ₹{float(entry):.2f}"
+        if sl is not None:
+            line += f" · SL ₹{float(sl):.2f}"
+        if t1 is not None:
+            line += f" · T₹{float(t1):.2f}"
+        if rr is not None:
+            line += f" · RR 1:{rr}"
+        if conf is not None:
+            line += f" · conf {int(conf)}"
+        if setup:
+            line += f" · {setup}"
+        lines.append(line)
+    if len(findings) > len(top_n):
+        lines.append("")
+        lines.append(f"<i>+ {len(findings) - len(top_n)} more in Research Center → {horizon.capitalize()} tab</i>")
+
+    msg = "\n".join(lines)
+    import requests
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        requests.post(url, json={
+            "chat_id": chat_id,
+            "text": msg,
+            "parse_mode": "HTML",
+        }, timeout=10)
+    except Exception:
+        import logging as _log
+        _log.getLogger("SwingTradeAlphaAgent").warning(
+            "Telegram post failed for scan alert (best-effort)")
