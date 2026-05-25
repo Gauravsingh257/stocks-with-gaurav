@@ -196,6 +196,10 @@ def _on_ticks(ws, ticks):
             cur["close"] = price
             cur["volume"] += volume
 
+    # Heartbeat: this batch produced at least one valid tick → WS is alive.
+    # Written even when payload_ltp is empty (every tick path counts).
+    _write_heartbeat("connected")
+
     if not payload_ltp:
         return
     _last_ltp.update(payload_ltp)
@@ -265,7 +269,14 @@ def _run_ticker() -> None:
 
         new_map = _get_instrument_tokens()
         if not new_map:
-            log.debug("Realtime: no instrument tokens — sleeping 60s")
+            # WARNING (was DEBUG — invisible at production INFO level).
+            # The 2026-05-26 Monday outage looked identical to this: thread
+            # alive but no ticks because token resolution returned {}.
+            log.warning(
+                "Realtime: no instrument tokens resolved — Kite session or "
+                "kite.ltp may be broken. Sleeping 60s before retry."
+            )
+            _write_heartbeat("disconnected")
             time.sleep(60)
             continue
         TOKEN_TO_SYMBOL.clear()
@@ -275,13 +286,20 @@ def _run_ticker() -> None:
         def on_connect(ws, response):
             ws.subscribe(tokens)
             ws.set_mode(ws.MODE_LTP, tokens)  # minimal payload
-            log.info("Realtime: subscribed to %s", tokens)
+            log.info("Realtime: KiteTicker connected + subscribed to %s tokens: %s",
+                     len(tokens), tokens)
+            _write_heartbeat("connected")
 
         def on_close(ws, code, reason):
-            log.info("Realtime: WebSocket closed %s %s", code, reason)
+            # Bumped from INFO to WARNING — disconnect during market hours is
+            # actionable. Heartbeat status reflects the disconnect so
+            # /api/system/health can surface it.
+            log.warning("Realtime: KiteTicker WebSocket CLOSED code=%s reason=%s", code, reason)
+            _write_heartbeat("disconnected")
 
         def on_error(ws, code, reason):
-            log.warning("Realtime: WebSocket error %s %s", code, reason)
+            log.warning("Realtime: KiteTicker WebSocket ERROR code=%s reason=%s", code, reason)
+            _write_heartbeat("error")
 
         kws = KiteTicker(api_key, access_token)
         kws.on_ticks = _on_ticks
@@ -300,6 +318,35 @@ def _run_ticker() -> None:
 
 _realtime_thread: threading.Thread | None = None
 _reconnect_requested = threading.Event()
+
+
+# ── Observability heartbeat ──────────────────────────────────────────
+# 2026-05-26 incident: Monday's macro strip served Friday's prices ALL
+# DAY because the KiteTicker thread silently died and no one knew.
+# Fix: every successful tick batch writes `realtime:ws_heartbeat` to
+# Redis with a 120s TTL. `/api/system/health` checks this key — when
+# it's missing during market hours, we KNOW the WS is dead and can
+# alert/restart. Same key TTL during off-hours expires naturally
+# (expected, no alert).
+_HEARTBEAT_KEY = "realtime:ws_heartbeat"
+_HEARTBEAT_TTL_SEC = 120
+_HEARTBEAT_STATUS_KEY = "realtime:ws_status"  # "connected"|"disconnected"|"error"
+
+
+def _write_heartbeat(status: str = "connected") -> None:
+    """Best-effort heartbeat write to Redis. Never raises."""
+    try:
+        import redis as _redis
+        url = os.getenv("REDIS_URL", "").strip()
+        if not url:
+            return
+        r = _redis.from_url(url, decode_responses=True, socket_timeout=2)
+        r.set(_HEARTBEAT_KEY, str(int(time.time())), ex=_HEARTBEAT_TTL_SEC)
+        r.set(_HEARTBEAT_STATUS_KEY, status, ex=_HEARTBEAT_TTL_SEC)
+    except Exception:
+        # Heartbeat must NEVER raise into the tick handler — silent fail
+        # is better than killing the WS thread on a Redis hiccup.
+        pass
 
 
 def request_reconnect() -> None:
