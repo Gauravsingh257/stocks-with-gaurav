@@ -215,6 +215,80 @@ def start_scheduler() -> None:
         except Exception:
             logger.exception("[Kite auto-login] crashed")
 
+    # KiteTicker WS heartbeat watchdog — every 2 min during market hours.
+    # Reads realtime:ws_heartbeat key (written by dashboard/backend/realtime.py
+    # on every tick batch, PR #15). If stale (>180s) during market hours →
+    # send Telegram alert with 30min cooldown per reason. Catches the silent
+    # KiteTicker-death scenario that hit prod 2026-05-25 (macro strip
+    # served Friday's data for an entire Monday session).
+    _WS_ALERT_COOLDOWN_SEC = 1800
+    _ws_alert_last: dict = {}
+
+    def _send_ws_down_alert(reason: str, msg: str) -> None:
+        import time as _t
+        now = _t.time()
+        last = _ws_alert_last.get(reason, 0.0)
+        if now - last < _WS_ALERT_COOLDOWN_SEC:
+            return
+        _ws_alert_last[reason] = now
+        try:
+            import os as _os, requests as _rq
+            bot = _os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            chat = _os.getenv("TELEGRAM_CHAT_ID", "").strip()
+            if not bot or not chat:
+                return
+            _rq.post(
+                f"https://api.telegram.org/bot{bot}/sendMessage",
+                json={"chat_id": chat,
+                      "text": (
+                          "🚨 <b>KITETICKER WS DEAD</b>\n"
+                          f"<i>Reason:</i> {reason}\n{msg}\n"
+                          "Macro strip is serving stale data. The next "
+                          "tick should reconnect automatically; if this "
+                          "alert repeats, web service restart required."),
+                      "parse_mode": "HTML"},
+                timeout=8,
+            )
+        except Exception:
+            pass
+
+    def _run_ws_heartbeat_watchdog():
+        if not _market_hours():
+            return
+        try:
+            import os as _os, redis as _r, time as _t
+            url = _os.getenv("REDIS_URL", "").strip()
+            if not url:
+                return
+            cli = _r.from_url(url, decode_responses=True, socket_timeout=3)
+            raw = cli.get("realtime:ws_heartbeat")
+            if not raw:
+                _send_ws_down_alert(
+                    "never-connected",
+                    "KiteTicker has not written any heartbeat since boot.")
+                return
+            try:
+                last_ts = int(raw)
+            except (TypeError, ValueError):
+                return
+            age = int(_t.time()) - last_ts
+            if age > 180:
+                _send_ws_down_alert(
+                    f"stale-gt-180s",
+                    f"Last KiteTicker tick was {age}s ago (>3 min).")
+        except Exception:
+            logger.exception("[ws-watchdog] tick failed")
+
+    _scheduler.add_job(
+        _run_ws_heartbeat_watchdog,
+        CronTrigger(minute="*/2", day_of_week="mon-fri",
+                    timezone="Asia/Kolkata"),
+        id="ws_heartbeat_watchdog",
+        name="KiteTicker WS Heartbeat Watchdog (2m, market-hours)",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
+
     _scheduler.add_job(
         _run_kite_auto_login,
         CronTrigger(hour=8, minute=50, day_of_week="mon-fri",
@@ -224,6 +298,134 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=600,
         max_instances=1,
+    )
+
+    # Stage-transition watchdog — every 10 min during market hours.
+    # Reads snapshot:last_known_good:discovery (canonical cached scan)
+    # and detects symbols that moved UP a bucket since last check:
+    #   discovery → watchlist  (approaching entry zone)
+    #   watchlist → final      (cleared all 3 gates)
+    #   discovery → final      (fast promotion)
+    # Demotions are silent. Stores last seen bucket-per-symbol in
+    # stage:last_buckets Redis key (24h TTL). 15min cooldown on the
+    # overall Telegram digest so user doesn't get spammed if a scan
+    # produces many transitions back-to-back.
+    _BUCKET_RANK = {"discovery": 1, "watchlist": 2, "final": 3}
+    _STAGE_ALERT_COOLDOWN_SEC = 900  # 15 min
+    _stage_alert_state: dict = {"last_sent_at": 0.0, "pending": []}
+
+    def _send_stage_alert(promotions: list) -> None:
+        """Batched Telegram digest of stage promotions. promotions = list
+        of dicts {symbol, from, to, score}. Cooldown enforced."""
+        import time as _t
+        now = _t.time()
+        if not promotions:
+            return
+        if now - _stage_alert_state["last_sent_at"] < _STAGE_ALERT_COOLDOWN_SEC:
+            return
+        _stage_alert_state["last_sent_at"] = now
+        try:
+            import os as _os, requests as _rq
+            bot = _os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            chat = _os.getenv("TELEGRAM_CHAT_ID", "").strip()
+            if not bot or not chat:
+                return
+            # Group by destination bucket for readability
+            by_dest: dict = {}
+            for p in promotions:
+                by_dest.setdefault(p["to"], []).append(p)
+            lines = ["📈 <b>STAGE PROMOTIONS</b>"]
+            for dest in ("final", "watchlist"):
+                items = by_dest.get(dest, [])
+                if not items:
+                    continue
+                label = "Final Trades" if dest == "final" else "Approaching Zones"
+                lines.append(f"\n<b>→ {label}</b>")
+                # Sort by score descending
+                items.sort(key=lambda x: x.get("score", 0), reverse=True)
+                for it in items[:10]:
+                    sym = str(it["symbol"]).replace("NSE:", "")
+                    arr = f"({it['from']}→{it['to']})"
+                    sc = it.get("score")
+                    sc_text = f" · {sc:.0f}%" if isinstance(sc, (int, float)) else ""
+                    lines.append(f"  • <b>{sym}</b>{sc_text} {arr}")
+                if len(items) > 10:
+                    lines.append(f"  …and {len(items)-10} more")
+            lines.append(f"\n<i>Review on stockswithgaurav.com/research</i>")
+            _rq.post(
+                f"https://api.telegram.org/bot{bot}/sendMessage",
+                json={"chat_id": chat, "text": "\n".join(lines),
+                      "parse_mode": "HTML",
+                      "disable_web_page_preview": True},
+                timeout=8,
+            )
+        except Exception:
+            pass
+
+    def _run_stage_transition_watchdog():
+        if not _market_hours():
+            return
+        try:
+            import os as _os, redis as _r, json as _json
+            url = _os.getenv("REDIS_URL", "").strip()
+            if not url:
+                return
+            cli = _r.from_url(url, decode_responses=True, socket_timeout=3)
+            raw = cli.get("snapshot:last_known_good:discovery")
+            if not raw:
+                return
+            payload = _json.loads(raw)
+            # Build current bucket map: symbol → bucket name
+            curr_map: dict = {}
+            for bucket in ("final", "watchlist", "discovery"):
+                # Endpoint uses 'final_trades' for the final bucket
+                key = "final_trades" if bucket == "final" else bucket
+                for item in payload.get(key, []) or []:
+                    sym = item.get("symbol")
+                    if sym:
+                        curr_map[sym] = {
+                            "bucket": bucket,
+                            "score": item.get("confidence_score"),
+                        }
+            if not curr_map:
+                return
+            # Read previous
+            prev_raw = cli.get("stage:last_buckets")
+            prev_map: dict = _json.loads(prev_raw) if prev_raw else {}
+            # Detect promotions
+            promotions = []
+            for sym, info in curr_map.items():
+                new_bucket = info["bucket"]
+                new_rank = _BUCKET_RANK.get(new_bucket, 0)
+                old_bucket = (prev_map.get(sym) or {}).get("bucket")
+                old_rank = _BUCKET_RANK.get(old_bucket, 0) if old_bucket else 0
+                # Promoted = appeared OR moved up a tier
+                if old_bucket is None and new_rank >= 2:
+                    promotions.append({
+                        "symbol": sym, "from": "new", "to": new_bucket,
+                        "score": info.get("score"),
+                    })
+                elif new_rank > old_rank:
+                    promotions.append({
+                        "symbol": sym, "from": old_bucket or "new",
+                        "to": new_bucket, "score": info.get("score"),
+                    })
+            # Persist current as new baseline (24h TTL)
+            cli.set("stage:last_buckets", _json.dumps(curr_map), ex=86400)
+            if promotions:
+                logger.info("[stage-watchdog] %d promotion(s) detected", len(promotions))
+                _send_stage_alert(promotions)
+        except Exception:
+            logger.exception("[stage-watchdog] tick failed")
+
+    _scheduler.add_job(
+        _run_stage_transition_watchdog,
+        CronTrigger(minute="*/10", day_of_week="mon-fri",
+                    timezone="Asia/Kolkata"),
+        id="stage_transition_watchdog",
+        name="Discovery Stage-Transition Watchdog (10m, market-hours)",
+        replace_existing=True,
+        misfire_grace_time=60,
     )
 
     # Swing alpha scan: daily before market open (Mon–Fri)
