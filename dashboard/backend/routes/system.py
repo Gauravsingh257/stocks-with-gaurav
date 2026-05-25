@@ -54,6 +54,42 @@ def _market_status_now() -> str:
     return "closed"
 
 
+def _check_realtime_ws_heartbeat() -> bool:
+    """KiteTicker liveness check. Returns True iff realtime:ws_heartbeat
+    Redis key was written within the last 120s. Tells us whether the
+    macro strip pipeline (KiteTicker → Redis candles → frontend) is
+    actually receiving ticks. False during market hours = WS is dead.
+    Never raises — on any error, return False (fail-safe)."""
+    try:
+        import os, redis as _redis, time as _t
+        url = os.getenv("REDIS_URL", "").strip()
+        if not url:
+            return False
+        r = _redis.from_url(url, decode_responses=True, socket_timeout=2)
+        raw = r.get("realtime:ws_heartbeat")
+        if not raw:
+            return False
+        last_ts = int(raw)
+        return (int(_t.time()) - last_ts) < 120
+    except Exception:
+        return False
+
+
+def _check_realtime_ws_status() -> str:
+    """Last-known KiteTicker connection status. One of:
+    "connected" | "disconnected" | "error" | "unknown"."""
+    try:
+        import os, redis as _redis
+        url = os.getenv("REDIS_URL", "").strip()
+        if not url:
+            return "unknown"
+        r = _redis.from_url(url, decode_responses=True, socket_timeout=2)
+        val = r.get("realtime:ws_status")
+        return val if val else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _check_kite_cached() -> tuple:
     """
     Return (kite_connected: bool, disconnect_reason: str | None).
@@ -337,6 +373,15 @@ def system_health():
         "token_present":    token_present,
         "token_expires_in_hours": token_expires_in_hours,
         "token_source":     token_source,
+        # 2026-05-26: KiteTicker WebSocket liveness (separate from the
+        # engine-worker's Kite REST). Reads realtime:ws_heartbeat Redis
+        # key written by dashboard/backend/realtime.py on every tick
+        # batch. Stale (>120s) during market hours = WS dead → macro
+        # strip will serve stale prices. Surfaced here so monitoring +
+        # UI can detect the silent-WS-death failure mode that hit prod
+        # 2026-05-25 (full session served Friday's data).
+        "realtime_ws_alive": _check_realtime_ws_heartbeat(),
+        "realtime_ws_status": _check_realtime_ws_status(),
         "kite_last_login_utc": kite_last_login_utc,
         "ws_clients":       ws_clients,
         "latency_ms":       latency_ms,

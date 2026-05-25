@@ -112,8 +112,14 @@ async def lifespan(app: FastAPI):
     try:
         from dashboard.backend.realtime import start_realtime_service
         start_realtime_service()
+        log.info("Realtime tick service: start_realtime_service() called")
     except Exception as exc:
-        log.debug("Realtime market data service not started: %s", exc)
+        # 2026-05-26 incident: Monday's macro strip showed Friday's prices
+        # ALL DAY because the realtime KiteTicker thread died silently and
+        # this swallow was DEBUG-level (invisible at production INFO).
+        # Bumped to ERROR with traceback so a future regression cannot hide.
+        log.error("Realtime market data service FAILED to start: %s", exc,
+                  exc_info=True)
 
     # ── Kite: validate session in a DAEMON THREAD ────────────────────────────
     # Why a thread: k.profile() is a synchronous HTTP call into Kite with no
