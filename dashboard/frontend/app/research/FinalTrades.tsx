@@ -1,10 +1,55 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Activity, ExternalLink, Flame, ShieldCheck, Target } from "lucide-react";
+import {
+  Activity, Check, ExternalLink, Eye, EyeOff, Flame, ShieldCheck, Target, X,
+} from "lucide-react";
 import type { ResearchDecisionCard } from "@/lib/api";
 import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
+
+const STORAGE_PREFIX = "research:dismissed:";
+
+type DismissAction = "reviewed" | "skipped";
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function dismissalKey(symbol: string): string {
+  return `${STORAGE_PREFIX}${symbol}:${todayISO()}`;
+}
+function readDismissed(symbol: string): DismissAction | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = window.localStorage.getItem(dismissalKey(symbol));
+    return v === "reviewed" || v === "skipped" ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeDismissed(symbol: string, action: DismissAction): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(dismissalKey(symbol), action); } catch { /* quota / private mode */ }
+}
+function clearDismissed(symbol: string): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.removeItem(dismissalKey(symbol)); } catch { /* quota / private mode */ }
+}
+function pruneStaleDismissals(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const today = todayISO();
+    const toRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k || !k.startsWith(STORAGE_PREFIX)) continue;
+      const day = k.split(":").pop();
+      if (day && day !== today) toRemove.push(k);
+    }
+    toRemove.forEach((k) => window.localStorage.removeItem(k));
+  } catch { /* ignore */ }
+}
 
 function cleanSymbol(symbol: string): string {
   return symbol.replace(/^NSE:/i, "").replace(/\.NS$/i, "");
@@ -55,7 +100,40 @@ function riskNote(item: ResearchDecisionCard, target: number | null): string {
 }
 
 export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
-  const display = items.slice(0, 6);
+  const [dismissedMap, setDismissedMap] = useState<Record<string, DismissAction>>({});
+  const [showDismissed, setShowDismissed] = useState(false);
+
+  useEffect(() => {
+    pruneStaleDismissals();
+    const next: Record<string, DismissAction> = {};
+    for (const it of items) {
+      const v = readDismissed(it.symbol);
+      if (v) next[it.symbol] = v;
+    }
+    setDismissedMap(next);
+  }, [items]);
+
+  const dismiss = useCallback((symbol: string, action: DismissAction) => {
+    writeDismissed(symbol, action);
+    setDismissedMap((prev) => ({ ...prev, [symbol]: action }));
+  }, []);
+
+  const restore = useCallback((symbol: string) => {
+    clearDismissed(symbol);
+    setDismissedMap((prev) => {
+      const next = { ...prev };
+      delete next[symbol];
+      return next;
+    });
+  }, []);
+
+  // PR A keeps the legacy 6-card cap; PR B removes it and adds an expander.
+  const candidates = items.slice(0, 6);
+  const visible = useMemo(
+    () => (showDismissed ? candidates : candidates.filter((it) => !dismissedMap[it.symbol])),
+    [candidates, dismissedMap, showDismissed]
+  );
+  const hiddenCount = candidates.length - visible.length;
 
   return (
     <section className="glass border-emerald-500 shadow-xl" style={{ padding: 18, display: "grid", gap: 14, border: "1px solid #10b981", boxShadow: "0 24px 60px rgba(16,185,129,0.16), 0 0 28px rgba(16,185,129,0.14)" }}>
@@ -65,28 +143,46 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
             <Flame size={20} className="text-emerald-400 shrink-0" aria-hidden />
             <span>Final Trade Ideas</span>
           </h2>
-          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>High-conviction setups cleared for manual study</p>
+          <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+            Engine has done all the homework — open the chart and decide
+          </p>
         </div>
-        <span style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.5)", color: "#34d399", fontWeight: 900, boxShadow: "0 0 18px rgba(16,185,129,0.18)" }}>
-          <span className="inline-flex items-center gap-1">
-            <Flame size={12} aria-hidden />
-            Final Review · {display.length}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {(hiddenCount > 0 || showDismissed) && (
+            <button
+              type="button"
+              onClick={() => setShowDismissed((s) => !s)}
+              style={{ fontSize: "0.7rem", padding: "4px 9px", borderRadius: 6, background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.32)", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+              title={showDismissed ? "Hide dismissed cards" : "Show dismissed cards for today"}
+            >
+              {showDismissed ? <EyeOff size={12} /> : <Eye size={12} />}
+              {showDismissed ? "Hide dismissed" : `Show dismissed (${hiddenCount})`}
+            </button>
+          )}
+          <span style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.5)", color: "#34d399", fontWeight: 900, boxShadow: "0 0 18px rgba(16,185,129,0.18)" }}>
+            <span className="inline-flex items-center gap-1">
+              <Flame size={12} aria-hidden />
+              Cleared · {visible.length}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
 
-      {display.length === 0 ? (
+      {visible.length === 0 ? (
         <MarketMonitoringEmpty
-          title="Final book is intentionally selective"
-          subtitle="Nothing cleared the last quality gate yet — the engine is still monitoring structure and liquidity. Use Watchlist and Discovery for names approaching confirmation."
+          title={hiddenCount > 0 ? "All cleared cards reviewed for today" : "Final book is intentionally selective"}
+          subtitle={hiddenCount > 0
+            ? `${hiddenCount} card(s) dismissed today. They reset tomorrow, or click "Show dismissed" above.`
+            : "Nothing cleared the last quality gate yet — the engine is still monitoring structure and liquidity. Use Watchlist and Discovery for names approaching confirmation."}
         />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 14, padding: "4px 2px" }}>
-          {display.map((item) => {
+          {visible.map((item) => {
             const symbol = cleanSymbol(item.symbol);
             const target = targetOf(item);
+            const action = dismissedMap[item.symbol];
             return (
-              <article className="scale-105 border-emerald-500 shadow-xl" key={item.symbol} style={{ border: "1px solid #10b981", borderRadius: 8, padding: 14, background: "linear-gradient(180deg, rgba(16,185,129,0.12), rgba(16,185,129,0.045))", display: "grid", gap: 11, transform: "scale(1.03)", transformOrigin: "center", boxShadow: "0 18px 42px rgba(16,185,129,0.18), 0 0 24px rgba(16,185,129,0.16)" }}>
+              <article className="scale-105 border-emerald-500 shadow-xl" key={item.symbol} style={{ border: "1px solid #10b981", borderRadius: 8, padding: 14, background: "linear-gradient(180deg, rgba(16,185,129,0.12), rgba(16,185,129,0.045))", display: "grid", gap: 11, transform: "scale(1.03)", transformOrigin: "center", boxShadow: "0 18px 42px rgba(16,185,129,0.18), 0 0 24px rgba(16,185,129,0.16)", opacity: action ? 0.55 : 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
                   <div>
                     <Link href={`/stock/${encodeURIComponent(symbol)}`} style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 850, display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -102,8 +198,13 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                     <ShieldCheck size={12} /> High Conviction
                   </span>
                   <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: "#34d399", background: "rgba(16,185,129,0.16)", border: "1px solid rgba(16,185,129,0.4)", fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Activity size={12} /> Final Review
+                    <Activity size={12} /> Cleared — study chart
                   </span>
+                  {action && (
+                    <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: action === "reviewed" ? "#7dd3fc" : "#fda4af", background: action === "reviewed" ? "rgba(125,211,252,0.12)" : "rgba(253,164,175,0.10)", border: `1px solid ${action === "reviewed" ? "rgba(125,211,252,0.40)" : "rgba(253,164,175,0.35)"}`, fontWeight: 800 }}>
+                      {action === "reviewed" ? "Reviewed today" : "Skipped today"}
+                    </span>
+                  )}
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, fontSize: "0.74rem" }}>
@@ -124,6 +225,37 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                     <Target size={13} /> Study Chart
                   </Link>
+                  <div style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+                    {action ? (
+                      <button
+                        type="button"
+                        onClick={() => restore(item.symbol)}
+                        title="Undo dismissal"
+                        style={{ fontSize: "0.7rem", padding: "6px 9px", borderRadius: 6, background: "rgba(15,23,42,0.55)", border: "1px solid rgba(148,163,184,0.35)", color: "var(--text-secondary)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        Undo
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => dismiss(item.symbol, "reviewed")}
+                          title="Mark as reviewed — hides this card for the day"
+                          style={{ fontSize: "0.7rem", padding: "6px 9px", borderRadius: 6, background: "rgba(125,211,252,0.10)", border: "1px solid rgba(125,211,252,0.35)", color: "#7dd3fc", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700 }}
+                        >
+                          <Check size={12} /> Reviewed
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => dismiss(item.symbol, "skipped")}
+                          title="Skip this card for the day"
+                          style={{ fontSize: "0.7rem", padding: "6px 9px", borderRadius: 6, background: "rgba(253,164,175,0.08)", border: "1px solid rgba(253,164,175,0.32)", color: "#fda4af", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700 }}
+                        >
+                          <X size={12} /> Skip
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </article>
             );
