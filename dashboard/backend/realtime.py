@@ -307,17 +307,28 @@ def _run_ticker() -> None:
         kws.on_close = on_close
         kws.on_error = on_error
         _reconnect_requested.clear()
+        # Publish the active instance so the side-channel watchdog can
+        # force-close it when the tick-deadlock is detected.
+        _active_kws_ref["kws"] = kws
         try:
             kws.connect(threaded=False)
         except Exception as e:
             log.warning("Realtime: KiteTicker disconnected — %s", e)
+        finally:
+            _active_kws_ref["kws"] = None
         if _reconnect_requested.is_set():
             log.info("Realtime: reconnect requested — will use new token")
         time.sleep(5)
 
 
 _realtime_thread: threading.Thread | None = None
+_realtime_watchdog_thread: threading.Thread | None = None
 _reconnect_requested = threading.Event()
+
+# Reference to the currently-active KiteTicker instance so the watchdog
+# can force-close it when the tick deadlock is detected (2026-05-26
+# incident — see _realtime_watchdog docstring).
+_active_kws_ref: dict = {"kws": None}
 
 
 # ── Observability heartbeat ──────────────────────────────────────────
@@ -354,17 +365,109 @@ def request_reconnect() -> None:
     _reconnect_requested.set()
 
 
+def _realtime_watchdog() -> None:
+    """Side-channel deadlock breaker for the KiteTicker WS thread.
+
+    2026-05-26 INCIDENT: KiteTicker connected at web-service boot
+    (00:50 IST) with the then-current Kite token. At some point Kite
+    invalidated that token (session reset / expiry / network glitch).
+    No ticks arrived, but kws.connect() did NOT return — the WS
+    appeared "connected" at TCP level while delivering zero data.
+    The reconnect-on-token-update flag (_reconnect_requested) is
+    only checked inside _on_ticks, so with zero ticks it could never
+    fire. Classic chicken-and-egg deadlock: needed reconnect to
+    receive ticks; needed ticks to trigger reconnect. Web service
+    served stale Friday data for the entire market session until
+    a manual redeploy.
+
+    This watchdog runs in its own thread and breaks the deadlock:
+      - Every 60s during market hours, check realtime:ws_heartbeat age
+      - If > 90s (no ticks for that long while market is open),
+        force-close the active KiteTicker instance
+      - Closing it makes kws.connect() in _run_ticker return →
+        outer while True loops → re-reads access_token from Redis
+        (fresh after morning auto-login) → instantiates new KiteTicker
+        with fresh token → reconnects cleanly
+
+    Never raises (errors logged + swallowed). Sleep-interval based,
+    no APScheduler dependency (lives in the same realtime module so
+    we can ship the fix as one atomic change)."""
+    log.info("Realtime watchdog: started")
+    while True:
+        try:
+            time.sleep(60)
+            # Quiet during off-hours — no ticks expected, false-positive risk
+            try:
+                from zoneinfo import ZoneInfo
+                from datetime import datetime, time as _dtime
+                now = datetime.now(ZoneInfo("Asia/Kolkata"))
+                if now.weekday() >= 5:
+                    continue
+                t = now.time()
+                if not (_dtime(9, 15) <= t <= _dtime(15, 31)):
+                    continue
+            except Exception:
+                # If tz check fails for any reason, default to NOT
+                # firing the watchdog (safer than spurious reconnects)
+                continue
+            # Inside market hours: check heartbeat freshness
+            import redis as _redis
+            url = os.getenv("REDIS_URL", "").strip()
+            if not url:
+                continue
+            r = _redis.from_url(url, decode_responses=True, socket_timeout=3)
+            raw = r.get(_HEARTBEAT_KEY)
+            stale = True
+            if raw:
+                try:
+                    age = int(time.time()) - int(raw)
+                    stale = age > 90
+                except Exception:
+                    stale = True
+            if not stale:
+                continue
+            # Heartbeat stale during market hours → tick deadlock suspected.
+            log.warning(
+                "Realtime watchdog: heartbeat stale during market hours — "
+                "forcing KiteTicker reconnect (deadlock breaker)"
+            )
+            _write_heartbeat("disconnected")
+            _reconnect_requested.set()
+            kws = _active_kws_ref.get("kws")
+            if kws is not None:
+                try:
+                    kws.close()
+                    log.info("Realtime watchdog: forced close of active KiteTicker")
+                except Exception as exc:
+                    log.warning("Realtime watchdog: close failed (will retry): %s", exc)
+        except Exception:
+            # Swallow ALL exceptions — the watchdog must never die. A
+            # dead watchdog brings back the original bug.
+            log.exception("Realtime watchdog: tick failed (continuing)")
+
+
 def start_realtime_service() -> None:
-    """Start the market data service in a daemon thread. Safe to call if Redis/Kite unavailable."""
-    global _realtime_thread
+    """Start the market data service in a daemon thread. Safe to call if Redis/Kite unavailable.
+
+    Also starts a side-channel watchdog thread that breaks the tick-
+    deadlock scenario (see _realtime_watchdog docstring)."""
+    global _realtime_thread, _realtime_watchdog_thread
     if _realtime_thread is not None and _realtime_thread.is_alive():
         return
     if not os.getenv("REDIS_URL", "").strip():
-        log.debug("Realtime: REDIS_URL not set — tick service not started")
+        log.warning("Realtime: REDIS_URL not set — tick service not started")
         return
     _realtime_thread = threading.Thread(target=_run_ticker, daemon=True)
     _realtime_thread.start()
     log.info("Realtime: market data service thread started")
+
+    # Watchdog: separate thread, started alongside main ticker
+    if _realtime_watchdog_thread is None or not _realtime_watchdog_thread.is_alive():
+        _realtime_watchdog_thread = threading.Thread(
+            target=_realtime_watchdog, daemon=True
+        )
+        _realtime_watchdog_thread.start()
+        log.info("Realtime: deadlock-breaker watchdog thread started")
 
 
 def stop_realtime_service() -> None:
