@@ -7,7 +7,19 @@ from agents.base import BaseAgent, AgentResult
 from dashboard.backend.db import create_stock_recommendation, log_ranking_run, snapshot_performance, get_stock_recommendations, expire_old_recommendations
 from services import generate_rankings
 
-MAX_SWING_SLOTS = int(__import__("os").getenv("MAX_SWING_SLOTS", "25"))
+# Dynamic inventory: name is in inventory iff it independently passes
+# regime → sector → quality → structure (per docs/CANONICAL_ARCHITECTURE.md
+# TASK 4). Count is an output, never an input. The ceiling below is a sanity
+# net that should rarely bind — only triggers if upstream filters break and
+# garbage floods in. Removing the empty-slot floor lets fresh, higher-quality
+# candidates be saved every day instead of being silently dropped because the
+# table was "full" of week-old picks.
+RESEARCH_MAX_INVENTORY = int(__import__("os").getenv("RESEARCH_MAX_INVENTORY", "50"))
+RESEARCH_SCAN_TOP_K = int(__import__("os").getenv("RESEARCH_SCAN_TOP_K", "60"))
+# Kept for back-compat: a few callers still import MAX_SWING_SLOTS. Now points
+# at the sanity ceiling so existing reads return a sane value, and the
+# slot-machine logic that used to early-return on `empty_slots <= 0` is gone.
+MAX_SWING_SLOTS = RESEARCH_MAX_INVENTORY
 RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
@@ -49,21 +61,31 @@ class SwingTradeAlphaAgent(BaseAgent):
             result.metrics = {**(result.metrics or {}),
                               "rec_expiry_error": str(exc)}
 
-        # Slot-aware scanning: only fill empty slots
-        active_recs = get_stock_recommendations("SWING", limit=MAX_SWING_SLOTS)
+        # Dynamic inventory: always scan, save everything that survives the
+        # upstream quality + SMC gates. Only bound by RESEARCH_MAX_INVENTORY
+        # as a sanity ceiling (default 50). De-dupe against names already
+        # present so the same symbol doesn't get re-saved on every cron tick.
+        active_recs = get_stock_recommendations("SWING", limit=RESEARCH_MAX_INVENTORY * 2)
         active_count = len(active_recs)
-        empty_slots = MAX_SWING_SLOTS - active_count
         active_symbols = [r["symbol"] for r in active_recs]
+        headroom = max(0, RESEARCH_MAX_INVENTORY - active_count)
 
-        if empty_slots <= 0:
+        if headroom <= 0:
             result.status = "OK"
-            result.summary = f"All {MAX_SWING_SLOTS} swing slots occupied — scan skipped."
-            result.metrics = {"active_slots": active_count, "empty_slots": 0}
+            result.summary = (
+                f"Swing inventory at sanity ceiling ({active_count}/"
+                f"{RESEARCH_MAX_INVENTORY}) — scan deferred. Tune via "
+                "RESEARCH_MAX_INVENTORY if this binds regularly."
+            )
+            result.metrics = {"active_inventory": active_count,
+                              "ceiling": RESEARCH_MAX_INVENTORY,
+                              "headroom": 0}
             return
 
-        # Scan at least 15 candidates even when only a few slots are empty —
-        # the extra candidates serve as ranked fallback for the research page.
-        scan_top_k = max(empty_slots, int(os.getenv("MIN_SWING_SCAN_K", "15")))
+        # Scan a generous candidate pool. generate_rankings already enforces
+        # regime → sector → quality → SMC gates — the cap below is just so
+        # we don't ask it for the entire universe.
+        scan_top_k = min(headroom, RESEARCH_SCAN_TOP_K)
         ranking = asyncio.run(generate_rankings(
             "SWING", top_k=scan_top_k, target_universe=RESEARCH_AGENT_TARGET_UNIVERSE,
             exclude_symbols=active_symbols,
@@ -175,8 +197,9 @@ class SwingTradeAlphaAgent(BaseAgent):
             "recommendations_saved": saved,
             "requested_universe_size": ranking.universe.requested_size,
             "actual_universe_size": ranking.universe.actual_size,
-            "active_slots": active_count + saved,
-            "empty_slots": empty_slots - saved,
+            "active_inventory": active_count + saved,
+            "ceiling": RESEARCH_MAX_INVENTORY,
+            "headroom": max(0, RESEARCH_MAX_INVENTORY - (active_count + saved)),
         }
         result.findings = findings
         if saved == 0:
