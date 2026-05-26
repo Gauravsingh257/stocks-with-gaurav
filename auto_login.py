@@ -46,11 +46,41 @@ if _env_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 # ── Config from env ────────────────────────────────────────────────
+# Initial capture at module import (preserved for callers that read the
+# module attribute directly). These are REFRESHED at the start of every
+# auto_login() call via _refresh_config_from_env() — see comment there
+# for the 2026-05-26 incident that motivated this fix.
 API_KEY = os.getenv("KITE_API_KEY", "").strip()
 API_SECRET = os.getenv("KITE_API_SECRET", "").strip()
 USER_ID = os.getenv("KITE_USER_ID", "").strip()
 PASSWORD = os.getenv("KITE_PASSWORD", "").strip()
 TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
+
+
+def _refresh_config_from_env() -> None:
+    """Re-read Kite config env vars into the module-level constants.
+
+    THE 2026-05-26 INCIDENT: The web service ran for ~8 hours holding
+    USER_ID="" (and the other Kite constants empty) because the env
+    vars set via `railway variable set --skip-deploys` weren't visible
+    to the process at the moment auto_login.py was first imported.
+    Result: every 08:50 IST in-cloud APScheduler auto_login() call
+    sent a "Missing config" Telegram alert, even though the env vars
+    WERE present in the Railway service config and propagated to the
+    NEXT process boot. The same code worked fine when GitHub Actions
+    ran auto_login.py at 06:30 IST (fresh process, fresh env capture).
+
+    Calling this at the top of auto_login() rebinds the module
+    constants to whatever os.environ has RIGHT NOW. Subsequent
+    _validate_config() / _get_request_token() / _exchange_token()
+    calls then see fresh values without further refactor of their
+    USER_ID / TOTP_SECRET / PASSWORD usages."""
+    global API_KEY, API_SECRET, USER_ID, PASSWORD, TOTP_SECRET
+    API_KEY = os.getenv("KITE_API_KEY", "").strip()
+    API_SECRET = os.getenv("KITE_API_SECRET", "").strip()
+    USER_ID = os.getenv("KITE_USER_ID", "").strip()
+    PASSWORD = os.getenv("KITE_PASSWORD", "").strip()
+    TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -416,6 +446,13 @@ def auto_login() -> bool:
     Full automated login with retries.
     Returns True on success, False on failure.
     """
+    # 2026-05-26 fix: re-read Kite config from os.environ at every call
+    # so a long-lived process (like the web service APScheduler that
+    # imported auto_login hours/days ago) cannot hold stale empty values
+    # for USER_ID / TOTP_SECRET / PASSWORD. See _refresh_config_from_env
+    # docstring for the incident detail.
+    _refresh_config_from_env()
+
     if os.getenv("FORCE_AUTO_LOGIN", "").strip().lower() not in {"1", "true", "yes"}:
         if _existing_session_active():
             return True
