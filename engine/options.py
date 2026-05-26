@@ -1218,59 +1218,22 @@ class BankNiftySignalEngine:
         }
         reasoning = self._build_signal_reasoning(mock_tap, oi_detail, momentum, score, bullish_oi)
 
-        # Build spot price context
+        # Compact 5-line Telegram message — action-first, no boilerplate.
         spot_ltp = self.spot_prices.get(ul_name, 0)
-        spot_line = f"\n📊 <b>{ul_name} Spot:</b> {spot_ltp:.0f}" if spot_ltp else ""
-
-        # Build Entry/SL/TP block
-        trade_block = (
-            f"\n\n📋 <b>TRADE PLAN:</b>\n"
-            f"Entry: <b>{entry_price:.2f}</b> (bounce confirmed)\n"
-            f"SL: <b>{sl_price:.2f}</b> (below dump low {low_price:.2f})\n"
-            f"Target: <b>{target_price:.2f}</b> (RR: {rr:.1f})\n"
-        )
-
-        # Signal header
-        if is_session_break:
-            signal_header = "📉 <b>Session Low Break + Bounce (Early Cycle)</b>"
-        else:
-            signal_header = "🚨 <b>Monthly Low Break + Reversal Confirmed!</b>"
-
-        elapsed_min = (now - break_data["break_time"]).total_seconds() / 60
-
-        msg = (
-            f"{emoji} <b>OPTIONS SIGNAL ({confidence})</b>\n"
-            f"Score: <b>{score}/10</b>\n"
-            f"{'=' * 30}\n\n"
-            f"<b>{ul_name} {break_data['strike']} {break_data['opt_type']}</b>"
-            f"{spot_line}\n\n"
-            f"{signal_header}\n"
-            f"{break_details}\n\n"
-            f"✅ <b>BOUNCE CONFIRMED:</b> "
-            f"+{bounce_pct*100:.1f}% from low {low_price:.2f} → {bounce_price:.2f} "
-            f"({elapsed_min:.0f}min after break)\n\n"
-            f"{'=' * 30}\n\n"
-            f"<b>SIGNAL:</b> {reasoning['components']}\n\n"
-            f"<b>WHAT IT MEANS:</b>\n"
-            f"<i>{reasoning['meaning']}</i>\n\n"
-            f"<b>TRADE IMPLICATION:</b>\n"
-            f"{reasoning['implication']}\n\n"
-            f"<b>CONVICTION:</b> {reasoning['conviction']}\n"
-        )
-
-        if oi_detail:
-            msg += f"\nOI Delta: {oi_detail.strip()}"
+        spot_str = f" · Spot {spot_ltp:.0f}" if spot_ltp else ""
+        mom_tag = ""
         if momentum:
-            if momentum_conflict:
-                msg += f"\nMomentum: {momentum} ⚠️ CONFLICTS with signal bias"
-            else:
-                msg += f"\nMomentum: {momentum} ✅ Confirms signal"
-
-        msg += trade_block
-
-        msg += (
-            f"\n<b>ACTION:</b> {reasoning['action']}\n"
-            f"\nTime: {now.strftime('%H:%M:%S')}"
+            mom_tag = (f"\nMomentum: {momentum} "
+                       + ("⚠️ CONFLICT" if momentum_conflict else "✅"))
+        msg = (
+            f"{emoji} <b>{ul_name} {break_data['strike']} "
+            f"{break_data['opt_type']}</b> · {confidence} {score}/10\n"
+            f"{break_data['opt_type']} {bounce_pct*100:+.1f}% from "
+            f"{low_price:.2f} → {bounce_price:.2f}{spot_str}\n\n"
+            f"➜ <b>{reasoning['action']}</b>\n"
+            f"Entry {entry_price:.2f} · SL {sl_price:.2f} · "
+            f"T {target_price:.2f} (RR {rr:.1f})"
+            f"{mom_tag}"
         )
 
         _direction = "SHORT" if break_data["opt_type"] == "PE" else "LONG"
@@ -1312,15 +1275,11 @@ class BankNiftySignalEngine:
                     score += OPT_SCORE_MOMENTUM
                 if score >= OPT_ALERT_THRESHOLD_MED:
                     msg = (
-                        f"<b>OI ALERT: CALL UNWINDING</b>\n\n"
-                        f"<b>{symbol}</b>\n"
-                        f"Strike: {cu['strike']} CE\n"
-                        f"OI Change: {cu['change_pct']:.1f}%\n"
-                        f"({cu['prev_oi']:,} -> {cu['cur_oi']:,})\n\n"
-                        f"<b>WHAT IT MEANS:</b>\n"
-                        f"<i>Institutions exiting CALL positions. Bullish conviction weakening.</i>\n\n"
-                        f"Momentum: {momentum_map.get(ul_name, 'Flat')}\n"
-                        f"Time: {now.strftime('%H:%M:%S')}"
+                        f"🔻 <b>{symbol} {cu['strike']} CE</b> · "
+                        f"CALL UNWIND {cu['change_pct']:+.1f}%\n"
+                        f"OI {cu['prev_oi']:,} → {cu['cur_oi']:,} · "
+                        f"Momentum {momentum_map.get(ul_name, 'Flat')}\n"
+                        f"➜ Bearish bias on {ul_name or symbol}"
                     )
                     _cu_meta = {
                         "symbol": symbol,
@@ -1349,15 +1308,11 @@ class BankNiftySignalEngine:
                     score += OPT_SCORE_MOMENTUM
                 if score >= OPT_ALERT_THRESHOLD_MED:
                     msg = (
-                        f"<b>OI ALERT: PUT OI SURGING</b>\n\n"
-                        f"<b>{symbol}</b>\n"
-                        f"Strike: {ps['strike']} PE\n"
-                        f"OI Change: +{ps['change_pct']:.1f}%\n"
-                        f"({ps['prev_oi']:,} -> {ps['cur_oi']:,})\n\n"
-                        f"<b>WHAT IT MEANS:</b>\n"
-                        f"<i>Institutions building heavy PUT positions. Strong bearish bias.</i>\n\n"
-                        f"Momentum: {momentum_map.get(ul_name, 'Flat')}\n"
-                        f"Time: {now.strftime('%H:%M:%S')}"
+                        f"🔻 <b>{symbol} {ps['strike']} PE</b> · "
+                        f"PUT SURGE +{ps['change_pct']:.1f}%\n"
+                        f"OI {ps['prev_oi']:,} → {ps['cur_oi']:,} · "
+                        f"Momentum {momentum_map.get(ul_name, 'Flat')}\n"
+                        f"➜ Bearish bias on {ul_name or symbol}"
                     )
                     _ps_meta = {
                         "symbol": symbol,
