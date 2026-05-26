@@ -127,13 +127,18 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
     });
   }, []);
 
-  // PR A keeps the legacy 6-card cap; PR B removes it and adds an expander.
-  const candidates = items.slice(0, 6);
-  const visible = useMemo(
-    () => (showDismissed ? candidates : candidates.filter((it) => !dismissedMap[it.symbol])),
-    [candidates, dismissedMap, showDismissed]
+  // Dynamic inventory: render every final-tier card the backend returns.
+  // Collapse past COLLAPSED_LIMIT with an expander so the page stays usable
+  // on high-quality days. Final = upstream gate cleared; never a UI slice.
+  const COLLAPSED_LIMIT = 12;
+  const [expanded, setExpanded] = useState(false);
+  const filtered = useMemo(
+    () => (showDismissed ? items : items.filter((it) => !dismissedMap[it.symbol])),
+    [items, dismissedMap, showDismissed]
   );
-  const hiddenCount = candidates.length - visible.length;
+  const visible = expanded ? filtered : filtered.slice(0, COLLAPSED_LIMIT);
+  const hiddenCount = items.length - filtered.length;
+  const collapsedCount = filtered.length - visible.length;
 
   return (
     <section className="glass border-emerald-500 shadow-xl" style={{ padding: 18, display: "grid", gap: 14, border: "1px solid #10b981", boxShadow: "0 24px 60px rgba(16,185,129,0.16), 0 0 28px rgba(16,185,129,0.14)" }}>
@@ -260,6 +265,19 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
               </article>
             );
           })}
+        </div>
+      )}
+      {(collapsedCount > 0 || expanded) && filtered.length > COLLAPSED_LIMIT && (
+        <div style={{ display: "flex", justifyContent: "center", paddingTop: 4 }}>
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            style={{ fontSize: "0.75rem", padding: "8px 16px", borderRadius: 8, background: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.40)", color: "#34d399", cursor: "pointer", fontWeight: 800 }}
+          >
+            {expanded
+              ? `Collapse to top ${COLLAPSED_LIMIT}`
+              : `View all ${filtered.length} cleared setups (${collapsedCount} more)`}
+          </button>
         </div>
       )}
     </section>

@@ -195,7 +195,12 @@ def _decision_cache_set(top_k: int, min_turnover: float, src: str, payload: dict
     _cache.set(key, {"ts": time.time(), "payload": payload}, ttl_seconds=DECISION_CACHE_SECONDS)
 
 STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
-MAX_LONGTERM_SLOTS = int(os.getenv("MAX_LONGTERM_SLOTS", "10"))
+# Dynamic inventory ceiling — kept in sync with the agents
+# (agents/swing_alpha_agent.py, agents/longterm_investment_agent.py).
+# This is a sanity cap, not a hard slot count — should rarely bind.
+RESEARCH_MAX_INVENTORY = int(os.getenv("RESEARCH_MAX_INVENTORY", "50"))
+# Back-compat alias: legacy responses still expose the field as "max".
+MAX_LONGTERM_SLOTS = RESEARCH_MAX_INVENTORY
 FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
 DECISION_CACHE_SECONDS = int(os.getenv("RESEARCH_DECISION_CACHE_SECONDS", "600"))
 
@@ -737,12 +742,14 @@ def _longterm_payload(limit: int) -> dict:
                 **_extract_fundamentals(row),
             }
         )
-    # Slot status — surfaces why long-term scan may not have produced new ideas.
+    # Inventory status — dynamic, capped only by the sanity ceiling. UI uses
+    # this for messaging like "X ideas active". slots_full kept for backwards
+    # compat with older clients; it only goes True at the sanity ceiling.
     occupied = len(rows)
     slot_status = {
         "occupied": occupied,
-        "max": MAX_LONGTERM_SLOTS,
-        "slots_full": occupied >= MAX_LONGTERM_SLOTS,
+        "max": RESEARCH_MAX_INVENTORY,
+        "slots_full": occupied >= RESEARCH_MAX_INVENTORY,
     }
     return {
         "items": items,

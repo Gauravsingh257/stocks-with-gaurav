@@ -8,7 +8,13 @@ from dashboard.backend.db import create_stock_recommendation, log_ranking_run, g
 from services import generate_rankings
 from services.portfolio_constructor import apply_sector_cap
 
-MAX_LONGTERM_SLOTS = int(__import__("os").getenv("MAX_LONGTERM_SLOTS", "25"))
+# Dynamic inventory — see docs/CANONICAL_ARCHITECTURE.md TASK 4 and the
+# matching change in agents/swing_alpha_agent.py. Count is an output of the
+# quality gates, never a cap that silently drops better candidates.
+RESEARCH_MAX_INVENTORY = int(__import__("os").getenv("RESEARCH_MAX_INVENTORY", "50"))
+RESEARCH_SCAN_TOP_K = int(__import__("os").getenv("RESEARCH_SCAN_TOP_K", "60"))
+# Kept for back-compat with imports elsewhere; same value as the sanity cap.
+MAX_LONGTERM_SLOTS = RESEARCH_MAX_INVENTORY
 RESEARCH_AGENT_TARGET_UNIVERSE = int(os.getenv("RESEARCH_AGENT_TARGET_UNIVERSE", "2200"))
 
 
@@ -46,34 +52,41 @@ class LongTermInvestmentAgent(BaseAgent):
             result.metrics = {**(result.metrics or {}),
                               "rec_expiry_error": str(exc)}
 
-        # Slot-aware scanning: only fill empty slots (unless force-scan flag is set)
+        # Dynamic inventory: always scan; cap is a sanity ceiling only.
         force_scan = __import__("os").environ.pop("LONGTERM_FORCE_SCAN", "").strip() == "1"
-        active_recs = get_stock_recommendations("LONGTERM", limit=MAX_LONGTERM_SLOTS)
+        active_recs = get_stock_recommendations("LONGTERM", limit=RESEARCH_MAX_INVENTORY * 2)
         active_count = len(active_recs)
-        empty_slots = MAX_LONGTERM_SLOTS - active_count
         active_symbols = [r["symbol"] for r in active_recs]
+        headroom = max(0, RESEARCH_MAX_INVENTORY - active_count)
 
         # Cross-horizon dedup — symbols already shown as SWING picks should not
         # also surface as LONGTERM picks in the same scan window.
         try:
-            swing_active = get_stock_recommendations("SWING", limit=50)
+            swing_active = get_stock_recommendations(
+                "SWING", limit=RESEARCH_MAX_INVENTORY * 2
+            )
             cross_horizon_symbols = [r["symbol"] for r in swing_active]
         except Exception:
             cross_horizon_symbols = []
         exclude_set = list({*active_symbols, *cross_horizon_symbols})
 
-        if empty_slots <= 0 and not force_scan:
+        if headroom <= 0 and not force_scan:
             result.status = "OK"
-            result.summary = f"All {MAX_LONGTERM_SLOTS} longterm slots occupied — scan skipped."
-            result.metrics = {"active_slots": active_count, "empty_slots": 0}
+            result.summary = (
+                f"Long-term inventory at sanity ceiling ({active_count}/"
+                f"{RESEARCH_MAX_INVENTORY}) — scan deferred. Tune via "
+                "RESEARCH_MAX_INVENTORY if this binds regularly."
+            )
+            result.metrics = {"active_inventory": active_count,
+                              "ceiling": RESEARCH_MAX_INVENTORY,
+                              "headroom": 0}
             return
 
-        # When forcing a scan with no empty slots, still pull a fresh top-K so
-        # users see refreshed candidates ranked alongside the current active set.
-        # Scan at least 15 candidates even when only a few slots are empty.
-        scan_top_k = max(
-            empty_slots if empty_slots > 0 else MAX_LONGTERM_SLOTS,
-            int(os.getenv("MIN_LONGTERM_SCAN_K", "15")),
+        # Force-scan still respects the ceiling: it just guarantees a fresh
+        # ranking pass even if every slot below the ceiling is already filled.
+        scan_top_k = min(
+            headroom if headroom > 0 else RESEARCH_MAX_INVENTORY,
+            RESEARCH_SCAN_TOP_K,
         )
 
         ranking = asyncio.run(generate_rankings(
@@ -193,8 +206,9 @@ class LongTermInvestmentAgent(BaseAgent):
             "recommendations_saved": saved,
             "requested_universe_size": ranking.universe.requested_size,
             "actual_universe_size": ranking.universe.actual_size,
-            "active_slots": active_count + saved,
-            "empty_slots": empty_slots - saved,
+            "active_inventory": active_count + saved,
+            "ceiling": RESEARCH_MAX_INVENTORY,
+            "headroom": max(0, RESEARCH_MAX_INVENTORY - (active_count + saved)),
         }
 
         result.findings = findings
