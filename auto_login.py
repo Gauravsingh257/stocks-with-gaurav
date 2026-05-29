@@ -46,17 +46,78 @@ if _env_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 # ── Config from env ────────────────────────────────────────────────
+# Initial capture at module import (preserved for callers that read the
+# module attribute directly). These are REFRESHED at the start of every
+# auto_login() call via _refresh_config_from_env() — see comment there
+# for the 2026-05-26 incident that motivated this fix.
 API_KEY = os.getenv("KITE_API_KEY", "").strip()
 API_SECRET = os.getenv("KITE_API_SECRET", "").strip()
 USER_ID = os.getenv("KITE_USER_ID", "").strip()
 PASSWORD = os.getenv("KITE_PASSWORD", "").strip()
 TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
+
+
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 # Railway backend URL must be set explicitly via env (no hard-coded fallback —
 # old defaults silently broke when the Railway service was renamed).
 BACKEND_URL = os.getenv("RAILWAY_BACKEND_URL", "").strip().rstrip("/")
+
+
+def _refresh_config_from_env() -> None:
+    """Re-read every env-derived module constant from os.environ NOW.
+
+    THE 2026-05-26 INCIDENT (then recurrence 2026-05-27): The cloud
+    engine ran for hours holding USER_ID="" (and the rest of the Kite
+    + Redis + Telegram constants empty) even though the env vars WERE
+    present in Railway service config. The classic Python module-level
+    `os.getenv at import` trap — the values are captured once when the
+    module is first imported and frozen forever for that process. The
+    same code worked fine in GitHub Actions because GHA spawns a fresh
+    process every run.
+
+    The FIRST fix (PR #17, 2026-05-26) only refreshed the 5 Kite
+    credentials. But _existing_session_active() depends on REDIS_URL
+    (line below), _send_telegram() depends on TELEGRAM_TOKEN /
+    TELEGRAM_CHAT_ID, and _push_to_railway() depends on BACKEND_URL —
+    all also susceptible. If REDIS_URL is empty, _redis_client() returns
+    None → _existing_session_active() returns False → forced full
+    login flow on every call even when token is valid.
+
+    This refresh now rebinds ALL nine env-derived constants on every
+    auto_login() call. The names are module globals, so subsequent
+    function calls (which read the names directly) see the fresh
+    values without further refactor of their call sites."""
+    global API_KEY, API_SECRET, USER_ID, PASSWORD, TOTP_SECRET
+    global REDIS_URL, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, BACKEND_URL
+    API_KEY = os.getenv("KITE_API_KEY", "").strip()
+    API_SECRET = os.getenv("KITE_API_SECRET", "").strip()
+    USER_ID = os.getenv("KITE_USER_ID", "").strip()
+    PASSWORD = os.getenv("KITE_PASSWORD", "").strip()
+    TOTP_SECRET = os.getenv("KITE_TOTP_SECRET", "").strip()
+    REDIS_URL = os.getenv("REDIS_URL", "").strip()
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    BACKEND_URL = os.getenv("RAILWAY_BACKEND_URL", "").strip().rstrip("/")
+
+
+def _env_audit(keys: list[str]) -> str:
+    """Return a one-line diagnostic of `os.environ` membership for the given
+    keys. Used to settle the question "is the env var actually missing on
+    this process, or is this a stale-import problem?" — surfaces both the
+    presence and (where safe) a non-revealing length-prefix of the value.
+    Never returns the actual secret; only "set(len=N)" or "MISSING"."""
+    parts: list[str] = []
+    for k in keys:
+        raw = os.environ.get(k)
+        if raw is None:
+            parts.append(f"{k}=MISSING")
+        else:
+            stripped = raw.strip()
+            parts.append(f"{k}=set(len={len(stripped)})" if stripped
+                         else f"{k}=EMPTY_STRING")
+    return " ".join(parts)
 
 # ── Logging ────────────────────────────────────────────────────────
 _scheduled = "--scheduled" in sys.argv
@@ -416,6 +477,13 @@ def auto_login() -> bool:
     Full automated login with retries.
     Returns True on success, False on failure.
     """
+    # 2026-05-26 fix: re-read Kite config from os.environ at every call
+    # so a long-lived process (like the web service APScheduler that
+    # imported auto_login hours/days ago) cannot hold stale empty values
+    # for USER_ID / TOTP_SECRET / PASSWORD. See _refresh_config_from_env
+    # docstring for the incident detail.
+    _refresh_config_from_env()
+
     if os.getenv("FORCE_AUTO_LOGIN", "").strip().lower() not in {"1", "true", "yes"}:
         if _existing_session_active():
             return True
@@ -434,6 +502,15 @@ def auto_login() -> bool:
     try:
         missing = _validate_config()
         if missing:
+            # Surface env audit so we can definitively tell stale-constant
+            # bugs apart from genuine missing-env-var bugs. Logged BEFORE
+            # the Telegram message so Railway log retention captures the
+            # ground truth even when the alert is suppressed by a cooldown.
+            audit = _env_audit([
+                "KITE_API_KEY", "KITE_API_SECRET", "KITE_USER_ID",
+                "KITE_PASSWORD", "KITE_TOTP_SECRET",
+            ])
+            log.error("env audit at validation failure: %s", audit)
             msg = f"Missing config: {', '.join(missing)}"
             log.error(msg)
             _send_telegram(f"❌ <b>Auto-Login FAILED</b>\n{msg}")
