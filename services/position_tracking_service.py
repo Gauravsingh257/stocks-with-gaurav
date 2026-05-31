@@ -80,6 +80,11 @@ class PositionTrackingService:
         if not positions:
             return 0
 
+        # Structure-break cull is a per-store policy (system book honors
+        # PORTFOLIO_STRUCTURE_EXIT; user book defaults OFF so user-chosen
+        # trades aren't auto-sold on a soft 200-DMA break).
+        structure_exit_on = bool(getattr(store, "structure_exit_enabled", lambda: _STRUCTURE_EXIT_ON)())
+
         symbols = list({p.symbol for p in positions})
         prices = _fetch_cmp_batch(symbols)
 
@@ -126,7 +131,7 @@ class PositionTrackingService:
             elif cmp <= sl:
                 new_status = "STOP_HIT"
                 exit_reason = "STOP_HIT"
-            elif _STRUCTURE_EXIT_ON and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
+            elif structure_exit_on and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
                 dma200 = _get_200dma(pos.symbol)
                 if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
                     new_status = "CLOSED"

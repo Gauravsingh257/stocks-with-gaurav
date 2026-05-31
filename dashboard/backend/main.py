@@ -174,6 +174,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("Portfolio DB init failed (non-fatal): %s", exc)
     try:
+        # Watchlist→trigger→tracking lifecycle tables + source/metric columns.
+        # Runs AFTER auth (user_positions) AND portfolio (portfolio_positions)
+        # so the ALTER ADD COLUMN targets both existing tables.
+        from dashboard.backend.db.watchlist_monitor import init_watchlist_monitor_tables
+        init_watchlist_monitor_tables()
+    except Exception as wl_exc:
+        log.warning("Watchlist monitor DB init failed (non-fatal): %s", wl_exc)
+    try:
         from services.portfolio_tracker import start_portfolio_tracker
         start_portfolio_tracker()
         log.info("Portfolio tracker started")
