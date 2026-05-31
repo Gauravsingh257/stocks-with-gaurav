@@ -626,6 +626,10 @@ def list_positions(
                 except (TypeError, ValueError):
                     pass
 
+        # CMP: prefer live resolve; fall back to the price the shared
+        # PositionTrackingService last wrote to user_positions.current_price
+        # (so the card still shows a price off-hours / when resolve misses).
+        cmp_out = cmp_val if cmp_val is not None else d.get("current_price")
         items.append({
             "id": d.get("id"),
             "symbol": d.get("symbol"),
@@ -637,11 +641,13 @@ def list_positions(
             "taken_at": d.get("taken_at"),
             "status": d.get("status"),
             "live_status": live_status,
-            "cmp": cmp_val,
+            "cmp": cmp_out,
             "cmp_source": cmp_src,
             "pnl_pct": pnl_pct,
             "pnl_r": pnl_r,
             "holding_days": holding_days,
+            "source": d.get("source"),
+            "quantity": d.get("quantity"),
             "exit_price": d.get("exit_price"),
             "exit_reason": d.get("exit_reason"),
             "exited_at": d.get("exited_at"),
