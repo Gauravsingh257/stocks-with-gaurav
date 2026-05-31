@@ -288,7 +288,17 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <AddToWatchlistButton symbol={symbol} compact />
+                  <AddToWatchlistButton
+                    symbol={symbol}
+                    compact
+                    setup={{
+                      entry_price: item.entry_price,
+                      stop_loss: item.stop_loss,
+                      target_1: item.target_1 ?? (Array.isArray(item.targets) ? item.targets[0] : null),
+                      target_2: target,
+                      pattern: setupLabel(item.setup),
+                    }}
+                  />
                   <Link href={`/research/chart?symbol=${encodeURIComponent(symbol)}&horizon=SWING`} style={{ color: "#04130d", background: "#34d399", border: "1px solid rgba(16,185,129,0.7)", borderRadius: 7, padding: "8px 10px", textDecoration: "none", fontSize: "0.74rem", fontWeight: 900, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                     <Target size={13} /> Study Chart
                   </Link>
