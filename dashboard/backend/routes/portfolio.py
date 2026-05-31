@@ -45,19 +45,19 @@ def portfolio_summary():
 
 
 @router.get("/swing")
-def swing_portfolio(limit: int = Query(default=10, ge=1, le=50)):
+def swing_portfolio(limit: int = Query(default=50, ge=1, le=50)):
     """Active swing portfolio positions."""
-    from dashboard.backend.db.portfolio import get_portfolio
+    from dashboard.backend.db.portfolio import get_portfolio, MAX_SWING_POSITIONS
     positions = get_portfolio("SWING")
-    return {"items": positions[:limit], "count": len(positions), "max": 10, "horizon": "SWING"}
+    return {"items": positions[:limit], "count": len(positions), "max": MAX_SWING_POSITIONS, "horizon": "SWING"}
 
 
 @router.get("/longterm")
-def longterm_portfolio(limit: int = Query(default=10, ge=1, le=50)):
+def longterm_portfolio(limit: int = Query(default=50, ge=1, le=50)):
     """Active long-term portfolio positions."""
-    from dashboard.backend.db.portfolio import get_portfolio
+    from dashboard.backend.db.portfolio import get_portfolio, MAX_LONGTERM_POSITIONS
     positions = get_portfolio("LONGTERM")
-    return {"items": positions[:limit], "count": len(positions), "max": 10, "horizon": "LONGTERM"}
+    return {"items": positions[:limit], "count": len(positions), "max": MAX_LONGTERM_POSITIONS, "horizon": "LONGTERM"}
 
 
 @router.get("/counts")

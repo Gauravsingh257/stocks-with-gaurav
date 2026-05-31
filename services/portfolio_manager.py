@@ -16,8 +16,15 @@ import os
 
 log = logging.getLogger("services.portfolio_manager")
 
-MAX_SWING = int(os.getenv("MAX_SWING_PORTFOLIO", "10"))
-MAX_LONGTERM = int(os.getenv("MAX_LONGTERM_PORTFOLIO", "10"))
+# Single source of truth for portfolio capacity lives in db/portfolio.py
+# (env PORTFOLIO_MAX_SWING / PORTFOLIO_MAX_LONGTERM, default 20). This module
+# previously had its OWN duplicate cap (MAX_SWING_PORTFOLIO=10), so raising one
+# without the other left promotion silently blocked. Import the canonical
+# values so there is exactly one knob.
+from dashboard.backend.db.portfolio import (  # noqa: E402
+    MAX_SWING_POSITIONS as MAX_SWING,
+    MAX_LONGTERM_POSITIONS as MAX_LONGTERM,
+)
 
 
 def promote_to_portfolio(

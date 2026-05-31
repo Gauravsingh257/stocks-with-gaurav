@@ -12,6 +12,7 @@ Stocks STAY in the portfolio until explicitly resolved. No auto-expiry.
 
 import json
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
 
@@ -107,8 +108,13 @@ def init_portfolio_db() -> None:
 # Portfolio CRUD
 # ──────────────────────────────────────────────────────────────────────────────
 
-MAX_SWING_POSITIONS = 10
-MAX_LONGTERM_POSITIONS = 10
+# Portfolio capacity — env-configurable (was a hardcoded 10, which left the
+# book "FULL" and blocked new promotions while the research inventory had
+# already been expanded to 50). These are a separate layer from
+# RESEARCH_MAX_INVENTORY: that caps how many IDEAS are surfaced; this caps how
+# many live POSITIONS the portfolio holds. Default raised 10 → 20.
+MAX_SWING_POSITIONS = int(os.getenv("PORTFOLIO_MAX_SWING", "20"))
+MAX_LONGTERM_POSITIONS = int(os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
 
 
 def add_position(payload: dict) -> int:
