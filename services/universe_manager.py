@@ -197,6 +197,20 @@ def load_nse_universe(target_size: int = 1800) -> UniverseSnapshot:
         seen.add(symbol)
         deduped.append(symbol)
 
+    # Exclude Trade-to-Trade (-BE), surveillance (-BZ) and SME (-SM) segment
+    # stocks — delivery-only, thin, often under manipulation surveillance, and
+    # not appropriate as tradeable recommendations. Best-effort + fail-open:
+    # any failure leaves the universe untouched. Flag: RESEARCH_EXCLUDE_T2T_SME.
+    try:
+        from services.segment_filter import filter_universe as _seg_filter
+
+        deduped, _seg_removed = _seg_filter(deduped)
+        if _seg_removed:
+            sources["t2t_sme_excluded"] = -_seg_removed
+            log.info("Universe: excluded %d T2T/SME segment symbols", _seg_removed)
+    except Exception as exc:
+        log.warning("Universe: segment filter skipped (%s)", exc)
+
     requested = max(1, int(target_size))
     selected = deduped[:requested]
     min_required = int(os.getenv("NSE_UNIVERSE_MIN_SCAN", "1500"))

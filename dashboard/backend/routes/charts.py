@@ -165,21 +165,30 @@ def _reset_kite():
 _token_cache: dict[str, int] = {}
 
 def _get_instrument_token(kite, symbol: str) -> int | None:
-    """Resolve NSE:SYMBOL or bare SYMBOL to instrument token."""
+    """Resolve NSE:SYMBOL or bare SYMBOL to instrument token.
+
+    Falls back to NSE segment suffixes (-BE/-BZ/-SM) when the bare lookup
+    misses. Trade-to-Trade (-BE), surveillance (-BZ) and SME (-SM) stocks
+    carry a suffixed tradingsymbol in Kite (e.g. KSHITIJPOL-BE), so
+    kite.ltp("NSE:KSHITIJPOL") returns {} and the chart shows "Awaiting
+    data". Trying the suffixes lets those still resolve. (Note: the
+    research universe separately filters most of these out — this is
+    defensive so any legitimately-suffixed name still charts.)"""
     if symbol in _token_cache:
         return _token_cache[symbol]
 
     # Normalise: if no exchange prefix, add NSE
     lookup = symbol if ":" in symbol else f"NSE:{symbol}"
 
-    try:
-        ltp_data = kite.ltp(lookup)
-        if ltp_data:
-            token = list(ltp_data.values())[0]["instrument_token"]
-            _token_cache[symbol] = token
-            return token
-    except Exception as e:
-        logger.warning("[Charts] Token lookup failed for %s: %s", symbol, e)
+    for candidate in (lookup, f"{lookup}-BE", f"{lookup}-BZ", f"{lookup}-SM"):
+        try:
+            ltp_data = kite.ltp(candidate)
+            if ltp_data:
+                token = list(ltp_data.values())[0]["instrument_token"]
+                _token_cache[symbol] = token
+                return token
+        except Exception as e:
+            logger.warning("[Charts] Token lookup failed for %s: %s", candidate, e)
     return None
 
 
