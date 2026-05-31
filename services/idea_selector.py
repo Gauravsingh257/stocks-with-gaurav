@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 log = logging.getLogger("services.idea_selector")
 
@@ -401,11 +402,105 @@ def select_top_ideas(horizon: str, max_picks: int | None = None) -> list[dict]:
         return select_swing_ideas(max_picks)
 
 
-def select_and_promote(horizon: str) -> int:
-    """Select top ideas and auto-promote them into the portfolio. Returns count promoted."""
-    from services.portfolio_manager import promote_to_portfolio
+# Price-trigger band (mirrors validation_engine._entry_reachability "actionable"):
+# only CMP-buys — price within this % of the planned entry — promote immediately.
+PROMOTE_ACTIONABLE_PCT = float(os.getenv("PORTFOLIO_PROMOTE_ACTIONABLE_PCT", "5.0"))
 
-    ideas = select_top_ideas(horizon)
+
+def select_from_final_ideas(horizon: str, max_picks: int) -> list[dict]:
+    """Promotion candidates sourced from the SAME Final Trade Ideas the user
+    sees (the discovery validation scan's `final` section), gated by a LIVE
+    price-trigger: only names whose current price is within
+    PORTFOLIO_PROMOTE_ACTIONABLE_PCT of the planned entry (a "CMP-buy") are
+    returned. Names that ran past entry (unreachable) or are still far below
+    (waiting) are intentionally NOT promoted here — they stay on the research
+    feed until price reaches the zone (the arm-on-tap follow-up handles those).
+
+    Best-effort: returns [] on any failure so the caller falls back to the
+    legacy recommendation source."""
+    if max_picks <= 0:
+        return []
+    try:
+        from dashboard.backend.db import get_latest_signals_scan_report
+        from dashboard.backend.db.portfolio import get_active_position_by_symbol
+        from services.trade_tracker import _fetch_cmp_batch
+
+        report = get_latest_signals_scan_report(horizon=horizon.upper(), limit=120)
+        if not report.get("available"):
+            return []
+        rows = [r for r in (report.get("sample") or [])
+                if r.get("final_selected") and r.get("symbol")
+                and r.get("entry") and r.get("stop_loss")]
+        # Highest-confidence first.
+        rows.sort(key=lambda r: float(r.get("confidence") or 0), reverse=True)
+        if not rows:
+            return []
+
+        cmps = _fetch_cmp_batch([r["symbol"] for r in rows]) or {}
+        picks: list[dict] = []
+        waiting = unreachable = 0
+        for r in rows:
+            if len(picks) >= max_picks:
+                break
+            sym = r["symbol"]
+            if get_active_position_by_symbol(sym):
+                continue
+            entry = float(r["entry"])
+            cmp = cmps.get(sym)
+            if cmp is None or entry <= 0:
+                continue
+            gap = (float(cmp) - entry) / entry * 100.0
+            if gap > PROMOTE_ACTIONABLE_PCT:
+                # Price above the entry zone: 5-15% = waiting (may pull back),
+                # >15% = unreachable (ran past). Neither is a CMP-buy.
+                if gap > 15:
+                    unreachable += 1
+                else:
+                    waiting += 1
+                continue
+            if gap < -PROMOTE_ACTIONABLE_PCT:
+                waiting += 1  # below entry — awaiting (breakout); don't chase
+                continue
+            tgt = r.get("target")
+            picks.append({
+                "symbol": sym,
+                "horizon": horizon.upper(),
+                "entry_price": entry,
+                "stop_loss": float(r["stop_loss"]),
+                "target_1": float(tgt) if tgt else None,
+                "target_2": None,
+                "confidence_score": float(r.get("confidence") or 0),
+                "reasoning": "Promoted from Final Trade Ideas (CMP-buy — price at entry zone).",
+                "recommendation_id": r.get("id"),
+                "scan_cmp": float(cmp),
+            })
+        log.info("[FinalIdeas] %s actionable=%d waiting=%d unreachable=%d (cap-room=%d)",
+                 horizon, len(picks), waiting, unreachable, max_picks)
+        return picks
+    except Exception as exc:
+        log.warning("[FinalIdeas] source failed (%s) — falling back to legacy", exc)
+        return []
+
+
+def select_and_promote(horizon: str) -> int:
+    """Select top ideas and auto-promote them into the portfolio. Returns count promoted.
+
+    Primary source = the Final Trade Ideas feed with a live price-trigger gate
+    (PORTFOLIO_SOURCE_FINAL_IDEAS, default on). Falls back to the legacy
+    recommendation selector if that yields nothing, so promotion never stalls.
+    """
+    from services.portfolio_manager import promote_to_portfolio
+    from dashboard.backend.db.portfolio import get_portfolio_counts
+
+    use_final = os.getenv("PORTFOLIO_SOURCE_FINAL_IDEAS", "1").strip().lower() in {"1", "true", "yes"}
+    ideas: list[dict] = []
+    if use_final:
+        counts = get_portfolio_counts()
+        cur = counts.get(horizon.lower(), 0)
+        cap = counts.get(f"{horizon.lower()}_max", 20)
+        ideas = select_from_final_ideas(horizon, max_picks=max(0, cap - cur))
+    if not ideas:
+        ideas = select_top_ideas(horizon)
     promoted = 0
 
     for idea in ideas:
