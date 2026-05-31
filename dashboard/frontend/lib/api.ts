@@ -858,6 +858,8 @@ export interface ResearchDecisionCard {
   risk_reward?: number | null;
   confidence_score: number;
   scan_cmp?: number | null;
+  entry_distance_pct?: number | null;
+  reachability?: "actionable" | "waiting" | "unreachable" | "pre_breakout" | "unknown" | string | null;
   entry_type?: string | null;
   expected_holding_period?: string | null;
   layer1_pass?: boolean;

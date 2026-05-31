@@ -127,6 +127,7 @@ class LayerValidationRecord:
             risk = abs(self.entry - self.stop_loss)
             rr = round(abs(target - self.entry) / max(risk, 0.01), 2)
         tier = _signal_tier_label(self)
+        entry_distance_pct, reachability = _entry_reachability(self.cmp, self.entry)
         return {
             "symbol": self.symbol,
             "setup": self.setup,
@@ -136,6 +137,8 @@ class LayerValidationRecord:
             "risk_reward": rr,
             "confidence_score": self.confidence_score,
             "scan_cmp": self.cmp,
+            "entry_distance_pct": entry_distance_pct,
+            "reachability": reachability,
             "entry_type": (self.smc or {}).get("entry_type", "MARKET"),
             "expected_holding_period": "1-8 weeks" if self.horizon == "SWING" else "6-24 months",
             "layer1_pass": self.layer1_pass,
@@ -373,6 +376,37 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     meta["scored_smc"] = True
     meta["symbol"] = symbol
     return entry, stop, targets, setup, meta
+
+
+def _entry_reachability(cmp: float | None, entry: float | None) -> tuple[float | None, str]:
+    """Classify how reachable the planned entry is from the current price.
+
+    A recommendation whose limit entry sits far BELOW the current price is
+    effectively dead — the order will not fill unless the stock reverses hard.
+    This surfaces that state instead of showing an entry that "will never
+    trigger" (the 2026-05 product complaint: 35% of the final book had CMP
+    >15% above the planned entry).
+
+    gap = (cmp - entry) / entry   (+ve = price already above the buy zone)
+    Pre-committed bands (frozen — not swept):
+      |gap| <= 5%      -> "actionable"   (trading at/near the entry)
+      5% < gap <= 15%  -> "waiting"      (above entry; may pull back)
+      gap > 15%        -> "unreachable"  (price ran away; hidden by default)
+      gap < -5%        -> "pre_breakout" (entry above CMP; awaiting trigger)
+    Returns (entry_distance_pct, reachability). Distance is None when inputs
+    are missing/zero, with reachability "unknown" (UI shows it, no badge)."""
+    if not cmp or not entry or entry <= 0:
+        return None, "unknown"
+    gap = (cmp - entry) / entry * 100.0
+    if gap < -5.0:
+        band = "pre_breakout"
+    elif gap <= 5.0:
+        band = "actionable"
+    elif gap <= 15.0:
+        band = "waiting"
+    else:
+        band = "unreachable"
+    return round(gap, 2), band
 
 
 def _smc_score(meta: dict | None, horizon: Horizon) -> float:
