@@ -194,6 +194,36 @@ def start_scheduler() -> None:
         misfire_grace_time=60,
     )
 
+    # Equity state machine (SWING_SM tracked book): daily pre-market tick.
+    # ISOLATED + flag-gated (EQUITY_STATE_MACHINE; off ⟹ instant no-op).
+    # This is the persistent ARMED→TAPPED→ENTRY_ACTIVE/EXPIRED tracker that
+    # feeds the website "Tracked Setups" section — answers "what happened to
+    # yesterday's idea" instead of the daily scan's fresh re-rank. Idempotent
+    # per IST day; evaluates the latest CLOSED daily bar. In `alert` mode it
+    # publishes recent fires as isolated SWING_SM recommendations (NOT
+    # auto-traded, never touches the live index engine). Best-effort.
+    def _run_equity_state_machine():
+        try:
+            import asyncio as _asyncio
+            from services.equity_state_machine import run_equity_sm_shadow_tick
+            res = _asyncio.run(run_equity_sm_shadow_tick())
+            status = res.get("status")
+            if status == "disabled":
+                return  # flag off — stay silent
+            logger.info("[EquitySM] %s", res)
+        except Exception:
+            logger.exception("[EquitySM] tick failed")
+
+    _scheduler.add_job(
+        _run_equity_state_machine,
+        CronTrigger(hour=8, minute=35, day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="equity_state_machine",
+        name="Equity State Machine (SWING_SM tracked book, flag-gated)",
+        replace_existing=True,
+        misfire_grace_time=600,
+        max_instances=1,
+    )
+
     # Kite auto-login: daily 08:50 IST, runs IN THE CLOUD (this web service)
     # so token refresh never depends on the user's PC being on. Previously
     # auto_login.py was scheduled via Windows Task Scheduler on the user's
