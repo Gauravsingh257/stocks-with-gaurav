@@ -323,6 +323,11 @@ app.include_router(watchlist_os_router)
 app.include_router(command_center_router)
 app.include_router(user_product_router)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
+try:
+    from dashboard.backend.routes.watchlist_monitor import router as watchlist_monitor_router
+    app.include_router(watchlist_monitor_router)
+except Exception as _wl_exc:  # never block app startup on the new router
+    log.warning("watchlist_monitor router not mounted: %s", _wl_exc)
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
