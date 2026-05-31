@@ -221,3 +221,172 @@ def close_user_position(position_id: int, exit_price: float, exit_reason: str) -
         log.warning("close_user_position %s failed: %s", position_id, exc)
     finally:
         conn.close()
+
+
+# ── watchlist_positions CRUD ─────────────────────────────────────────────
+def create_watchlist_idea(user_id: int, payload: dict) -> int:
+    """Insert a staged idea (research-promoted or manual). Returns id."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO watchlist_positions
+                (user_id, symbol, pattern, tag, entry_low, entry_high, stop_loss,
+                 target_1, target_2, capital, risk_percent, calculated_quantity,
+                 auto_entry_override, valid_until, source, notes, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING')
+            """,
+            (
+                user_id, payload["symbol"], payload.get("pattern"), payload.get("tag"),
+                float(payload["entry_low"]), float(payload["entry_high"]), float(payload["stop_loss"]),
+                payload.get("target_1"), payload.get("target_2"),
+                payload.get("capital"), payload.get("risk_percent"), payload.get("calculated_quantity"),
+                payload.get("auto_entry_override"), payload.get("valid_until"),
+                payload.get("source", "MANUAL"), payload.get("notes"),
+            ),
+        )
+        conn.commit()
+        wid = int(cur.lastrowid)
+    finally:
+        conn.close()
+    log_watchlist_event(wid, user_id, "CREATED", payload={"symbol": payload["symbol"]})
+    return wid
+
+
+def list_watchlist(user_id: int, include_done: bool = False) -> list[dict]:
+    conn = get_connection()
+    try:
+        if include_done:
+            rows = conn.execute(
+                "SELECT * FROM watchlist_positions WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM watchlist_positions WHERE user_id = ? "
+                "AND status NOT IN ('CLOSED','EXPIRED') ORDER BY created_at DESC",
+                (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_watchlist_idea(idea_id: int, user_id: int | None = None) -> dict | None:
+    conn = get_connection()
+    try:
+        if user_id is None:
+            row = conn.execute("SELECT * FROM watchlist_positions WHERE id = ?", (idea_id,)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM watchlist_positions WHERE id = ? AND user_id = ?",
+                               (idea_id, user_id)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_watchlist_fields(idea_id: int, **fields) -> None:
+    allowed = {"status", "armed", "triggered", "trigger_time", "cmp",
+               "linked_position_id", "calculated_quantity", "valid_until",
+               "auto_entry_override", "notes", "tag", "capital", "risk_percent"}
+    upd = {k: v for k, v in fields.items() if k in allowed}
+    if not upd:
+        return
+    upd["updated_at"] = datetime.now(_IST).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in upd)
+    conn = get_connection()
+    try:
+        conn.execute(f"UPDATE watchlist_positions SET {set_clause} WHERE id = ?",
+                     list(upd.values()) + [idea_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_watchlist_idea(idea_id: int, user_id: int) -> bool:
+    conn = get_connection()
+    try:
+        cur = conn.execute("DELETE FROM watchlist_positions WHERE id = ? AND user_id = ?",
+                           (idea_id, user_id))
+        conn.commit()
+        ok = cur.rowcount > 0
+    finally:
+        conn.close()
+    if ok:
+        log_watchlist_event(idea_id, user_id, "REMOVED")
+    return ok
+
+
+def list_monitorable() -> list[dict]:
+    """All watchlist rows the trigger engine should evaluate (not done/active)."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM watchlist_positions "
+            "WHERE status NOT IN ('ACTIVE','CLOSED','EXPIRED')").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_user_pref(user_id: int) -> dict:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM user_preferences WHERE user_id = ?", (user_id,)).fetchone()
+        if row:
+            return dict(row)
+        return {"user_id": user_id, "auto_entry": 0, "default_capital": None, "default_risk_percent": 1.0}
+    finally:
+        conn.close()
+
+
+def set_user_pref(user_id: int, **fields) -> None:
+    cur = get_user_pref(user_id)
+    auto_entry = int(fields.get("auto_entry", cur.get("auto_entry", 0)) or 0)
+    default_capital = fields.get("default_capital", cur.get("default_capital"))
+    default_risk = fields.get("default_risk_percent", cur.get("default_risk_percent", 1.0))
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO user_preferences (user_id, auto_entry, default_capital, default_risk_percent, updated_at) "
+            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(user_id) DO UPDATE SET auto_entry=excluded.auto_entry, "
+            "default_capital=excluded.default_capital, default_risk_percent=excluded.default_risk_percent, "
+            "updated_at=datetime('now')",
+            (user_id, auto_entry, default_capital, default_risk))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def promote_watchlist_to_user_position(idea: dict, entry_price: float, source: str) -> int | None:
+    """Create a user_positions row from a watchlist idea (Buy-CMP or trigger).
+    Duplicate-guarded: returns None if the symbol is already ACTIVE for the user.
+    Links both rows and flips the watchlist idea to ACTIVE."""
+    user_id = int(idea["user_id"])
+    symbol = idea["symbol"]
+    conn = get_connection()
+    try:
+        dup = conn.execute(
+            "SELECT id FROM user_positions WHERE user_id = ? AND symbol = ? AND status = 'ACTIVE'",
+            (user_id, symbol)).fetchone()
+        if dup:
+            return None
+        cur = conn.execute(
+            """
+            INSERT INTO user_positions
+                (user_id, symbol, entry_price, stop_loss, target_1, target_2,
+                 holding_period, status, source, quantity, watchlist_id)
+            VALUES (?, ?, ?, ?, ?, ?, 'Swing', 'ACTIVE', ?, ?, ?)
+            """,
+            (user_id, symbol, float(entry_price),
+             float(idea["stop_loss"]) if idea.get("stop_loss") is not None else None,
+             idea.get("target_1"), idea.get("target_2"),
+             source, idea.get("calculated_quantity"), int(idea["id"])),
+        )
+        conn.commit()
+        pos_id = int(cur.lastrowid)
+    finally:
+        conn.close()
+    update_watchlist_fields(int(idea["id"]), status="ACTIVE", linked_position_id=pos_id)
+    log_watchlist_event(int(idea["id"]), user_id, "ACTIVE",
+                        notes=f"{source} @ {entry_price}", payload={"position_id": pos_id})
+    return pos_id

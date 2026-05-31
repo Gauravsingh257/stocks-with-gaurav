@@ -96,6 +96,15 @@ def _portfolio_tracker_loop() -> None:
             _promote_final_ideas_on_tap()
         except Exception:
             log.exception("Portfolio tracker: arm-on-tap error")
+        try:
+            # Watchlist entry-trigger monitor (flag-gated WATCHLIST_MONITOR_ENABLED;
+            # inert until enabled). Same loop, no separate scheduler/engine.
+            from services.entry_trigger_service import EntryTriggerService
+            res = EntryTriggerService().tick()
+            if res.get("status") == "ok" and (res.get("triggered") or res.get("promoted")):
+                log.info("[WatchlistTrigger] %s", res)
+        except Exception:
+            log.exception("Portfolio tracker: watchlist-trigger error")
         interval = _current_interval()
         time.sleep(interval)
 
