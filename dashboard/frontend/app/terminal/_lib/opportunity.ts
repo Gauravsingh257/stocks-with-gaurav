@@ -105,9 +105,31 @@ function deriveDirection(card: ResearchDecisionCard): Direction {
 }
 
 function deriveStatus(card: ResearchDecisionCard): WatchStatus {
-  if (card.final_selected) return "Triggered";
-  if (card.near_setup) return "Tapped";
-  return "Waiting";
+  // Honest, price-aware lifecycle for a STATELESS scan card.
+  //
+  // 2026-05 bug: this mapped `final_selected -> "Triggered"`. Every card in
+  // the final bucket HAS final_selected=true (that's what makes it final), so
+  // EVERY card pinned to "Triggered" regardless of where price actually was —
+  // even names trading 30%+ above their entry that the order will never fill.
+  //
+  // A daily scan only knows today's CMP vs the planned entry — NOT whether
+  // price actually traded through the entry after the signal. So it can never
+  // truthfully claim Triggered / Running / Closed (those require the stateful
+  // equity state machine). The most we can honestly say from a CMP snapshot is
+  // whether price is AT the entry zone (Approaching) or not yet (Waiting).
+  // The full lifecycle progression is driven by the state machine elsewhere.
+  switch (card.reachability) {
+    case "actionable":          // CMP within ±5% of entry — at the zone
+      return "Approaching";
+    case "waiting":             // 5–15% above entry — pull back pending
+    case "unreachable":         // >15% past entry — missed, NOT triggered
+    case "pre_breakout":        // below entry — awaiting breakout trigger
+      return "Waiting";
+    default:
+      // Older cached payloads without the reachability field: fall back to
+      // SMC flags but still never fake "Triggered".
+      return card.near_setup ? "Tapped" : "Waiting";
+  }
 }
 
 export function toOpportunity(card: ResearchDecisionCard): Opportunity {
