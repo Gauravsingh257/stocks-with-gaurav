@@ -324,92 +324,72 @@ function PositionRow({
   cmpLive: number | null;
   onClose: (id: number) => void;
 }) {
-  const cmp = cmpLive ?? pos.cmp;
   const entry = pos.entry_price;
+  const cmp = cmpLive ?? pos.cmp ?? null;
+  const sl = pos.stop_loss ?? entry * 0.95;
+  const t1 = pos.target_1;
+  const t2 = pos.target_2;
+  const maxTarget = t2 ?? t1 ?? entry * 1.2;
   const pnlPct = cmp != null && entry > 0 ? ((cmp - entry) / entry) * 100 : pos.pnl_pct;
-  const pnlR = cmp != null && pos.stop_loss != null && entry > 0
-    ? (cmp - entry) / Math.abs(entry - pos.stop_loss)
-    : pos.pnl_r;
-  const status = pos.live_status || pos.status;
-  const statusColor =
-    status === "Near Target" || status === "Running"
-      ? "#00e096"
-      : status === "SL Risk" || status === "Underwater"
-        ? "#ff4757"
-        : "var(--text-secondary)";
+  const risk = Math.abs(entry - sl);
+  const reward = maxTarget - entry;
+  const rr = risk > 0 ? (reward / risk).toFixed(1) : "-";
+
+  // Progress bar: SL (0%) → Entry marker → Target (100%)
+  const range = maxTarget - sl;
+  const fillRef = cmp ?? entry;
+  const progress = range > 0 ? Math.min(Math.max(((fillRef - sl) / range) * 100, 0), 100) : 50;
+  const entryPct = range > 0 ? ((entry - sl) / range) * 100 : 50;
+  const up = (pnlPct ?? 0) >= 0;
+
+  const Cell = ({ k, v, color }: { k: string; v: string; color?: string }) => (
+    <div>
+      <div style={{ color: "var(--text-dim)", fontSize: "0.58rem", textTransform: "uppercase", letterSpacing: 0.6, fontFamily: "var(--font-sans, system-ui)" }}>{k}</div>
+      <strong style={{ color: color || "var(--text-primary)" }}>{v}</strong>
+    </div>
+  );
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1.2fr 0.8fr 0.8fr 0.7fr 0.7fr 0.7fr 0.7fr auto",
-        gap: 10,
-        alignItems: "center",
-        padding: "10px 14px",
-        background: "rgba(255,255,255,0.015)",
-        border: "1px solid rgba(255,255,255,0.05)",
-        borderLeft: "2px solid rgba(0,224,150,0.35)",
-        borderRadius: 4,
-        fontSize: "0.72rem",
-        ...MONO_NUMS,
-      }}
-    >
-      <div style={{ fontFamily: "inherit" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <strong style={{ color: "var(--text-primary)", letterSpacing: 0.3, fontFamily: "var(--font-sans, system-ui)" }}>{pos.symbol}</strong>
+    <div style={{ padding: "13px 16px", background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.06)", borderLeft: "3px solid #00d18c", borderRadius: 8, ...MONO_NUMS }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem", letterSpacing: 0.3, fontFamily: "var(--font-sans, system-ui)" }}>{pos.symbol}</strong>
           {pos.source && SOURCE_LABEL[pos.source] && (
-            <span style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4, textTransform: "uppercase", letterSpacing: 0.5, color: SOURCE_LABEL[pos.source].color, border: `1px solid ${SOURCE_LABEL[pos.source].color}55`, fontFamily: "var(--font-sans, system-ui)" }}>
+            <span style={{ fontSize: "0.52rem", fontWeight: 800, padding: "1px 6px", borderRadius: 4, textTransform: "uppercase", letterSpacing: 0.5, color: SOURCE_LABEL[pos.source].color, border: `1px solid ${SOURCE_LABEL[pos.source].color}55`, fontFamily: "var(--font-sans, system-ui)" }}>
               {SOURCE_LABEL[pos.source].label}
             </span>
           )}
-        </span>
-        <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.2, fontFamily: "var(--font-sans, system-ui)" }}>
-          {pos.holding_period || "Swing"} · {pos.holding_days ?? 0}d
+          <span style={{ fontSize: "0.62rem", color: "var(--text-dim)", fontFamily: "var(--font-sans, system-ui)" }}>
+            {pos.holding_period || "Swing"} · {pos.holding_days ?? 0}d held
+          </span>
+        </div>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: "0.6rem", fontWeight: 800, color: "#00d18c", border: "1px solid rgba(0,209,140,0.4)", borderRadius: 999, padding: "2px 9px", fontFamily: "var(--font-sans, system-ui)" }}>● ACTIVE</span>
+          <button type="button" onClick={() => onClose(pos.id)} style={{ padding: "3px 10px", background: "transparent", border: "1px solid rgba(255,255,255,0.14)", color: "var(--text-secondary)", borderRadius: 6, fontSize: "0.64rem", cursor: "pointer", fontFamily: "var(--font-sans, system-ui)" }}>Close</button>
         </div>
       </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>Entry</div>
-        {fmtPrice(entry)}
+
+      {/* Metrics grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))", gap: 10, fontSize: "0.8rem" }}>
+        <Cell k="Entry" v={fmtPrice(entry)} />
+        <Cell k="CMP" v={fmtPrice(cmp)} color={up ? "#00e096" : "#ff4757"} />
+        <Cell k="Stop Loss" v={fmtPrice(sl)} color="#ff4d6d" />
+        {t1 != null && <Cell k="Target 1" v={fmtPrice(t1)} color="#00d18c" />}
+        {t2 != null && t2 !== t1 && <Cell k="Target 2" v={fmtPrice(t2)} color="#00d18c" />}
+        <Cell k="P&L" v={fmtPct(pnlPct)} color={up ? "#00e096" : "#ff4757"} />
+        <Cell k="R:R" v={`1:${rr}`} />
       </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>CMP</div>
-        <strong>{fmtPrice(cmp)}</strong>
+
+      {/* Progress bar: SL → Entry → Target */}
+      <div style={{ marginTop: 11, position: "relative", height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
+        <div style={{ position: "absolute", left: `${entryPct}%`, top: -2, width: 2, height: 10, background: "var(--text-secondary)", borderRadius: 1, zIndex: 2 }} />
+        <div style={{ height: "100%", borderRadius: 3, width: `${progress}%`, background: up ? "linear-gradient(90deg,#00d18c,#00ff88)" : "linear-gradient(90deg,#ff4d6d,#ff6b88)", transition: "width 0.3s ease" }} />
       </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>SL</div>
-        <span style={{ color: "#ff4757" }}>{fmtPrice(pos.stop_loss)}</span>
-      </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>Target</div>
-        <span style={{ color: "#00e096" }}>{fmtPrice(pos.target_2 ?? pos.target_1)}</span>
-      </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>P&amp;L</div>
-        <strong style={{ color: (pnlPct ?? 0) >= 0 ? "#00e096" : "#ff4757" }}>{fmtPct(pnlPct)}</strong>
-      </div>
-      <div>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "var(--font-sans, system-ui)" }}>R</div>
-        <span style={{ color: (pnlR ?? 0) >= 0 ? "#00e096" : "#ff4757" }}>{pnlR != null ? pnlR.toFixed(2) : "—"}</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-        <span style={{ fontSize: "0.62rem", color: statusColor, fontWeight: 700, letterSpacing: 0.3 }}>
-          {status}
-        </span>
-        <button
-          type="button"
-          onClick={() => onClose(pos.id)}
-          style={{
-            padding: "3px 8px",
-            background: "transparent",
-            border: "1px solid rgba(255,255,255,0.12)",
-            color: "var(--text-secondary)",
-            borderRadius: 4,
-            fontSize: "0.62rem",
-            cursor: "pointer",
-          }}
-        >
-          Close
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.6rem", color: "var(--text-dim)", marginTop: 3 }}>
+        <span>SL: {fmtPrice(sl)}</span>
+        <span>Entry: {fmtPrice(entry)}</span>
+        <span>Target: {fmtPrice(maxTarget)}</span>
       </div>
     </div>
   );
@@ -597,16 +577,13 @@ export default function WatchlistPage() {
         </div>
       )}
 
-      {/* Active Watchlist Monitor — entry-trigger lifecycle (new) */}
-      <WatchlistMonitor />
-
-      {/* Active Positions */}
+      {/* Active Positions — held trades, full portfolio-style tracking (FIRST) */}
       {positions.length > 0 && (
         <section>
           <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "var(--text-dim)", letterSpacing: 0.5, marginBottom: 8, display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Activity size={11} color="#00e096" /> ACTIVE POSITIONS
+            <Activity size={11} color="#00e096" /> ACTIVE POSITIONS ({positions.length})
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {positions.map((p) => {
               const live = marketLtp[stripNse(p.symbol)] ?? null;
               return <PositionRow key={p.id} pos={p} cmpLive={live} onClose={handleClosePosition} />;
@@ -614,6 +591,9 @@ export default function WatchlistPage() {
           </div>
         </section>
       )}
+
+      {/* Active Watchlist Monitor — entry-trigger staging (below positions) */}
+      <WatchlistMonitor />
 
       {/* Legacy symbol-only watches (deprecated). The Active Watchlist above is
           the primary flow; this only renders pre-existing symbol-only entries so
