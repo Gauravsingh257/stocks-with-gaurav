@@ -615,41 +615,24 @@ export default function WatchlistPage() {
         </section>
       )}
 
-      {/* Watchlist cards */}
-      <section>
-        <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "var(--text-dim)", letterSpacing: 0.5, marginBottom: 8 }}>
-          MONITORING ({intel.length})
-        </div>
-        {loading ? (
-          <div className="glass" style={{ padding: 24, textAlign: "center", color: "var(--text-secondary)" }}>
-            Loading…
+      {/* Legacy symbol-only watches (deprecated). The Active Watchlist above is
+          the primary flow; this only renders pre-existing symbol-only entries so
+          nothing silently disappears. Re-add from Research for full tracking. */}
+      {intel.length > 0 && (
+        <section>
+          <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "var(--text-dim)", letterSpacing: 0.5, marginBottom: 6 }}>
+            LEGACY WATCHES · SYMBOL-ONLY ({intel.length})
           </div>
-        ) : intel.length === 0 && savedSymbols.length === 0 ? (
-          <div className="glass" style={{ padding: "32px 24px", textAlign: "center" }}>
-            <Bookmark size={32} color="var(--text-dim)" style={{ margin: "0 auto 12px" }} />
-            <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Your watchlist is empty.</p>
-            <p style={{ color: "var(--text-dim)", fontSize: "0.82rem" }}>
-              Add from{" "}
-              <Link href="/research" style={{ color: "var(--accent)" }}>
-                Research
-              </Link>{" "}
-              or any stock page.
-            </p>
+          <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginBottom: 8 }}>
+            These were saved without a setup. Re-add from{" "}
+            <Link href="/research" style={{ color: "var(--accent)" }}>Research</Link>{" "}
+            to track entry zone, SL and targets in the Active Watchlist above.
           </div>
-        ) : intel.length === 0 ? (
-          <div className="glass" style={{ padding: 18, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
-            Preparing intelligence for {savedSymbols.map((s) => s.symbol).join(", ")}… tap Refresh in a moment.
-          </div>
-        ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {intel.map((row, i) => {
               const cmp = marketLtp[stripNse(row.symbol)] ?? row.quote_ltp ?? null;
               return (
-                <div
-                  key={row.symbol}
-                  className="wl-card-enter"
-                  style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}
-                >
+                <div key={row.symbol} className="wl-card-enter" style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}>
                   <StockCard
                     row={row}
                     cmp={cmp}
@@ -662,8 +645,8 @@ export default function WatchlistPage() {
               );
             })}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       {/* Subtle staggered fade-in on initial mount — the one "high-impact
           moment" the frontend-design skill calls for. Restrained per the

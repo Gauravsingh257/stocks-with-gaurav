@@ -6,16 +6,36 @@ import { BookmarkPlus, Check } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 
-/** Cloud API only — adds symbol to user_watchlist via Railway backend. */
+/**
+ * Adds a symbol to the watchlist.
+ *  - With a `setup` (entry/SL/targets from a research card) → creates a full
+ *    watchlist_positions row via /api/watchlist/monitor (source=RESEARCH_AUTO)
+ *    so it appears as an active WatchlistMonitor card with entry zone + actions.
+ *  - Without a setup (plain symbol) → legacy /api/watchlist symbol add.
+ */
+export interface WatchlistSetup {
+  entry_price?: number | null;
+  stop_loss?: number | null;
+  target_1?: number | null;
+  target_2?: number | null;
+  pattern?: string | null;
+}
+
+// Entry zone derived from a research card's single entry price (±band).
+const ENTRY_BAND = 0.01; // ±1%
+
 export default function AddToWatchlistButton({
   symbol,
   compact = false,
   onAdded,
+  setup,
 }: {
   symbol: string;
   compact?: boolean;
   /** Called after successful POST (e.g. router.refresh for /watchlist). */
   onAdded?: () => void;
+  /** When provided, creates a full monitor entry (entry zone + SL + targets). */
+  setup?: WatchlistSetup;
 }) {
   const { user, token } = useAuth();
   const [done, setDone] = useState(false);
@@ -30,7 +50,23 @@ export default function AddToWatchlistButton({
     setErr(null);
     setDone(true);
     try {
-      await api.addToWatchlist(token, clean);
+      const entry = setup?.entry_price;
+      const sl = setup?.stop_loss;
+      if (entry && sl) {
+        // Full research setup → active monitor entry with levels copied.
+        await api.watchlistMonitorAdd(token, {
+          symbol: clean,
+          entry_low: Number((entry * (1 - ENTRY_BAND)).toFixed(2)),
+          entry_high: Number((entry * (1 + ENTRY_BAND)).toFixed(2)),
+          stop_loss: Number(sl),
+          target_1: setup?.target_1 ?? null,
+          target_2: setup?.target_2 ?? null,
+          pattern: setup?.pattern ?? null,
+          source: "RESEARCH_AUTO",
+        });
+      } else {
+        await api.addToWatchlist(token, clean);
+      }
       onAdded?.();
     } catch {
       setDone(false);
@@ -38,7 +74,7 @@ export default function AddToWatchlistButton({
     } finally {
       setBusy(false);
     }
-  }, [token, clean, onAdded]);
+  }, [token, clean, onAdded, setup]);
 
   if (!user || !token) {
     return (
