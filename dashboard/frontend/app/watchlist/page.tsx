@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { api, type WatchlistIntelItem } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import WatchlistMonitor from "./WatchlistMonitor";
 import { useMergedMarketLtp } from "@/lib/realtimeRegistry";
 import { subscribeWatchlistOsHint } from "@/lib/watchlistOsBridge";
 
@@ -35,6 +36,14 @@ type Position = {
   pnl_pct: number | null;
   pnl_r: number | null;
   holding_days: number | null;
+  source?: string | null;
+};
+
+const SOURCE_LABEL: Record<string, { label: string; color: string }> = {
+  CMP_BUY:           { label: "Buy@CMP",  color: "#34d399" },
+  WATCHLIST_TRIGGER: { label: "Triggered", color: "#f472b6" },
+  RESEARCH_AUTO:     { label: "Research", color: "#7dd3fc" },
+  MANUAL:            { label: "Manual",   color: "#a3a3a3" },
 };
 
 function stripNse(s: string): string {
@@ -346,7 +355,14 @@ function PositionRow({
       }}
     >
       <div style={{ fontFamily: "inherit" }}>
-        <strong style={{ color: "var(--text-primary)", letterSpacing: 0.3, fontFamily: "var(--font-sans, system-ui)" }}>{pos.symbol}</strong>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <strong style={{ color: "var(--text-primary)", letterSpacing: 0.3, fontFamily: "var(--font-sans, system-ui)" }}>{pos.symbol}</strong>
+          {pos.source && SOURCE_LABEL[pos.source] && (
+            <span style={{ fontSize: "0.5rem", fontWeight: 800, padding: "1px 5px", borderRadius: 4, textTransform: "uppercase", letterSpacing: 0.5, color: SOURCE_LABEL[pos.source].color, border: `1px solid ${SOURCE_LABEL[pos.source].color}55`, fontFamily: "var(--font-sans, system-ui)" }}>
+              {SOURCE_LABEL[pos.source].label}
+            </span>
+          )}
+        </span>
         <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.2, fontFamily: "var(--font-sans, system-ui)" }}>
           {pos.holding_period || "Swing"} · {pos.holding_days ?? 0}d
         </div>
@@ -580,6 +596,9 @@ export default function WatchlistPage() {
           {error}
         </div>
       )}
+
+      {/* Active Watchlist Monitor — entry-trigger lifecycle (new) */}
+      <WatchlistMonitor />
 
       {/* Active Positions */}
       {positions.length > 0 && (

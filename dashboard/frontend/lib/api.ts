@@ -845,6 +845,48 @@ export interface ResearchValidationResponse {
   records_sample: Array<Record<string, unknown>>;
 }
 
+export interface WatchlistMonitorItem {
+  id: number;
+  symbol: string;
+  pattern?: string | null;
+  tag?: string | null;
+  entry_low: number;
+  entry_high: number;
+  stop_loss: number;
+  target_1?: number | null;
+  target_2?: number | null;
+  capital?: number | null;
+  risk_percent?: number | null;
+  calculated_quantity?: number | null;
+  cmp?: number | null;
+  status: string;
+  live_status?: string;
+  distance_pct?: number | null;
+  armed?: number;
+  triggered?: number;
+  source?: string;
+  valid_until?: string | null;
+  notes?: string | null;
+  linked_position_id?: number | null;
+}
+
+export interface WatchlistMonitorAddPayload {
+  symbol: string;
+  entry_low: number;
+  entry_high: number;
+  stop_loss: number;
+  target_1?: number | null;
+  target_2?: number | null;
+  pattern?: string | null;
+  tag?: string | null;
+  capital?: number | null;
+  risk_percent?: number | null;
+  auto_entry_override?: boolean | null;
+  valid_until?: string | null;
+  notes?: string | null;
+  source?: string;
+}
+
 export interface ResearchDecisionCard {
   id?: number;
   symbol: string;
@@ -1396,6 +1438,32 @@ export const api = {
   removeFromWatchlist: (token: string, symbol: string) =>
     fetch(`${BASE}/api/watchlist/${encodeURIComponent(symbol)}`, {
       method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json()),
+
+  // ── Active Watchlist Monitor (entry-trigger lifecycle) ──────────────────
+  watchlistMonitorList: (token: string) =>
+    fetch(`${BASE}/api/watchlist/monitor`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() as Promise<{ items: WatchlistMonitorItem[]; count: number }> : Promise.reject(r.status)),
+  watchlistMonitorAdd: (token: string, payload: WatchlistMonitorAddPayload) =>
+    fetch(`${BASE}/api/watchlist/monitor`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => r.json()),
+  watchlistMonitorArm: (token: string, id: number) =>
+    fetch(`${BASE}/api/watchlist/monitor/${id}/arm`, { method: "POST", headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+  watchlistMonitorBuyCmp: (token: string, id: number) =>
+    fetch(`${BASE}/api/watchlist/monitor/${id}/buy-cmp`, { method: "POST", headers: { Authorization: `Bearer ${token}` } })
+      .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j?.detail || "buy failed"); return j; }),
+  watchlistMonitorIgnore: (token: string, id: number) =>
+    fetch(`${BASE}/api/watchlist/monitor/${id}/ignore`, { method: "POST", headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+  watchlistMonitorRemove: (token: string, id: number) =>
+    fetch(`${BASE}/api/watchlist/monitor/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+  watchlistPrefsGet: (token: string) =>
+    fetch(`${BASE}/api/watchlist/preferences`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+  watchlistPrefsPut: (token: string, payload: { auto_entry?: boolean; default_capital?: number; default_risk_percent?: number }) =>
+    fetch(`${BASE}/api/watchlist/preferences`, {
+      method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }).then((r) => r.json()),
 
   /** Take Entry — open an active position from the watchlist. */
