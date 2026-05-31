@@ -13,6 +13,7 @@ On exit: journals the trade + sends Telegram alert.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import date, datetime
@@ -20,6 +21,83 @@ from datetime import date, datetime
 log = logging.getLogger("services.portfolio_tracker")
 
 _tracker_thread: threading.Thread | None = None
+
+# ── PR-3 structure-break exit (flag-gated, default OFF — opt in after review) ──
+_STRUCTURE_EXIT_ON = os.getenv("PORTFOLIO_STRUCTURE_EXIT", "0").strip().lower() in {"1", "true", "yes"}
+_STRUCTURE_EXIT_MIN_DAYS = int(os.getenv("PORTFOLIO_STRUCTURE_EXIT_MIN_DAYS", "3"))
+_STRUCTURE_EXIT_BUFFER = float(os.getenv("PORTFOLIO_STRUCTURE_EXIT_BUFFER", "0.02"))  # 2% below 200DMA
+# per-day 200-DMA cache {symbol: (day, dma)}
+_dma_cache: dict[str, tuple[str, float | None]] = {}
+
+
+def _get_200dma(symbol: str) -> float | None:
+    """Best-effort 200-day SMA from Kite daily bars, cached once per IST day.
+    Returns None on any failure (caller then skips the structure check)."""
+    today = date.today().isoformat()
+    hit = _dma_cache.get(symbol)
+    if hit and hit[0] == today:
+        return hit[1]
+    dma: float | None = None
+    try:
+        from datetime import timedelta
+        from services.fvg_tap_engine import _get_fvg_tap_kite_client
+        kite = _get_fvg_tap_kite_client()
+        if kite is not None:
+            d = kite.ltp(symbol)
+            tok = int(list(d.values())[0]["instrument_token"]) if d else None
+            if tok:
+                to_dt = datetime.now()
+                bars = kite.historical_data(tok, to_dt - timedelta(days=320), to_dt, "day")
+                closes = [float(b["close"]) for b in bars if b.get("close")]
+                if len(closes) >= 200:
+                    dma = sum(closes[-200:]) / 200.0
+    except Exception as exc:
+        log.debug("200DMA fetch failed for %s: %s", symbol, exc)
+    _dma_cache[symbol] = (today, dma)
+    return dma
+
+
+def _promote_final_ideas_on_tap() -> int:
+    """Arm-on-tap: during market hours, promote any Final Trade Idea now trading
+    in its entry zone (CMP-buy). The Final Trade Ideas feed IS the armed set —
+    select_from_final_ideas re-checks live CMP each cycle, so a name that was
+    "waiting" (above entry) earlier gets promoted the moment price pulls back
+    into the ±band. Flag-gated + best-effort; never raises into the loop."""
+    if os.getenv("PORTFOLIO_SOURCE_FINAL_IDEAS", "1").strip().lower() not in {"1", "true", "yes"}:
+        return 0
+    try:
+        from services.trade_tracker import _is_market_hours
+        if not _is_market_hours():
+            return 0
+        from services.idea_selector import select_from_final_ideas
+        from services.portfolio_manager import promote_to_portfolio
+        from dashboard.backend.db.portfolio import get_portfolio_counts
+
+        promoted = 0
+        for horizon in ("SWING", "LONGTERM"):
+            counts = get_portfolio_counts()
+            room = max(0, counts.get(f"{horizon.lower()}_max", 20) - counts.get(horizon.lower(), 0))
+            if room <= 0:
+                continue
+            for idea in select_from_final_ideas(horizon, max_picks=room):
+                try:
+                    promote_to_portfolio(
+                        symbol=idea["symbol"], horizon=idea["horizon"],
+                        entry_price=idea["entry_price"], stop_loss=idea["stop_loss"],
+                        target_1=idea.get("target_1"), target_2=idea.get("target_2"),
+                        confidence_score=idea.get("confidence_score", 0),
+                        reasoning=idea.get("reasoning", ""),
+                        recommendation_id=idea.get("recommendation_id"),
+                        current_price=idea.get("scan_cmp"),
+                    )
+                    promoted += 1
+                    log.info("[ArmOnTap] promoted %s into %s portfolio", idea["symbol"], horizon)
+                except ValueError:
+                    pass  # full / already held
+        return promoted
+    except Exception:
+        log.exception("[ArmOnTap] tick failed")
+        return 0
 
 
 def _update_portfolio_prices() -> int:
@@ -78,6 +156,16 @@ def _update_portfolio_prices() -> int:
         elif cmp <= sl:
             new_status = "STOP_HIT"
             exit_reason = "STOP_HIT"
+        elif _STRUCTURE_EXIT_ON and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
+            # PR-3 structure-break cull (flag-gated, default OFF): exit a LOSING
+            # hold whose trend has broken — CMP below the 200-DMA by a buffer —
+            # rather than wait for the hard stop. Frees a slot from dead capital
+            # (e.g. a name that drifts down for weeks without hitting SL). The
+            # loss + min-held guards avoid whipsawing out of healthy positions.
+            dma200 = _get_200dma(sym)
+            if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
+                new_status = "CLOSED"
+                exit_reason = "STRUCTURE_BREAK"
 
         update_position_price(
             pos["id"],
@@ -117,6 +205,10 @@ def _portfolio_tracker_loop() -> None:
             _update_portfolio_prices()
         except Exception:
             log.exception("Portfolio tracker loop error")
+        try:
+            _promote_final_ideas_on_tap()
+        except Exception:
+            log.exception("Portfolio tracker: arm-on-tap error")
         interval = _current_interval()
         time.sleep(interval)
 
