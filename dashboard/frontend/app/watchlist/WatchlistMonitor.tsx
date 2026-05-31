@@ -5,7 +5,7 @@
  *
  * Each card shows: name, pattern/tag, entry zone, SL, T1/T2, live CMP,
  * distance-from-entry, a status badge (WAITING/APPROACHING/ACTIONABLE/MISSED/
- * ARMED/TRIGGERED), and the 4 actions: Buy CMP · Arm · Ignore/Remove · Study.
+ * ARMED/TRIGGERED), and the actions: Buy CMP · Set Entry Alert · Ignore/Remove · Study.
  * Triggered/bought ideas flow into the per-user portfolio (user_positions),
  * tracked by the shared engine — this component never opens a position itself
  * beyond calling the API.
@@ -30,7 +30,7 @@ const BADGE: Record<string, { label: string; fg: string; bg: string; bd: string 
   APPROACHING: { label: "Approaching", fg: "#fbbf24", bg: "rgba(251,191,36,0.12)",  bd: "rgba(251,191,36,0.4)" },
   ACTIONABLE:  { label: "Actionable",  fg: "#34d399", bg: "rgba(16,185,129,0.16)",  bd: "rgba(16,185,129,0.45)" },
   MISSED:      { label: "Missed",      fg: "#fda4af", bg: "rgba(244,63,94,0.12)",   bd: "rgba(244,63,94,0.4)" },
-  ARMED:       { label: "Armed",       fg: "#a78bfa", bg: "rgba(139,92,246,0.14)",  bd: "rgba(139,92,246,0.45)" },
+  ARMED:       { label: "Alert Set",   fg: "#a78bfa", bg: "rgba(139,92,246,0.14)",  bd: "rgba(139,92,246,0.45)" },
   TRIGGERED:   { label: "Triggered",   fg: "#f472b6", bg: "rgba(244,114,182,0.14)", bd: "rgba(244,114,182,0.5)" },
 };
 
@@ -138,10 +138,10 @@ export default function WatchlistMonitor() {
                   {triggered ? (
                     <button disabled={busy === it.id} onClick={() => act(it.id, () => api.watchlistMonitorIgnore(token, it.id))} style={btn("ghost")}>Ignore</button>
                   ) : it.armed ? (
-                    <span style={{ ...chip(), color: "#a78bfa", borderColor: "rgba(139,92,246,0.4)" }}>Armed ✓</span>
+                    <span style={{ ...chip(), color: "#a78bfa", borderColor: "rgba(139,92,246,0.4)" }} title="We'll alert you when price reaches the entry zone">Alert Set ✓</span>
                   ) : (
-                    <button disabled={busy === it.id} onClick={() => act(it.id, () => api.watchlistMonitorArm(token, it.id))} style={btn("arm")}>
-                      <Crosshair size={12} /> Arm
+                    <button disabled={busy === it.id} onClick={() => act(it.id, () => api.watchlistMonitorArm(token, it.id))} style={btn("arm")} title="Get alerted when price reaches the entry zone (no auto-buy)">
+                      <Crosshair size={12} /> Set Entry Alert
                     </button>
                   )}
                   <Link href={`/research/chart?symbol=${encodeURIComponent(sym)}&horizon=SWING`} style={{ ...chip(), textDecoration: "none", color: "#34d399", borderColor: "rgba(16,185,129,0.4)" }}>
