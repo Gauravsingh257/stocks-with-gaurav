@@ -99,6 +99,25 @@ function riskNote(item: ResearchDecisionCard, target: number | null): string {
   return `Risk note: Use SL ${fmt(item.stop_loss)}. ${rr}. Avoid entry if price is far from the planned zone.`;
 }
 
+// Reachability badge: how far has price moved past the planned entry?
+// Mirrors the backend bands (validation_engine._entry_reachability).
+function reachabilityBadge(item: ResearchDecisionCard):
+  { label: string; color: string; bg: string; border: string } | null {
+  const gap = item.entry_distance_pct;
+  switch (item.reachability) {
+    case "actionable":
+      return { label: "At entry — actionable", color: "#34d399", bg: "rgba(16,185,129,0.16)", border: "rgba(16,185,129,0.4)" };
+    case "waiting":
+      return { label: `Price +${gap != null ? gap.toFixed(0) : "?"}% above entry — wait for pullback`, color: "#fbbf24", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.4)" };
+    case "unreachable":
+      return { label: `Price +${gap != null ? gap.toFixed(0) : "?"}% past entry — likely won't fill`, color: "#fda4af", bg: "rgba(244,63,94,0.12)", border: "rgba(244,63,94,0.4)" };
+    case "pre_breakout":
+      return { label: "Below entry — awaiting breakout trigger", color: "#7dd3fc", bg: "rgba(125,211,252,0.12)", border: "rgba(125,211,252,0.4)" };
+    default:
+      return null;
+  }
+}
+
 export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
   const [dismissedMap, setDismissedMap] = useState<Record<string, DismissAction>>({});
   const [showDismissed, setShowDismissed] = useState(false);
@@ -127,17 +146,35 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
     });
   }, []);
 
+  // Reachability: hide ideas whose planned entry the price has already left
+  // behind (>15% away → "unreachable" — the limit order won't fill). These
+  // are surfaced behind a toggle so the default view only shows ideas you can
+  // actually act on. Backend classifies via reachability field; default to
+  // showing anything not explicitly "unreachable" (back-compat for older
+  // payloads that lack the field).
+  const [showUnreachable, setShowUnreachable] = useState(false);
+  const isUnreachable = useCallback(
+    (it: ResearchDecisionCard) => it.reachability === "unreachable",
+    []
+  );
+
   // Dynamic inventory: render every final-tier card the backend returns.
   // Collapse past COLLAPSED_LIMIT with an expander so the page stays usable
   // on high-quality days. Final = upstream gate cleared; never a UI slice.
   const COLLAPSED_LIMIT = 12;
   const [expanded, setExpanded] = useState(false);
   const filtered = useMemo(
-    () => (showDismissed ? items : items.filter((it) => !dismissedMap[it.symbol])),
-    [items, dismissedMap, showDismissed]
+    () =>
+      items.filter((it) => {
+        if (!showDismissed && dismissedMap[it.symbol]) return false;
+        if (!showUnreachable && isUnreachable(it)) return false;
+        return true;
+      }),
+    [items, dismissedMap, showDismissed, showUnreachable, isUnreachable]
   );
   const visible = expanded ? filtered : filtered.slice(0, COLLAPSED_LIMIT);
-  const hiddenCount = items.length - filtered.length;
+  const dismissedCount = items.filter((it) => dismissedMap[it.symbol]).length;
+  const unreachableCount = items.filter(isUnreachable).length;
   const collapsedCount = filtered.length - visible.length;
 
   return (
@@ -153,7 +190,18 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          {(hiddenCount > 0 || showDismissed) && (
+          {unreachableCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowUnreachable((s) => !s)}
+              style={{ fontSize: "0.7rem", padding: "4px 9px", borderRadius: 6, background: showUnreachable ? "rgba(244,63,94,0.14)" : "rgba(15,23,42,0.6)", border: "1px solid rgba(244,63,94,0.32)", color: showUnreachable ? "#fda4af" : "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+              title="Ideas where price has run more than 15% past the planned entry — the limit order likely won't fill"
+            >
+              {showUnreachable ? <EyeOff size={12} /> : <Eye size={12} />}
+              {showUnreachable ? "Hide ran-past-entry" : `Ran past entry (${unreachableCount})`}
+            </button>
+          )}
+          {(dismissedCount > 0 || showDismissed) && (
             <button
               type="button"
               onClick={() => setShowDismissed((s) => !s)}
@@ -161,13 +209,13 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
               title={showDismissed ? "Hide dismissed cards" : "Show dismissed cards for today"}
             >
               {showDismissed ? <EyeOff size={12} /> : <Eye size={12} />}
-              {showDismissed ? "Hide dismissed" : `Show dismissed (${hiddenCount})`}
+              {showDismissed ? "Hide dismissed" : `Show dismissed (${dismissedCount})`}
             </button>
           )}
           <span style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.5)", color: "#34d399", fontWeight: 900, boxShadow: "0 0 18px rgba(16,185,129,0.18)" }}>
             <span className="inline-flex items-center gap-1">
               <Flame size={12} aria-hidden />
-              Cleared · {visible.length}
+              Actionable · {visible.length}
             </span>
           </span>
         </div>
@@ -175,9 +223,11 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
 
       {visible.length === 0 ? (
         <MarketMonitoringEmpty
-          title={hiddenCount > 0 ? "All cleared cards reviewed for today" : "Final book is intentionally selective"}
-          subtitle={hiddenCount > 0
-            ? `${hiddenCount} card(s) dismissed today. They reset tomorrow, or click "Show dismissed" above.`
+          title={unreachableCount > 0 ? "Every actionable idea is at/near its entry" : dismissedCount > 0 ? "All cleared cards reviewed for today" : "Final book is intentionally selective"}
+          subtitle={unreachableCount > 0
+            ? `${unreachableCount} idea(s) hidden because price already ran past the planned entry. Click "Ran past entry" above to review them.`
+            : dismissedCount > 0
+            ? `${dismissedCount} card(s) dismissed today. They reset tomorrow, or click "Show dismissed" above.`
             : "Nothing cleared the last quality gate yet — the engine is still monitoring structure and liquidity. Use Watchlist and Discovery for names approaching confirmation."}
         />
       ) : (
@@ -202,9 +252,21 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: "#00e096", background: "rgba(0,224,150,0.12)", border: "1px solid rgba(0,224,150,0.28)", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <ShieldCheck size={12} /> High Conviction
                   </span>
-                  <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: "#34d399", background: "rgba(16,185,129,0.16)", border: "1px solid rgba(16,185,129,0.4)", fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Activity size={12} /> Cleared — study chart
-                  </span>
+                  {(() => {
+                    const rb = reachabilityBadge(item);
+                    if (!rb) {
+                      return (
+                        <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: "#34d399", background: "rgba(16,185,129,0.16)", border: "1px solid rgba(16,185,129,0.4)", fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <Activity size={12} /> Cleared — study chart
+                        </span>
+                      );
+                    }
+                    return (
+                      <span style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, color: rb.color, background: rb.bg, border: `1px solid ${rb.border}`, fontWeight: 900, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Activity size={12} /> {rb.label}
+                      </span>
+                    );
+                  })()}
                   {action && (
                     <span style={{ fontSize: "0.66rem", padding: "3px 7px", borderRadius: 6, color: action === "reviewed" ? "#7dd3fc" : "#fda4af", background: action === "reviewed" ? "rgba(125,211,252,0.12)" : "rgba(253,164,175,0.10)", border: `1px solid ${action === "reviewed" ? "rgba(125,211,252,0.40)" : "rgba(253,164,175,0.35)"}`, fontWeight: 800 }}>
                       {action === "reviewed" ? "Reviewed today" : "Skipped today"}
