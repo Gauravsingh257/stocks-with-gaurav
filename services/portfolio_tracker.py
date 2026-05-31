@@ -24,10 +24,13 @@ _tracker_thread: threading.Thread | None = None
 
 # One shared engine instance; PR-A registers only the system store. The
 # per-user store plugs into this same list in PR-B (no engine change).
-from services.position_stores import PortfolioPositionStore  # noqa: E402
+from services.position_stores import PortfolioPositionStore, UserPositionStore  # noqa: E402
 from services.position_tracking_service import PositionTrackingService  # noqa: E402
 
-_service = PositionTrackingService([PortfolioPositionStore()])
+# One shared engine, two stores: the system book + the per-user book. Same
+# tracking logic for both (UserPositionStore is flag-gated via
+# USER_POSITION_TRACKING and maps its own status vocabulary).
+_service = PositionTrackingService([PortfolioPositionStore(), UserPositionStore()])
 
 
 def _update_portfolio_prices() -> int:

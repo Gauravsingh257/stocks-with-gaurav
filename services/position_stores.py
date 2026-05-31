@@ -49,6 +49,7 @@ class PositionStore(Protocol):
     def update_metrics(self, position_id: int, **metrics) -> None: ...
     def close(self, position_id: int, exit_price: float, exit_reason: str) -> None: ...
     def map_status(self, canonical: str) -> str: ...
+    def structure_exit_enabled(self) -> bool: ...   # soft 200-DMA cull policy
 
 
 class PortfolioPositionStore:
@@ -98,3 +99,70 @@ class PortfolioPositionStore:
         # portfolio_positions already uses the canonical vocabulary
         # (ACTIVE / TARGET_HIT / STOP_HIT / CLOSED) — identity map.
         return canonical
+
+    def structure_exit_enabled(self) -> bool:
+        # System book: honor the existing PORTFOLIO_STRUCTURE_EXIT flag
+        # (preserves PR-A behavior exactly).
+        import os
+        return os.getenv("PORTFOLIO_STRUCTURE_EXIT", "0").strip().lower() in {"1", "true", "yes"}
+
+
+class UserPositionStore:
+    """Per-user `user_positions` book. Registering this into the shared engine
+    gives every user's trades the SAME live tracking + auto-exit the system
+    portfolio has (previously user positions were computed read-time only and
+    never actually closed in the DB). Flag-gated so it can be disabled instantly.
+
+    Status vocabulary differs (user_positions uses SL_HIT, not STOP_HIT) — the
+    adapter maps it; the engine stays unchanged."""
+
+    name = "user_positions"
+
+    def enabled(self) -> bool:
+        import os
+        return os.getenv("USER_POSITION_TRACKING", "1").strip().lower() in {"1", "true", "yes"}
+
+    def list_active(self) -> list[TrackedPosition]:
+        from dashboard.backend.db.watchlist_monitor import get_active_user_positions
+
+        out: list[TrackedPosition] = []
+        for r in get_active_user_positions() or []:
+            try:
+                out.append(TrackedPosition(
+                    id=int(r["id"]),
+                    symbol=r["symbol"],
+                    entry=float(r["entry_price"]),
+                    stop_loss=float(r["stop_loss"]) if r.get("stop_loss") is not None else float(r["entry_price"]) * 0.95,
+                    target_1=float(r["target_1"]) if r.get("target_1") else None,
+                    target_2=float(r["target_2"]) if r.get("target_2") else None,
+                    status=r.get("status", "ACTIVE"),
+                    created_at=r.get("taken_at"),
+                    high_since_entry=(float(r["high_since_entry"]) if r.get("high_since_entry") else None),
+                    low_since_entry=(float(r["low_since_entry"]) if r.get("low_since_entry") else None),
+                    days_held=int(r.get("days_held") or 0),
+                    raw=r,
+                ))
+            except Exception:
+                continue
+        return out
+
+    def update_metrics(self, position_id: int, **metrics) -> None:
+        from dashboard.backend.db.watchlist_monitor import update_user_position_metrics
+
+        update_user_position_metrics(position_id, **metrics)
+
+    def close(self, position_id: int, exit_price: float, exit_reason: str) -> None:
+        from dashboard.backend.db.watchlist_monitor import close_user_position
+
+        close_user_position(position_id, exit_price, exit_reason)
+
+    def map_status(self, canonical: str) -> str:
+        # user_positions CHECK uses SL_HIT (not STOP_HIT); others align.
+        return {"STOP_HIT": "SL_HIT"}.get(canonical, canonical)
+
+    def structure_exit_enabled(self) -> bool:
+        # User-chosen positions: the system does NOT auto-sell on a soft
+        # 200-DMA break by default — users set their own SL/target, which
+        # still auto-close. Opt-in only via USER_POSITION_STRUCTURE_EXIT.
+        import os
+        return os.getenv("USER_POSITION_STRUCTURE_EXIT", "0").strip().lower() in {"1", "true", "yes"}
