@@ -32,6 +32,9 @@ log = logging.getLogger("fvg_tap_engine")
 _YF = {"NSE:NIFTY 50": "^NSEI", "NSE:NIFTY BANK": "^NSEBANK"}
 _AGENT_TYPE = "FVG_TAP"
 _SEEN: set[str] = set()  # in-process dedup (single scheduler process)
+# How many recent closed bars the live tick treats as decision points, so a
+# confirmation the */5 cron missed by one bar still fires (env-tunable).
+_LIVE_LOOKBACK = max(1, int(__import__("os").getenv("FVG_TAP_LIVE_LOOKBACK", "2")))
 
 # Module-cached KiteConnect client + instrument-token map. Mirrors the
 # proven PR #3 pattern in agents/oi_intelligence_agent.py — one client
@@ -299,9 +302,20 @@ def _publish_fvg_tap_recommendation(sym: str, sig: dict):
                 "<i>Index 5m. Backtest-cleared (NIFTY PF2.07 / BANKNIFTY "
                 "PF2.33); live-validating. No position opened.</i>"
             )
+            log.info("fvg_tap published rec #%s + Telegram: %s %s @ %s",
+                     rec_id, sym, sig["direction"], sig["entry"])
+        else:
+            # 2026-06-01 publish gap: a fire reached the ledger but no rec/
+            # Telegram surfaced. Make the reason explicit instead of silent.
+            log.warning(
+                "fvg_tap publish: create_stock_recommendation returned %r for "
+                "%s %s (entry=%s sl=%s t=%s cmp=%s) — NO rec/Telegram. Likely "
+                "rejected by a recommendation gate; investigate.",
+                rec_id, sym, sig["direction"], sig["entry"], sig["sl"],
+                sig["target"], sig["entry"])
         return rec_id
     except Exception as exc:
-        log.warning("fvg_tap publish skipped (%s): %s", sym, exc)
+        log.warning("fvg_tap publish FAILED (%s): %s", sym, exc, exc_info=True)
         return None
 
 
@@ -324,12 +338,26 @@ def run_fvg_tap_tick() -> dict:
                 continue
             for direction in ("LONG", "SHORT"):
                 out["evaluated"] += 1
-                sig = evaluate_fvg_tap(candles, direction)
+                # 2026-06-01 fix (detection-timing gap): the detector only
+                # returns a signal when the engulfing confirmation is the LAST
+                # closed bar. With the */5 cron + Kite's bar-close lag the tick
+                # rarely lands on that exact bar, so most setups were missed
+                # (1 of 4 caught on 2026-06-01). Re-run the SAME frozen detector
+                # on the last N closed bars as decision points so a setup
+                # confirmed a tick ago still fires. Dedup by confirm_time keeps
+                # it single-shot. The backtest rule itself is unchanged.
+                sig = None
+                for _back in range(_LIVE_LOOKBACK):
+                    sub = candles if _back == 0 else candles[:-_back]
+                    if len(sub) < 80:
+                        continue
+                    cand = evaluate_fvg_tap(sub, direction)
+                    if cand and f"{sym}|{direction}|{cand.get('confirm_time')}" not in _SEEN:
+                        sig = cand
+                        break
                 if not sig:
                     continue
                 key = f"{sym}|{direction}|{sig.get('confirm_time')}"
-                if key in _SEEN:
-                    continue
                 _SEEN.add(key)
                 if len(_SEEN) > 2000:
                     _SEEN.clear()
