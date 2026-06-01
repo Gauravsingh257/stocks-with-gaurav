@@ -417,6 +417,29 @@ def _today_ist() -> str:
     return datetime.now(_IST).date().isoformat()
 
 
+def _redis_has_fresh_token() -> bool:
+    """True if Redis already holds TODAY's Kite token (e.g. refreshed by the
+    06:30 GitHub Actions cron). Deliberately lightweight — NO live Kite verify
+    call and reads REDIS_URL straight from os.environ — so it works as a guard
+    even when this process can't see its own Kite creds. Used to suppress the
+    redundant 08:50 web-backup's false 'Missing config' alarm when the system
+    already has a valid token. Best-effort; never raises."""
+    url = os.getenv("REDIS_URL", "").strip()
+    if not url:
+        return False
+    try:
+        import redis as _redis
+        r = _redis.from_url(url, decode_responses=True, socket_timeout=5)
+        token = (r.get("kite:access_token") or "").strip()
+        ts_raw = (r.get("kite:token_ts") or "").strip()
+        if not token or not ts_raw:
+            return False
+        return datetime.fromisoformat(ts_raw).date().isoformat() == _today_ist()
+    except Exception as exc:
+        log.warning("fresh-token check failed: %s", exc)
+        return False
+
+
 def _login_done_key(date_str: str | None = None) -> str:
     return f"{_AUTO_LOGIN_DONE_PREFIX}:{date_str or _today_ist()}"
 
@@ -513,7 +536,21 @@ def auto_login() -> bool:
             log.error("env audit at validation failure: %s", audit)
             msg = f"Missing config: {', '.join(missing)}"
             log.error(msg)
-            _send_telegram(f"❌ <b>Auto-Login FAILED</b>\n{msg}")
+            # FALSE-ALARM GUARD: this 08:50 web-backup is redundant with the
+            # 06:30 GitHub Actions cron + the engine's own self-heal. If a fresh
+            # token already exists in Redis, the system is fine — suppress the
+            # scary alert (the config is "missing" only because THIS long-lived
+            # process started before the creds were injected; os.environ can't
+            # be refreshed to values it never received). Only alert when there
+            # is GENUINELY no token AND config is missing — a real outage.
+            if _redis_has_fresh_token():
+                log.warning(
+                    "Auto-login: config missing on THIS process but Redis already "
+                    "holds today's token — suppressing false alarm. (%s)", audit)
+                return True
+            _send_telegram(
+                f"❌ <b>Auto-Login FAILED</b>\n{msg}\n"
+                f"<i>No fresh token in Redis either — genuine: check creds.</i>")
             return False
 
         for attempt in range(1, MAX_RETRIES + 1):
