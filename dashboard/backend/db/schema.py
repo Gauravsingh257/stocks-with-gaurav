@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_status ON agent_action_queue(status);
 CREATE TABLE IF NOT EXISTS stock_recommendations (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol                TEXT NOT NULL,
-    agent_type            TEXT NOT NULL CHECK(agent_type IN ('SWING','LONGTERM')),
+    agent_type            TEXT NOT NULL CHECK(agent_type IN ('SWING','LONGTERM','FVG_TAP','SWING_SM')),
     entry_price           REAL NOT NULL,
     stop_loss             REAL,
     targets               TEXT NOT NULL DEFAULT '[]',
@@ -694,6 +694,43 @@ def migrate_stock_recommendations() -> None:
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} {col_def}")
         conn.commit()
+
+        # ── agent_type CHECK relaxation (2026-06-01) ───────────────────────
+        # The original table restricted agent_type to ('SWING','LONGTERM').
+        # That silently rejected EVERY FVG_TAP and SWING_SM insert (IntegrityError
+        # caught upstream), which is why the FVG-Tap engine and the equity state
+        # machine never surfaced a single recommendation despite running in
+        # alert mode. SQLite can't ALTER a CHECK in place, so rebuild the table
+        # in-place, preserving all rows/columns, only when still restrictive.
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_recommendations'"
+            ).fetchone()
+            old_sql = (row[0] if row else "") or ""
+            if "CHECK(agent_type IN ('SWING','LONGTERM'))" in old_sql and "FVG_TAP" not in old_sql:
+                new_sql = old_sql.replace(
+                    "CHECK(agent_type IN ('SWING','LONGTERM'))",
+                    "CHECK(agent_type IN ('SWING','LONGTERM','FVG_TAP','SWING_SM'))",
+                ).replace("stock_recommendations", "stock_recommendations_new", 1)
+                colnames = [r[1] for r in conn.execute(
+                    "PRAGMA table_info(stock_recommendations)").fetchall()]
+                collist = ", ".join(colnames)
+                conn.execute("PRAGMA foreign_keys=OFF")
+                conn.executescript(new_sql)
+                conn.execute(
+                    f"INSERT INTO stock_recommendations_new ({collist}) "
+                    f"SELECT {collist} FROM stock_recommendations")
+                conn.execute("DROP TABLE stock_recommendations")
+                conn.execute("ALTER TABLE stock_recommendations_new RENAME TO stock_recommendations")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_reco_type_created ON stock_recommendations(agent_type, created_at DESC)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_reco_symbol ON stock_recommendations(symbol)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_reco_status ON stock_recommendations(status)")
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.commit()
+                logger.warning("Migrated stock_recommendations: agent_type CHECK now "
+                               "allows FVG_TAP + SWING_SM (was SWING/LONGTERM only)")
+        except Exception as exc:
+            logger.error("agent_type CHECK migration failed (non-fatal): %s", exc)
     finally:
         conn.close()
 
