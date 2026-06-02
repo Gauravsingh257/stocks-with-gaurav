@@ -548,9 +548,23 @@ def auto_login() -> bool:
                     "Auto-login: config missing on THIS process but Redis already "
                     "holds today's token — suppressing false alarm. (%s)", audit)
                 return True
+            # SOURCE FINGERPRINT: every elimination pass (web=OK, GHA=not-run,
+            # engine=no-scheduler, no local task) failed to locate which process
+            # sends this. Stamp the alert with the host + env fingerprint so the
+            # NEXT occurrence names its own source and we can finally kill it.
+            import socket
+            try:
+                _host = socket.gethostname()
+            except Exception:
+                _host = "?"
+            _fp = (f"host={_host} redis={'Y' if os.getenv('REDIS_URL','').strip() else 'N'} "
+                   f"tg={'Y' if os.getenv('TELEGRAM_BOT_TOKEN','').strip() else 'N'} "
+                   f"cwd={os.getcwd()[-40:]}")
+            log.error("Auto-login FAILED source fingerprint: %s | %s", _fp, audit)
             _send_telegram(
                 f"❌ <b>Auto-Login FAILED</b>\n{msg}\n"
-                f"<i>No fresh token in Redis either — genuine: check creds.</i>")
+                f"<i>No fresh token in Redis either.</i>\n"
+                f"<code>src: {_host}</code>")
             return False
 
         for attempt in range(1, MAX_RETRIES + 1):
