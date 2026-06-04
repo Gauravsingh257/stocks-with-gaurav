@@ -251,6 +251,22 @@ def evaluate_criteria(sessions: list[dict], anchor_gap: float = ANCHOR_GAP_DEFAU
     c4 = all(p["C4_median_rr"] for p in per) if per else False
     c5 = (n >= SESSIONS_REQUIRED) and c1 and c2 and c3 and c4   # stability over the window
     ready = c5
+    overall = "READY" if ready else ("COLLECTING" if n < SESSIONS_REQUIRED else "NOT_READY")
+    latest = sessions[-1] if sessions else None
+    latest_summary = None
+    if latest:
+        a, b = latest.get("A_current", {}), latest.get("B_anchor", {})
+        latest_summary = {
+            "date": latest.get("date"),
+            "scan_id": latest.get("scan_id"),
+            "current_count": a.get("count", 0),               # current engine signal count
+            "anchor_count": b.get("count", 0),                # Anchor10 signal count
+            "actionable_pct": b.get("actionable_pct", 0.0),   # daily actionable %
+            "avg_distance_pct": b.get("avg_dist_from_entry_pct", 0.0),  # daily avg distance
+            "median_remaining_rr": b.get("median_remaining_rr"),
+            "count_drop_pct": latest.get("count_drop_pct", 0.0),
+            "breaches": latest.get("breaches", []),
+        }
     return {
         "anchor_gap_pct": anchor_gap,
         "session_count": n,
@@ -262,7 +278,8 @@ def evaluate_criteria(sessions: list[dict], anchor_gap: float = ANCHOR_GAP_DEFAU
             "C4_median_rr": {"pass": c4, "rule": f"Anchor10 median remaining RR >= {C4_MIN_MEDIAN_REM_RR} every session"},
             "C5_stable_window": {"pass": c5, "rule": f">= {SESSIONS_REQUIRED} sessions with C1–C4 all holding"},
         },
-        "overall": "READY" if ready else ("COLLECTING" if n < SESSIONS_REQUIRED else "NOT_MET"),
+        "overall": overall,
+        "latest": latest_summary,
         "recommendation": (
             "Criteria met — prepare ENTRY_ANCHOR_MAX_GAP_PCT=10 production enablement (monitor 2 live sessions, keep rollback ready)."
             if ready else

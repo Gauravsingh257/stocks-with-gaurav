@@ -33,6 +33,7 @@ import { DailyIdeasLeadModal } from "./DailyIdeasLeadModal";
 import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
 import { Watchlist } from "./Watchlist";
+import AnchorShadowChip from "./AnchorShadowChip";
 
 type ResearchTab = "research" | "portfolio" | "advanced";
 type ResearchDecisionBuckets = Pick<ResearchDecisionFeedResponse, "final_trades" | "watchlist" | "discovery">;
@@ -899,6 +900,9 @@ export default function ResearchPage() {
 
       {/* ── ADVANCED TAB ──────────────────────────────────────── */}
       {currentTab === "advanced" && user && (<>
+      <StaggerItem>
+        <AnchorShadowChip />
+      </StaggerItem>
       <StaggerItem>
         <RetentionPanel
           hasIdeas={decisionItems.length > 0}
