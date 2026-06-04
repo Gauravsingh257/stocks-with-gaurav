@@ -938,6 +938,38 @@ export interface ResearchDecisionFeedResponse {
   fallback_items?: ResearchDecisionCard[];
 }
 
+export interface AnchorShadowCriterion {
+  pass: boolean;
+  rule: string;
+}
+
+export interface AnchorShadowStatus {
+  anchor_gap_pct: number;
+  session_count: number;
+  sessions_required: number;
+  overall: "COLLECTING" | "READY" | "NOT_READY" | "UNKNOWN";
+  criteria: {
+    C1_count_stable: AnchorShadowCriterion;
+    C2_actionable: AnchorShadowCriterion;
+    C3_avg_distance: AnchorShadowCriterion;
+    C4_median_rr: AnchorShadowCriterion;
+    C5_stable_window: AnchorShadowCriterion;
+  };
+  latest: {
+    date: string;
+    scan_id: string;
+    current_count: number;
+    anchor_count: number;
+    actionable_pct: number;
+    avg_distance_pct: number;
+    median_remaining_rr: number | null;
+    count_drop_pct: number;
+    breaches: string[];
+  } | null;
+  recommendation: string;
+  error?: string;
+}
+
 export interface LayerFunnelMetrics {
   total: number;
   layer1_pass: number;
@@ -1378,6 +1410,9 @@ export const api = {
   /** FVG-Tap: isolated index-5m signals — validation phase, never auto-traded. */
   fvgTapSignals: (limit = 50) =>
     get<{ engine: string; validation_phase: boolean; auto_traded: boolean; count: number; signals: Array<Record<string, unknown>>; _note?: string; error?: string }>(`/api/research/fvg-tap-signals?limit=${limit}`, null, 25_000),
+  /** Anchor10 shadow-validation status — observational; ENTRY_ANCHOR_MAX_GAP_PCT stays 30 until C1–C5 pass. */
+  anchorShadowStatus: () =>
+    get<AnchorShadowStatus>(`/api/research/anchor-shadow-status`, null, 20_000),
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   liveSignals: (limit = 40) => get<{ items: Array<{ signal_id?: string; symbol?: string; direction?: string; strategy_name?: string; entry?: number | null; stop_loss?: number | null; target1?: number | null; target2?: number | null; score?: number | null; confidence?: number | null; timestamp?: string; signal_kind?: string }>; count: number; source?: string }>(`/api/research/live-signals?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
