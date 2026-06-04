@@ -2,25 +2,24 @@
 """
 scripts/shadow_anchor_daily.py
 ──────────────────────────────
-Daily shadow recorder for ENTRY_ANCHOR_MAX_GAP_PCT=10 (Anchor10), action #3.
+Manual CLI for the Anchor10 shadow programme (action #3).
 
-Run ONCE per trading session (manually or via the scheduler) for 3-5 sessions.
+In production this runs AUTOMATICALLY via the scheduler job
+`anchor_shadow_record` (agents/runner.py, 09:20 IST Mon-Fri) — you do not need
+to run it by hand. This CLI exists for ad-hoc recording / inspection and uses
+the SAME core (services/anchor_shadow.py) and the SAME Redis store
+(shadow:anchor10:sessions), so manual and scheduled sessions never diverge.
+
 Each run:
-  1. pulls today's LIVE final book from the backend discovery API,
-  2. computes the Config-A (current) vs Config-B (Anchor10) summary metrics,
-  3. appends one dated row per config to signal_history/shadow_anchor10.csv
-     (idempotent — re-running the same date overwrites that date's rows),
-  4. prints today's A-vs-B line and the full running multi-session table.
-
-It NEVER enables the flag and never touches the engine — it only reads the
-served book and records what Anchor10 *would* have produced. After 3-5 stable
-sessions, feed the CSV to the go/no-go check in
-docs/PHASE2_ENABLEMENT_CRITERIA.md.
+  1. pulls the final book (live discovery API, Redis snapshot, or a saved JSON),
+  2. records one deduped session to Redis via services.anchor_shadow,
+  3. mirrors the session to signal_history/shadow_anchor10.csv (local history),
+  4. prints today's A-vs-Anchor10 line and the C1–C5 criteria status.
 
 Usage:
-  python scripts/shadow_anchor_daily.py                 # pull live API
+  python scripts/shadow_anchor_daily.py                 # live discovery API
   python scripts/shadow_anchor_daily.py --path _disc.json   # from a saved payload
-  python scripts/shadow_anchor_daily.py --show          # just print the table
+  python scripts/shadow_anchor_daily.py --show          # criteria status only
 """
 from __future__ import annotations
 
@@ -32,10 +31,12 @@ import os
 import sys
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))           # for sibling import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 
-from shadow_diff_phase2 import Setup, _row_to_setup, levels_for, metrics  # noqa: E402
+from services.anchor_shadow import (  # noqa: E402
+    ANCHOR_GAP_DEFAULT, REDIS_SESSIONS_KEY, book_from_payload, evaluate_criteria,
+    load_sessions, record_session,
+)
 
 CSV_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -43,119 +44,114 @@ CSV_PATH = os.path.join(
 )
 DEFAULT_BACKEND = os.getenv("DASHBOARD_URL") or os.getenv("BACKEND_URL") \
     or "https://web-production-2781a.up.railway.app"
-ANCHOR_GAP = float(os.getenv("SHADOW_ANCHOR_GAP_PCT", "10"))
 
-FIELDS = ["date", "config", "scan_id", "count", "actionable", "actionable_pct",
-          "avg_dist_from_entry_pct", "median_remaining_rr", "avg_remaining_rr",
-          "extended_gt10pct", "extended_pct", "quality_score", "recorded_at"]
+CSV_FIELDS = ["date", "config", "scan_id", "count", "actionable", "actionable_pct",
+              "avg_dist_from_entry_pct", "median_remaining_rr", "avg_remaining_rr",
+              "extended_gt10pct", "extended_pct", "quality_score", "recorded_at"]
 
 
-def _fetch_live() -> tuple[list[Setup], str]:
+def _redis_client():
+    try:
+        import redis  # type: ignore
+        url = os.getenv("REDIS_URL", "").strip()
+        return redis.from_url(url, decode_responses=True, socket_timeout=4) if url else None
+    except Exception:
+        return None
+
+
+def _fetch_payload(path: str | None) -> dict:
+    if path:
+        return json.load(open(path, encoding="utf-8"))
     url = DEFAULT_BACKEND.rstrip("/") + "/api/research/discovery"
     with urllib.request.urlopen(url, timeout=30) as resp:        # noqa: S310 (trusted host)
-        payload = json.load(resp)
-    rows = payload.get("final_trades") or payload.get("items") or []
-    setups = [s for r in rows if (s := _row_to_setup(r))]
-    return setups, str(payload.get("scan_id") or payload.get("generated_at") or "?")
+        return json.load(resp)
 
 
-def _load_json(path: str) -> tuple[list[Setup], str]:
-    payload = json.load(open(path, encoding="utf-8"))
-    rows = payload.get("final_trades") or payload.get("items") or []
-    setups = [s for r in rows if (s := _row_to_setup(r))]
-    return setups, str(payload.get("scan_id") or payload.get("generated_at") or path)
-
-
-def _read_rows() -> list[dict]:
-    if not os.path.exists(CSV_PATH):
-        return []
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
-
-
-def _write_rows(rows: list[dict]) -> None:
+def _mirror_csv(session: dict) -> None:
+    """Append the session's A and B metric rows to the local CSV (deduped by date)."""
+    rows: list[dict] = []
+    if os.path.exists(CSV_PATH):
+        with open(CSV_PATH, newline="", encoding="utf-8") as f:
+            rows = [r for r in csv.DictReader(f) if r.get("date") != session["date"]]
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    for cfg, key in (("A_current", "A_current"), (f"B_anchor{int(session['anchor_gap_pct'])}", "B_anchor")):
+        m = session[key]
+        rows.append({
+            "date": session["date"], "config": cfg, "scan_id": session["scan_id"],
+            "count": m["count"], "actionable": m["actionable"],
+            "actionable_pct": m["actionable_pct"],
+            "avg_dist_from_entry_pct": m["avg_dist_from_entry_pct"],
+            "median_remaining_rr": m["median_remaining_rr"],
+            "avg_remaining_rr": m["avg_remaining_rr"],
+            "extended_gt10pct": m["extended_gt10pct"], "extended_pct": m["extended_pct"],
+            "quality_score": m["quality_score"], "recorded_at": now,
+        })
+    rows.sort(key=lambda r: (r["date"], r["config"]))
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         for r in rows:
-            w.writerow({k: r.get(k, "") for k in FIELDS})
+            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
 
 
-def _metric_row(date: str, config: str, scan_id: str, m: dict) -> dict:
-    return {
-        "date": date, "config": config, "scan_id": scan_id,
-        "count": m.get("count", 0), "actionable": m.get("actionable", 0),
-        "actionable_pct": m.get("actionable_pct", 0),
-        "avg_dist_from_entry_pct": m.get("avg_dist_from_entry_pct", 0),
-        "median_remaining_rr": m.get("median_remaining_rr", ""),
-        "avg_remaining_rr": m.get("avg_remaining_rr", ""),
-        "extended_gt10pct": m.get("extended_gt10pct", 0),
-        "extended_pct": m.get("extended_pct", 0),
-        "quality_score": m.get("quality_score", 0),
-        "recorded_at": _dt.datetime.now().isoformat(timespec="seconds"),
-    }
-
-
-def _print_table(rows: list[dict]) -> None:
-    if not rows:
-        print("  (no sessions recorded yet)")
-        return
-    hdr = (f"{'date':<12}{'cfg':<10}{'count':>7}{'action':>8}{'act%':>7}"
-           f"{'avgDist%':>10}{'medRemRR':>10}{'ext>10':>8}{'ext%':>7}{'quality':>9}")
-    print(hdr); print("-" * len(hdr))
-    for r in rows:
-        print(f"{r['date']:<12}{r['config']:<10}{r['count']:>7}{r['actionable']:>8}"
-              f"{r['actionable_pct']:>7}{r['avg_dist_from_entry_pct']:>10}"
-              f"{str(r['median_remaining_rr']):>10}{r['extended_gt10pct']:>8}"
-              f"{r['extended_pct']:>7}{r['quality_score']:>9}")
+def _print_status(sessions: list[dict]) -> None:
+    ev = evaluate_criteria(sessions)
+    print(f"\nAnchor10 status: {ev['overall']}  "
+          f"({ev['session_count']}/{ev['sessions_required']} sessions)")
+    for k, v in ev["criteria"].items():
+        print(f"  {'PASS' if v['pass'] else 'FAIL'}  {k:<20} — {v['rule']}")
+    print(f"  → {ev['recommendation']}")
+    if sessions:
+        hdr = (f"\n{'date':<12}{'A act%':>8}{'B act%':>8}{'B avgDist%':>12}"
+               f"{'B medRR':>9}{'cntDrop%':>10}{'breaches':>10}")
+        print(hdr)
+        for s in sessions:
+            a, b = s["A_current"], s["B_anchor"]
+            print(f"{s['date']:<12}{a['actionable_pct']:>8}{b['actionable_pct']:>8}"
+                  f"{b['avg_dist_from_entry_pct']:>12}{str(b['median_remaining_rr']):>9}"
+                  f"{s['count_drop_pct']:>10}{len(s['breaches']):>10}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Daily Anchor10 shadow recorder (read-only)")
+    ap = argparse.ArgumentParser(description="Anchor10 daily shadow recorder (read-only)")
     ap.add_argument("--path", help="record from a saved discovery JSON instead of the live API")
     ap.add_argument("--date", help="override the session date (YYYY-MM-DD)")
-    ap.add_argument("--show", action="store_true", help="print the running table and exit")
+    ap.add_argument("--show", action="store_true", help="print criteria status and exit")
     args = ap.parse_args()
 
-    existing = _read_rows()
+    cli = _redis_client()
+
     if args.show:
-        _print_table(existing)
+        _print_status(load_sessions(cli))
         return
 
-    setups, scan_id = _load_json(args.path) if args.path else _fetch_live()
+    payload = _fetch_payload(args.path)
+    setups = book_from_payload(payload)
     date = args.date or _dt.date.today().isoformat()
+    scan_id = str(payload.get("scan_id") or payload.get("generated_at") or "?")
     if not setups:
-        print(f"[{date}] no final setups returned (scan_id={scan_id}); nothing recorded.")
-        _print_table(existing)
+        print(f"[{date}] no final setups (scan_id={scan_id}); nothing recorded.")
+        _print_status(load_sessions(cli))
         return
 
-    m_a = metrics(levels_for(setups, "current", ANCHOR_GAP))
-    m_b = metrics(levels_for(setups, "anchor", ANCHOR_GAP))
+    session = record_session(setups, date, scan_id, cli, ANCHOR_GAP_DEFAULT)
+    _mirror_csv(session)
 
-    # idempotent: drop any prior rows for this date, then append A and B
-    kept = [r for r in existing if r.get("date") != date]
-    kept.append(_metric_row(date, "A_current", scan_id, m_a))
-    kept.append(_metric_row(date, f"B_anchor{int(ANCHOR_GAP)}", scan_id, m_b))
-    kept.sort(key=lambda r: (r["date"], r["config"]))
-    _write_rows(kept)
+    a, b = session["A_current"], session["B_anchor"]
+    print(f"\n[{date}] scan={scan_id}  (Anchor gap={session['anchor_gap_pct']}%)  "
+          f"redis={'on' if cli else 'OFF (csv only)'}")
+    print(f"  A current : count={a['count']:>3}  actionable={a['actionable']:>3} "
+          f"({a['actionable_pct']}%)  avgDist={a['avg_dist_from_entry_pct']}%  "
+          f"medRemRR={a['median_remaining_rr']}  extended={a['extended_gt10pct']}")
+    print(f"  B anchor10: count={b['count']:>3}  actionable={b['actionable']:>3} "
+          f"({b['actionable_pct']}%)  avgDist={b['avg_dist_from_entry_pct']}%  "
+          f"medRemRR={b['median_remaining_rr']}  extended={b['extended_gt10pct']}")
+    print(f"  count delta under Anchor10: {b['count']-a['count']:+d} "
+          f"({-session['count_drop_pct']:+.0f}%)  "
+          f"breaches: {session['breaches'] or 'none'}")
 
-    print(f"\n[{date}] scan={scan_id}  (Anchor gap={ANCHOR_GAP}%)")
-    print(f"  A current : count={m_a['count']:>3}  actionable={m_a['actionable']:>3} "
-          f"({m_a['actionable_pct']}%)  avgDist={m_a['avg_dist_from_entry_pct']}%  "
-          f"medRemRR={m_a['median_remaining_rr']}  extended={m_a['extended_gt10pct']}")
-    print(f"  B anchor10: count={m_b['count']:>3}  actionable={m_b['actionable']:>3} "
-          f"({m_b['actionable_pct']}%)  avgDist={m_b['avg_dist_from_entry_pct']}%  "
-          f"medRemRR={m_b['median_remaining_rr']}  extended={m_b['extended_gt10pct']}")
-    # count-collapse guard signal
-    if m_a["count"]:
-        drop = (m_a["count"] - m_b["count"]) / m_a["count"] * 100.0
-        flag = "OK" if drop <= 20 else "WARN: signal count dropped >20%"
-        print(f"  count delta under Anchor10: {m_b['count']-m_a['count']:+d} ({-drop:+.0f}%)  [{flag}]")
-
-    print(f"\nRunning sessions ({CSV_PATH}):")
-    _print_table(kept)
-    print("\nAfter 3-5 stable sessions, apply docs/PHASE2_ENABLEMENT_CRITERIA.md.")
+    _print_status(load_sessions(cli) or [session])
 
 
 if __name__ == "__main__":
