@@ -2341,13 +2341,23 @@ def get_research_chart_data(symbol: str, horizon: str = Query("SWING")):
     if cached and (_t.time() - cached[0]) < _CHART_CACHE_TTL:
         return cached[1]
 
-    # 1. Fetch recommendation from DB
+    # 1. Fetch recommendation from DB (best-effort — a missing/malformed reco
+    #    must NOT crash the chart; the candles are the point). A row with a
+    #    NULL symbol previously raised AttributeError here and 500'd EVERY chart
+    #    request (unhandled 500s also drop CORS headers, so the browser only
+    #    saw "Failed to fetch").
     reco = None
-    rows = get_stock_recommendations(horizon, limit=50)
-    for r in rows:
-        if r["symbol"].upper().replace("NSE:", "") == symbol:
-            reco = r
-            break
+    try:
+        for r in get_stock_recommendations(horizon, limit=50):
+            rsym = r.get("symbol")
+            if not isinstance(rsym, str) or not rsym:
+                continue
+            if rsym.upper().replace("NSE:", "") == symbol:
+                reco = r
+                break
+    except Exception as exc:
+        log.warning("chart-data reco lookup failed for %s: %s", symbol, exc)
+        reco = None
 
     # 2. Fetch daily OHLC via yfinance
     candles = _fetch_yfinance_ohlc(symbol, days=180)
@@ -2357,37 +2367,46 @@ def get_research_chart_data(symbol: str, horizon: str = Query("SWING")):
     # 3. Detect SMC zones
     zones = _detect_smc_zones(candles)
 
-    # 4. Build trade levels from recommendation
+    # 4. Build trade levels from recommendation (best-effort — a malformed
+    #    field must degrade to "no levels", never crash the chart).
     levels = []
     if reco:
-        entry = float(reco["entry_price"])
-        sl = float(reco["stop_loss"]) if reco.get("stop_loss") else None
-        targets = reco.get("targets", [])
-        scan_cmp = float(reco["scan_cmp"]) if reco.get("scan_cmp") else None
-        entry_type = reco.get("entry_type", "MARKET")
-        setup = reco.get("setup", "")
+        try:
+            entry = float(reco["entry_price"])
+            sl = float(reco["stop_loss"]) if reco.get("stop_loss") else None
+            targets = reco.get("targets", []) or []
+            if not isinstance(targets, list):
+                targets = []
+            scan_cmp = float(reco["scan_cmp"]) if reco.get("scan_cmp") else None
+            entry_type = reco.get("entry_type", "MARKET")
 
-        levels.append({"type": "entry", "price": entry, "label": f"Entry ₹{entry:.2f}", "color": "#2962ff",
-                        "style": "solid", "entry_type": entry_type})
-        if sl:
-            levels.append({"type": "sl", "price": sl, "label": f"SL ₹{sl:.2f}", "color": "#ff4757", "style": "dashed"})
-        for i, t in enumerate(targets):
-            tv = float(t)
-            levels.append({"type": "target", "price": tv, "label": f"T{i+1} ₹{tv:.2f}", "color": "#00e096", "style": "dashed"})
-        if scan_cmp:
-            levels.append({"type": "cmp", "price": scan_cmp, "label": f"CMP ₹{scan_cmp:.2f}", "color": "#f0c060", "style": "dotted"})
+            levels.append({"type": "entry", "price": entry, "label": f"Entry ₹{entry:.2f}", "color": "#2962ff",
+                            "style": "solid", "entry_type": entry_type})
+            if sl:
+                levels.append({"type": "sl", "price": sl, "label": f"SL ₹{sl:.2f}", "color": "#ff4757", "style": "dashed"})
+            for i, t in enumerate(targets):
+                try:
+                    tv = float(t)
+                except (TypeError, ValueError):
+                    continue
+                levels.append({"type": "target", "price": tv, "label": f"T{i+1} ₹{tv:.2f}", "color": "#00e096", "style": "dashed"})
+            if scan_cmp:
+                levels.append({"type": "cmp", "price": scan_cmp, "label": f"CMP ₹{scan_cmp:.2f}", "color": "#f0c060", "style": "dotted"})
 
-        # Entry zone for longterm
-        entry_zone = reco.get("entry_zone")
-        if entry_zone and isinstance(entry_zone, list) and len(entry_zone) == 2:
-            zones.append({
-                "top": float(entry_zone[1]),
-                "bottom": float(entry_zone[0]),
-                "zone_type": "ENTRY_ZONE",
-                "color": "rgba(41, 98, 255, 0.12)",
-                "border_color": "rgba(41, 98, 255, 0.4)",
-                "label": "Entry Zone",
-            })
+            # Entry zone for longterm
+            entry_zone = reco.get("entry_zone")
+            if entry_zone and isinstance(entry_zone, list) and len(entry_zone) == 2:
+                zones.append({
+                    "top": float(entry_zone[1]),
+                    "bottom": float(entry_zone[0]),
+                    "zone_type": "ENTRY_ZONE",
+                    "color": "rgba(41, 98, 255, 0.12)",
+                    "border_color": "rgba(41, 98, 255, 0.4)",
+                    "label": "Entry Zone",
+                })
+        except Exception as exc:
+            log.warning("chart-data level build failed for %s: %s", symbol, exc)
+            levels = []
 
     # 5. Build response
     response = {
@@ -2412,15 +2431,27 @@ def _fetch_yfinance_ohlc(symbol: str, days: int = 180) -> list[dict]:
         df = ticker.history(period=f"{days}d")
         if df.empty:
             return []
+        import math
         candles = []
         for idx, row in df.iterrows():
+            o, h, l, c = row["Open"], row["High"], row["Low"], row["Close"]
+            # Skip bars with NaN OHLC (e.g. a halted day or an incomplete bar);
+            # a single bad bar must not nuke the whole chart.
+            if any(v is None or (isinstance(v, float) and math.isnan(v)) for v in (o, h, l, c)):
+                continue
+            vol = row["Volume"]
+            vol = 0 if (vol is None or (isinstance(vol, float) and math.isnan(vol))) else int(vol)
+            day = idx.strftime("%Y-%m-%d")
             candles.append({
-                "time": idx.strftime("%Y-%m-%d"),
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]),
+                # "time" → lightweight-charts (frontend); "date" → SMC detectors
+                # (services.research_levels.daily_candles_to_weekly needs "date").
+                "time": day,
+                "date": day,
+                "open": round(float(o), 2),
+                "high": round(float(h), 2),
+                "low": round(float(l), 2),
+                "close": round(float(c), 2),
+                "volume": vol,
             })
         return candles
     except Exception as e:
