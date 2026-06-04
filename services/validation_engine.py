@@ -33,6 +33,22 @@ log = logging.getLogger("services.validation_engine")
 Horizon = Literal["SWING", "LONGTERM"]
 
 
+# ── Signal-quality flags (Phase 2 — default OFF: behaviour unchanged) ─────────
+# Max gap between the planned (OB/liquidity) entry and current price before the
+# entry is pulled toward CMP. Historically hard-coded to 0.30 (30%), which let
+# limit entries sit up to ~30% below price — orders that never fill on momentum
+# names already at their highs (the live audit found 16/30 final ideas >15%
+# past entry). Lower this (e.g. ENTRY_ANCHOR_MAX_GAP_PCT=10) to anchor entries
+# to a fillable level. Default 30 reproduces the prior behaviour exactly.
+ENTRY_ANCHOR_MAX_GAP_PCT = float(os.getenv("ENTRY_ANCHOR_MAX_GAP_PCT", "30")) / 100.0
+
+# When enabled, cap the far target at the nearest prior swing-high resistance
+# above entry (floored at 1.5R, so a clean breakout with no overhead supply
+# keeps the full measured-move target). Default off → fixed 3.0R (LT 3.5R), so
+# nothing changes until STRUCTURAL_TARGET_CAP=1 is set and reviewed.
+STRUCTURAL_TARGET_CAP = os.getenv("STRUCTURAL_TARGET_CAP", "0").strip().lower() in {"1", "true", "yes"}
+
+
 @dataclass(slots=True)
 class CoverageReport:
     total_universe: int
@@ -329,6 +345,26 @@ def _smc_confirmation(df: pd.DataFrame | None) -> dict:
     }
 
 
+def _nearest_resistance_above(
+    candles: list[dict], entry: float, left: int = 3, right: int = 3, lookback: int = 180
+) -> float | None:
+    """Nearest prior swing-high pivot strictly above `entry`.
+
+    A pivot high is a bar whose high is the max of a +/- window around it
+    (standard fractal pivot — fixed window, not tuned per symbol, so it does
+    not curve-fit). Used to cap the far target at real overhead supply.
+    Returns None when no pivot sits above entry (e.g. a clean breakout at
+    all-time highs), so those setups keep the full measured-move target."""
+    highs = [float(c["high"]) for c in candles[-lookback:]]
+    n = len(highs)
+    pivots: list[float] = []
+    for i in range(left, n - right):
+        h = highs[i]
+        if h > entry and h == max(highs[i - left : i + right + 1]):
+            pivots.append(h)
+    return min(pivots) if pivots else None
+
+
 def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, confirmation: dict) -> tuple[float, float, list[float], str, dict] | None:
     candles = df_to_candles(df)
     confirmation_score = float(confirmation.get("confirmation_score", 0.0) or 0.0)
@@ -352,7 +388,7 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     else:
         entry = round(close, 2)
         entry_type = "MARKET"
-    if abs(entry - close) / close > 0.30:
+    if abs(entry - close) / close > ENTRY_ANCHOR_MAX_GAP_PCT:
         entry = round(close - atr * 0.5, 2)
     recent_low = min(float(c["low"]) for c in candles[-20:])
     base_risk = max(atr * (2.0 if horizon == "LONGTERM" else 1.3), entry * 0.03)
@@ -365,7 +401,15 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
         return None
     risk = entry - stop
     target_mult = 3.5 if horizon == "LONGTERM" else 3.0
-    targets = [round(entry + risk * 1.5, 2), round(entry + risk * target_mult, 2)]
+    far = entry + risk * target_mult
+    if STRUCTURAL_TARGET_CAP:
+        res = _nearest_resistance_above(candles, entry)
+        if res is not None:
+            # Cap at the nearest overhead resistance, but never below a 1.5R
+            # floor (don't neuter the trade); breakouts with no pivot above
+            # entry keep the full measured-move target.
+            far = max(entry + risk * 1.5, min(far, res))
+    targets = [round(entry + risk * 1.5, 2), round(far, 2)]
     tier = str(confirmation.get("tier", "SCORED"))
     structure = str(confirmation.get("structure", "NEUTRAL"))
     setup = f"SMC_{horizon}_SCORE_{int(float(confirmation.get('confirmation_score', 0.0) or 0.0))}_{tier}_{structure}"
