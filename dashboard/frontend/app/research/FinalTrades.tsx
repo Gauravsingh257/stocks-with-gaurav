@@ -99,6 +99,32 @@ function riskNote(item: ResearchDecisionCard, target: number | null): string {
   return `Risk note: Use SL ${fmt(item.stop_loss)}. ${rr}. Avoid entry if price is far from the planned zone.`;
 }
 
+// Honest reward-left-from-here. The headline R:R assumes a fill at the planned
+// entry. Once price has run toward target, a buy at the current price carries
+// far less reward for the same SL risk — so a "3R" card that is 90% of the way
+// to target is NOT a fresh 3R trade. Surface the remaining R from CMP and how
+// much of the entry→target move is already gone.
+function remainingFromCmp(
+  item: ResearchDecisionCard,
+  target: number | null,
+): { label: string; color: string; bg: string; border: string } | null {
+  const cmp = Number(item.scan_cmp);
+  const entry = Number(item.entry_price);
+  const sl = Number(item.stop_loss);
+  if (!Number.isFinite(cmp) || !Number.isFinite(sl) || !Number.isFinite(entry) || !target) return null;
+  if (cmp <= 0 || target <= entry) return null;
+  const riskFromCmp = cmp - sl;
+  if (riskFromCmp <= 0) return null;
+  const remR = (target - cmp) / riskFromCmp;
+  const pctDone = Math.round(((cmp - entry) / (target - entry)) * 100);
+  const rTxt = remR.toFixed(2);
+  if (remR >= 1.5)
+    return { label: `From CMP: ${rTxt}R left · ${pctDone}% of move done`, color: "#34d399", bg: "rgba(16,185,129,0.12)", border: "rgba(16,185,129,0.35)" };
+  if (remR >= 0.5)
+    return { label: `From CMP: only ${rTxt}R left · ${pctDone}% of move done`, color: "#fbbf24", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.35)" };
+  return { label: `From CMP: ${rTxt}R left · ${pctDone}% of move done — move largely over`, color: "#fda4af", bg: "rgba(244,63,94,0.12)", border: "rgba(244,63,94,0.35)" };
+}
+
 // Reachability badge: how far has price moved past the planned entry?
 // Mirrors the backend bands (validation_engine._entry_reachability).
 function reachabilityBadge(item: ResearchDecisionCard):
@@ -279,6 +305,16 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                   <div><span style={{ color: "var(--text-dim)" }}>SL</span><br /><strong style={{ color: "#ff4e6a" }}>{fmt(item.stop_loss)}</strong></div>
                   <div><span style={{ color: "var(--text-dim)" }}>Target</span><br /><strong style={{ color: "#00e096" }}>{fmt(target)}</strong></div>
                 </div>
+
+                {(() => {
+                  const rc = remainingFromCmp(item, target);
+                  if (!rc) return null;
+                  return (
+                    <div style={{ fontSize: "0.68rem", padding: "4px 8px", borderRadius: 6, color: rc.color, background: rc.bg, border: `1px solid ${rc.border}`, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 5, width: "fit-content" }}>
+                      <Target size={12} /> {rc.label}
+                    </div>
+                  );
+                })()}
 
                 <div style={{ display: "grid", gap: 6, padding: 10, borderRadius: 8, background: "rgba(3,7,18,0.28)", border: "1px solid rgba(16,185,129,0.22)", fontSize: "0.72rem", lineHeight: 1.45 }}>
                   <div style={{ color: "var(--text-primary)", fontWeight: 850 }}>Why this trade?</div>

@@ -242,6 +242,40 @@ def _utc_iso(s: str | None) -> str | None:
     return value.replace(" ", "T") + "Z"
 
 
+def _serve_reachability(cmp, entry) -> tuple[float | None, str]:
+    """Reachability bands for the *served* decision feed.
+
+    Mirrors the frozen bands in services.validation_engine._entry_reachability
+    so the frontend's "hide ran-past-entry" filter works on the cached
+    signals_log payload too. The persisted row schema does not carry these
+    fields, so without this the field is absent and every unreachable idea
+    (price already >15% past the planned entry) leaks into the default view.
+
+      gap = (cmp - entry) / entry * 100
+      gap < -5%        -> pre_breakout (entry above CMP; awaiting breakout)
+      |gap| <= 5%      -> actionable   (trading at/near the entry)
+      5% < gap <= 15%  -> waiting      (above entry; may pull back)
+      gap > 15%        -> unreachable  (price ran away; hidden by default)
+    """
+    try:
+        c = float(cmp)
+        e = float(entry)
+    except (TypeError, ValueError):
+        return None, "unknown"
+    if not c or e <= 0:
+        return None, "unknown"
+    gap = (c - e) / e * 100.0
+    if gap < -5.0:
+        band = "pre_breakout"
+    elif gap <= 5.0:
+        band = "actionable"
+    elif gap <= 15.0:
+        band = "waiting"
+    else:
+        band = "unreachable"
+    return round(gap, 2), band
+
+
 def _signals_log_row_to_decision_card(row: dict) -> dict:
     """Convert a persisted validation row into the public decision-feed shape."""
     confidence = float(row.get("confidence") or 0)
@@ -261,6 +295,7 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
             risk_reward = round(reward / risk, 2) if risk > 0 else None
     except Exception:
         risk_reward = None
+    entry_distance_pct, reachability = _serve_reachability(row.get("cmp"), entry)
     return {
         "id": row.get("id"),
         "symbol": row.get("symbol"),
@@ -272,6 +307,8 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
         "target_2": target,
         "targets": [target] if target is not None else [],
         "risk_reward": risk_reward,
+        "entry_distance_pct": entry_distance_pct,
+        "reachability": reachability,
         "confidence_score": confidence,
         "scan_cmp": row.get("cmp"),
         "entry_type": "validation_scan",
