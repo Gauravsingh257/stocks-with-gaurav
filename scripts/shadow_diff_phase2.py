@@ -56,9 +56,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 from dataclasses import dataclass
+
+# Allow running as `python scripts/shadow_diff_phase2.py` from the repo root:
+# put the project root on sys.path so the lazy `data` / `services` imports resolve.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ── band thresholds (mirror validation_engine._entry_reachability) ────────────
@@ -79,6 +84,9 @@ class Setup:
     is_at_52w_high: bool
     pct_below_52w_high: float | None
     date: str = ""
+    # Exact structural cap target, filled by resolve_exact_caps() in engine mode.
+    # None -> Config C uses the 52w-high proxy.
+    target_cap: float | None = None
 
 
 # ── reconstruction of each config's (entry, stop, target) ─────────────────────
@@ -112,14 +120,55 @@ def cfg_anchor(s: Setup, max_gap_pct: float) -> tuple[float, float, float]:
     return entry_b, stop_b, target_b
 
 
-def cfg_targetcap_proxy(s: Setup) -> tuple[float, float, float]:
-    """Config C (proxy): cap far target at the reconstructed 52w high."""
+def cfg_targetcap(s: Setup) -> tuple[float, float, float]:
+    """Config C. Uses the EXACT pivot cap (s.target_cap, set by
+    resolve_exact_caps in engine mode) when available; otherwise falls back to
+    the documented 52w-high proxy."""
+    if s.target_cap is not None:
+        return s.entry, s.stop, s.target_cap
     if s.is_at_52w_high or not s.pct_below_52w_high or s.pct_below_52w_high <= 0:
         return s.entry, s.stop, s.target           # no overhead -> full target
     high52 = s.cmp / (1.0 - s.pct_below_52w_high / 100.0)
     floor = s.entry + (s.entry - s.stop) * TARGET_FLOOR_R
     capped = max(floor, min(s.target, high52))
     return s.entry, s.stop, round(capped, 2)
+
+
+def resolve_exact_caps(setups: list[Setup], source: str = "yfinance", days: int = 420) -> int:
+    """EXACT Config-C: fetch real candle history per symbol and run the
+    PRODUCTION pivot finder (validation_engine._nearest_resistance_above) to cap
+    the far target at the nearest swing-high resistance above entry, floored at
+    1.5R. Mutates each Setup.target_cap in place. Returns the number resolved.
+
+    This is the real cap the engine applies with STRUCTURAL_TARGET_CAP=1 — no
+    proxy. Requires network/data access (the same yfinance path the scan uses)."""
+    from data.ingestion import DataIngestion
+    from services.research_levels import df_to_candles
+    from services.validation_engine import _nearest_resistance_above
+
+    ing = DataIngestion(source=source)
+    cache: dict[str, float | None] = {}
+    resolved = 0
+    for s in setups:
+        if s.symbol not in cache:
+            try:
+                df = ing.fetch_historical(s.symbol, interval="day", days=days)
+                # Drop NaN highs (e.g. an incomplete trailing bar) so the pivot
+                # finder sees only clean, completed candles.
+                candles = [c for c in (df_to_candles(df) or [])
+                           if c.get("high") is not None and float(c["high"]) == float(c["high"])]
+                cache[s.symbol] = _nearest_resistance_above(candles, s.entry) if candles else None
+            except Exception as exc:  # noqa: BLE001 — best-effort per symbol
+                print(f"  [warn] candle fetch failed for {s.symbol}: {exc}", file=sys.stderr)
+                cache[s.symbol] = None
+        res = cache[s.symbol]
+        if res is None:
+            s.target_cap = s.target            # no overhead pivot -> full target (matches engine)
+        else:
+            floor = s.entry + (s.entry - s.stop) * TARGET_FLOOR_R
+            s.target_cap = round(max(floor, min(s.target, res)), 2)
+        resolved += 1
+    return resolved
 
 
 # ── metrics over a list of (entry, stop, target, cmp) ─────────────────────────
@@ -174,7 +223,7 @@ def levels_for(setups: list[Setup], config: str, max_gap_pct: float) -> list[tup
         elif config == "anchor":
             e, st, t = cfg_anchor(s, max_gap_pct)
         elif config == "targetcap":
-            e, st, t = cfg_targetcap_proxy(s)
+            e, st, t = cfg_targetcap(s)
         else:
             raise ValueError(config)
         out.append((e, st, t, s.cmp))
@@ -287,6 +336,43 @@ def print_window(label: str, setups: list[Setup], anchor_gap: float, mode: str):
     print(f"  [Config C target cap = {cap_note}]")
 
 
+def _classify(gap: float) -> str:
+    if abs(gap) <= ACTIONABLE_PCT:
+        return "actionable"
+    if gap > EXTENDED_PCT:
+        return "extended"
+    return "waiting"
+
+
+def print_per_symbol(setups: list[Setup], anchor_gap: float):
+    """Action #5: per-recommendation diff — which CURRENT live ideas change
+    under Anchor10, and how (entry, distance, remaining RR, state flip)."""
+    print(f"\n{'='*112}\nPER-RECOMMENDATION CHANGE UNDER ANCHOR10 (gap={anchor_gap}%)  "
+          f"— current live final book\n{'='*112}")
+    hdr = (f"{'Symbol':<13}{'CMP':>9}"
+           f"{'A entry':>9}{'A dist%':>8}{'A remRR':>8}{'A state':>11}   "
+           f"{'B entry':>9}{'B dist%':>8}{'B remRR':>8}{'B state':>11}  {'change':>10}")
+    print(hdr); print("-" * len(hdr))
+    flips = 0
+    for s in sorted(setups, key=lambda x: _gap_from_entry(x.entry, x.cmp), reverse=True):
+        ea, sa, ta = cfg_current(s)
+        eb, sb, tb = cfg_anchor(s, anchor_gap)
+        ga, gb = _gap_from_entry(ea, s.cmp), _gap_from_entry(eb, s.cmp)
+        ra, rb = _remaining_rr(ea, sa, ta, s.cmp), _remaining_rr(eb, sb, tb, s.cmp)
+        ca, cb = _classify(ga), _classify(gb)
+        changed = abs(eb - ea) > 0.01
+        flip = "" if ca == cb else f"{ca[:4]}->{cb[:4]}"
+        if changed:
+            flips += 1
+        tag = flip or ("re-anchored" if changed else "unchanged")
+        print(f"{s.symbol.replace('NSE:',''):<13}{s.cmp:>9.2f}"
+              f"{ea:>9.2f}{ga:>8.1f}{(round(ra,2) if ra is not None else '-')!s:>8}{ca:>11}   "
+              f"{eb:>9.2f}{gb:>8.1f}{(round(rb,2) if rb is not None else '-')!s:>8}{cb:>11}  {tag:>10}")
+    print("-" * len(hdr))
+    print(f"  {flips}/{len(setups)} recommendations re-anchored under Anchor10; "
+          f"the rest already within {anchor_gap}% of entry (unchanged).")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Phase-2 flag shadow-diff (read-only)")
     ap.add_argument("--source", choices=["db", "json"], default="db")
@@ -295,14 +381,10 @@ def main():
     ap.add_argument("--anchor-gap", type=float, default=10.0,
                     help="Config-B ENTRY_ANCHOR_MAX_GAP_PCT to simulate (default 10)")
     ap.add_argument("--mode", choices=["proxy", "engine"], default="proxy",
-                    help="Config-C target-cap: proxy (52w-high) or engine (exact, needs candles)")
+                    help="Config-C target-cap: proxy (52w-high) or engine (EXACT pivot cap, fetches candles)")
+    ap.add_argument("--per-symbol", action="store_true",
+                    help="also print the per-recommendation Anchor10 change report (action #5)")
     args = ap.parse_args()
-
-    if args.mode == "engine":
-        print("NOTE: --mode engine (exact pivot cap) not wired in this build; "
-              "using proxy. Run validation_engine with STRUCTURAL_TARGET_CAP=1 on a "
-              "shadow scan for the exact figure.", file=sys.stderr)
-        args.mode = "proxy"
 
     if args.source == "json":
         windows = load_from_json(args.path)
@@ -310,10 +392,19 @@ def main():
         wins = [int(x) for x in args.windows.split(",") if x.strip()]
         windows = load_from_db(wins)
 
+    if args.mode == "engine":
+        all_setups = [s for setups in windows.values() for s in setups]
+        print(f"Resolving EXACT Config-C caps via candle history for "
+              f"{len({s.symbol for s in all_setups})} symbols ...", file=sys.stderr)
+        resolve_exact_caps(all_setups)
+
     print(f"\nPhase-2 Shadow-Diff  |  Config-B anchor gap = {args.anchor_gap}%  "
+          f"|  Config-C cap = {'EXACT (production pivots)' if args.mode == 'engine' else 'PROXY (52w-high)'}  "
           f"|  bands: actionable<=5%, extended>10%")
     for label, setups in windows.items():
         print_window(label, setups, args.anchor_gap, args.mode)
+        if args.per_symbol:
+            print_per_symbol(setups, args.anchor_gap)
     print("\nReminder: Config A reflects production today. B/C are simulations — "
           "review before setting ENTRY_ANCHOR_MAX_GAP_PCT / STRUCTURAL_TARGET_CAP.")
 
