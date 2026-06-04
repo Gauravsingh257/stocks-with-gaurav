@@ -488,6 +488,80 @@ def start_scheduler() -> None:
         misfire_grace_time=300,
     )
 
+    # Anchor10 shadow recorder: once daily at 09:20 IST (after the morning
+    # scans + market open). OBSERVATIONAL ONLY — records Config-A (current) vs
+    # Config-B (ENTRY_ANCHOR_MAX_GAP_PCT=10) metrics for the validation soak,
+    # appends a deduped session to shadow:anchor10:sessions (Redis, append-only)
+    # and Telegram-alerts on a breach (count collapse >20%, actionable <60%,
+    # avg distance >6%). Never enables the flag; STRUCTURAL_TARGET_CAP stays 0.
+    def _send_anchor_shadow_alert(date_s: str, session: dict) -> None:
+        try:
+            import os as _os, requests as _rq
+            bot = _os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            chat = _os.getenv("TELEGRAM_CHAT_ID", "").strip()
+            if not bot or not chat:
+                return
+            b = session.get("B_anchor", {})
+            lines = "\n".join(f"• {x}" for x in session.get("breaches", []))
+            _rq.post(
+                f"https://api.telegram.org/bot{bot}/sendMessage",
+                json={"chat_id": chat, "parse_mode": "HTML",
+                      "disable_web_page_preview": True,
+                      "text": (
+                          f"⚠️ <b>Anchor10 shadow breach — {date_s}</b>\n{lines}\n"
+                          f"<i>Anchor10:</i> count={b.get('count')} "
+                          f"actionable={b.get('actionable_pct')}% "
+                          f"avgDist={b.get('avg_dist_from_entry_pct')}% "
+                          f"medRR={b.get('median_remaining_rr')}\n"
+                          "Observational only — ENTRY_ANCHOR_MAX_GAP_PCT is still 30.")},
+                timeout=8,
+            )
+        except Exception:
+            pass
+
+    def _run_anchor_shadow_record():
+        try:
+            import os as _os, json as _json, redis as _r
+            from datetime import datetime as _dtm
+            from zoneinfo import ZoneInfo as _ZI
+            from services.anchor_shadow import book_from_payload, record_session
+            url = _os.getenv("REDIS_URL", "").strip()
+            if not url:
+                logger.warning("[anchor-shadow] REDIS_URL unset; skipping")
+                return
+            cli = _r.from_url(url, decode_responses=True, socket_timeout=5)
+            raw = cli.get("snapshot:last_known_good:discovery")
+            if not raw:
+                logger.info("[anchor-shadow] no discovery snapshot yet; skipping")
+                return
+            payload = _json.loads(raw)
+            setups = book_from_payload(payload)
+            if not setups:
+                logger.info("[anchor-shadow] final book empty; skipping")
+                return
+            date_s = _dtm.now(_ZI("Asia/Kolkata")).date().isoformat()
+            scan_id = payload.get("scan_id") or "?"
+            session = record_session(setups, date_s, scan_id, cli)
+            a, b = session["A_current"], session["B_anchor"]
+            logger.info(
+                "[anchor-shadow] %s scan=%s A(act%%=%s) B(act%%=%s dist=%s medRR=%s) breaches=%s",
+                date_s, scan_id, a["actionable_pct"], b["actionable_pct"],
+                b["avg_dist_from_entry_pct"], b["median_remaining_rr"], session["breaches"])
+            if session["breaches"]:
+                _send_anchor_shadow_alert(date_s, session)
+        except Exception:
+            logger.exception("[anchor-shadow] record failed")
+
+    _scheduler.add_job(
+        _run_anchor_shadow_record,
+        CronTrigger(hour=9, minute=20, day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="anchor_shadow_record",
+        name="Anchor10 Shadow Recorder (09:20 IST, post-scan)",
+        replace_existing=True,
+        misfire_grace_time=1800,
+        max_instances=1,
+    )
+
     _scheduler.start()
     logger.info("Agent scheduler started")
 
