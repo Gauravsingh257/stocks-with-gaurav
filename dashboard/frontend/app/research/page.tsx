@@ -34,6 +34,7 @@ import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
 import { Watchlist } from "./Watchlist";
 import AnchorShadowChip from "./AnchorShadowChip";
+import AnchorShadowHeaderBadge from "./AnchorShadowHeaderBadge";
 
 type ResearchTab = "research" | "portfolio" | "advanced";
 type ResearchDecisionBuckets = Pick<ResearchDecisionFeedResponse, "final_trades" | "watchlist" | "discovery">;
@@ -504,6 +505,7 @@ export default function ResearchPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {user && <AnchorShadowHeaderBadge />}
           <Link href="/research/track-record" style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "6px 14px", borderRadius: 8, fontWeight: 600, fontSize: "0.72rem",
