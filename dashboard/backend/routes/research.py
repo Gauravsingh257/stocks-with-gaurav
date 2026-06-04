@@ -1869,6 +1869,32 @@ def get_state_machine_signals(limit: int = Query(50, ge=1, le=200)):
              "signals": [], "count": 0})
 
 
+@router.get("/api/research/anchor-shadow-status")
+@router.get("/research/anchor-shadow-status")
+def anchor_shadow_status():
+    """Anchor10 shadow-programme status (read-only).
+
+    Surfaces the validation soak of ENTRY_ANCHOR_MAX_GAP_PCT=10: session count,
+    current criteria status, and PASS/FAIL for C1–C5 (see
+    docs/PHASE2_ENABLEMENT_CRITERIA.md). The recorder job appends one session
+    per trading day to the shadow:anchor10:sessions Redis key.
+    STRUCTURAL_TARGET_CAP remains disabled — not evaluated here."""
+    try:
+        import os as _os
+        import redis as _r
+
+        from services.anchor_shadow import evaluate_criteria, load_sessions
+
+        url = _os.getenv("REDIS_URL", "").strip()
+        cli = _r.from_url(url, decode_responses=True, socket_timeout=3) if url else None
+        return _safe_json_response(evaluate_criteria(load_sessions(cli)))
+    except Exception as exc:
+        log.exception("anchor-shadow-status failed: %s", exc)
+        return _safe_json_response(
+            {"error": "anchor_shadow_status_unavailable", "detail": str(exc),
+             "session_count": 0, "overall": "UNKNOWN"})
+
+
 @router.get("/api/research/fvg-tap-signals")
 @router.get("/research/fvg-tap-signals")
 def get_fvg_tap_signals(limit: int = Query(50, ge=1, le=200)):

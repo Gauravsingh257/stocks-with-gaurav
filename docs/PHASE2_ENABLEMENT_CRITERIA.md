@@ -13,11 +13,17 @@ These are engine-service env vars. Setting/unsetting them is instant and code-fr
 
 ## 1. `ENTRY_ANCHOR_MAX_GAP_PCT=10` — go/no-go
 
-Record one session per trading day with:
+Sessions are recorded **automatically** by the scheduler job `anchor_shadow_record`
+(`agents/runner.py`, **09:20 IST Mon–Fri**, after the morning scans + open). It reads
+the canonical discovery snapshot, appends a deduped session to the Redis key
+`shadow:anchor10:sessions` (append-only), and Telegram-alerts on any breach
+(count collapse >20%, actionable <60%, avg distance >6%). No manual runs needed.
 
+Inspect progress any time:
 ```
-python scripts/shadow_anchor_daily.py        # appends to signal_history/shadow_anchor10.csv
-python scripts/shadow_anchor_daily.py --show  # view the running table
+GET /api/research/anchor-shadow-status     # session count + C1–C5 PASS/FAIL + recommendation
+python scripts/shadow_anchor_daily.py --show   # same status from the CLI
+python scripts/shadow_anchor_daily.py          # optional ad-hoc record (same Redis store)
 ```
 
 Collect **3–5 consecutive trading sessions**, then evaluate. **GO requires ALL of:**
