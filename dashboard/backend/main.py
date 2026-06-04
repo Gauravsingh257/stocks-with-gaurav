@@ -303,6 +303,30 @@ app.add_middleware(
     allow_headers     = ["*"],
 )
 
+# ── Unhandled-error handler that PRESERVES CORS headers ──────────────────────
+# Starlette emits unhandled 500s from its OUTERMOST error middleware, which sits
+# OUTSIDE CORSMiddleware — so a cross-origin 500 arrives at the browser with no
+# Access-Control-Allow-Origin header and is reported as the opaque "Failed to
+# fetch" instead of the real status. Echo the Origin back on errors so the
+# frontend surfaces the actual 500 (this fixed the chart-data "Failed to fetch").
+@app.exception_handler(Exception)
+async def _cors_preserving_error_handler(request: Request, exc: Exception):
+    from starlette.responses import JSONResponse
+
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    origin = request.headers.get("origin")
+    headers = (
+        {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+        if origin
+        else {}
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers=headers)
+
+
 # ── REST routers ─────────────────────────────────────────────────────────────
 app.include_router(trades_router)
 app.include_router(analytics_router)
