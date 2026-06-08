@@ -159,9 +159,19 @@ def _fetch_index_5m_yfinance() -> dict:
             return []
         if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
             df = df.droplevel(1, axis=1)
+        # Normalize the index to IST. yfinance may return either a tz-AWARE
+        # index (convert directly) or a tz-NAIVE one (its intraday stamps are
+        # UTC — localize to UTC first, THEN convert). The old code kept a
+        # tz-naive index AS-IS, so a 15:05 IST bar was written as its raw UTC
+        # clock "09:35", making confirm_time appear ~5.5h in the past and
+        # poisoning the freshness telemetry (2026-06-08 forensic).
+        idx = df.index
         try:
-            idx = df.index.tz_convert("Asia/Kolkata")
-        except (TypeError, AttributeError):
+            if getattr(idx, "tz", None) is None:
+                idx = idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+            else:
+                idx = idx.tz_convert("Asia/Kolkata")
+        except (TypeError, AttributeError, ValueError):
             idx = df.index
         out = []
         for ts, row in zip(idx, df.itertuples(index=False)):
