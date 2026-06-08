@@ -868,11 +868,22 @@ class BankNiftySignalEngine:
         else:
             conviction = "LOW - Single factor only. Monitor, don't trade."
 
-        # Trade action
-        if bias == "BEARISH":
-            action = f"BUY {tap['strike']} PE (Bearish Play)"
-        elif bias == "BULLISH":
+        # Trade action — this signal is a BOUNCE-REVERSAL LONG on the option
+        # premium. It only fires AFTER the broken option's premium recovers, and
+        # the entry/SL/target (and the exit tracker) all follow THAT same option
+        # rising to target. So the trade is always to BUY the option that
+        # bounced — the option type alone fixes the direction:
+        #   CE bounce  -> buy CE -> underlying BULLISH
+        #   PE bounce  -> buy PE -> underlying BEARISH
+        # (The older "monthly-low = weakness" reasoning above is descriptive
+        # only; it must NOT drive the action, or the alert tells you to buy the
+        # opposite leg from the one actually being entered/tracked.)
+        if opt_type == "CE":
+            bias = "BULLISH"
             action = f"BUY {tap['strike']} CE (Bullish Play)"
+        elif opt_type == "PE":
+            bias = "BEARISH"
+            action = f"BUY {tap['strike']} PE (Bearish Play)"
         else:
             action = "Monitor for direction confirmation"
 
