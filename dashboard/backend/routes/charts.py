@@ -42,6 +42,13 @@ logger = logging.getLogger("dashboard.charts")
 
 router = APIRouter(prefix="/api", tags=["charts"])
 
+# Warm last-good OHLC retention. The index path fetches Kite on-demand when
+# tick-built candles are thin (e.g. 15m). We keep the merged result warm under
+# ohlc_key so a transient Kite failure serves stale-but-usable candles instead
+# of a 502. Replaces the resilience the (undeployed) market_engine worker was
+# meant to provide. Generous TTL: spans a Kite outage without going truly stale.
+OHLC_LKG_TTL = 1800  # 30 min
+
 # ── Kite resolution ────────────────────────────────────────────────────────────
 _WORKSPACE = str(Path(__file__).resolve().parents[3])   # C:\Users\...\Trading Algo
 if _WORKSPACE not in sys.path:
@@ -359,11 +366,21 @@ def ohlc(
             try:
                 kite_candles = _fetch_ohlc(kite_sym, kite_interval, fetch_days)
                 candles = _merge_candles(kite_candles, redis_candles)
+                # Keep a warm last-good copy for the Kite-failure path below.
+                cache_set(ohlc_key(kite_sym, kite_interval), candles, OHLC_LKG_TTL)
             except Exception as e:
                 logger.warning("Kite OHLC failed for %s %s, using Redis candles only: %s", symbol, interval, e)
                 if redis_candles:
                     candles = redis_candles
                 else:
+                    # Last resort before erroring: warm last-good OHLC cache.
+                    lkg = cache_get(ohlc_key(kite_sym, kite_interval))
+                    if lkg:
+                        logger.warning("Serving warm last-good OHLC for %s %s (Kite down, no tick candles)", symbol, interval)
+                        return {
+                            "symbol": symbol, "interval": interval, "kite_interval": kite_interval,
+                            "count": len(lkg), "candles": lkg, "cached_at": None, "stale": True,
+                        }
                     err_str = str(e)
                     if "invalid interval" in err_str.lower() or "invalid_interval" in err_str.lower():
                         raise HTTPException(status_code=400, detail=f"Kite interval error: {e}")
