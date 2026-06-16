@@ -14,18 +14,15 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import {
-  Eye, Shield, Clock, RefreshCw, Wifi, WifiOff, AlertTriangle, Activity,
+  Eye, Clock, RefreshCw, Wifi, WifiOff, AlertTriangle, Activity,
 } from "lucide-react";
 import type { OISnapshot } from "./types";
 import { PCRGauge } from "./PCRGauge";
 import { OverallBiasCard } from "./OverallBiasCard";
-import { UnderlyingSummaryCards } from "./UnderlyingSummaryCards";
 import { StrikeHeatmap } from "./StrikeHeatmap";
 import { ShortCoveringPanel } from "./ShortCoveringPanel";
 import { ExecutionQualityPanel } from "./ExecutionQualityPanel";
 import { PCRSparkline, BiasTimeline } from "./HistoryCharts";
-import { MarketStatePanel } from "./MarketStatePanel";
-import { MarketIntelligenceSuite } from "./MarketIntelligenceSuite";
 import { OIInterpretationEssentials } from "./OIInterpretationEssentials";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
@@ -292,35 +289,6 @@ export default function OIIntelligencePage() {
           </div>
 
           <OIInterpretationEssentials data={snapshot.interpretation} />
-
-          <details className="glass" style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
-            <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
-              Advanced narrative &amp; strike intelligence (collapsed by default)
-            </summary>
-            <div style={{ marginTop: 12 }}>
-              <MarketIntelligenceSuite data={snapshot.interpretation} />
-            </div>
-          </details>
-
-          <details className="glass" style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
-            <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
-              Market state &amp; underlying (collapsed — expand for detail)
-            </summary>
-            <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6">
-              <div>
-                <div style={{ fontSize: "0.65rem", color: "var(--text-secondary)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Activity size={12} /> Market state
-                </div>
-                <MarketStatePanel marketState={snapshot.market_state} />
-              </div>
-              <div>
-                <div style={{ fontSize: "0.65rem", color: "var(--text-secondary)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Shield size={12} /> Underlying
-                </div>
-                <UnderlyingSummaryCards summaries={snapshot.underlying_summaries} />
-              </div>
-            </div>
-          </details>
 
           {(snapshot.strike_heatmap?.length ?? 0) > 0 && (
             <details className="glass" style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>

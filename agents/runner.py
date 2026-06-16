@@ -146,14 +146,36 @@ def start_scheduler() -> None:
         misfire_grace_time=30,
     )
 
-    # OI Intelligence: every 60s during market hours (read-only, no AGENTS entry)
+    # OI Intelligence: every 60s during market hours (read-only, no AGENTS entry).
+    # The /api/agents/oi-intelligence endpoint reads the Redis `oi_snapshot`
+    # key first, then the canonical `snapshot:oi_intelligence` LKG. Generating
+    # the snapshot is not enough — it must be PERSISTED to those keys or the
+    # panel goes stale. The always-on web backend is the single source of truth
+    # here; we intentionally do NOT depend on scripts/market_engine.py (that
+    # worker is not deployed as a Railway service). Mirrors the boot prewarm in
+    # dashboard/backend/main.py:_prewarm_oi_snapshot().
     def _run_oi_intelligence():
-        if _market_hours():
-            try:
-                _oi_generate_snapshot()
-                logger.debug("[OI Intelligence] snapshot generated")
-            except Exception:
-                logger.exception("[OI Intelligence] snapshot failed")
+        if not _market_hours():
+            return
+        try:
+            snapshot = _oi_generate_snapshot()
+            if not snapshot:
+                logger.warning("[OI Intelligence] snapshot empty; not persisted")
+                return
+            from dashboard.backend.cache import OI_SNAPSHOT_KEY, set as _cache_set
+            from dashboard.backend.redis_endpoint_cache import (
+                finalize_endpoint as _finalize_endpoint,
+                valid_oi_payload as _valid_oi_payload,
+            )
+            # Primary key the endpoint checks first. TTL (180s) must exceed the
+            # 60s tick cadence so a single missed/slow tick never flips the panel
+            # to "stale".
+            _cache_set(OI_SNAPSHOT_KEY, snapshot, 180)
+            # Canonical live `snapshot:oi_intelligence` + durable LKG fallback.
+            _finalize_endpoint("oi_intelligence", snapshot, _valid_oi_payload)
+            logger.debug("[OI Intelligence] snapshot generated + persisted to Redis")
+        except Exception:
+            logger.exception("[OI Intelligence] snapshot failed")
 
     _scheduler.add_job(
         _run_oi_intelligence,
