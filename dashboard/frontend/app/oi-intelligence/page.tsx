@@ -99,7 +99,22 @@ export default function OIIntelligencePage() {
         try {
           const msg = JSON.parse(ev.data as string);
           if (msg.type === "oi_intelligence" && msg.data) {
-            setSnapshot(msg.data);
+            // WS pushes the RAW snapshot — the `interpretation` enrichment is
+            // added only on the REST path (it has Redis side-effects, so it
+            // must not run per WS tick). Replacing wholesale would drop
+            // `interpretation` every push and make the OI Essentials panel
+            // flicker. Merge instead: keep the last enriched values until the
+            // next REST poll refreshes them.
+            const incoming = msg.data as OISnapshot;
+            setSnapshot((prev) =>
+              prev
+                ? {
+                    ...incoming,
+                    interpretation: incoming.interpretation ?? prev.interpretation,
+                    interpretation_digest: incoming.interpretation_digest ?? prev.interpretation_digest,
+                  }
+                : incoming,
+            );
             setLastUpdate(new Date().toLocaleTimeString());
             setError(null);
             setLoading(false);
