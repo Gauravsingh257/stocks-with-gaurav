@@ -236,6 +236,37 @@ async def lifespan(app: FastAPI):
 
     _th.Thread(target=_prewarm_oi_snapshot, daemon=True, name="oi-prewarm").start()
 
+    # ── Pre-warm research swing/longterm snapshots ────────────────────────
+    # In snapshot-only mode the swing/longterm Redis snapshots are written by
+    # the daily scan + outcome tracker. On a fresh deploy (or once the 24h LKG
+    # TTL elapses with no scan) they can be ABSENT, so /api/research/{swing,
+    # longterm} serve empty and the live-CMP overlay never engages until the
+    # next 08:30/08:40 IST scan. Rebuild them at boot from the EXISTING ACTIVE
+    # recommendations only — no scan, no recommendation regeneration, no DB or
+    # outcome writes — so the research tables + overlay work immediately after
+    # every deploy. Best-effort; the daily scan + outcome tracker keep them fresh.
+    def _prewarm_research_snapshots():
+        try:
+            from dashboard.backend.routes.research import _swing_payload, _longterm_payload
+            from dashboard.backend.redis_endpoint_cache import (
+                finalize_endpoint, valid_research_list_payload,
+            )
+        except Exception as exc:
+            log.warning("[PREWARM] research snapshot prewarm unavailable: %s", exc)
+            return
+        for horizon, builder in (("swing", _swing_payload), ("longterm", _longterm_payload)):
+            try:
+                payload = builder(100)
+                if isinstance(payload, dict) and payload.get("items"):
+                    finalize_endpoint(horizon, payload, valid_research_list_payload)
+                    log.info("[PREWARM] %s snapshot primed (%d items)", horizon, len(payload["items"]))
+                else:
+                    log.info("[PREWARM] %s snapshot skipped — no ACTIVE recommendations", horizon)
+            except Exception:
+                log.exception("[PREWARM] %s snapshot rebuild failed", horizon)
+
+    _th.Thread(target=_prewarm_research_snapshots, daemon=True, name="research-prewarm").start()
+
     log.info("Dashboard backend ready")
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
