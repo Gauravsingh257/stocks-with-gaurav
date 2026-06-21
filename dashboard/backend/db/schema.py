@@ -690,6 +690,9 @@ def migrate_stock_recommendations() -> None:
             ("exit_price", "REAL"),
             ("exit_date", "TEXT"),
             ("exit_reason", "TEXT"),
+            # Outcome-tracker P&L columns (Phase 2). Additive — safe on live DB.
+            ("pnl_pct", "REAL"),
+            ("pnl_r", "REAL"),
         ):
             if col_name not in cols:
                 conn.execute(f"ALTER TABLE stock_recommendations ADD COLUMN {col_name} {col_def}")
@@ -1333,6 +1336,97 @@ def get_latest_recommendation_by_symbol(symbol: str) -> dict | None:
             (symbol,),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# ── Outcome-tracker support (Phase 2) ────────────────────────────────────────
+
+# Public, user-facing portfolio products. FVG_TAP / SWING_SM are validation-phase
+# only and are intentionally excluded from lifecycle tracking + public analytics.
+TRACKED_AGENT_TYPES = ("SWING", "LONGTERM")
+
+
+def get_recommendations_for_tracking(agent_types: tuple[str, ...] = TRACKED_AGENT_TYPES) -> list[dict]:
+    """Return ACTIVE recommendations eligible for SL/target outcome evaluation.
+
+    Only the public portfolio products (SWING, LONGTERM) — parsed targets,
+    enough fields to evaluate against live CMP.
+    """
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" for _ in agent_types)
+        rows = conn.execute(
+            f"""
+            SELECT id, symbol, agent_type, entry_price, stop_loss, targets,
+                   long_term_target, scan_cmp, status, created_at
+            FROM stock_recommendations
+            WHERE status = 'ACTIVE' AND agent_type IN ({placeholders})
+            ORDER BY datetime(created_at) DESC
+            """,
+            list(agent_types),
+        ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.get("targets")
+            if raw:
+                try:
+                    item["targets"] = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    item["targets"] = []
+            else:
+                item["targets"] = []
+            out.append(item)
+        return out
+    finally:
+        conn.close()
+
+
+def close_recommendation(
+    rec_id: int,
+    *,
+    status: str,
+    exit_price: float,
+    exit_reason: str,
+    pnl_pct: float,
+    pnl_r: float,
+    exit_date: str | None = None,
+) -> bool:
+    """Persist a terminal outcome (TARGET_HIT / STOP_HIT) onto a recommendation.
+
+    Idempotent: only transitions rows that are still ACTIVE so a re-run of the
+    tracker never double-closes or overwrites an earlier exit. Returns True when
+    a row was updated.
+    """
+    if status not in ("TARGET_HIT", "STOP_HIT"):
+        raise ValueError(f"close_recommendation: invalid terminal status {status!r}")
+    now = datetime.utcnow().isoformat() + "Z"
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE stock_recommendations
+            SET status = ?, exit_price = ?, exit_date = ?, exit_reason = ?,
+                pnl_pct = ?, pnl_r = ?, signals_updated_at = ?
+            WHERE id = ? AND status = 'ACTIVE'
+            """,
+            (status, float(exit_price), exit_date or now, exit_reason,
+             float(pnl_pct), float(pnl_r), now, int(rec_id)),
+        )
+        changed = cur.rowcount > 0
+        conn.commit()
+        if changed:
+            try:
+                conn.execute(
+                    "INSERT INTO signal_events (symbol, event_type, source, recommendation_id, details) "
+                    "SELECT symbol, ?, 'outcome_tracker', id, ? FROM stock_recommendations WHERE id = ?",
+                    (status, json.dumps({"exit_price": exit_price, "pnl_pct": pnl_pct, "pnl_r": pnl_r}), int(rec_id)),
+                )
+                conn.commit()
+            except Exception:
+                pass
+        return changed
     finally:
         conn.close()
 
