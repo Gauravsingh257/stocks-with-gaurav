@@ -86,14 +86,33 @@ def _run_market_hours(agent_name: str) -> None:
         _run_agent(agent_name)
 
 
+def _rebuild_research_snapshot(horizon: str) -> None:
+    """Phase 6 — rebuild the swing/longterm Redis snapshot from DB after a scan
+    so the website serves fresh picks immediately (scheduled scans previously
+    updated the DB but left the snapshot stale)."""
+    try:
+        from dashboard.backend.routes.research import _swing_payload, _longterm_payload
+        from dashboard.backend.redis_endpoint_cache import (
+            finalize_endpoint, valid_research_list_payload,
+        )
+        payload = _swing_payload(100) if horizon == "SWING" else _longterm_payload(100)
+        if isinstance(payload, dict) and payload.get("items"):
+            finalize_endpoint(horizon.lower(), payload, valid_research_list_payload)
+            logger.info("[%s] snapshot rebuilt after scan (%d items)", horizon, len(payload["items"]))
+    except Exception:
+        logger.exception("[%s] post-scan snapshot rebuild failed", horizon)
+
+
 def weekly_swing_scan() -> None:
     """Public wrapper for weekly swing scan."""
     _run_agent("SwingTradeAlphaAgent")
+    _rebuild_research_snapshot("SWING")
 
 
 def weekly_longterm_scan() -> None:
     """Public wrapper for weekly long-term ranking scan."""
     _run_agent("LongTermInvestmentAgent")
+    _rebuild_research_snapshot("LONGTERM")
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -478,6 +497,30 @@ def start_scheduler() -> None:
         name="Discovery Stage-Transition Watchdog (10m, market-hours)",
         replace_existing=True,
         misfire_grace_time=60,
+    )
+
+    # Research outcome tracker — every 60s, 09:00–16:00 IST (Phase 2).
+    # Evaluates every ACTIVE SWING/LONGTERM recommendation against live CMP and
+    # flips ACTIVE → TARGET_HIT / STOP_HIT (persisting exit_price/pnl), then
+    # rebuilds the swing/longterm Redis snapshot when anything changed (Phase 6).
+    # Market-hours gating + snapshot rebuild live inside run_outcome_tracker_tick.
+    def _run_outcome_tracker():
+        try:
+            from services.research_outcome_tracker import run_outcome_tracker_tick
+            res = run_outcome_tracker_tick()
+            if res.get("closed"):
+                logger.info("[outcome-tracker] %s", res)
+        except Exception:
+            logger.exception("[outcome-tracker] tick failed")
+
+    _scheduler.add_job(
+        _run_outcome_tracker,
+        CronTrigger(minute="*", day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="research_outcome_tracker",
+        name="Research Outcome Tracker (60s, 09:00–16:00 IST)",
+        replace_existing=True,
+        misfire_grace_time=30,
+        max_instances=1,
     )
 
     # Swing alpha scan: daily before market open (Mon–Fri)

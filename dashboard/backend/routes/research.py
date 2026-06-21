@@ -925,6 +925,79 @@ def _finalize_research_snapshot(canonical: str, merged: dict) -> dict:
     return merged
 
 
+def _overlay_live_cmp(snapshot: dict) -> dict:
+    """Phase 1: overlay live CMP onto a cached research snapshot during market hours.
+
+    Preserves the snapshot architecture entirely — we only refresh the per-item
+    price fields (scan_cmp / cmp_source / cmp_age_sec / entry_gap_pct) using the
+    existing single source of truth, services.price_resolver.resolve_cmp.
+
+    Outside research market hours (Mon–Fri 09:00–16:00 IST) the snapshot is
+    returned untouched, so users see the latest available close. On the request
+    path we skip yfinance (use_yf=False) to keep latency low — ws_cache + Kite
+    only; symbols the resolver can't price keep their existing snapshot value.
+    """
+    items = snapshot.get("items")
+    if not isinstance(items, list) or not items:
+        return snapshot
+    try:
+        from services.research_outcome_tracker import is_research_market_hours
+        if not is_research_market_hours():
+            return snapshot
+    except Exception:
+        return snapshot
+
+    symbols = [it.get("symbol") for it in items if isinstance(it, dict) and it.get("symbol")]
+    if not symbols:
+        return snapshot
+
+    scan_cmp_map: dict[str, float] = {}
+    for it in items:
+        sc = it.get("scan_cmp") if isinstance(it, dict) else None
+        if sc is not None:
+            try:
+                scan_cmp_map[it["symbol"]] = float(sc)
+            except (TypeError, ValueError):
+                pass
+
+    try:
+        resolved = resolve_cmp(symbols, scan_cmp_map=scan_cmp_map, use_yf=False)
+    except Exception as exc:
+        log.warning("live CMP overlay failed (%s) — serving snapshot as-is", exc)
+        return snapshot
+    if not resolved:
+        return snapshot
+
+    out = dict(snapshot)
+    new_items: list[dict] = []
+    overlaid = 0
+    for it in items:
+        if not isinstance(it, dict):
+            new_items.append(it)
+            continue
+        live = resolved.get(it.get("symbol"))
+        # Only overlay a genuinely live price — never replace with a scan_snapshot.
+        if live and live.get("source") != "scan_snapshot":
+            ni = dict(it)
+            price = float(live["price"])
+            ni["scan_cmp"] = price
+            ni["cmp_source"] = live.get("source")
+            ni["cmp_age_sec"] = int(live.get("age_sec") or 0)
+            try:
+                entry = float(ni.get("entry_price") or 0)
+                if entry > 0:
+                    ni["entry_gap_pct"] = round((price - entry) / entry * 100, 1)
+            except (TypeError, ValueError):
+                pass
+            new_items.append(ni)
+            overlaid += 1
+        else:
+            new_items.append(it)
+    out["items"] = new_items
+    out["cmp_overlay"] = {"applied": True, "overlaid": overlaid, "total": len(new_items)}
+    return out
+
+
 def _gate_research_items(result: dict, is_premium: bool) -> dict:
     """Apply free-tier item cap without building a live DB payload."""
     if is_premium:
@@ -955,7 +1028,8 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("swing")
             if snap is not None:
-                return _safe_json_response(_gate_research_items(_finalize_research_snapshot("swing", dict(snap)), is_premium))
+                served = _overlay_live_cmp(_finalize_research_snapshot("swing", dict(snap)))
+                return _safe_json_response(_gate_research_items(served, is_premium))
             merged = finalize_endpoint("swing", {}, valid_research_list_payload)
             return _safe_json_response(_gate_research_items(dict(merged), is_premium))
 
@@ -1023,7 +1097,8 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("longterm")
             if snap is not None:
-                return _safe_json_response(_gate_research_items(_finalize_research_snapshot("longterm", dict(snap)), is_premium))
+                served = _overlay_live_cmp(_finalize_research_snapshot("longterm", dict(snap)))
+                return _safe_json_response(_gate_research_items(served, is_premium))
             merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
             return _safe_json_response(_gate_research_items(dict(merged), is_premium))
 

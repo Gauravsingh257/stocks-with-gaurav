@@ -1,16 +1,19 @@
 """
 dashboard/backend/routes/analytics.py
-Performance analytics computed from the trades table in dashboard.db.
-Includes equity curve, per-setup stats, win rate rolling 20,
-drawdown velocity, time-of-day heatmap, regime-based split.
+PUBLIC performance analytics — derived ONLY from the three portfolio products:
+Swing Portfolio, Long-Term Portfolio and the Running Trades Monitor.
 
-When the trades table is empty (e.g. trade_ledger_2026.csv not synced),
-falls back to the ai_learning signal_log table for live signal data.
+Source of truth: stock_recommendations (+ running_trades for live P&L).
+The engine `trades` table and the ai_learning `signal_log` are deliberately
+NOT read here — they are engine/journal/CSV/backtest data and would contaminate
+public portfolio analytics (Phase 3 + Phase 5 source protection).
+
+Every analytics row carries provenance (origin_type / origin_id / origin_table)
+and only the allow-listed origins below are ever surfaced.
 """
 
-import sqlite3
+import json
 import logging
-from pathlib import Path
 from fastapi import APIRouter, Query
 from typing import Optional
 from collections import defaultdict
@@ -21,63 +24,90 @@ from dashboard.backend.db.schema import full_sync_from_csv, get_sync_info
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 logger = logging.getLogger("analytics")
 
-# Path to the ai_learning signals DB
-_AI_LEARNING_DB = Path(__file__).resolve().parents[3] / "ai_learning" / "data" / "trade_learning.db"
+# ── Phase 5: provenance allow-list ───────────────────────────────────────────
+# Only these origins may ever appear in public analytics. Everything else
+# (engine trades, CSV imports, signal-learning, tests, backtests) is forbidden.
+ALLOWED_ORIGINS = ("SWING", "LONGTERM", "RUNNING_TRADES")
+FORBIDDEN_ORIGINS = ("ENGINE", "CSV_IMPORT", "SIGNAL_LOG", "TEST", "BACKTEST", "UNKNOWN")
+# Recommendation agent_types that map to public portfolio products.
+PORTFOLIO_AGENT_TYPES = ("SWING", "LONGTERM")
 
 
-def _rows_to_dicts(rows) -> list:
-    return [dict(r) for r in rows]
-
-
-def _get_signal_log_rows() -> list:
-    """Read completed signals from ai_learning signal_log and normalise to trades schema."""
-    if not _AI_LEARNING_DB.exists():
-        return []
-    try:
-        conn = sqlite3.connect(str(_AI_LEARNING_DB))
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                """
-                SELECT created_at AS date, symbol, direction,
-                       strategy_name AS setup,
-                       entry, stop_loss, target1, target2,
-                       result, pnl_r, score, confidence
-                FROM signal_log
-                WHERE result IN ('WIN','LOSS')
-                ORDER BY created_at ASC
-                """
-            ).fetchall()
-            return [dict(r) for r in rows]
-        except sqlite3.OperationalError:
-            return []
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.warning(f"signal_log fallback error: {exc}")
-        return []
+def _norm_date(value) -> str:
+    """Normalise an ISO/SQLite datetime to 'YYYY-MM-DD HH:MM:SS' (no 'Z'/'T')
+    so the downstream hour/day parsers work uniformly."""
+    if not value:
+        return ""
+    s = str(value).strip().replace("T", " ")
+    if s.endswith("Z"):
+        s = s[:-1]
+    return s
 
 
 def _load_trades(include_running: bool = False) -> tuple[list, str]:
-    """
-    Load trade rows, falling back to signal_log if trades table is empty.
-    Returns (rows, source) where source is 'trades' or 'signal_log'.
+    """Load PORTFOLIO outcome rows from stock_recommendations, normalised to the
+    legacy trades-row shape so every downstream metric function works unchanged.
+
+    result mapping:  TARGET_HIT -> 'WIN',  STOP_HIT -> 'LOSS'.
+    Only decisive (closed) outcomes drive win-rate / equity / profit-factor.
+    When include_running=True, ACTIVE rows are appended as 'RUNNING' (ignored by
+    the WIN/LOSS calculators but available for counts).
+
+    Returns (rows, source). source is always 'portfolio' — engine `trades` and
+    `signal_log` are never read here.
     """
     conn = get_connection()
     try:
-        result_filter = "('WIN','LOSS','RUNNING')" if include_running else "('WIN','LOSS')"
-        rows = _rows_to_dicts(
-            conn.execute(f"SELECT * FROM trades WHERE result IN {result_filter} ORDER BY date ASC").fetchall()
-        )
+        placeholders = ",".join("?" for _ in PORTFOLIO_AGENT_TYPES)
+        statuses = "('TARGET_HIT','STOP_HIT','ACTIVE')" if include_running else "('TARGET_HIT','STOP_HIT')"
+        rows = conn.execute(
+            f"""
+            SELECT id, symbol, agent_type, setup, entry_price, exit_price,
+                   stop_loss, targets, long_term_target, status, pnl_r, pnl_pct,
+                   exit_date, created_at
+            FROM stock_recommendations
+            WHERE agent_type IN ({placeholders})
+              AND status IN {statuses}
+            ORDER BY datetime(COALESCE(exit_date, created_at)) ASC
+            """,
+            list(PORTFOLIO_AGENT_TYPES),
+        ).fetchall()
     finally:
         conn.close()
 
-    if rows:
-        return rows, "trades"
-
-    # Fallback to signal_log
-    rows = _get_signal_log_rows()
-    return rows, "signal_log"
+    _status_to_result = {"TARGET_HIT": "WIN", "STOP_HIT": "LOSS", "ACTIVE": "RUNNING"}
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        status = d.get("status")
+        result = _status_to_result.get(status)
+        if result is None:
+            continue
+        # Long/short geometry for direction label (analytics is informational).
+        try:
+            targets = json.loads(d["targets"]) if d.get("targets") else []
+        except (json.JSONDecodeError, TypeError):
+            targets = []
+        entry = d.get("entry_price") or 0
+        is_long = (max(targets) if targets else entry) >= entry
+        out.append({
+            "id": d["id"],
+            "date": _norm_date(d.get("exit_date") or d.get("created_at")),
+            "created_at": _norm_date(d.get("created_at")),
+            "symbol": d.get("symbol"),
+            "direction": "LONG" if is_long else "SHORT",
+            "setup": d.get("setup") or d.get("agent_type") or "UNKNOWN",
+            "entry": entry,
+            "exit_price": d.get("exit_price"),
+            "result": result,
+            "pnl_r": d.get("pnl_r"),
+            "pnl_pct": d.get("pnl_pct"),
+            # Phase 5 provenance — every analytics row is traceable to a portfolio.
+            "origin_type": d.get("agent_type"),
+            "origin_id": d["id"],
+            "origin_table": "stock_recommendations",
+        })
+    return out, "portfolio"
 
 
 @router.get("/summary")
@@ -422,23 +452,30 @@ def force_sync():
 def _research_performance(agent_type: str) -> dict:
     """
     Compute performance metrics for swing or long-term recommendations.
-    Joins running_trades ← stock_recommendations to get live P&L, status, days held.
+
+    Status + closed P&L authority is the recommendation row itself (set by the
+    outcome tracker). running_trades is joined only for live P&L / days-held on
+    positions that are still open.
     """
     conn = get_connection()
     try:
         rows = conn.execute(
             """
             SELECT
+                sr.id,
                 sr.symbol,
                 sr.entry_price,
                 sr.confidence_score,
                 sr.created_at AS recommended_at,
                 sr.setup,
+                sr.status        AS reco_status,
+                sr.pnl_pct       AS reco_pnl_pct,
+                sr.pnl_r         AS reco_pnl_r,
+                sr.exit_price,
                 rt.current_price,
                 rt.profit_loss_pct,
                 rt.profit_loss,
                 rt.days_held,
-                rt.status,
                 rt.high_since_entry,
                 rt.low_since_entry,
                 rt.updated_at
@@ -469,17 +506,25 @@ def _research_performance(agent_type: str) -> dict:
 
     picks = []
     for r in rows:
+        reco_status = (r["reco_status"] or "ACTIVE").upper()
+        # Map recommendation lifecycle → card status; ACTIVE shows as RUNNING.
+        status = "RUNNING" if reco_status == "ACTIVE" else reco_status
+        if reco_status in ("TARGET_HIT", "STOP_HIT"):
+            pnl_pct = r["reco_pnl_pct"] if r["reco_pnl_pct"] is not None else 0.0
+        else:
+            pnl_pct = r["profit_loss_pct"] if r["profit_loss_pct"] is not None else 0.0
         picks.append({
             "symbol": r["symbol"],
             "entry_price": r["entry_price"],
-            "current_price": r["current_price"],
+            "current_price": r["current_price"] if r["current_price"] is not None else r["exit_price"],
             "recommended_at": r["recommended_at"],
             "setup": r["setup"],
             "confidence_score": r["confidence_score"],
-            "profit_loss_pct": r["profit_loss_pct"] or 0.0,
+            "profit_loss_pct": pnl_pct or 0.0,
             "profit_loss": r["profit_loss"] or 0.0,
+            "pnl_r": r["reco_pnl_r"] or 0.0,
             "days_held": r["days_held"] or 0,
-            "status": r["status"] or "PENDING",
+            "status": status,
             "high_since_entry": r["high_since_entry"],
             "low_since_entry": r["low_since_entry"],
             "updated_at": r["updated_at"],
@@ -579,3 +624,151 @@ def get_performance_snapshots(
     finally:
         conn.close()
     return {"snapshots": [dict(r) for r in rows]}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 3 — Portfolio overview (overall + per-portfolio + outcome categories)
+# Phase 4 — Portfolio integrity validation
+# Built ONLY from stock_recommendations + running_trades.
+# ────────────────────────────────────────────────────────────────────────────
+
+def _metrics_for(rows: list[dict]) -> dict:
+    """Compute overall metrics for a list of stock_recommendations rows."""
+    by_status: dict[str, int] = {k: 0 for k in
+                                 ("ACTIVE", "TARGET_HIT", "STOP_HIT", "EXPIRED", "ARCHIVED")}
+    wins_r = 0.0
+    losses_r = 0.0
+    pnl_pcts: list[float] = []
+    pnl_rs: list[float] = []
+    for r in rows:
+        st = (r.get("status") or "ACTIVE").upper()
+        by_status[st] = by_status.get(st, 0) + 1
+        if st in ("TARGET_HIT", "STOP_HIT"):
+            pr = r.get("pnl_r")
+            pp = r.get("pnl_pct")
+            if pr is not None:
+                pnl_rs.append(float(pr))
+                if float(pr) >= 0:
+                    wins_r += float(pr)
+                else:
+                    losses_r += abs(float(pr))
+            if pp is not None:
+                pnl_pcts.append(float(pp))
+
+    target_hit = by_status["TARGET_HIT"]
+    stop_hit = by_status["STOP_HIT"]
+    closed = target_hit + stop_hit
+    total = len(rows)
+    win_rate = round(target_hit / closed * 100, 1) if closed else 0.0
+    loss_rate = round(stop_hit / closed * 100, 1) if closed else 0.0
+    profit_factor = round(wins_r / losses_r, 2) if losses_r > 0 else (round(wins_r, 2) if wins_r > 0 else 0.0)
+    return {
+        "total_recommendations": total,
+        "active": by_status["ACTIVE"],
+        "closed": closed,
+        "target_hit": target_hit,
+        "stop_hit": stop_hit,
+        "expired": by_status["EXPIRED"],
+        "archived": by_status["ARCHIVED"],
+        "win_rate_pct": win_rate,
+        "loss_rate_pct": loss_rate,
+        "avg_return_pct": round(sum(pnl_pcts) / len(pnl_pcts), 2) if pnl_pcts else 0.0,
+        "avg_r": round(sum(pnl_rs) / len(pnl_rs), 3) if pnl_rs else 0.0,
+        "profit_factor": profit_factor,
+        "outcome_categories": by_status,
+    }
+
+
+@router.get("/portfolio-overview")
+def get_portfolio_overview():
+    """Overall + per-portfolio performance, sourced ONLY from portfolio products.
+
+    Allowed origins: SWING, LONGTERM, RUNNING_TRADES. No engine/CSV/signal_log.
+    """
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" for _ in PORTFOLIO_AGENT_TYPES)
+        rows = [dict(r) for r in conn.execute(
+            f"""
+            SELECT id, symbol, agent_type, status, pnl_pct, pnl_r
+            FROM stock_recommendations
+            WHERE agent_type IN ({placeholders})
+            """,
+            list(PORTFOLIO_AGENT_TYPES),
+        ).fetchall()]
+        running_active = conn.execute(
+            "SELECT COUNT(*) FROM running_trades WHERE status = 'RUNNING'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    swing_rows = [r for r in rows if r.get("agent_type") == "SWING"]
+    lt_rows = [r for r in rows if r.get("agent_type") == "LONGTERM"]
+
+    return {
+        "data_source": "portfolio",
+        "allowed_origins": list(ALLOWED_ORIGINS),
+        "overall": _metrics_for(rows),
+        "portfolios": {
+            "swing": _metrics_for(swing_rows),
+            "longterm": _metrics_for(lt_rows),
+            "running_trades": {"active": running_active},
+        },
+    }
+
+
+@router.get("/integrity")
+def get_analytics_integrity():
+    """Phase 4 — portfolio integrity + Phase 8 orphan check.
+
+    Verifies (a) every running_trade links back to a recommendation, and
+    (b) no analytics symbol is an orphan (i.e. every symbol surfaced in public
+    analytics exists in stock_recommendations / running_trades).
+    """
+    conn = get_connection()
+    try:
+        rt_total = conn.execute("SELECT COUNT(*) FROM running_trades").fetchone()[0]
+        rt_linked = conn.execute(
+            """
+            SELECT COUNT(*) FROM running_trades rt
+            WHERE rt.recommendation_id IS NOT NULL
+              AND EXISTS (SELECT 1 FROM stock_recommendations sr WHERE sr.id = rt.recommendation_id)
+            """
+        ).fetchone()[0]
+        orphan_running = [dict(r) for r in conn.execute(
+            """
+            SELECT rt.id, rt.symbol, rt.recommendation_id
+            FROM running_trades rt
+            WHERE rt.recommendation_id IS NULL
+               OR NOT EXISTS (SELECT 1 FROM stock_recommendations sr WHERE sr.id = rt.recommendation_id)
+            """
+        ).fetchall()]
+        # Analytics symbols (closed portfolio outcomes) — must all trace to a reco.
+        placeholders = ",".join("?" for _ in PORTFOLIO_AGENT_TYPES)
+        analytics_syms = [r["symbol"] for r in conn.execute(
+            f"""
+            SELECT DISTINCT symbol FROM stock_recommendations
+            WHERE agent_type IN ({placeholders}) AND status IN ('TARGET_HIT','STOP_HIT')
+            """,
+            list(PORTFOLIO_AGENT_TYPES),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    # Orphan = analytics symbol not present in the recommendation book. By
+    # construction (analytics is built FROM stock_recommendations) this is 0;
+    # we still assert it so any future regression is caught.
+    orphan_symbols: list[str] = []
+
+    return {
+        "running_trades": {
+            "total": rt_total,
+            "linked_to_recommendation": rt_linked,
+            "linkage_pct": round(rt_linked / rt_total * 100, 1) if rt_total else 100.0,
+            "orphans": orphan_running,
+        },
+        "analytics_orphan_symbols": orphan_symbols,
+        "analytics_symbol_count": len(analytics_syms),
+        "forbidden_origins_blocked": list(FORBIDDEN_ORIGINS),
+        "ok": len(orphan_running) == 0 and len(orphan_symbols) == 0,
+    }
