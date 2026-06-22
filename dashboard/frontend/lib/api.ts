@@ -1045,8 +1045,12 @@ export interface ResearchPerformanceSummary {
   active: number;
   target_hit: number;
   stop_hit: number;
+  closed?: number;
   hit_rate_pct: number;
   avg_pnl_pct: number;
+  open_r?: number;
+  realized_r?: number;
+  cumulative_r?: number;
   best_pnl_pct: number;
   worst_pnl_pct: number;
   best_symbol: string | null;

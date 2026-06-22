@@ -169,6 +169,7 @@ function ResearchSection({ data, label, color }: { data: ResearchPerformanceResp
           { l: "Target Hit",  v: summary.target_hit,       c: "#00d18c" },
           { l: "Stop Hit",    v: summary.stop_hit,         c: "#ff4d4d" },
           { l: "Hit Rate",    v: `${summary.hit_rate_pct.toFixed(1)}%`, c: summary.hit_rate_pct >= 50 ? "#00d18c" : "#ffc800" },
+          { l: "Cumulative R", v: `${(summary.cumulative_r ?? 0) >= 0 ? "+" : ""}${(summary.cumulative_r ?? 0).toFixed(2)}R`, c: pnlColor(summary.cumulative_r ?? 0) },
           { l: "Avg P&L",     v: fmt.pct(summary.avg_pnl_pct), c: pnlColor(summary.avg_pnl_pct) },
           { l: "Best Pick",   v: summary.best_symbol ?? "—",  c: "#00d18c" },
           { l: "Worst Pick",  v: summary.worst_symbol ?? "—", c: "#ff4d4d" },
