@@ -55,12 +55,17 @@ CREATE TABLE IF NOT EXISTS portfolio_positions (
     exit_reason           TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
-    closed_at             TEXT,
-    UNIQUE(symbol, horizon, status) -- only one ACTIVE position per symbol+horizon
+    closed_at             TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_positions(status);
 CREATE INDEX IF NOT EXISTS idx_portfolio_horizon ON portfolio_positions(horizon, status);
 CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol);
+-- Enforce the REAL invariant: only one ACTIVE position per symbol+horizon.
+-- (Terminal rows are historical trades — a symbol may be traded/stopped out more
+-- than once over time, so the old table-level UNIQUE(symbol,horizon,status) was
+-- wrong: a second STOP_HIT collided and crashed the price tracker mid-tick.)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique
+    ON portfolio_positions(symbol, horizon) WHERE status = 'ACTIVE';
 
 -- ─────────────────────────────────────────
 -- TABLE: portfolio_journal (immutable trade log)
@@ -93,6 +98,64 @@ CREATE INDEX IF NOT EXISTS idx_journal_symbol ON portfolio_journal(symbol);
 """
 
 
+def migrate_portfolio_positions() -> None:
+    """Replace the over-broad table-level UNIQUE(symbol,horizon,status) with a
+    partial unique index on ACTIVE-only.
+
+    The old constraint blocked a symbol from having two terminal rows (e.g. a
+    second STOP_HIT after being re-traded), which made the shared position
+    tracker raise IntegrityError mid-tick and silently FREEZE every position
+    after it. SQLite can't drop a table constraint in place, so rebuild the
+    table preserving all rows + ids (portfolio_journal.position_id refs stay
+    valid). Idempotent: only rebuilds while the old constraint is still present.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='portfolio_positions'"
+        ).fetchone()
+        old_sql = (row[0] if row else "") or ""
+        if "UNIQUE(symbol, horizon, status)" in old_sql or "UNIQUE (symbol, horizon, status)" in old_sql:
+            cnt_before = conn.execute("SELECT COUNT(*) FROM portfolio_positions").fetchone()[0]
+            colnames = [r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()]
+            collist = ", ".join(colnames)
+            import re as _re
+            new_sql = old_sql.replace("portfolio_positions", "portfolio_positions_new", 1)
+            # Drop the table-level UNIQUE constraint (with its leading comma).
+            new_sql = _re.sub(r",\s*UNIQUE\s*\(\s*symbol\s*,\s*horizon\s*,\s*status\s*\)", "", new_sql)
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.executescript(new_sql)
+            conn.execute(f"INSERT INTO portfolio_positions_new ({collist}) SELECT {collist} FROM portfolio_positions")
+            cnt_after = conn.execute("SELECT COUNT(*) FROM portfolio_positions_new").fetchone()[0]
+            if cnt_after != cnt_before:
+                conn.execute("DROP TABLE portfolio_positions_new")
+                conn.rollback()
+                logger.error("[Portfolio] migration aborted: row count %d != %d", cnt_after, cnt_before)
+                return
+            conn.execute("DROP TABLE portfolio_positions")
+            conn.execute("ALTER TABLE portfolio_positions_new RENAME TO portfolio_positions")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_positions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_horizon ON portfolio_positions(horizon, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol)")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.commit()
+            logger.warning("[Portfolio] migrated UNIQUE(symbol,horizon,status) -> ACTIVE-only partial index (%d rows preserved)", cnt_after)
+        # Always ensure the partial unique index exists (new + migrated schemas).
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique "
+            "ON portfolio_positions(symbol, horizon) WHERE status = 'ACTIVE'"
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.error("[Portfolio] migrate_portfolio_positions failed (non-fatal): %s", exc)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 def init_portfolio_db() -> None:
     """Create portfolio tables (idempotent)."""
     conn = get_connection()
@@ -102,6 +165,7 @@ def init_portfolio_db() -> None:
         logger.info("[Portfolio] Tables initialized")
     finally:
         conn.close()
+    migrate_portfolio_positions()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

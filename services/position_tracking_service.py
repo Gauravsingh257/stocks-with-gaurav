@@ -137,18 +137,26 @@ class PositionTrackingService:
                     new_status = "CLOSED"
                     exit_reason = "STRUCTURE_BREAK"
 
-            store.update_metrics(
-                pos.id,
-                current_price=cmp,
-                profit_loss=pl,
-                profit_loss_pct=pl_pct,
-                drawdown=dd,
-                drawdown_pct=dd_pct,
-                high_since_entry=high_since,
-                low_since_entry=low_since,
-                days_held=days_held,
-                status=store.map_status(new_status),
-            )
+            # Per-position isolation: a single row's DB error (e.g. a UNIQUE
+            # clash) must NEVER abort the tick and freeze every position after
+            # it. Log and skip just this one; the rest still get live prices.
+            try:
+                store.update_metrics(
+                    pos.id,
+                    current_price=cmp,
+                    profit_loss=pl,
+                    profit_loss_pct=pl_pct,
+                    drawdown=dd,
+                    drawdown_pct=dd_pct,
+                    high_since_entry=high_since,
+                    low_since_entry=low_since,
+                    days_held=days_held,
+                    status=store.map_status(new_status),
+                )
+            except Exception:
+                log.exception("[%s] update_metrics failed id=%s sym=%s — skipping row",
+                              getattr(store, "name", "?"), pos.id, pos.symbol)
+                continue
 
             # On exit: close + journal
             if new_status != "ACTIVE" and old_status == "ACTIVE":
