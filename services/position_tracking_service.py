@@ -137,6 +137,14 @@ class PositionTrackingService:
                     new_status = "CLOSED"
                     exit_reason = "STRUCTURE_BREAK"
 
+            is_exit = (new_status != "ACTIVE" and old_status == "ACTIVE")
+            # On an exit, keep the row ACTIVE for the metric write so close()
+            # (which requires an ACTIVE row to build the journal entry) can find
+            # it; close() then performs the terminal flip + journal. Previously
+            # the status was pre-flipped here, so close() found no ACTIVE row and
+            # silently skipped journaling — closed trades never reached the book.
+            write_status = store.map_status("ACTIVE" if is_exit else new_status)
+
             # Per-position isolation: a single row's DB error (e.g. a UNIQUE
             # clash) must NEVER abort the tick and freeze every position after
             # it. Log and skip just this one; the rest still get live prices.
@@ -151,15 +159,16 @@ class PositionTrackingService:
                     high_since_entry=high_since,
                     low_since_entry=low_since,
                     days_held=days_held,
-                    status=store.map_status(new_status),
+                    status=write_status,
                 )
             except Exception:
                 log.exception("[%s] update_metrics failed id=%s sym=%s — skipping row",
                               getattr(store, "name", "?"), pos.id, pos.symbol)
                 continue
 
-            # On exit: close + journal
-            if new_status != "ACTIVE" and old_status == "ACTIVE":
+            # On exit: close + journal (close() does the terminal flip + records
+            # the immutable journal entry). Isolated so it can't abort the tick.
+            if is_exit:
                 try:
                     store.close(pos.id, cmp, exit_reason)
                     log.info("[%s] auto-close: %s %s at %.2f (PL: %.2f%%)",

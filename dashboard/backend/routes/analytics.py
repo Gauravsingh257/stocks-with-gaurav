@@ -559,16 +559,121 @@ def _research_performance(agent_type: str) -> dict:
     }
 
 
+def _R(direction: str | None, entry, sl, px) -> float | None:
+    """Risk-multiple of a position vs its 1R risk (entry−stop). Direction-aware."""
+    try:
+        entry = float(entry); sl = float(sl); px = float(px)
+    except (TypeError, ValueError):
+        return None
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return None
+    move = (px - entry) if (direction or "LONG").upper() != "SHORT" else (entry - px)
+    return move / risk
+
+
+def _portfolio_performance(horizon: str) -> dict:
+    """LIVE performance of the actual PORTFOLIO (portfolio_positions) for a horizon.
+
+    This is the cumulative-R mirror of the /research Portfolio cards: open
+    positions contribute live UNREALIZED R, closed ones contribute REALIZED R.
+    Sourced ONLY from portfolio_positions (+ exit_price on terminal rows) — never
+    the recommendation/scan funnel.
+    """
+    conn = get_connection()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            """
+            SELECT id, symbol, horizon, direction, entry_price, stop_loss,
+                   target_1, target_2, current_price, exit_price, profit_loss,
+                   profit_loss_pct, status, days_held, high_since_entry,
+                   low_since_entry, confidence_score, created_at, updated_at
+            FROM portfolio_positions WHERE horizon = ?
+            ORDER BY datetime(created_at) DESC
+            """,
+            (horizon.upper(),),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    open_rows = [r for r in rows if r["status"] == "ACTIVE"]
+    closed_rows = [r for r in rows if r["status"] in ("TARGET_HIT", "STOP_HIT", "CLOSED")]
+    target_hit = sum(1 for r in rows if r["status"] == "TARGET_HIT")
+    stop_hit = sum(1 for r in rows if r["status"] == "STOP_HIT")
+    closed_other = sum(1 for r in rows if r["status"] == "CLOSED")
+
+    open_r = 0.0
+    for r in open_rows:
+        rr = _R(r["direction"], r["entry_price"], r["stop_loss"], r["current_price"])
+        if rr is not None:
+            open_r += rr
+    realized_r = 0.0
+    realized_pls: list[float] = []
+    for r in closed_rows:
+        rr = _R(r["direction"], r["entry_price"], r["stop_loss"], r["exit_price"])
+        if rr is not None:
+            realized_r += rr
+        if r["profit_loss_pct"] is not None:
+            realized_pls.append(float(r["profit_loss_pct"]))
+
+    open_pls = [float(r["profit_loss_pct"]) for r in open_rows if r["profit_loss_pct"] is not None]
+    decisive = target_hit + stop_hit
+    best = max(open_rows, key=lambda x: x["profit_loss_pct"] or -1e9, default=None)
+    worst = min(open_rows, key=lambda x: x["profit_loss_pct"] if x["profit_loss_pct"] is not None else 1e9, default=None)
+
+    picks = []
+    for r in open_rows + closed_rows:
+        is_open = r["status"] == "ACTIVE"
+        px = r["current_price"] if is_open else r["exit_price"]
+        picks.append({
+            "symbol": r["symbol"],
+            "entry_price": r["entry_price"],
+            "current_price": px,
+            "recommended_at": r["created_at"],
+            "setup": None,
+            "confidence_score": r["confidence_score"],
+            "profit_loss_pct": r["profit_loss_pct"] or 0.0,
+            "profit_loss": r["profit_loss"] or 0.0,
+            "pnl_r": round(_R(r["direction"], r["entry_price"], r["stop_loss"], px) or 0.0, 2),
+            "days_held": r["days_held"] or 0,
+            "status": "RUNNING" if is_open else r["status"],
+            "high_since_entry": r["high_since_entry"],
+            "low_since_entry": r["low_since_entry"],
+            "updated_at": r["updated_at"],
+        })
+
+    return {
+        "summary": {
+            "total": len(rows),
+            "active": len(open_rows),
+            "target_hit": target_hit,
+            "stop_hit": stop_hit,
+            "closed": closed_other,
+            "hit_rate_pct": round(target_hit / decisive * 100, 1) if decisive else 0.0,
+            "avg_pnl_pct": round(sum(open_pls) / len(open_pls), 2) if open_pls else 0.0,
+            "open_r": round(open_r, 2),
+            "realized_r": round(realized_r, 2),
+            "cumulative_r": round(open_r + realized_r, 2),
+            "best_pnl_pct": round(best["profit_loss_pct"], 2) if best and best["profit_loss_pct"] is not None else 0,
+            "worst_pnl_pct": round(worst["profit_loss_pct"], 2) if worst and worst["profit_loss_pct"] is not None else 0,
+            "best_symbol": best["symbol"] if best else None,
+            "worst_symbol": worst["symbol"] if worst else None,
+        },
+        "picks": picks,
+        "source": "portfolio_positions",
+    }
+
+
 @router.get("/research/swing-performance")
 def get_swing_performance():
-    """Swing scan recommendation performance: hit rate, avg P&L%, per-symbol table."""
-    return _research_performance("SWING")
+    """Live SWING Portfolio performance (portfolio_positions): cumulative R, hit rate, per-symbol table."""
+    return _portfolio_performance("SWING")
 
 
 @router.get("/research/longterm-performance")
 def get_longterm_performance():
-    """Long-term recommendation performance: hit rate, avg P&L%, per-symbol table."""
-    return _research_performance("LONGTERM")
+    """Live LONG-TERM Portfolio performance (portfolio_positions): cumulative R, hit rate, per-symbol table."""
+    return _portfolio_performance("LONGTERM")
 
 
 @router.get("/research/scan-history")
@@ -681,38 +786,29 @@ def _metrics_for(rows: list[dict]) -> dict:
 
 @router.get("/portfolio-overview")
 def get_portfolio_overview():
-    """Overall + per-portfolio performance, sourced ONLY from portfolio products.
-
-    Allowed origins: SWING, LONGTERM, RUNNING_TRADES. No engine/CSV/signal_log.
+    """Live cumulative-R overview of the actual PORTFOLIO (portfolio_positions),
+    per horizon and combined. This is the analytics mirror of the /research
+    Portfolio page — open positions' unrealized R + closed positions' realized R.
     """
-    conn = get_connection()
-    try:
-        placeholders = ",".join("?" for _ in PORTFOLIO_AGENT_TYPES)
-        rows = [dict(r) for r in conn.execute(
-            f"""
-            SELECT id, symbol, agent_type, status, pnl_pct, pnl_r
-            FROM stock_recommendations
-            WHERE agent_type IN ({placeholders})
-            """,
-            list(PORTFOLIO_AGENT_TYPES),
-        ).fetchall()]
-        running_active = conn.execute(
-            "SELECT COUNT(*) FROM running_trades WHERE status = 'RUNNING'"
-        ).fetchone()[0]
-    finally:
-        conn.close()
+    swing = _portfolio_performance("SWING")["summary"]
+    longterm = _portfolio_performance("LONGTERM")["summary"]
 
-    swing_rows = [r for r in rows if r.get("agent_type") == "SWING"]
-    lt_rows = [r for r in rows if r.get("agent_type") == "LONGTERM"]
+    def _combine(a: dict, b: dict) -> dict:
+        out = {}
+        for k in ("total", "active", "target_hit", "stop_hit", "closed"):
+            out[k] = a.get(k, 0) + b.get(k, 0)
+        for k in ("open_r", "realized_r", "cumulative_r"):
+            out[k] = round(a.get(k, 0) + b.get(k, 0), 2)
+        decisive = out["target_hit"] + out["stop_hit"]
+        out["hit_rate_pct"] = round(out["target_hit"] / decisive * 100, 1) if decisive else 0.0
+        return out
 
     return {
-        "data_source": "portfolio",
-        "allowed_origins": list(ALLOWED_ORIGINS),
-        "overall": _metrics_for(rows),
+        "data_source": "portfolio_positions",
+        "overall": _combine(swing, longterm),
         "portfolios": {
-            "swing": _metrics_for(swing_rows),
-            "longterm": _metrics_for(lt_rows),
-            "running_trades": {"active": running_active},
+            "swing": swing,
+            "longterm": longterm,
         },
     }
 

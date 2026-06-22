@@ -259,6 +259,11 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         pl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
         now_str = datetime.now(_IST).isoformat()
 
+        # Status must be a valid enum value; exit_reason is the descriptive cause
+        # (e.g. STRUCTURE_BREAK / MANUAL are reasons, not statuses). Map anything
+        # that isn't a terminal status onto CLOSED so the CHECK never rejects it.
+        final_status = exit_reason if exit_reason in ("TARGET_HIT", "STOP_HIT", "CLOSED", "PARTIAL_EXIT") else "CLOSED"
+
         # Update position
         conn.execute(
             """
@@ -268,7 +273,7 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
                 current_price = ?, closed_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (exit_reason, exit_price, exit_reason, pl, pl_pct, exit_price, now_str, now_str, position_id),
+            (final_status, exit_price, exit_reason, pl, pl_pct, exit_price, now_str, now_str, position_id),
         )
 
         # Journal entry (immutable — never deleted)
