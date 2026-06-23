@@ -495,6 +495,21 @@ def _send_telegram(message: str) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────
 
+def _within_market_hours() -> bool:
+    """True Mon–Fri 09:15–15:30 IST. Used to suppress pre-open false alarms."""
+    try:
+        from datetime import datetime, time as _t, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime.now(ist)
+        if now.weekday() >= 5:
+            return False
+        return _t(9, 15) <= now.time() <= _t(15, 30)
+    except Exception:
+        # On any failure, behave as "market hours" so a genuine alert is never
+        # silently lost (fail-loud for the safety-critical path).
+        return True
+
+
 def auto_login() -> bool:
     """
     Full automated login with retries.
@@ -561,6 +576,17 @@ def auto_login() -> bool:
                    f"tg={'Y' if os.getenv('TELEGRAM_BOT_TOKEN','').strip() else 'N'} "
                    f"cwd={os.getcwd()[-40:]}")
             log.error("Auto-login FAILED source fingerprint: %s | %s", _fp, audit)
+            # MARKET-HOURS GATE: a missing-config run BEFORE market open (the
+            # 08:15/09:00 GHA crons + 08:50 web backup all fire pre-open) is NOT
+            # an outage — other paths still have time to set today's token before
+            # 09:15. Only a genuine missing token DURING market hours is
+            # actionable. This kills the daily pre-open false alarm; real
+            # market-hours Kite death is still surfaced by the WS heartbeat
+            # watchdog + /api/system/health.
+            if not _within_market_hours():
+                log.warning("Auto-login: missing config pre-open — suppressing "
+                            "false alarm (not market hours). %s", audit)
+                return False
             _send_telegram(
                 f"❌ <b>Auto-Login FAILED</b>\n{msg}\n"
                 f"<i>No fresh token in Redis either.</i>\n"

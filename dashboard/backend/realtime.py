@@ -341,19 +341,31 @@ _active_kws_ref: dict = {"kws": None}
 # (expected, no alert).
 _HEARTBEAT_KEY = "realtime:ws_heartbeat"
 _HEARTBEAT_TTL_SEC = 120
-_HEARTBEAT_STATUS_KEY = "realtime:ws_status"  # "connected"|"disconnected"|"error"
+_HEARTBEAT_STATUS_KEY = "realtime:ws_status"  # "connected"|"disconnected"|"error"|"rest_fallback"
+# Written ONLY by genuine KiteTicker ticks (never by the REST fallback). The
+# watchdog uses THIS to decide whether the real WS is dead — so the REST
+# fallback keeping the macro strip alive can't mask a dead WS and block reconnect.
+_WS_TICK_KEY = "realtime:ws_tick_ts"
 
 
 def _write_heartbeat(status: str = "connected") -> None:
-    """Best-effort heartbeat write to Redis. Never raises."""
+    """Best-effort heartbeat write to Redis. Never raises.
+
+    Writes the freshness heartbeat (used by the frontend + the runner WS-dead
+    alert). status="connected" also stamps the WS-only tick marker so the
+    watchdog can tell a real WS tick apart from the REST fallback.
+    """
     try:
         import redis as _redis
         url = os.getenv("REDIS_URL", "").strip()
         if not url:
             return
         r = _redis.from_url(url, decode_responses=True, socket_timeout=2)
-        r.set(_HEARTBEAT_KEY, str(int(time.time())), ex=_HEARTBEAT_TTL_SEC)
+        now = str(int(time.time()))
+        r.set(_HEARTBEAT_KEY, now, ex=_HEARTBEAT_TTL_SEC)
         r.set(_HEARTBEAT_STATUS_KEY, status, ex=_HEARTBEAT_TTL_SEC)
+        if status == "connected":
+            r.set(_WS_TICK_KEY, now, ex=_HEARTBEAT_TTL_SEC)
     except Exception:
         # Heartbeat must NEVER raise into the tick handler — silent fail
         # is better than killing the WS thread on a Redis hiccup.
@@ -416,7 +428,10 @@ def _realtime_watchdog() -> None:
             if not url:
                 continue
             r = _redis.from_url(url, decode_responses=True, socket_timeout=3)
-            raw = r.get(_HEARTBEAT_KEY)
+            # Use the WS-ONLY tick marker (not the shared heartbeat, which the
+            # REST fallback also refreshes) so we keep trying to restore the real
+            # WS even while the fallback is serving live prices.
+            raw = r.get(_WS_TICK_KEY)
             stale = True
             if raw:
                 try:
@@ -446,12 +461,94 @@ def _realtime_watchdog() -> None:
             log.exception("Realtime watchdog: tick failed (continuing)")
 
 
+_rest_fallback_thread: threading.Thread | None = None
+
+
+def _rest_ltp_fallback() -> None:
+    """Keep the macro strip LIVE via Kite REST when the KiteTicker WS is down.
+
+    The WS reconnect can stall (Twisted reactor won't stop cleanly cross-thread),
+    which left the index ticker frozen for an entire session. Kite REST keeps
+    working independently, so this poller fills the gap: every few seconds during
+    market hours, if no genuine WS tick has arrived recently, it pulls kite.ltp()
+    for the macro instruments and writes the same Redis keys the WS would
+    (set_ltp + publish), plus a 'rest_fallback' heartbeat so the UI shows live.
+
+    It never touches the WS-only tick marker, so the watchdog keeps trying to
+    restore the real WS in parallel. Never raises."""
+    from dashboard.backend.cache import set_ltp, publish_ltp_update
+    spec = dict(INSTRUMENT_SPEC)  # {kite_symbol: redis_suffix}
+    log.info("Realtime REST fallback: started")
+    while True:
+        try:
+            time.sleep(7)
+            # Market hours only (mirror the watchdog window).
+            try:
+                from zoneinfo import ZoneInfo
+                from datetime import datetime as _dt, time as _dtime
+                now = _dt.now(ZoneInfo("Asia/Kolkata"))
+                if now.weekday() >= 5 or not (_dtime(9, 15) <= now.time() <= _dtime(15, 31)):
+                    continue
+            except Exception:
+                continue
+
+            import redis as _redis
+            url = os.getenv("REDIS_URL", "").strip()
+            if not url:
+                continue
+            r = _redis.from_url(url, decode_responses=True, socket_timeout=3)
+            # If a genuine WS tick arrived in the last 20s, the WS is healthy —
+            # let it own the feed and skip the REST poll.
+            raw = r.get(_WS_TICK_KEY)
+            if raw:
+                try:
+                    if int(time.time()) - int(raw) < 20:
+                        continue
+                except Exception:
+                    pass
+
+            from kiteconnect import KiteConnect
+            from config.kite_auth import get_api_key
+            from dashboard.backend.kite_auth import get_access_token
+            api_key = get_api_key()
+            token = get_access_token()
+            if not api_key or not token:
+                continue
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(token)
+            data = kite.ltp(list(spec.keys())) or {}
+            wrote = 0
+            for kite_sym, payload in data.items():
+                suffix = spec.get(kite_sym)
+                if not suffix or not isinstance(payload, dict):
+                    continue
+                price = payload.get("last_price")
+                if price is None:
+                    continue
+                try:
+                    price = float(price)
+                except (TypeError, ValueError):
+                    continue
+                set_ltp(suffix, price)
+                try:
+                    publish_ltp_update(SYMBOL_TO_LABEL.get(suffix, suffix), price)
+                except Exception:
+                    pass
+                wrote += 1
+            if wrote:
+                _write_heartbeat("rest_fallback")
+                log.debug("Realtime REST fallback: refreshed %d macro LTPs", wrote)
+        except Exception:
+            log.exception("Realtime REST fallback: tick failed (continuing)")
+
+
 def start_realtime_service() -> None:
     """Start the market data service in a daemon thread. Safe to call if Redis/Kite unavailable.
 
     Also starts a side-channel watchdog thread that breaks the tick-
-    deadlock scenario (see _realtime_watchdog docstring)."""
-    global _realtime_thread, _realtime_watchdog_thread
+    deadlock scenario (see _realtime_watchdog docstring) and a REST fallback
+    poller that keeps the macro strip live when the WS is down."""
+    global _realtime_thread, _realtime_watchdog_thread, _rest_fallback_thread
     if _realtime_thread is not None and _realtime_thread.is_alive():
         return
     if not os.getenv("REDIS_URL", "").strip():
@@ -468,6 +565,12 @@ def start_realtime_service() -> None:
         )
         _realtime_watchdog_thread.start()
         log.info("Realtime: deadlock-breaker watchdog thread started")
+
+    # REST fallback: keeps the macro strip live when the WS is stale.
+    if _rest_fallback_thread is None or not _rest_fallback_thread.is_alive():
+        _rest_fallback_thread = threading.Thread(target=_rest_ltp_fallback, daemon=True)
+        _rest_fallback_thread.start()
+        log.info("Realtime: REST LTP fallback thread started")
 
 
 def stop_realtime_service() -> None:
