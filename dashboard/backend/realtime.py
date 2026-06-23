@@ -518,6 +518,7 @@ def _rest_ltp_fallback() -> None:
             kite.set_access_token(token)
             data = kite.ltp(list(spec.keys())) or {}
             wrote = 0
+            label_patch: dict[str, float] = {}
             for kite_sym, payload in data.items():
                 suffix = spec.get(kite_sym)
                 if not suffix or not isinstance(payload, dict):
@@ -530,11 +531,17 @@ def _rest_ltp_fallback() -> None:
                 except (TypeError, ValueError):
                     continue
                 set_ltp(suffix, price)
+                label_patch[SYMBOL_TO_LABEL.get(suffix, suffix)] = price
+                wrote += 1
+            # publish_ltp_update expects a {label: price} dict — one batched
+            # publish per poll (the old per-symbol two-arg call raised TypeError
+            # every time and was silently swallowed, so the live 1s browser
+            # broadcast never fired while the REST fallback was the source).
+            if label_patch:
                 try:
-                    publish_ltp_update(SYMBOL_TO_LABEL.get(suffix, suffix), price)
+                    publish_ltp_update(label_patch)
                 except Exception:
                     pass
-                wrote += 1
             if wrote:
                 _write_heartbeat("rest_fallback")
                 log.debug("Realtime REST fallback: refreshed %d macro LTPs", wrote)
