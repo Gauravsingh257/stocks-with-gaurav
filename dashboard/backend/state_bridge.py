@@ -198,16 +198,42 @@ def _enrich_snapshot(snap: Dict, source: str, stale: bool, stale_reason: str = "
 
     redis_up = r is not None
 
-    # Index LTP: prefer snapshot data, fill missing from Redis LTP keys
+    # Index LTP: the web service's own KiteTicker (and the REST fallback) write
+    # tick-fresh ltp:* keys to Redis on every tick. The engine snapshot's
+    # index_ltp is published on the ENGINE's slower cadence and can lag minutes
+    # behind — so a FRESH Redis LTP must OVERRIDE the snapshot value, not merely
+    # fill gaps. (Prior bug: gap-fill-only meant a stale engine value like
+    # NIFTY 24,103 was served all session while the live tick said 23,923,
+    # because the label already existed in index_ltp.)
+    #
+    # Freshness proof: ltp:* keys carry a 300s TTL refreshed on every tick, so
+    # get_ltp_with_age() reports a small age while the feed is alive. We only
+    # override within _MAX_LTP_AGE; once the feed stops and the key ages out (or
+    # expires entirely), we fall back to the last snapshot value. INDIA VIX is
+    # included so the volatility reading stays live too.
     index_ltp = snap.get("index_ltp") or {}
     if isinstance(index_ltp, dict):
         try:
-            from dashboard.backend.cache import get_ltp
-            for label, redis_sym in (("NIFTY 50", "NIFTY"), ("NIFTY BANK", "BANKNIFTY")):
-                if label not in index_ltp:
-                    ltp = get_ltp(redis_sym)
-                    if ltp is not None:
-                        index_ltp[label] = float(ltp)
+            from dashboard.backend.cache import get_ltp_with_age
+            _MAX_LTP_AGE_SEC = 120
+            for label, redis_sym in (
+                ("NIFTY 50", "NIFTY"),
+                ("NIFTY BANK", "BANKNIFTY"),
+                ("INDIA VIX", "INDIA_VIX"),
+            ):
+                res = get_ltp_with_age(redis_sym)
+                if res is None:
+                    continue
+                price, age = res
+                if price <= 0:
+                    continue
+                if age <= _MAX_LTP_AGE_SEC:
+                    # Live tick — authoritative; override any (possibly stale)
+                    # value the engine snapshot carried.
+                    index_ltp[label] = float(price)
+                elif label not in index_ltp:
+                    # Aged tick but snapshot had nothing — still better than blank.
+                    index_ltp[label] = float(price)
         except Exception:
             pass
 
