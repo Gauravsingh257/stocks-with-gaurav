@@ -1,0 +1,25 @@
+# Scanner producer worker — set "Config file path" to railway-scanner.toml in Railway dashboard.
+#
+# Separate from the live trading engine (isolation): it only reads the Kite token
+# from Redis and writes scanner:* snapshots. It does NOT serve HTTP and does NOT
+# touch trade state, so it has no healthcheck (worker service).
+#
+# Uses Dockerfile.scanner whose CMD is the scanner cron loop — so the start
+# command lives in code and this service can NEVER boot the live trading engine.
+# Runs in --loop mode: one run on boot, a post-close run each weekday ~15:45 IST,
+# and optional intraday refreshes when SCANNER_INTRADAY_REFRESH=1.
+#
+# Required env (share with the engine service):
+#   REDIS_URL, KITE_API_KEY  (token is read from Redis key kite:access_token)
+# Optional:
+#   SCANNER_MODE=liquid|full          (default liquid)
+#   SCANNER_INTRADAY_REFRESH=0|1      (default 0 — confirmed-at-close only)
+#   SCANNER_INTRADAY_MIN=30           (minutes between intraday refreshes)
+
+[build]
+dockerfilePath = "Dockerfile.scanner"
+
+[deploy]
+startCommand = "python -m scripts.scanner_cron --loop"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

@@ -384,6 +384,12 @@ try:
 except Exception as _wl_exc:  # never block app startup on the new router
     log.warning("watchlist_monitor router not mounted: %s", _wl_exc)
 
+try:
+    from dashboard.backend.routes.screeners import router as screeners_router
+    app.include_router(screeners_router)  # Scanner suite: read-only Redis-backed /api/screeners
+except Exception as _sc_exc:  # never block app startup on the new router
+    log.warning("screeners router not mounted: %s", _sc_exc)
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_route(websocket: WebSocket):
