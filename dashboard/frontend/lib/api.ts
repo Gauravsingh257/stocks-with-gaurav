@@ -1327,6 +1327,63 @@ export interface MIHolidayResponse {
   count: number;
 }
 
+// ── Screeners (scanner suite) ──────────────────────────────────────────────
+export interface ScreenerCatalogItem {
+  name: string;
+  timeframe: string;
+  label: string;
+  description: string;
+  hits: number | null;
+  as_of: string | null;
+  computed_at: string | null;
+}
+
+export interface ScreenerCatalog {
+  scanners: ScreenerCatalogItem[];
+  source: string;
+}
+
+export interface ScreenerRow {
+  symbol: string;
+  close: number;
+  ema10: number;
+  stop: number;
+  flip: "this_bar" | "last_bar" | string;
+  date: string;
+  avg_vol: number;
+  flip_vol_x: number;
+  dist_ema_pct: number;
+  risk_to_stop_pct: number;
+  pos52: number;
+  from_high_pct: number;
+  mom_short_pct: number;
+  mom_long_pct: number;
+  atr_pct: number;
+  stack: boolean;
+  quality_score: number;
+  tier: "quality" | "momentum" | "speculative" | string;
+}
+
+export interface ScreenerResult {
+  scanner: string;
+  timeframe: string;
+  label?: string;
+  description?: string;
+  as_of: string | null;
+  computed_at: string | null;
+  universe_mode?: string;
+  universe_size?: number;
+  hits: number;
+  snapshot_source?: string;
+  snapshot_stale?: boolean;
+  tiers?: { quality: number; momentum: number; speculative: number };
+  rows: ScreenerRow[];
+  locked: boolean;
+  upgrade_required?: boolean;
+  pending?: boolean;
+  sample_locked?: { quality_score: number; tier: string; flip: string }[];
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -1633,4 +1690,11 @@ export const api = {
   marketIntelMacro: () => get<MIFREDMacro>("/api/market-intelligence/macro"),
   marketIntelFX: () => get<MIFXSnapshot>("/api/market-intelligence/fx"),
   marketIntelMFFlows: () => get<MIMFFlowData>("/api/market-intelligence/mf-flows"),
+
+  // ── Screeners (scanner suite) ─────────────────────────────────────────────
+  /** Public catalog of available scanners (drives the section + paywall teaser). */
+  screenersCatalog: () => get<ScreenerCatalog>("/api/screeners"),
+  /** Ranked results for one scanner+timeframe. Pass token so PREMIUM gets full rows. */
+  screener: (name: string, timeframe: string, authToken?: string | null) =>
+    get<ScreenerResult>(`/api/screeners/${encodeURIComponent(name)}/${encodeURIComponent(timeframe)}`, authToken, 20_000),
 };

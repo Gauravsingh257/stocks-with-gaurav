@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements-engine.txt .
+RUN pip install --no-cache-dir -r requirements-engine.txt
+
+COPY . .
+
+# Scanner producer worker (SEPARATE from the trading engine).
+# The start command lives HERE, in code, so this service can NEVER accidentally
+# boot the live engine — it only reads the Kite token from Redis and writes
+# scanner:* snapshots. --loop = run on boot + post-close daily + optional intraday.
+CMD ["python", "-m", "scripts.scanner_cron", "--loop"]
