@@ -1379,7 +1379,7 @@ export interface ScreenerResult {
   tiers?: { quality: number; momentum: number; speculative: number };
   rows: ScreenerRow[];
   locked: boolean;
-  upgrade_required?: boolean;
+  login_required?: boolean;
   pending?: boolean;
   sample_locked?: { quality_score: number; tier: string; flip: string }[];
 }

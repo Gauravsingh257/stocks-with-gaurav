@@ -3,12 +3,13 @@
  * /screeners — Technical Screeners (scanner suite).
  *
  * Pure read of pre-computed Redis snapshots (served by /api/screeners). The page
- * never triggers a scan, so it stays instant under any load. PREMIUM users see
- * full ranked rows; FREE/anonymous users see a locked teaser (counts + tiers).
+ * never triggers a scan, so it stays instant under any load. Logged-in users see
+ * full ranked rows; anonymous users see a locked teaser (counts + tiers) that
+ * prompts them to log in.
  */
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { Radar, Lock, Download, RefreshCw, TrendingUp, AlertTriangle, Crown } from "lucide-react";
+import { Radar, Lock, Download, RefreshCw, TrendingUp, AlertTriangle, LogIn } from "lucide-react";
 import { api, ScreenerCatalogItem, ScreenerResult, ScreenerRow } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
@@ -55,7 +56,7 @@ function toCsv(rows: ScreenerRow[]): string {
 
 export default function ScreenersPage() {
   const { user, token } = useAuth();
-  const entitled = user?.role === "PREMIUM" || user?.role === "ADMIN";
+  const entitled = !!user;   // any logged-in user gets full results
 
   const [tf, setTf] = useState("1W");
   const [catalog, setCatalog] = useState<ScreenerCatalogItem[]>([]);
@@ -305,7 +306,7 @@ function LockedTeaser({ result }: { result: ScreenerResult }) {
       <Link href="/login"
         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold"
         style={{ background: "linear-gradient(135deg,#22d3ee,#0ea5e9)", color: "#04111f" }}>
-        <Crown size={16} /> Upgrade to Premium to unlock
+        <LogIn size={16} /> Log in to unlock
       </Link>
       {result.as_of && (
         <p className="mt-3 text-xs" style={{ color: "var(--text-muted, #94a3b8)" }}>

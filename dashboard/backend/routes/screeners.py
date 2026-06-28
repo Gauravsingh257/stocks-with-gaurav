@@ -7,10 +7,11 @@ single Redis GET, so the site stays fast under any load.
 
 Endpoints:
   GET /api/screeners                      → catalog of available scanners (public)
-  GET /api/screeners/{name}/{timeframe}   → ranked results (PAID: PREMIUM/ADMIN)
+  GET /api/screeners/{name}/{timeframe}   → ranked results (any logged-in user)
 
-Paywall: unauthenticated / FREE users receive a LOCKED teaser (hit count + tier
-breakdown + blurred sample) instead of full rows. PREMIUM/ADMIN get full data.
+Access gate: anonymous (not-logged-in) users receive a LOCKED teaser (hit count
++ tier breakdown + blurred sample) instead of full rows. Any AUTHENTICATED user
+gets full data. (Relaxed from PREMIUM-only to all logged-in users — see _is_entitled.)
 
 Safety: only scanners present in the registry are served (no arbitrary Redis key
 reads). LKG fallback is handled inside snapshot_store, so a producer hiccup never
@@ -38,7 +39,9 @@ log = logging.getLogger("dashboard.screeners")
 
 
 def _is_entitled(user: dict | None) -> bool:
-    return bool(user) and str(user.get("role", "")).upper() in ("PREMIUM", "ADMIN")
+    # Any authenticated user gets full results; anonymous users get the locked
+    # teaser. (Relaxed from PREMIUM/ADMIN-only to all logged-in users.)
+    return bool(user)
 
 
 def _tier_breakdown(rows: list[dict]) -> dict:
@@ -122,6 +125,6 @@ def get_screener(name: str, timeframe: str, user: dict | None = Depends(get_opti
         sample.append({"quality_score": r.get("quality_score"), "tier": r.get("tier"), "flip": r.get("flip")})
     base["rows"] = []
     base["locked"] = True
-    base["upgrade_required"] = True
+    base["login_required"] = True
     base["sample_locked"] = sample   # scores/tiers only — no symbols or levels
     return base
