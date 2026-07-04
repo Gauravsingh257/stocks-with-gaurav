@@ -568,12 +568,39 @@ def get_journal_stats(horizon: str | None = None) -> dict:
         total = row["total_trades"] or 0
         wins = row["wins"] or 0
         target_hits = row["target_hits"] or 0
+
+        # ── Unique-setup view ────────────────────────────────────────────────
+        # Collapse repeat re-entries of the SAME setup (same symbol + same entry
+        # price) into ONE representative trade (earliest by closed_at). This is
+        # what the churn bug (e.g. APTUS re-promoted 9x at the same entry) and the
+        # now-live re-entry guard concern. Shown alongside the realized numbers so
+        # a single failed setup recorded N times doesn't N-count the loss.
+        # NOTE: this is an ADJUSTED metric — the realized hit_rate_pct above
+        # remains the ground truth across all closed trades.
+        urows = conn.execute(
+            f"SELECT symbol, entry_price, profit_loss_pct, closed_at "
+            f"FROM portfolio_journal {where} ORDER BY datetime(closed_at) ASC",
+            params,
+        ).fetchall()
+        _seen: dict[tuple, float] = {}
+        for ur in urows:
+            key = (str(ur["symbol"]).upper(), round(float(ur["entry_price"] or 0), 2))
+            if key not in _seen:  # keep earliest occurrence as representative
+                _seen[key] = float(ur["profit_loss_pct"] or 0)
+        unique_total = len(_seen)
+        unique_wins = sum(1 for p in _seen.values() if p > 0)
+
         return {
             "total_trades": total,
             "wins": wins,
             "losses": row["losses"] or 0,
-            # hit_rate_pct = % of closed trades that were net positive (win rate).
+            # hit_rate_pct = % of ALL closed trades that were net positive (realized truth).
             "hit_rate_pct": round(wins / total * 100, 1) if total > 0 else 0.0,
+            # Unique-setup view: repeat re-entries of the same setup collapsed to one.
+            "unique_trades": unique_total,
+            "unique_wins": unique_wins,
+            "unique_hit_rate_pct": round(unique_wins / unique_total * 100, 1) if unique_total > 0 else 0.0,
+            "repeat_reentries_collapsed": total - unique_total,
             # Exit-reason breakdown so the UI can distinguish "hit target" from
             # "cut early by structure-break" from "stopped out" — otherwise a
             # low win rate hides a positive-expectancy system.
