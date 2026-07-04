@@ -26,6 +26,19 @@ log = logging.getLogger("services.position_tracking")
 _STRUCTURE_EXIT_ON = os.getenv("PORTFOLIO_STRUCTURE_EXIT", "0").strip().lower() in {"1", "true", "yes"}
 _STRUCTURE_EXIT_MIN_DAYS = int(os.getenv("PORTFOLIO_STRUCTURE_EXIT_MIN_DAYS", "3"))
 _STRUCTURE_EXIT_BUFFER = float(os.getenv("PORTFOLIO_STRUCTURE_EXIT_BUFFER", "0.02"))
+
+# ── Stale / dead-money time-stop (flag-gated, default ON) ────────────────────
+# Cull a position that has been held a long time but is still stuck near its
+# entry (small loss to small gain) — it's occupying a slot without progressing,
+# so we free it for a better candidate. Only fires within a tight band around
+# entry: a real loser (below the lower band) is left to STOP/STRUCTURE, and a
+# winner (above the upper band) is left to run to target. Gated per-store like
+# the structure cull, so user-chosen positions are never auto-sold.
+_STALE_EXIT_ON = os.getenv("PORTFOLIO_STALE_EXIT", "1").strip().lower() in {"1", "true", "yes"}
+_STALE_EXIT_MIN_DAYS = int(os.getenv("PORTFOLIO_STALE_EXIT_MIN_DAYS", "20"))
+_STALE_EXIT_UPPER_PCT = float(os.getenv("PORTFOLIO_STALE_EXIT_UPPER_PCT", "3.0"))    # <= +3% P&L = no real progress
+_STALE_EXIT_LOWER_PCT = float(os.getenv("PORTFOLIO_STALE_EXIT_LOWER_PCT", "-5.0"))   # >= -5% P&L = still near entry
+
 # per-day 200-DMA cache {symbol: (day, dma)}
 _dma_cache: dict[str, tuple[str, float | None]] = {}
 
@@ -84,6 +97,10 @@ class PositionTrackingService:
         # PORTFOLIO_STRUCTURE_EXIT; user book defaults OFF so user-chosen
         # trades aren't auto-sold on a soft 200-DMA break).
         structure_exit_on = bool(getattr(store, "structure_exit_enabled", lambda: _STRUCTURE_EXIT_ON)())
+        # Stale cull reuses the store's auto-cull permission (so the user book,
+        # which disables structure culls, is also protected from stale culls)
+        # AND its own feature flag.
+        stale_exit_on = _STALE_EXIT_ON and structure_exit_on
 
         symbols = list({p.symbol for p in positions})
         prices = _fetch_cmp_batch(symbols)
@@ -136,6 +153,15 @@ class PositionTrackingService:
                 if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
                     new_status = "CLOSED"
                     exit_reason = "STRUCTURE_BREAK"
+            elif (
+                stale_exit_on
+                and days_held >= _STALE_EXIT_MIN_DAYS
+                and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
+            ):
+                # Dead money: long-held but still hovering near entry — free the
+                # slot for a better candidate rather than let it block the book.
+                new_status = "CLOSED"
+                exit_reason = "STALE_EXIT"
 
             is_exit = (new_status != "ACTIVE" and old_status == "ACTIVE")
             # On an exit, keep the row ACTIVE for the metric write so close()
