@@ -90,7 +90,9 @@ function PositionCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
             rel="noopener noreferrer"
             style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--accent)", textDecoration: "none" }}
           >
-            NSE:{pos.symbol}
+            {/* symbol may or may not already carry the NSE: prefix — normalize so
+                we never render the doubled "NSE:NSE:" form. */}
+            NSE:{pos.symbol.replace(/^NSE:/, "")}
           </a>
           <span style={{ fontSize: "0.65rem", color: "var(--text-secondary)" }}>
             Added {fmtDate(pos.created_at)} · {pos.days_held}d held
@@ -182,10 +184,20 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
             {horizon === "SWING" ? "📊" : "🏦"} {title}
           </h2>
           <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-            {count}/{max} Active Slots
-            {journalStats && journalStats.total_trades > 0 && (
-              <> · {journalStats.total_trades} completed · {journalStats.hit_rate_pct}% hit rate · Avg P&L: {journalStats.avg_pnl_pct > 0 ? "+" : ""}{journalStats.avg_pnl_pct}%</>
-            )}
+            {Math.min(count, max)}/{max} Active Slots
+            {journalStats && journalStats.total_trades > 0 && (() => {
+              const s = journalStats;
+              const MIN_SAMPLE = 10; // don't headline stats off a tiny sample
+              if (s.total_trades < MIN_SAMPLE) {
+                return <> · {s.total_trades} completed · building track record</>;
+              }
+              const tgt = s.target_hits ?? 0;
+              const stop = s.stop_hits ?? 0;
+              const cut = (s.structure_exits ?? 0) + (s.other_exits ?? 0);
+              return (
+                <> · {s.total_trades} completed · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · Total return: <span style={{ color: plColor(s.total_pnl_pct), fontWeight: 700 }}>{s.total_pnl_pct > 0 ? "+" : ""}{s.total_pnl_pct}%</span></>
+              );
+            })()}
           </span>
         </div>
         <div style={{
