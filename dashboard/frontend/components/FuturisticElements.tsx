@@ -6,12 +6,13 @@
 
 import { useEffect, useState } from "react";
 
-/* ── Animated Background Grid + Scan Line ──────────────────────────────────── */
+/* ── Animated Background Grid ───────────────────────────────────────────────── */
 export function CyberGridOverlay() {
   return (
     <>
       <div className="cyber-grid-bg" />
-      <div className="scan-line-effect" />
+      {/* scan-line-effect removed — the constantly-sweeping top-to-bottom line
+          was visual noise. The static grid background is kept. */}
     </>
   );
 }
