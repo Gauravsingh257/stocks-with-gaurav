@@ -20,8 +20,8 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
 const STATUS_CONFIG: Record<string, { bg: string; color: string; label: string }> = {
   TARGET_HIT: { bg: "rgba(0,224,150,0.12)", color: "#00e096", label: "Target Hit" },
   STOP_HIT: { bg: "rgba(255,71,87,0.12)", color: "#ff4757", label: "Stop Hit" },
-  ACTIVE: { bg: "rgba(0,212,255,0.1)", color: "#00d4ff", label: "Active" },
-  RUNNING: { bg: "rgba(0,212,255,0.1)", color: "#00d4ff", label: "Running" },
+  ACTIVE: { bg: "rgba(0,212,255,0.1)", color: "#00d4ff", label: "Awaiting Entry" },
+  RUNNING: { bg: "rgba(0,224,150,0.1)", color: "#00e096", label: "In Progress" },
   EXPIRED: { bg: "rgba(58,74,107,0.3)", color: "#8899bb", label: "Expired" },
   ARCHIVED: { bg: "rgba(58,74,107,0.2)", color: "#6677aa", label: "Archived" },
   CLOSED: { bg: "rgba(245,158,11,0.12)", color: "#f59e0b", label: "Closed" },
@@ -59,19 +59,30 @@ export default function TrackRecordPage() {
         </Link>
         <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.1)" }} />
         <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700 }}>Track Record</h1>
-        <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,212,255,0.1)", color: "var(--accent)" }}>
-          Historical Performance
+        <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(240,192,96,0.12)", color: "#f0c060" }}>
+          Algorithm-Generated Signals
         </span>
+      </div>
+
+      {/* Honesty banner — these are hypothetical signals, not executed trades */}
+      <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 8, alignItems: "flex-start", borderLeft: "3px solid #f0c060" }}>
+        <ShieldAlert size={15} color="#f0c060" style={{ flexShrink: 0, marginTop: 2 }} />
+        <p style={{ margin: 0, fontSize: "0.72rem", lineHeight: 1.5, color: "var(--text-secondary)" }}>
+          These are <strong>algorithm-generated signals, not executed trades</strong>. Prices are hypothetical and assume entry/exit at the levels shown.
+          Hit rate and average P&amp;L are computed only over <strong>resolved</strong> signals (a small sample) and will move as more resolve.
+          Past performance does not guarantee future results. For educational purposes only — not investment advice.
+        </p>
       </div>
 
       {/* Summary Cards */}
       {summary && (
         <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label="Total Picks" value={String(summary.total_picks)} color="var(--text-primary)" />
-          <StatCard label="Hit Rate" value={`${summary.hit_rate_pct}%`} sub={`${summary.target_hit}W / ${summary.stop_hit}L`} color={summary.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Avg P&L" value={`${summary.avg_pnl_pct > 0 ? "+" : ""}${summary.avg_pnl_pct}%`} color={summary.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Best Trade" value={`+${summary.best_pnl_pct}%`} color="#00e096" />
-          <StatCard label="Worst Trade" value={`${summary.worst_pnl_pct}%`} color="#ff4757" />
+          <StatCard label="Total Signals" value={String(summary.total_picks)} color="var(--text-primary)" />
+          <StatCard label="Resolved" value={String(summary.resolved)} sub={`of ${summary.total_picks} · rest still open`} color="var(--text-primary)" />
+          <StatCard label="Hit Rate" value={summary.resolved > 0 ? `${summary.hit_rate_pct}%` : "—"} sub={`${summary.target_hit}W / ${summary.stop_hit}L of ${summary.resolved} resolved`} color={summary.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Avg P&L" value={summary.resolved > 0 ? `${summary.avg_pnl_pct > 0 ? "+" : ""}${summary.avg_pnl_pct}%` : "—"} sub={`on ${summary.resolved} resolved`} color={summary.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Best" value={`+${summary.best_pnl_pct}%`} color="#00e096" />
+          <StatCard label="Worst" value={`${summary.worst_pnl_pct}%`} color="#ff4757" />
         </div>
       )}
 
@@ -139,6 +150,11 @@ export default function TrackRecordPage() {
                 const sc = STATUS_CONFIG[pick.status] || STATUS_CONFIG.ACTIVE;
                 const pnl = pick.pnl_pct;
                 const targets = pick.targets || [];
+                // ACTIVE = signal fired but price hasn't reached entry yet, so
+                // exit/P&L/days are genuinely N/A. Tell the visitor why rather
+                // than leaving a bare dash that reads as "broken".
+                const awaiting = pick.status === "ACTIVE";
+                const naTitle = awaiting ? "Awaiting entry trigger — not filled yet" : undefined;
                 return (
                   <tr key={pick.id}>
                     <td>
@@ -167,16 +183,16 @@ export default function TrackRecordPage() {
                     <td style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#00e096" }}>
                       {targets.length > 0 ? `₹${Number(targets[0]).toFixed(2)}` : "—"}
                     </td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem" }}>
-                      {pick.exit_price ? `₹${pick.exit_price.toFixed(2)}` : pick.current_price ? `₹${pick.current_price.toFixed(2)}` : "—"}
+                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem" }} title={naTitle}>
+                      {pick.exit_price ? `₹${pick.exit_price.toFixed(2)}` : pick.current_price ? `₹${pick.current_price.toFixed(2)}` : awaiting ? "Awaiting" : "—"}
                     </td>
-                    <td style={{
+                    <td title={naTitle} style={{
                       fontWeight: 700, fontSize: "0.82rem",
                       color: pnl === null ? "var(--text-dim)" : pnl >= 0 ? "#00e096" : "#ff4757",
                     }}>
                       {pnl !== null ? `${pnl > 0 ? "+" : ""}${pnl}%` : "—"}
                     </td>
-                    <td style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                    <td style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }} title={naTitle}>
                       {pick.days_held !== null ? `${pick.days_held}d` : "—"}
                     </td>
                     <td>
