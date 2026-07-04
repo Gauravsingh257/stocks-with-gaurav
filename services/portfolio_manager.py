@@ -45,7 +45,7 @@ def promote_to_portfolio(
 
     STRICT SLOT CONTROL: Will NEVER exceed MAX positions. Only adds when a slot is free.
     """
-    from dashboard.backend.db.portfolio import add_position, get_portfolio_counts
+    from dashboard.backend.db.portfolio import add_position, get_portfolio_counts, reentry_guard_blocks
 
     horizon = horizon.upper()
     max_pos = MAX_SWING if horizon == "SWING" else MAX_LONGTERM
@@ -55,6 +55,13 @@ def promote_to_portfolio(
     current = counts.get(horizon.lower(), 0)
     if current >= max_pos:
         raise ValueError(f"{horizon} portfolio full ({current}/{max_pos}) — close a position first")
+
+    # Defense-in-depth: setup-aware re-entry guard. Blocks re-promotion of the
+    # same failed setup (same entry, recently structure-broken/stopped, still
+    # below 200-DMA); a genuinely new setup passes. The selectors filter these
+    # earlier, but this catches any other promotion path (manual/agent).
+    if reentry_guard_blocks(symbol, horizon, float(entry_price), cmp=current_price):
+        raise ValueError(f"{symbol} re-entry blocked — same failed setup within cooldown")
 
     position_id = add_position({
         "symbol": symbol,

@@ -181,6 +181,112 @@ MAX_SWING_POSITIONS = int(os.getenv("PORTFOLIO_MAX_SWING", "20"))
 MAX_LONGTERM_POSITIONS = int(os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Setup-aware re-entry guard
+# ──────────────────────────────────────────────────────────────────────────────
+# Stops the "churn" pathology where the same failed setup is re-promoted over and
+# over (observed: APTUS ×9, KALYANKJIL ×4 — same entry, structure-break, never
+# reaching target). Blocks ONLY a re-promotion that is the *same failed setup*;
+# a genuinely new setup (different entry level, reclaimed 200-DMA, or elapsed
+# cooldown) is always allowed. See LAUNCH_AUDIT_REPORT / shadow-log analysis.
+#
+# Mode: "on" enforces, "shadow" logs what it *would* block but allows, "off"
+# disables entirely. Default "on" (validated clean against full journal history).
+REENTRY_GUARD_MODE = os.getenv("PORTFOLIO_REENTRY_GUARD", "on").strip().lower()
+REENTRY_COOLDOWN_DAYS = int(os.getenv("PORTFOLIO_REENTRY_COOLDOWN_DAYS", "10"))
+REENTRY_SAME_ENTRY_PCT = float(os.getenv("PORTFOLIO_REENTRY_SAME_ENTRY_PCT", "3.0"))
+_REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT"}
+
+
+def _reentry_would_block(symbol: str, horizon: str, entry: float,
+                         cmp: float | None = None) -> tuple[bool, str]:
+    """Evaluate the four setup-aware gates. Returns (would_block, reason).
+
+    Blocks only when ALL hold:
+      G1  a prior exit for symbol+horizon within REENTRY_COOLDOWN_DAYS
+      G2  that exit was a FAILURE (STRUCTURE_BREAK / STOP_HIT), not a target hit
+      G3  the new entry is within REENTRY_SAME_ENTRY_PCT of the failed entry
+          (same price level — not a fresh breakout at a new level)
+      G4  setup-aware: the structural disqualifier still holds — price is still
+          below the 200-DMA. If the DMA can't be fetched or cmp is unknown, we
+          FAIL OPEN (allow) so uncertainty never suppresses a real opportunity.
+
+    Pure evaluation — never enforces on its own; the caller applies the mode.
+    """
+    sym = symbol.strip().upper()
+    hz = horizon.upper()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT entry_price, exit_reason, closed_at FROM portfolio_journal "
+            "WHERE symbol = ? AND horizon = ? ORDER BY datetime(closed_at) DESC LIMIT 1",
+            (sym, hz),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return False, "no-prior-exit"
+
+    last_entry = row["entry_price"]
+    last_reason = row["exit_reason"]
+
+    # G2 — only failures qualify (a prior TARGET_HIT is not a failed setup).
+    if last_reason not in _REENTRY_FAIL_REASONS:
+        return False, f"last-exit-not-failure({last_reason})"
+
+    # G1 — recency (uses reliable closed_at vs real-time IST).
+    try:
+        ca = str(row["closed_at"]).replace(" ", "T")
+        cdt = datetime.fromisoformat(ca)
+        if cdt.tzinfo is None:
+            cdt = cdt.replace(tzinfo=_IST)
+        days = (datetime.now(_IST) - cdt).days
+    except Exception:
+        return False, "cooldown-unparseable(fail-open)"
+    if days > REENTRY_COOLDOWN_DAYS:
+        return False, f"cooldown-elapsed({days}d>{REENTRY_COOLDOWN_DAYS}d)"
+
+    # G3 — same price level.
+    if not last_entry or last_entry <= 0:
+        return False, "no-prior-entry"
+    delta_pct = abs(entry - last_entry) / last_entry * 100.0
+    if delta_pct > REENTRY_SAME_ENTRY_PCT:
+        return False, f"new-entry-level(Δ{delta_pct:.1f}%>{REENTRY_SAME_ENTRY_PCT}%)"
+
+    # G4 — setup-aware structural gate: still below the 200-DMA?
+    if cmp is None:
+        return False, "cmp-unknown(fail-open)"
+    dma = None
+    try:
+        from services.position_tracking_service import _get_200dma
+        dma = _get_200dma(sym if sym.startswith("NSE:") else f"NSE:{sym}")
+    except Exception:
+        dma = None
+    if dma is None:
+        return False, "200dma-unavailable(fail-open)"
+    if cmp >= dma:
+        return False, f"reclaimed-200dma(cmp {cmp:.2f}>=dma {dma:.2f}) — new setup"
+
+    return True, (f"repeat-failed-setup(last={last_reason},cooldown={days}d,"
+                  f"Δentry={delta_pct:.1f}%,cmp {cmp:.2f}<dma {dma:.2f})")
+
+
+def reentry_guard_blocks(symbol: str, horizon: str, entry: float,
+                         cmp: float | None = None) -> bool:
+    """Enforcement wrapper. Always logs a would-block decision; only returns
+    True (block) when the guard is in 'on' mode. In 'shadow' mode it logs the
+    would-block and returns False so promotion proceeds (observation only)."""
+    if REENTRY_GUARD_MODE == "off":
+        return False
+    would, reason = _reentry_would_block(symbol, horizon, entry, cmp)
+    if not would:
+        return False
+    enforce = REENTRY_GUARD_MODE == "on"
+    logger.warning("[ReentryGuard] %s %s/%s @%.2f — %s",
+                   "BLOCK" if enforce else "SHADOW-BLOCK", symbol, horizon, entry, reason)
+    return enforce
+
+
 def add_position(payload: dict) -> int:
     """
     Add a stock to the portfolio. Returns position ID.

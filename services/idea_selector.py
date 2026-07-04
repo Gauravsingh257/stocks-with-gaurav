@@ -300,9 +300,15 @@ def select_swing_ideas(max_picks: int | None = None) -> list[dict]:
 
     from services.portfolio_risk import pre_promotion_risk_check
 
+    from dashboard.backend.db.portfolio import reentry_guard_blocks
+
     scored: list[tuple[float, dict]] = []
     for rec in recs:
         if get_active_position_by_symbol(rec["symbol"]):
+            continue
+        _cmp = rec.get("scan_cmp") or rec.get("current_price")
+        if reentry_guard_blocks(rec["symbol"], "SWING", float(rec.get("entry_price") or 0),
+                                cmp=float(_cmp) if _cmp else None):
             continue
         s = _score_swing(rec)
         if s is not None:
@@ -353,6 +359,8 @@ def select_longterm_ideas(max_picks: int | None = None) -> list[dict]:
 
     from services.portfolio_risk import pre_promotion_risk_check
 
+    from dashboard.backend.db.portfolio import reentry_guard_blocks
+
     scored: list[tuple[float, dict]] = []
     for rec in recs:
         if get_active_position_by_symbol(rec["symbol"]):
@@ -361,6 +369,11 @@ def select_longterm_ideas(max_picks: int | None = None) -> list[dict]:
         setup = (rec.get("setup") or "").upper()
         if any(noise in setup for noise in _INTRADAY_NOISE):
             log.debug("LT skip %s: intraday setup '%s'", rec["symbol"], setup)
+            continue
+
+        _cmp = rec.get("scan_cmp") or rec.get("current_price")
+        if reentry_guard_blocks(rec["symbol"], "LONGTERM", float(rec.get("entry_price") or 0),
+                                cmp=float(_cmp) if _cmp else None):
             continue
 
         s = _score_longterm(rec)
@@ -448,6 +461,12 @@ def select_from_final_ideas(horizon: str, max_picks: int) -> list[dict]:
             entry = float(r["entry"])
             cmp = cmps.get(sym)
             if cmp is None or entry <= 0:
+                continue
+            # Setup-aware re-entry guard: skip a re-promotion of the same failed
+            # setup (same entry, recently structure-broken/stopped, still below
+            # 200-DMA). A genuinely new setup passes through.
+            from dashboard.backend.db.portfolio import reentry_guard_blocks
+            if reentry_guard_blocks(sym, horizon, entry, cmp=float(cmp)):
                 continue
             gap = (float(cmp) - entry) / entry * 100.0
             if gap > PROMOTE_ACTIONABLE_PCT:
