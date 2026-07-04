@@ -6,7 +6,6 @@ import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import MobileNav from "@/components/MobileNav";
 import MarketCommandBar from "@/components/MarketCommandBar";
-import MarketIntelStrip from "@/components/MarketIntelStrip";
 import BackendStatusNotice from "@/components/BackendStatusNotice";
 import CommandPalette from "@/components/CommandPalette";
 import MultiPanelLayout from "@/components/MultiPanelLayout";
@@ -61,9 +60,6 @@ export default function LayoutClient({ children }: { children: React.ReactNode }
       />
       <div className="flex-1 flex flex-col min-w-0 relative z-[2] overflow-hidden">
         <MarketCommandBar />
-        <div className="px-0 max-w-[1800px] mx-auto w-full">
-          <MarketIntelStrip />
-        </div>
         <BackendStatusNotice />
         <TopBar
           onMenuClick={() => setSidebarOpen((v) => !v)}
