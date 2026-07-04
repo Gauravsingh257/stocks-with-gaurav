@@ -17,6 +17,56 @@ function fmt(v: number | null | undefined, dec = 2) {
   return v.toFixed(dec);
 }
 
+// ── CSV export (client-side, no backend) ──────────────────────────────────────
+const CSV_COLUMNS: { key: keyof PortfolioPosition; label: string }[] = [
+  { key: "symbol", label: "Symbol" },
+  { key: "horizon", label: "Horizon" },
+  { key: "status", label: "Status" },
+  { key: "direction", label: "Direction" },
+  { key: "entry_price", label: "Entry" },
+  { key: "current_price", label: "CMP" },
+  { key: "stop_loss", label: "StopLoss" },
+  { key: "target_1", label: "Target1" },
+  { key: "target_2", label: "Target2" },
+  { key: "profit_loss_pct", label: "PnL_%" },
+  { key: "profit_loss", label: "PnL_pts" },
+  { key: "drawdown_pct", label: "Drawdown_%" },
+  { key: "high_since_entry", label: "HighSinceEntry" },
+  { key: "low_since_entry", label: "LowSinceEntry" },
+  { key: "days_held", label: "DaysHeld" },
+  { key: "confidence_score", label: "Confidence" },
+  { key: "exit_price", label: "ExitPrice" },
+  { key: "exit_reason", label: "ExitReason" },
+  { key: "created_at", label: "AddedAt" },
+  { key: "updated_at", label: "UpdatedAt" },
+  { key: "closed_at", label: "ClosedAt" },
+];
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  // Quote when the value could break CSV parsing (comma, quote, newline).
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadPositionsCsv(positions: PortfolioPosition[], horizon: string) {
+  const stamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (daily file)
+  const header = CSV_COLUMNS.map((c) => c.label).join(",");
+  const lines = positions.map((p) =>
+    CSV_COLUMNS.map((c) => csvCell(p[c.key])).join(",")
+  );
+  const csv = [header, ...lines].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${horizon.toLowerCase()}-portfolio-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   try {
@@ -209,13 +259,31 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
             })()}
           </span>
         </div>
-        <div style={{
-          fontSize: "0.7rem", fontWeight: 700,
-          color: count >= max ? "#ff4d6d" : "#00d18c",
-          background: count >= max ? "rgba(255,77,109,0.1)" : "rgba(0,209,140,0.1)",
-          padding: "3px 10px", borderRadius: 999,
-        }}>
-          {count >= max ? "FULL" : `${max - count} SLOTS OPEN`}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => downloadPositionsCsv(positions, horizon)}
+            disabled={positions.length === 0}
+            title={`Download ${positions.length} ${horizon} position(s) as CSV`}
+            style={{
+              fontSize: "0.68rem", fontWeight: 600,
+              color: positions.length === 0 ? "var(--text-dim)" : "var(--accent)",
+              background: "rgba(0,212,255,0.08)",
+              border: "1px solid rgba(0,212,255,0.25)",
+              padding: "3px 10px", borderRadius: 999,
+              cursor: positions.length === 0 ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", gap: 4,
+            }}
+          >
+            ⬇ CSV
+          </button>
+          <div style={{
+            fontSize: "0.7rem", fontWeight: 700,
+            color: count >= max ? "#ff4d6d" : "#00d18c",
+            background: count >= max ? "rgba(255,77,109,0.1)" : "rgba(0,209,140,0.1)",
+            padding: "3px 10px", borderRadius: 999,
+          }}>
+            {count >= max ? "FULL" : `${max - count} SLOTS OPEN`}
+          </div>
         </div>
       </div>
 
