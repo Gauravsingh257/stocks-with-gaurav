@@ -148,20 +148,27 @@ class PositionTrackingService:
             elif cmp <= sl:
                 new_status = "STOP_HIT"
                 exit_reason = "STOP_HIT"
-            elif structure_exit_on and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
-                dma200 = _get_200dma(pos.symbol)
-                if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
+            else:
+                # Structure-break cull: underwater + long-held + below 200-DMA.
+                # (Its inner 200-DMA test may NOT fire, so it must not consume the
+                # exit chain — the stale check below still gets a chance.)
+                if structure_exit_on and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
+                    dma200 = _get_200dma(pos.symbol)
+                    if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
+                        new_status = "CLOSED"
+                        exit_reason = "STRUCTURE_BREAK"
+                # Stale / dead-money cull: long-held but hovering near entry.
+                # Evaluated even when the structure branch did NOT exit (e.g.
+                # underwater but still above the 200-DMA) — that gap is exactly
+                # the non-mover we want to free the slot from.
+                if (
+                    exit_reason is None
+                    and stale_exit_on
+                    and days_held >= _STALE_EXIT_MIN_DAYS
+                    and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
+                ):
                     new_status = "CLOSED"
-                    exit_reason = "STRUCTURE_BREAK"
-            elif (
-                stale_exit_on
-                and days_held >= _STALE_EXIT_MIN_DAYS
-                and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
-            ):
-                # Dead money: long-held but still hovering near entry — free the
-                # slot for a better candidate rather than let it block the book.
-                new_status = "CLOSED"
-                exit_reason = "STALE_EXIT"
+                    exit_reason = "STALE_EXIT"
 
             is_exit = (new_status != "ACTIVE" and old_status == "ACTIVE")
             # On an exit, keep the row ACTIVE for the metric write so close()
