@@ -32,7 +32,15 @@ router = APIRouter(tags=["auth"])
 log = logging.getLogger("dashboard.auth")
 
 _JWT_SECRET_REDIS_KEY = "auth:jwt_secret"
-_JWT_SECRET_FALLBACK = "swg-default-secret-change-me-in-prod"
+
+# SECURITY: never ship a known/constant fallback secret. If it lands in the
+# source (or a leaked repo) anyone can forge a valid token for any user/role.
+# When neither env nor Redis can supply a secret (Redis outage in dev), we fall
+# back to a per-process RANDOM value generated once at import. It is unguessable,
+# so it cannot be used to forge tokens; the trade-off is that tokens issued
+# during such an outage stop validating once Redis recovers (acceptable — a
+# rare degraded window forces a harmless re-login, not an account takeover).
+_EPHEMERAL_PROCESS_SECRET = secrets.token_urlsafe(48)
 
 
 _jwt_secret_cache: str | None = None
@@ -47,7 +55,8 @@ def _resolve_jwt_secret() -> str:
       1. Redis `auth:jwt_secret` — shared canonical secret across all replicas.
       2. If Redis is empty: seed with env JWT_SECRET (if set) or a fresh random.
          Uses SETNX so concurrent first-starts converge on the same value.
-      3. Fixed fallback (dev only; only hit when Redis is unreachable).
+      3. Per-process RANDOM secret (only hit when Redis is unreachable and no
+         env var is set). Never a shipped constant — see _EPHEMERAL_PROCESS_SECRET.
 
     Called lazily before every encode/decode so a slow Redis bootstrap doesn't
     permanently pin replicas to the fallback secret.
@@ -81,10 +90,12 @@ def _resolve_jwt_secret() -> str:
     except Exception as exc:
         log.warning("auth: redis-shared JWT secret unavailable (%s); using local fallback", exc)
 
-    # Redis unreachable — local fallback. Prefer env var even now so dev with
-    # JWT_SECRET set still works. Do NOT cache so we retry when Redis recovers.
+    # Redis unreachable — local fallback. Prefer env var even now so dev/prod
+    # with JWT_SECRET set still works. Otherwise use the per-process RANDOM
+    # secret (never a shipped constant). Do NOT cache so we retry when Redis
+    # recovers and re-converge on the shared secret.
     env_val = os.getenv("JWT_SECRET", "").strip()
-    return env_val or _JWT_SECRET_FALLBACK
+    return env_val or _EPHEMERAL_PROCESS_SECRET
 
 
 JWT_ALGORITHM = "HS256"
@@ -222,13 +233,9 @@ def decode_token(token: str) -> dict:
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
-        if secret != _JWT_SECRET_FALLBACK:
-            try:
-                return _coerce_user(jwt.decode(token, _JWT_SECRET_FALLBACK, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTS))
-            except jwt.ExpiredSignatureError:
-                raise HTTPException(status_code=401, detail="Token expired")
-            except jwt.InvalidTokenError:
-                pass
+        # SECURITY: do NOT retry against any other secret. A token that fails
+        # the resolved secret is invalid, full stop. (The old code re-tried a
+        # hardcoded constant here, which let anyone forge tokens for any user.)
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
