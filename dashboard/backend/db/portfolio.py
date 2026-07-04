@@ -195,7 +195,7 @@ MAX_LONGTERM_POSITIONS = int(os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
 REENTRY_GUARD_MODE = os.getenv("PORTFOLIO_REENTRY_GUARD", "on").strip().lower()
 REENTRY_COOLDOWN_DAYS = int(os.getenv("PORTFOLIO_REENTRY_COOLDOWN_DAYS", "10"))
 REENTRY_SAME_ENTRY_PCT = float(os.getenv("PORTFOLIO_REENTRY_SAME_ENTRY_PCT", "3.0"))
-_REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT"}
+_REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT", "STALE_EXIT"}
 
 
 def _reentry_would_block(symbol: str, horizon: str, entry: float,
@@ -252,6 +252,12 @@ def _reentry_would_block(symbol: str, horizon: str, entry: float,
     delta_pct = abs(entry - last_entry) / last_entry * 100.0
     if delta_pct > REENTRY_SAME_ENTRY_PCT:
         return False, f"new-entry-level(Δ{delta_pct:.1f}%>{REENTRY_SAME_ENTRY_PCT}%)"
+
+    # For a STALE_EXIT (dead-money time-stop), the "same setup" test is simply a
+    # re-buy at the same entry within cooldown — there is no 200-DMA structural
+    # condition to re-check, so G1+G2+G3 are sufficient to block the churn.
+    if last_reason == "STALE_EXIT":
+        return True, f"repeat-stalled-setup(cooldown={days}d,Δentry={delta_pct:.1f}%)"
 
     # G4 — setup-aware structural gate: still below the 200-DMA?
     if cmp is None:
