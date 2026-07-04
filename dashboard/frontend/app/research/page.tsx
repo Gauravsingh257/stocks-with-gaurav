@@ -5,8 +5,6 @@ import Link from "next/link";
 import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronDown, Mail, Briefcase, Settings2 } from "lucide-react";
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
-import StateMachineSignals from "@/components/StateMachineSignals";
-import FvgTapSignals from "@/components/FvgTapSignals";
 
 import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -530,17 +528,6 @@ export default function ResearchPage() {
           {scanButton("longterm", "warning")}
         </div>
       </div>
-      </StaggerItem>
-
-      {/* ── NEW ENGINE: Planned-Execution (Validation) — clearly separated
-           from legacy picks, badge per card. Self-contained: own fetch,
-           cannot affect the rest of the page. ─────────────────────── */}
-      <StaggerItem>
-        <StateMachineSignals />
-      </StaggerItem>
-
-      <StaggerItem>
-        <FvgTapSignals />
       </StaggerItem>
 
       {/* ── TAB BAR (logged-in users only) ──────────────────── */}
