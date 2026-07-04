@@ -787,6 +787,12 @@ export interface PortfolioJournalStats {
   wins: number;
   losses: number;
   hit_rate_pct: number;
+  // Exit-reason breakdown (optional — older cached payloads may omit these).
+  target_hits?: number;
+  stop_hits?: number;
+  structure_exits?: number;
+  other_exits?: number;
+  target_hit_rate_pct?: number;
   avg_pnl_pct: number;
   total_pnl_pct: number;
   best_pnl_pct: number;

@@ -444,6 +444,10 @@ def get_journal_stats(horizon: str | None = None) -> dict:
                 COUNT(*) as total_trades,
                 SUM(CASE WHEN profit_loss_pct > 0 THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN profit_loss_pct <= 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN exit_reason = 'TARGET_HIT' THEN 1 ELSE 0 END) as target_hits,
+                SUM(CASE WHEN exit_reason = 'STOP_HIT' THEN 1 ELSE 0 END) as stop_hits,
+                SUM(CASE WHEN exit_reason = 'STRUCTURE_BREAK' THEN 1 ELSE 0 END) as structure_exits,
+                SUM(CASE WHEN exit_reason NOT IN ('TARGET_HIT','STOP_HIT','STRUCTURE_BREAK') THEN 1 ELSE 0 END) as other_exits,
                 ROUND(AVG(profit_loss_pct), 2) as avg_pnl_pct,
                 ROUND(SUM(profit_loss_pct), 2) as total_pnl_pct,
                 MAX(profit_loss_pct) as best_pnl_pct,
@@ -457,11 +461,21 @@ def get_journal_stats(horizon: str | None = None) -> dict:
 
         total = row["total_trades"] or 0
         wins = row["wins"] or 0
+        target_hits = row["target_hits"] or 0
         return {
             "total_trades": total,
             "wins": wins,
             "losses": row["losses"] or 0,
+            # hit_rate_pct = % of closed trades that were net positive (win rate).
             "hit_rate_pct": round(wins / total * 100, 1) if total > 0 else 0.0,
+            # Exit-reason breakdown so the UI can distinguish "hit target" from
+            # "cut early by structure-break" from "stopped out" — otherwise a
+            # low win rate hides a positive-expectancy system.
+            "target_hits": target_hits,
+            "stop_hits": row["stop_hits"] or 0,
+            "structure_exits": row["structure_exits"] or 0,
+            "other_exits": row["other_exits"] or 0,
+            "target_hit_rate_pct": round(target_hits / total * 100, 1) if total > 0 else 0.0,
             "avg_pnl_pct": row["avg_pnl_pct"] or 0.0,
             "total_pnl_pct": row["total_pnl_pct"] or 0.0,
             "best_pnl_pct": row["best_pnl_pct"] or 0.0,
@@ -491,6 +505,17 @@ def seed_portfolio_from_recommendations() -> int:
             """,
         ).fetchall()
 
+        # Live active counts per horizon — the seed path must respect the same
+        # capacity cap as add_position/promote_to_portfolio, otherwise it can
+        # bulk-insert past MAX and the book shows an over-cap "25/20" state.
+        active_counts = {
+            r["horizon"]: r["cnt"]
+            for r in conn.execute(
+                "SELECT horizon, COUNT(*) AS cnt FROM portfolio_positions "
+                "WHERE status = 'ACTIVE' GROUP BY horizon"
+            ).fetchall()
+        }
+
         seeded = 0
         for row in rows:
             row_d = dict(row)
@@ -503,6 +528,11 @@ def seed_portfolio_from_recommendations() -> int:
                 (symbol, horizon),
             ).fetchone()
             if existing:
+                continue
+
+            # Respect capacity — never seed past MAX for the horizon.
+            cap = MAX_SWING_POSITIONS if horizon == "SWING" else MAX_LONGTERM_POSITIONS
+            if active_counts.get(horizon, 0) >= cap:
                 continue
 
             targets = []
@@ -539,6 +569,7 @@ def seed_portfolio_from_recommendations() -> int:
                     row_d.get("created_at", datetime.now(_IST).isoformat()),
                 ),
             )
+            active_counts[horizon] = active_counts.get(horizon, 0) + 1
             seeded += 1
 
         conn.commit()
