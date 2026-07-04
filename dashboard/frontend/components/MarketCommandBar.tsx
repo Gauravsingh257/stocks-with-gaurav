@@ -223,6 +223,18 @@ export default function MarketCommandBar() {
     return { color: "bg-yellow-400", bg: "bg-yellow-500/10", label: "Degraded — see details" };
   }, [hasSnapshot, engineOn, kiteOn, dataFresh, session, health?.token_present]);
 
+  // Tape regime + structure bias — moved here from the (removed) MarketIntelStrip
+  // so the macro read stays visible without a second full-width panel.
+  const regime = snapshot?.market_regime ?? "NEUTRAL";
+  const niftyBias =
+    snapshot?.setup_d_state?.["NIFTY"]?.bias ??
+    snapshot?.setup_d_state?.["NIFTY 50"]?.bias ??
+    regime;
+  const biasCls = (v: string) => {
+    const s = String(v).toUpperCase();
+    return s.includes("BULL") ? "text-green-400" : s.includes("BEAR") ? "text-red-400" : "text-slate-300";
+  };
+
   const statusTooltip = useMemo(() => {
     const sessionText =
       session === "OPEN" ? "OPEN" : session === "PREOPEN" ? "PREMARKET" : "CLOSED";
@@ -242,6 +254,19 @@ export default function MarketCommandBar() {
       role="status"
       aria-label="Macro market strip"
     >
+      {/* Tape regime + structure bias (compact) */}
+      <span className="flex items-center gap-3 shrink-0 text-[0.62rem] uppercase tracking-wide">
+        <span title="Tape regime — live classification">
+          <span className="text-gray-500 mr-1">Tape</span>
+          <span className={`font-semibold ${biasCls(String(regime))}`}>{String(regime)}</span>
+        </span>
+        <span title="Structure bias — engine snapshot">
+          <span className="text-gray-500 mr-1">Bias</span>
+          <span className={`font-semibold ${biasCls(String(niftyBias))}`}>{String(niftyBias)}</span>
+        </span>
+        <span className="text-slate-700 select-none" aria-hidden>|</span>
+      </span>
+
       <span className="text-gray-500 font-medium uppercase tracking-[0.18em] text-[0.62rem] shrink-0">
         Indices
       </span>
