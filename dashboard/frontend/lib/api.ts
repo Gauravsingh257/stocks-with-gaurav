@@ -793,6 +793,11 @@ export interface PortfolioJournalStats {
   structure_exits?: number;
   other_exits?: number;
   target_hit_rate_pct?: number;
+  // Unique-setup view (repeat re-entries of the same setup collapsed to one).
+  unique_trades?: number;
+  unique_wins?: number;
+  unique_hit_rate_pct?: number;
+  repeat_reentries_collapsed?: number;
   avg_pnl_pct: number;
   total_pnl_pct: number;
   best_pnl_pct: number;

@@ -194,8 +194,17 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
               const tgt = s.target_hits ?? 0;
               const stop = s.stop_hits ?? 0;
               const cut = (s.structure_exits ?? 0) + (s.other_exits ?? 0);
+              // Headline win rate = unique-setup rate (repeat re-entries of the
+              // same setup collapsed). Labeled '*' with the basis + realized rate
+              // in the tooltip so it is disclosed, not passed off as all-trades.
+              const collapsed = s.repeat_reentries_collapsed ?? 0;
+              const winRate = collapsed > 0 && s.unique_hit_rate_pct !== undefined
+                ? s.unique_hit_rate_pct : s.hit_rate_pct;
+              const basis = collapsed > 0
+                ? `Per unique setup: ${s.unique_wins}/${s.unique_trades} = ${s.unique_hit_rate_pct}% (excludes ${collapsed} repeat re-entries of the same setup, now prevented by the re-entry guard). Realized across all ${s.total_trades} closed trades: ${s.hit_rate_pct}%.`
+                : `${s.wins}/${s.total_trades} closed trades net positive.`;
               return (
-                <> · {s.total_trades} completed · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · Total return: <span style={{ color: plColor(s.total_pnl_pct), fontWeight: 700 }}>{s.total_pnl_pct > 0 ? "+" : ""}{s.total_pnl_pct}%</span></>
+                <> · <span title={basis} style={{ color: winRate >= 50 ? "#00d18c" : "#f0c060", fontWeight: 700, borderBottom: "1px dotted currentColor", cursor: "help" }}>{winRate}% win rate{collapsed > 0 ? "*" : ""}</span> · {s.total_trades} completed · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · Total return: <span style={{ color: plColor(s.total_pnl_pct), fontWeight: 700 }}>{s.total_pnl_pct > 0 ? "+" : ""}{s.total_pnl_pct}%</span></>
               );
             })()}
           </span>
