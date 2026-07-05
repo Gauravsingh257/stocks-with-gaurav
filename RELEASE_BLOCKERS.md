@@ -21,7 +21,7 @@
 ## 🔴 Critical (block production sign-off)
 
 1. **Real-device gesture validation not performed** — I have **no physical device** and **no live market data this weekend** (Kite token expired). The acceptance criteria require verifying on **Safari-iPhone + Chrome-Android with live candles**: pinch-zoom, long-press, crosshair, tooltip, drag, orientation change, resize-after-rotation. *Action:* owner or a device lab (BrowserStack/LambdaTest) must run these on Monday with live data. **I cannot sign this off.**
-2. **Accessibility not yet fully passing** — *partially done* (focus-visible ✅, reduced-motion ✅, input labels ✅ — PRs #78/#79). **Remaining before the a11y gate clears:** dim-text contrast fails AA (C1), icon-button touch targets (C2), scoped `aria-live` for P&L/Regime/Signals (C3), and the **manual screen-reader + keyboard-E2E pass**. See ACCESSIBILITY_REPORT.md.
+2. **Accessibility — automated findings resolved; manual pass remains.** Fixed: focus-visible, reduced-motion, input labels, **contrast (C1)**, **touch targets (C2)**, **live regions (C3)** — PRs #78/#79/#81. **Only remaining a11y item:** the **manual screen-reader (VoiceOver/NVDA) + keyboard-E2E pass**, which cannot be automated. See ACCESSIBILITY_REPORT.md.
 3. **Performance metrics not measured** — LCP/CLS/FCP/INP on throttled mobile, bundle analysis (framer-motion, two chart libs), and the **30-minute memory soak** for polling/WS/chart leaks. Required; not done (soak needs sustained monitoring beyond this session).
 4. **Backend availability during market hours unconfirmed** — intermittent **502s** on `/ws/trades`, `/api/chart/*`, `/api/snapshot` observed over the weekend. The frontend degrades gracefully, but if this persists during live hours users lose real-time data. *Action:* confirm backend stability Monday 09:15–15:30 IST. (Backend concern, but gates "production ready".)
 
@@ -29,13 +29,12 @@
 
 ## 🟠 Important (should fix before or shortly after launch)
 
-1. ✅ ~~Opportunity-card mini-chart fetch fan-out~~ — **FIXED (PR #77)**: MiniChart now lazy-loads via IntersectionObserver; off-screen cards issue zero requests.
-2. **Dim-text contrast fails AA** (ACCESSIBILITY_REPORT C1) — `--text-dim` ≈ 2.8:1; lighten to ~`#6b7fa6`. (Owner sign-off — visual change.)
-3. **Icon-button touch targets** (C2) — 18 sub-40px interactive elements; pad icon-only buttons to ≥44px on mobile.
-4. **Scoped aria-live for market data** (C3) — announce P&L/Regime/Signals changes to screen readers without over-announcing the per-tick ticker.
-5. **On-screen-keyboard occlusion unverified** — real device needed to confirm focused inputs scroll above the keyboard.
-6. **RunningTradesMonitor stat grids** — fixed `repeat(4,1fr)` grids not yet audited on 360px; likely need the `minWidth:0`+`clamp()` treatment.
-7. **Landscape + dynamic text scaling (120/150/200%)** not yet verified across pages.
+1. ✅ ~~Opportunity-card mini-chart fetch fan-out~~ — **FIXED (PR #77)**.
+2. ✅ ~~Dim-text contrast (C1)~~ / ~~touch targets (C2)~~ / ~~aria-live (C3)~~ — **FIXED (PR #81)**.
+3. **On-screen-keyboard occlusion unverified** — real device needed to confirm focused inputs scroll above the keyboard.
+4. **RunningTradesMonitor stat grids** — fixed `repeat(4,1fr)` grids not yet audited on 360px; likely need the `minWidth:0`+`clamp()` treatment.
+5. **Landscape + dynamic text scaling (120/150/200%)** not yet verified across pages.
+6. **C4 forced-colors / high-contrast mode** — no `@media (forced-colors)` handling (minor).
 
 ---
 

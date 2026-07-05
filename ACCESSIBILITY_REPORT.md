@@ -12,6 +12,9 @@
 | A1 | **Global keyboard focus ring** (`:focus-visible` outline) — every interactive element shows a visible focus indicator for keyboard/AT users; pointer users unaffected | 2.4.7 Focus Visible | #78 |
 | A2 | **prefers-reduced-motion** — animations/transitions reduced to near-instant for users who request it (kills pulses, shimmer, ticker flashes, orb drift) | 2.3.3 Animation from Interactions | #78 |
 | A3 | **Accessible names for search inputs** — terminal ticker search + 2 research inputs had only a placeholder; added `aria-label` | 1.3.1, 4.1.2 | #79 |
+| C1 | **Dim-text contrast** — `--text-dim` was 2.8:1 (dark) / 2.4:1 (light); now `#6b7fa6` (~4.8:1) / `#5f6b7d` (~5.0:1), **passes AA** | 1.4.3 | #81 |
+| C2 | **Touch targets** — `.tap-44` extends primary icon buttons (hamburger, alerts, refresh×2) to a 44px tap area via invisible overlay (no visual change) | 2.5.5 | #81 |
+| C3 | **Live regions** — removed the over-announcing ticker `role="status"`; added a scoped visually-hidden `aria-live="polite"` for market regime + signal count (P&L excluded — too frequent) | 4.1.3 | #81 |
 
 ---
 
@@ -52,10 +55,10 @@ No `@media (forced-colors: active)` handling. In Windows High-Contrast, custom `
 | Focus visible | ✅ fixed |
 | Reduced motion | ✅ fixed |
 | Input labels | ✅ fixed (search inputs) |
-| Contrast | ⚠️ C1 — dim text fails AA (fix recommended) |
-| Touch targets | ⚠️ C2 — icon buttons to audit |
-| Live regions | ⚠️ C3 — needs scoped aria-live |
-| Forced colors | 🟡 C4 — minor |
-| Screen reader / keyboard E2E | ⏳ manual |
+| Contrast | ✅ C1 fixed (both themes ≥ 4.5:1) |
+| Touch targets | ✅ C2 fixed (primary icon buttons 44px; content chips meet 24px AA by design) |
+| Live regions | ✅ C3 fixed (scoped aria-live; ticker no longer over-announces) |
+| Forced colors | 🟡 C4 — minor, deferred |
+| Screen reader / keyboard E2E | ⏳ manual (only remaining a11y item) |
 
-**Accessibility is not yet "passing"** — C1–C3 should be resolved and the manual SR/keyboard pass completed before the a11y gate in RELEASE_BLOCKERS.md can be cleared.
+**Automated + code-level a11y findings are resolved (C1–C3).** The only remaining a11y work is the **manual screen-reader + keyboard-E2E pass** (and optional C4 forced-colors), which cannot be automated.
