@@ -112,10 +112,21 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
         backdropFilter: "blur(12px)",
       }}
     >
+      {/* Scoped screen-reader live region: announces the MEANINGFUL market
+          state (regime + signal count) on change. P&L is intentionally excluded
+          — it ticks too often and would spam assistive tech. */}
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
+      >
+        Market regime {rb.label}. {sigToday} of {maxSig} signals today.
+      </div>
+
       {/* Hamburger - mobile only */}
       <button
         type="button"
-        className="md:hidden p-2 rounded-md -ml-1 text-[var(--text-primary)] hover:bg-white/5"
+        className="tap-44 md:hidden p-2 rounded-md -ml-1 text-[var(--text-primary)] hover:bg-white/5"
         onClick={onMenuClick}
         aria-label="Open menu"
       >

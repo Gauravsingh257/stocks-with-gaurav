@@ -18,7 +18,7 @@
 
   --text-primary:   #e0e8ff;
   --text-secondary: #8899bb;
-  --text-dim:       #4a5a7a;
+  --text-dim:       #6b7fa6; /* was #4a5a7a (2.8:1, failed AA); now ~4.8:1 on --bg-base */
 }
 
 @theme inline {
@@ -50,7 +50,7 @@
 
   --text-primary:   #1e293b;
   --text-secondary: #64748b;
-  --text-dim:       #94a3b8;
+  --text-dim:       #5f6b7d; /* was #94a3b8 (2.4:1, failed AA); now ~5.0:1 on light --bg-base */
 }
 
 [data-theme="light"] body {
@@ -143,6 +143,20 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Touch-target extension (WCAG 2.5.5/2.5.8). Expands the tappable area of a
+   small icon button to >=44px on touch screens via an invisible centered
+   overlay — the VISUAL size is unchanged, so dense layouts stay intact. */
+@media (max-width: 767px) {
+  .tap-44 { position: relative; }
+  .tap-44::after {
+    content: "";
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 44px; height: 44px;
+    transform: translate(-50%, -50%);
   }
 }
 

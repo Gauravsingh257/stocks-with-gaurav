@@ -251,7 +251,6 @@ export default function MarketCommandBar() {
   return (
     <div
       className="w-full bg-black/55 backdrop-blur-md border-b border-cyan-500/15 px-3 py-1.5 md:px-4 md:py-2 flex items-center gap-4 md:gap-5 text-xs md:text-sm shrink-0 shadow-[0_0_10px_rgba(0,255,255,0.06)] overflow-x-auto"
-      role="status"
       aria-label="Macro market strip"
     >
       {/* Tape regime + structure bias (compact) */}

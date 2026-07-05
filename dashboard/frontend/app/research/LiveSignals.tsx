@@ -96,6 +96,7 @@ export default function LiveSignals() {
         <button
           onClick={load}
           aria-label="Refresh"
+          className="tap-44"
           style={{
             background: "transparent",
             border: "none",
