@@ -654,6 +654,23 @@ body {
 .data-table tbody tr:hover { background: rgba(255,255,255,0.03); }
 .data-table tbody td { padding: 10px 14px; font-size: 0.85rem; }
 
+/* Mobile-only table ergonomics (desktop unchanged):
+   - sticky header so column labels stay visible while scrolling long tables
+     (needs an OPAQUE header bg so rows don't bleed through when pinned)
+   - tighter cell padding + momentum touch scroll */
+@media (max-width: 767px) {
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #0f1830;
+    padding: 8px 10px;
+  }
+  [data-theme="light"] .data-table thead th { background: #eef1f5; }
+  .data-table tbody td { padding: 8px 10px; font-size: 0.8rem; }
+  .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+}
+
 /* ── Terminal typography helpers ──────────────────────────────── */
 .terminal-label {
   font-size: 0.65rem;

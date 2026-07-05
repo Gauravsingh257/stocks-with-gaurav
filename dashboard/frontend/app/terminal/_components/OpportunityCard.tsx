@@ -370,6 +370,7 @@ function Level({
         borderRadius: 8,
         padding: "6px 8px",
         textAlign: "center",
+        minWidth: 0, // let the grid cell shrink so wide prices don't overflow the card
       }}
     >
       <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
@@ -385,7 +386,7 @@ function Level({
           }}
         />
       ) : (
-        <div style={{ fontSize: "0.82rem", fontWeight: 700, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{value}</div>
+        <div style={{ fontSize: "clamp(0.7rem, 3vw, 0.82rem)", fontWeight: 700, color: accent, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
       )}
     </div>
   );
