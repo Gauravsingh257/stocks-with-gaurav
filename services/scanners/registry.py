@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from services.scanners.indicators import ema, supertrend, supertrend_flip, atr_wilder
+from services.scanners import sector_rotation
 
 
 @dataclass(frozen=True)
@@ -27,17 +28,25 @@ class Scanner:
     interval: str             # Kite historical interval: "day" / "week"
     lookback_days: int        # calendar days of history to request
     bars_per_year: int        # 252 for daily, 52 for weekly — sizes the 52w window
-    evaluate: Callable[[list[dict], int], dict | None]
+    # evaluate(candles, bars_per_year, symbol, ctx) -> metrics | None. `symbol`
+    # and `ctx` are optional; per-symbol scanners ignore them, cross-sectional
+    # scanners (e.g. sector rotation) use `ctx` produced by `prepare`.
+    evaluate: Callable[..., dict | None]
     description: str = ""
+    # Optional cross-sectional pre-pass: prepare(universe_symbols) -> ctx dict,
+    # run ONCE per scan before the per-symbol loop. None for per-symbol scanners.
+    prepare: Callable[[list[str]], dict] | None = None
 
 
 # ── Scanner #1: Supertrend(10,3) red→green flip AND close > EMA10 ──────────────
 
-def _supertrend_flip_evaluate(candles: list[dict], bars_per_year: int = 252) -> dict | None:
+def _supertrend_flip_evaluate(candles: list[dict], bars_per_year: int = 252,
+                              symbol: str | None = None, ctx: dict | None = None) -> dict | None:
     """Condition: Supertrend(10,3) just flipped red→green (this/last bar) AND
     close is above EMA10. Returns metric dict (raw) or None.
 
     `bars_per_year` sizes the 52-week high/low window (252 daily, 52 weekly).
+    `symbol`/`ctx` are accepted for signature uniformity and ignored here.
     Metrics include everything scoring.py needs (trend stack, momentum, 52w
     positioning, ATR, avg volume) so the runner can gate + rank uniformly.
     """
@@ -133,6 +142,29 @@ SCANNERS: list[Scanner] = [
         bars_per_year=52,
         evaluate=_supertrend_flip_evaluate,
         description="Supertrend(10,3) just turned red→green and price is above the 10 EMA, weekly.",
+    ),
+    # ── Scanner #2: Sector Rotation — strong stock in a leading sector ─────────────
+    Scanner(
+        name="sector_rotation",
+        label="Sector Rotation",
+        timeframe="1D",
+        interval="day",
+        lookback_days=400,
+        bars_per_year=252,
+        evaluate=sector_rotation.evaluate,
+        prepare=sector_rotation.prepare,
+        description="Stocks in sectors leading NIFTY (real NSE sector-index momentum) with live news catalyst, in a confirmed uptrend — daily.",
+    ),
+    Scanner(
+        name="sector_rotation",
+        label="Sector Rotation",
+        timeframe="1W",
+        interval="week",
+        lookback_days=1400,
+        bars_per_year=52,
+        evaluate=sector_rotation.evaluate,
+        prepare=sector_rotation.prepare,
+        description="Stocks in sectors leading NIFTY (real NSE sector-index momentum) with live news catalyst, in a confirmed uptrend — weekly.",
     ),
 ]
 
