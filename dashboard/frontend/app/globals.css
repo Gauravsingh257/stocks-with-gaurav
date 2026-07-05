@@ -673,6 +673,21 @@ body {
   [data-theme="light"] .data-table thead th { background: #eef1f5; }
   .data-table tbody td { padding: 8px 10px; font-size: 0.8rem; }
   .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+
+  /* Frozen first column (usually the symbol) so context isn't lost while
+     scrolling a wide trading table sideways. Opt-in via .data-table--freeze
+     so tables whose first column is NOT primary context are unaffected. */
+  .data-table--freeze tbody td:first-child,
+  .data-table--freeze thead th:first-child {
+    position: sticky;
+    left: 0;
+    background: #0d1526;
+    box-shadow: 1px 0 0 rgba(255,255,255,0.06);
+  }
+  .data-table--freeze tbody td:first-child { z-index: 1; }
+  .data-table--freeze thead th:first-child { z-index: 3; } /* corner: above row + header */
+  [data-theme="light"] .data-table--freeze tbody td:first-child,
+  [data-theme="light"] .data-table--freeze thead th:first-child { background: #f5f7fa; }
 }
 
 /* ── Terminal typography helpers ──────────────────────────────── */
