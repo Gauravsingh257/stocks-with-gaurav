@@ -24,7 +24,7 @@ const SCANNER_META: Record<string, { label: string; blurb: string }> = {
   },
   sector_rotation: {
     label: "Sector Rotation",
-    blurb: "Strong stocks inside sectors leading NIFTY (real NSE sector-index momentum) + live news catalyst",
+    blurb: "Strong stocks inside sectors outperforming the market (live constituent momentum) + news catalyst",
   },
 };
 const DEFAULT_SCANNERS = ["supertrend_flip", "sector_rotation"];
@@ -75,7 +75,7 @@ function TierBadge({ tier }: { tier: string }) {
 
 function toCsv(scanner: string, rows: ScreenerRow[]): string {
   if (scanner === "sector_rotation") {
-    const head = ["Symbol", "Sector", "SectorRelNifty%", "NewsTone", "NewsArticles", "Score", "Tier", "Close", "Stop", "1mMom%", "From52wHigh%", "AvgVol", "Headline"];
+    const head = ["Symbol", "Sector", "SectorRS%", "NewsTone", "NewsArticles", "Score", "Tier", "Close", "Stop", "1mMom%", "From52wHigh%", "AvgVol", "Headline"];
     const lines = rows.map((r) => [
       r.symbol, r.sector ?? "", r.sector_rel20_pct ?? "", r.news_tone ?? "", r.news_articles ?? "",
       r.quality_score, r.tier, r.close, r.stop, r.mom_long_pct, r.from_high_pct, r.avg_vol,
@@ -290,7 +290,7 @@ export default function ScreenersPage() {
       <p className="mt-4 text-xs" style={{ color: "var(--text-muted, #64748b)" }}>
         <TrendingUp size={11} className="inline mr-1" />
         {isSector
-          ? "Sector leadership uses real NSE sector-index momentum vs NIFTY; news heat/tone is from GDELT (aggregated public news). A screen, not advice — confirm on the chart and size for the stop."
+          ? "Sector leadership is computed from live constituent-stock momentum vs the scanned market; news heat/tone is from GDELT (aggregated public news). A screen, not advice — confirm on the chart and size for the stop."
           : "Signals are a screen, not advice. A Supertrend flip is a probability edge — size for the stop and do your own analysis."}
       </p>
     </div>
@@ -347,7 +347,7 @@ function SectorTable({ rows }: { rows: ScreenerRow[] }) {
             <th className="text-left px-3 py-2 font-medium">#</th>
             <th className="text-left px-3 py-2 font-medium">Symbol</th>
             <th className="text-left px-3 py-2 font-medium">Sector</th>
-            <th className="text-right px-3 py-2 font-medium">Sector vs NIFTY</th>
+            <th className="text-right px-3 py-2 font-medium" title="Sector relative strength vs the scanned market">Sector RS</th>
             <th className="text-left px-3 py-2 font-medium">News</th>
             <th className="text-right px-3 py-2 font-medium">Score</th>
             <th className="text-left px-3 py-2 font-medium">Tier</th>

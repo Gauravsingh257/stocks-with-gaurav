@@ -33,9 +33,9 @@ class Scanner:
     # scanners (e.g. sector rotation) use `ctx` produced by `prepare`.
     evaluate: Callable[..., dict | None]
     description: str = ""
-    # Optional cross-sectional pre-pass: prepare(universe_symbols) -> ctx dict,
+    # Optional cross-sectional pre-pass: prepare({symbol: candles}) -> ctx dict,
     # run ONCE per scan before the per-symbol loop. None for per-symbol scanners.
-    prepare: Callable[[list[str]], dict] | None = None
+    prepare: Callable[[dict], dict] | None = None
 
 
 # ── Scanner #1: Supertrend(10,3) red→green flip AND close > EMA10 ──────────────
