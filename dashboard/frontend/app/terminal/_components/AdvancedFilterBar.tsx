@@ -79,6 +79,7 @@ export default function AdvancedFilterBar({ value, onChange, total, visible }: P
 
       <input
         type="search"
+        aria-label="Search ticker"
         value={value.query}
         onChange={(e) => onChange({ ...value, query: e.target.value })}
         placeholder="Search ticker…"

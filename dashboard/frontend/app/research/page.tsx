@@ -593,6 +593,7 @@ export default function ResearchPage() {
             />
             <input
               type="search"
+              aria-label="Search research"
               value={globalQuery}
               onChange={(e) => setGlobalQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -661,6 +662,7 @@ export default function ResearchPage() {
             />
             <input
               type="search"
+              aria-label="Filter by symbol"
               name="research-symbol-filter"
               autoComplete="off"
               enterKeyHint="search"
