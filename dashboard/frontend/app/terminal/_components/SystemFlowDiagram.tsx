@@ -575,6 +575,7 @@ export default function SystemFlowDiagram({
           alignItems: "center",
           justifyContent: "space-between",
           gap: 12,
+          flexWrap: "wrap",
           position: "relative",
           marginBottom: expanded ? 16 : 0,
         }}
@@ -606,9 +607,11 @@ export default function SystemFlowDiagram({
             <h2
               style={{
                 margin: 0,
-                fontSize: "1.05rem",
+                fontSize: "clamp(0.9rem, 3.4vw, 1.05rem)",
                 fontWeight: 800,
                 color: "var(--text-primary)",
+                overflowWrap: "normal",
+                wordBreak: "keep-all",
               }}
             >
               Stock journey: Universe → Final → Portfolio
@@ -691,10 +694,13 @@ export default function SystemFlowDiagram({
             style={{ overflow: "hidden", position: "relative" }}
           >
             {/* ── Main funnel ─────────────────────────────────────── */}
+            {/* Horizontally scrollable on narrow screens so the 6-stage flow
+                stays a single readable row instead of crushing to ~60px cards. */}
             <div
               style={{
                 perspective: "1400px",
                 padding: "18px 4px 8px",
+                overflowX: "auto",
               }}
             >
               <div
@@ -704,6 +710,7 @@ export default function SystemFlowDiagram({
                   gap: 8,
                   alignItems: "stretch",
                   position: "relative",
+                  minWidth: 620,
                 }}
               >
                 {/* Animated flow lines (behind cards) */}
