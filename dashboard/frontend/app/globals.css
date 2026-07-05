@@ -125,6 +125,27 @@ body {
   min-height: 100vh;
 }
 
+/* ── Accessibility ──────────────────────────────────────────────
+   Keyboard-only focus ring (WCAG 2.4.7). :focus-visible fires for keyboard/AT
+   navigation but NOT mouse clicks, so pointer users see no change. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Honor reduced-motion (WCAG 2.3.3): near-instant animations/transitions for
+   users who request it — kills pulses, shimmer, ticker flashes, orb drift, and
+   CSS-driven motion without changing layout. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Public landing page */
 .public-home {
   min-height: 100vh;
