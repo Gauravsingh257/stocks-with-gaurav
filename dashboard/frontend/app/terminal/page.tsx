@@ -547,6 +547,7 @@ function Hero({
             onClick={onRefresh}
             disabled={refreshing}
             aria-label="Refresh"
+            className="tap-44"
             style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               width: 32, height: 32, borderRadius: 8,

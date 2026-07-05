@@ -90,6 +90,7 @@ export default function AlertsBell({ newAlert }: Props) {
       {/* Bell button */}
       <button
         type="button"
+        className="tap-44"
         onClick={handleOpen}
         style={{
           position: "relative",
