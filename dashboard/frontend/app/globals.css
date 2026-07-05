@@ -113,6 +113,10 @@
 /* ── Reset & Base ───────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+
+/* Full-height that respects the mobile URL bar (dvh) with a vh fallback.
+   Plain 100vh clips content behind Safari/Chrome mobile chrome. */
+.h-screen-dvh { height: 100vh; height: 100dvh; }
 body {
   background: var(--bg-base);
   color: var(--text-primary);

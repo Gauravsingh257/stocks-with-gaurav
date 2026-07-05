@@ -47,7 +47,7 @@ export default function ResearchChartPage() {
 
 function ChartSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0a0e17" }}>
+    <div className="h-screen-dvh" style={{ display: "flex", flexDirection: "column", background: "#0a0e17" }}>
       <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
       <div style={{ padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 16, alignItems: "center", background: "#0d1117" }}>
         <SkeletonBar w="60px" h={16} />
@@ -224,7 +224,7 @@ function ChartContent() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0a0e17" }}>
+    <div className="h-screen-dvh" style={{ display: "flex", flexDirection: "column", background: "#0a0e17" }}>
       <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
       {/* Header */}
       <div style={{
