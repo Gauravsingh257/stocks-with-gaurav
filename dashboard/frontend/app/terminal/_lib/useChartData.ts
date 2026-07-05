@@ -81,6 +81,7 @@ function _releaseMainWs() {
 export function useChartData(
   symbol: string,
   interval = "5m",
+  enabled = true,
 ): ChartDataState {
   const [bars, setBars] = useState<OHLCBar[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,7 +93,7 @@ export function useChartData(
 
   // Fetch OHLC bars
   const fetchBars = useCallback(async () => {
-    if (!base || !symbol) return;
+    if (!enabled || !base || !symbol) return;
     try {
       const res = await fetch(`${base}/api/chart/${encodeURIComponent(symbol)}?interval=${interval}`, {
         cache: "no-store",
@@ -112,21 +113,25 @@ export function useChartData(
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [base, symbol, interval]);
+  }, [enabled, base, symbol, interval]);
 
-  // Initial fetch + polling refresh
+  // Initial fetch + polling refresh — skipped entirely until `enabled` (the card
+  // is scrolled into view), so off-screen cards issue zero /api/chart requests.
   useEffect(() => {
     mountedRef.current = true;
+    if (!enabled) return () => { mountedRef.current = false; };
     fetchBars();
     const timer = setInterval(fetchBars, REFRESH_MS);
     return () => {
       mountedRef.current = false;
       clearInterval(timer);
     };
-  }, [fetchBars]);
+  }, [enabled, fetchBars]);
 
-  // Live tick via shared WS → splice last bar's close
+  // Live tick via shared WS → splice last bar's close.
+  // Only subscribe once the card is in view (paired with the gated fetch above).
   useEffect(() => {
+    if (!enabled) return;
     _wsRefCount++;
     _ensureMainWs();
 
@@ -176,7 +181,7 @@ export function useChartData(
       window.removeEventListener("ws:ltp", onLtp);
       _releaseMainWs();
     };
-  }, [symbol]);
+  }, [symbol, enabled]);
 
   return { bars, loading, error, lastPrice };
 }
