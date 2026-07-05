@@ -130,7 +130,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
         }
         <span style={{ fontSize: "0.72rem", color: transportColor }}>
           {transportLabel}
-          {globalStateVersion > 0 ? ` · v${globalStateVersion}` : ""}
+          {globalStateVersion > 0 ? <span className="hidden lg:inline"> · v{globalStateVersion}</span> : null}
         </span>
       </div>
 
@@ -141,7 +141,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
       {/* Engine mode */}
       <span className={`badge shrink-0 ${paper ? "badge-paper" : "badge-live"}`}>
         <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: paper ? "var(--warning)" : "var(--success)", display: "inline-block" }} />
-        {paper ? "PAPER" : "LIVE"} · {snapshot?.engine_mode ?? "—"}
+        {paper ? "PAPER" : "LIVE"}<span className="hidden sm:inline"> · {snapshot?.engine_mode ?? "—"}</span>
       </span>
 
       {/* Regime */}
