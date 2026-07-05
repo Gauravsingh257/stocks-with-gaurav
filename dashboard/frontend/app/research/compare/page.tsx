@@ -120,7 +120,7 @@ function CompareContent() {
         <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>Loading comparison data...</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ minWidth: 500 }}>
+          <table className="data-table data-table--freeze" style={{ minWidth: 500 }}>
             <thead>
               <tr>
                 <th style={{ width: 140 }}>Metric</th>

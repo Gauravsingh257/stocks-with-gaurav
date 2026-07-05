@@ -128,7 +128,7 @@ export default function TrackRecordPage() {
         <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>No matching results for current filters — try widening the criteria or check back after the next scan.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ minWidth: 900 }}>
+          <table className="data-table data-table--freeze" style={{ minWidth: 900 }}>
             <thead>
               <tr>
                 <th>Symbol</th>
