@@ -85,7 +85,9 @@ def run_all(mode: str = "liquid", fetcher=None) -> dict:
         ctx: dict | None = None
         if sc.prepare is not None:
             try:
-                ctx = sc.prepare(list(data.keys()))
+                # prepare gets the whole interval's {symbol: candles} so a
+                # cross-sectional scanner can derive breadth/sector context.
+                ctx = sc.prepare(data)
             except Exception as exc:
                 log.warning("scanner %s/%s prepare failed (%s); yielding 0",
                             sc.name, sc.timeframe, exc)

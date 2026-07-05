@@ -37,6 +37,14 @@ def _downtrend(n: int = 120, step: float = 0.997, base: float = 300.0) -> list[d
     return out
 
 
+def _flat(n: int = 120, base: float = 200.0) -> list[dict]:
+    return [{
+        "date": f"2026-06-{(i % 28) + 1:02d}",
+        "open": base, "high": base * 1.003, "low": base * 0.997,
+        "close": base, "volume": 400_000,
+    } for i in range(n)]
+
+
 def _ctx() -> dict:
     return {
         "leading_sectors": {
@@ -86,6 +94,34 @@ def test_scoring_bonus_is_noop_for_plain_rows():
                        sector_rel20_pct=5, news_heat=1.0, news_tone=4)
     assert quality_score(with_marker) > base           # bonus applies only when flagged
     assert quality_score(plain) == base                # plain row unchanged
+
+
+def test_prepare_marks_outperforming_sector_leading(monkeypatch):
+    # News layer must not hit the network in tests.
+    import services.scanners.sector_news as snmod
+    monkeypatch.setattr(snmod, "get_sector_news", lambda sectors, **k: {})
+
+    # IT constituents strongly up; FMCG constituents flat. IT should lead, FMCG not.
+    data: dict[str, list[dict]] = {}
+    for s in ("TCS", "INFY", "WIPRO"):
+        data[s] = _uptrend(step=1.006)
+    for s in ("HINDUNILVR", "ITC", "NESTLEIND"):
+        data[s] = _flat()
+
+    ctx = sector_rotation.prepare(data)
+    assert "IT" in ctx["leading_sectors"]
+    assert "FMCG" not in ctx["leading_sectors"]
+    assert ctx["sym_sector"]["TCS"] == "IT"
+    assert ctx["leading_sectors"]["IT"]["rel20"] > 0
+
+    # And a stock in that now-leading sector should hit via evaluate.
+    hit = sector_rotation.evaluate(data["TCS"], 252, "TCS", ctx)
+    assert hit is not None and hit["sector"] == "IT"
+
+
+def test_prepare_empty_on_no_data():
+    ctx = sector_rotation.prepare({})
+    assert ctx["leading_sectors"] == {}
 
 
 def test_score_capped_at_100():
