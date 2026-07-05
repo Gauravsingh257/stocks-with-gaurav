@@ -78,6 +78,19 @@ def run_all(mode: str = "liquid", fetcher=None) -> dict:
 
     for sc in scanners:
         data = ohlc_by_interval.get(sc.interval, {})
+
+        # Cross-sectional pre-pass (e.g. sector rotation): compute shared context
+        # ONCE before the per-symbol loop. Failure degrades to an empty ctx (the
+        # scanner then yields zero) — it never aborts the whole run.
+        ctx: dict | None = None
+        if sc.prepare is not None:
+            try:
+                ctx = sc.prepare(list(data.keys()))
+            except Exception as exc:
+                log.warning("scanner %s/%s prepare failed (%s); yielding 0",
+                            sc.name, sc.timeframe, exc)
+                ctx = {}
+
         rows: list[dict] = []
         scanned = 0
         as_of = None
@@ -86,7 +99,7 @@ def run_all(mode: str = "liquid", fetcher=None) -> dict:
             if candles:
                 as_of = candles[-1].get("date") or as_of
             try:
-                metrics = sc.evaluate(candles, sc.bars_per_year)
+                metrics = sc.evaluate(candles, sc.bars_per_year, sym, ctx)
             except Exception as exc:
                 log.debug("evaluate failed %s/%s (%s)", sc.name, sym, exc)
                 continue

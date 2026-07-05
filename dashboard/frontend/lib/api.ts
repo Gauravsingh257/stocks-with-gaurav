@@ -1357,9 +1357,9 @@ export interface ScreenerCatalog {
 export interface ScreenerRow {
   symbol: string;
   close: number;
-  ema10: number;
+  ema10?: number;
   stop: number;
-  flip: "this_bar" | "last_bar" | string;
+  flip?: "this_bar" | "last_bar" | string;
   date: string;
   avg_vol: number;
   flip_vol_x: number;
@@ -1373,6 +1373,18 @@ export interface ScreenerRow {
   stack: boolean;
   quality_score: number;
   tier: "quality" | "momentum" | "speculative" | string;
+  // ── Sector Rotation scanner extras (present only for that scanner) ──
+  is_sector_rotation?: boolean;
+  sector?: string;
+  sector_band?: string;
+  sector_rel20_pct?: number | null;
+  sector_rel50_pct?: number | null;
+  news_heat?: number | null;
+  news_tone?: number | null;
+  news_articles?: number | null;
+  news_headline?: string | null;
+  news_url?: string | null;
+  news_domain?: string | null;
 }
 
 export interface ScreenerResult {
