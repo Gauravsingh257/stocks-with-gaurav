@@ -267,7 +267,7 @@ export default function MarketCommandBar() {
         <span className="text-slate-700 select-none" aria-hidden>|</span>
       </span>
 
-      <span className="text-gray-500 font-medium uppercase tracking-[0.18em] text-[0.62rem] shrink-0">
+      <span className="hidden sm:inline-block text-gray-500 font-medium uppercase tracking-[0.18em] text-[0.62rem] shrink-0">
         Indices
       </span>
 
@@ -311,8 +311,11 @@ export default function MarketCommandBar() {
         );
       })}
 
-      {/* Far-right: consolidated status dot + last-updated label */}
-      <span className="ml-auto flex items-center gap-3 shrink-0">
+      {/* Far-right: consolidated status dot + last-updated label.
+          sticky right-0 keeps freshness + health reachable on mobile even while
+          the indices scroll underneath (otherwise it sat ~500px into the scroll,
+          effectively unreachable). Left fade so numbers don't collide with it. */}
+      <span className="ml-auto sticky right-0 flex items-center gap-3 shrink-0 pl-4 bg-gradient-to-l from-black/80 from-60% to-transparent">
         {ageLabel && (
           <span
             className={`font-mono text-[0.65rem] ${snapshotAgeSeconds !== null && snapshotAgeSeconds > 30 ? "text-yellow-500" : "text-slate-500"}`}
