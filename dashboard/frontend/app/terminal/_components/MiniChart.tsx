@@ -15,7 +15,7 @@
  * the first fetch is in-flight, and a muted "No data" placeholder on error / empty.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChartData } from "../_lib/useChartData";
 import type { OHLCBar } from "../_lib/useChartData";
 
@@ -29,13 +29,36 @@ interface Props {
 }
 
 export default function MiniChart({ symbol, direction, height = 72, entry, stop, target }: Props) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chartRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const seriesRef = useRef<any>(null);
 
-  const { bars, loading, error } = useChartData(symbol, "5m");
+  // Lazy-load: only fetch OHLC + build the chart once this card scrolls into
+  // view. Previously every opportunity card fired a /api/chart request on mount,
+  // so a full terminal issued ~15+ concurrent requests. rootMargin prefetches
+  // just before the card enters the viewport so there's no visible pop-in.
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") { setInView(true); return; }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setInView(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "250px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  const { bars, loading, error } = useChartData(symbol, "5m", inView);
 
   const isUp = direction === "BUY";
   const lineColor = isUp ? "#00e096" : "#ff4757";
@@ -43,6 +66,7 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
 
   /* Chart lifecycle: recreate on symbol / levels so switching opportunities never freezes stale series */
   useEffect(() => {
+    if (!inView) return;
     if (typeof window === "undefined") return;
     if (!containerRef.current) return;
 
@@ -144,7 +168,7 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, [symbol, height, lineColor, areaTopColor, entry, stop, target]);
+  }, [inView, symbol, height, lineColor, areaTopColor, entry, stop, target]);
 
   useEffect(() => {
     if (!seriesRef.current || !bars.length) return;
@@ -156,52 +180,42 @@ export default function MiniChart({ symbol, direction, height = 72, entry, stop,
     chartRef.current?.timeScale().fitContent();
   }, [bars, symbol]);
 
-  // Loading skeleton
-  if (loading) {
-    return (
-      <div
-        style={{
-          height,
-          borderRadius: 8,
-          background: "linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.03) 75%)",
-          backgroundSize: "200% 100%",
-          animation: "shimmer 1.4s linear infinite",
-        }}
-      />
-    );
-  }
-
-  // Error / empty fallback — show a muted dash so card layout doesn't collapse
-  if (error || !bars.length) {
-    return (
-      <div
-        style={{
-          height,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: 8,
-          border: "1px dashed rgba(255,255,255,0.08)",
-          fontSize: "0.6rem",
-          color: "var(--text-dim)",
-          letterSpacing: 0.5,
-        }}
-      >
-        {error ? "Chart unavailable" : "Awaiting data…"}
-      </div>
-    );
-  }
+  // Container is ALWAYS rendered (so IntersectionObserver + the chart have a
+  // stable node). Skeleton / empty states render as overlays on top.
+  const showSkeleton = !inView || loading;
+  const showEmpty = inView && !loading && (error || !bars.length);
 
   return (
     <div
-      ref={containerRef}
-      style={{
-        height,
-        width: "100%",
-        borderRadius: 8,
-        overflow: "hidden",
-        position: "relative",
-      }}
-    />
+      ref={wrapperRef}
+      style={{ height, width: "100%", borderRadius: 8, overflow: "hidden", position: "relative" }}
+    >
+      <div ref={containerRef} style={{ height, width: "100%" }} />
+
+      {showSkeleton && (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute", inset: 0, borderRadius: 8,
+            background: "linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.03) 75%)",
+            backgroundSize: "200% 100%",
+            animation: "shimmer 1.4s linear infinite",
+          }}
+        />
+      )}
+
+      {showEmpty && (
+        <div
+          style={{
+            position: "absolute", inset: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            borderRadius: 8, border: "1px dashed rgba(255,255,255,0.08)",
+            fontSize: "0.6rem", color: "var(--text-dim)", letterSpacing: 0.5,
+          }}
+        >
+          {error ? "Chart unavailable" : "Awaiting data…"}
+        </div>
+      )}
+    </div>
   );
 }
