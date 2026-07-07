@@ -39,14 +39,105 @@ def _update_portfolio_prices() -> int:
     return _service.tick()
 
 
-def _promote_final_ideas_on_tap() -> int:
-    """Arm-on-tap: during market hours, promote any Final Trade Idea now trading
-    in its entry zone (CMP-buy) into the SYSTEM portfolio. The Final Trade Ideas
-    feed IS the armed set — select_from_final_ideas re-checks live CMP each
-    cycle. Flag-gated + best-effort; never raises into the loop.
+# ── Arm-on-tap trigger / expiry config ───────────────────────────────────────
+# A PENDING (armed) idea becomes ACTIVE only when its planned entry is genuinely
+# traded through. It expires (never enters) if it times out or the setup runs
+# away, so the slot is freed for a real candidate.
+_PENDING_MAX_DAYS = int(os.getenv("PORTFOLIO_PENDING_MAX_DAYS", "7"))        # arm validity window (calendar days)
+_PENDING_RUNAWAY_PCT = float(os.getenv("PORTFOLIO_PENDING_RUNAWAY_PCT", "15.0"))  # setup ran away → expire
 
-    (Watchlist arm-on-tap with the paper-trigger/confirm flow is a later PR; it
-    will live in a generalized EntryTriggerService.)"""
+
+def _arm_and_expire_pending() -> int:
+    """Advance every armed (PENDING) system-portfolio idea:
+
+      - TRIGGER → ACTIVE when the planned entry is genuinely traded through
+        (pullback: CMP falls to/through entry; breakout: CMP rises to/through it).
+        Direction is decided by arm_ref_price (the CMP captured at arm time).
+      - EXPIRE (retire, never a trade) when it times out (> _PENDING_MAX_DAYS) or
+        runs so far from entry a fill is implausible.
+
+    Runs every tracker cycle. Best-effort; never raises into the loop."""
+    from datetime import datetime, timezone, timedelta
+    try:
+        from dashboard.backend.db.portfolio import (
+            get_pending_positions, activate_pending_position, expire_pending_position,
+        )
+        pend = get_pending_positions()
+        if not pend:
+            return 0
+        from services.trade_tracker import _fetch_cmp_batch
+        from services.portfolio_manager import send_portfolio_triggered_alert
+
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime.now(ist)
+        prices = _fetch_cmp_batch(list({p["symbol"] for p in pend})) or {}
+        triggered = expired = 0
+
+        for p in pend:
+            pid = int(p["id"])
+            entry = float(p["entry_price"])
+            arm_ref = float(p.get("arm_ref_price") or p.get("current_price") or entry)
+            cmp = prices.get(p["symbol"])
+
+            # Expiry by age (independent of a live price).
+            try:
+                created = str(p.get("created_at") or "").replace(" ", "T")
+                cdt = datetime.fromisoformat(created)
+                if cdt.tzinfo is None:
+                    cdt = cdt.replace(tzinfo=ist)
+                age_days = (now - cdt).days
+            except Exception:
+                age_days = 0
+            if age_days > _PENDING_MAX_DAYS:
+                if expire_pending_position(pid, "EXPIRED_TIMEOUT"):
+                    expired += 1
+                continue
+
+            if cmp is None or entry <= 0:
+                continue
+
+            is_pullback = arm_ref >= entry
+            # Genuine tap: price traded through the planned entry in the right dir.
+            tapped = (cmp <= entry) if is_pullback else (cmp >= entry)
+            if tapped:
+                # Fill at the planned entry (the level just traded through) so P&L
+                # starts at zero — no fabricated gain. Strategy entry unchanged.
+                if activate_pending_position(pid, trigger_price=entry, entered_at=now.isoformat()):
+                    triggered += 1
+                    try:
+                        send_portfolio_triggered_alert(
+                            p["symbol"], p["horizon"], entry, cmp,
+                            float(p["stop_loss"]), p.get("target_1"),
+                        )
+                    except Exception:
+                        pass
+                continue
+
+            # Runaway: moved the WRONG way past a plausible fill → retire.
+            runaway = (
+                cmp > entry * (1 + _PENDING_RUNAWAY_PCT / 100.0) if is_pullback
+                else cmp < entry * (1 - _PENDING_RUNAWAY_PCT / 100.0)
+            )
+            if runaway:
+                if expire_pending_position(pid, "EXPIRED_RUNAWAY"):
+                    expired += 1
+
+        if triggered or expired:
+            log.info("[ArmOnTap] pending: %d triggered→active, %d expired", triggered, expired)
+        return triggered
+    except Exception:
+        log.exception("[ArmOnTap] pending processing failed")
+        return 0
+
+
+def _promote_final_ideas_on_tap() -> int:
+    """Arm Final Trade Ideas into the SYSTEM portfolio as PENDING (awaiting
+    entry). The actual fill happens later in _arm_and_expire_pending when the
+    planned entry is genuinely traded through — this function only ARMS, it never
+    creates a live position. Flag-gated + best-effort; never raises into the loop.
+
+    A "slot" is held by an ACTIVE or PENDING position, so room is computed against
+    committed slots (`*_used`) — the book never commits past MAX."""
     if os.getenv("PORTFOLIO_SOURCE_FINAL_IDEAS", "1").strip().lower() not in {"1", "true", "yes"}:
         return 0
     try:
@@ -60,7 +151,8 @@ def _promote_final_ideas_on_tap() -> int:
         promoted = 0
         for horizon in ("SWING", "LONGTERM"):
             counts = get_portfolio_counts()
-            room = max(0, counts.get(f"{horizon.lower()}_max", 20) - counts.get(horizon.lower(), 0))
+            used = counts.get(f"{horizon.lower()}_used", counts.get(horizon.lower(), 0))
+            room = max(0, counts.get(f"{horizon.lower()}_max", 20) - used)
             if room <= 0:
                 continue
             for idea in select_from_final_ideas(horizon, max_picks=room):
@@ -73,14 +165,15 @@ def _promote_final_ideas_on_tap() -> int:
                         reasoning=idea.get("reasoning", ""),
                         recommendation_id=idea.get("recommendation_id"),
                         current_price=idea.get("scan_cmp"),
+                        pending=True,   # ARM only — never an instant live fill
                     )
                     promoted += 1
-                    log.info("[ArmOnTap] promoted %s into %s portfolio", idea["symbol"], horizon)
+                    log.info("[ArmOnTap] armed %s into %s portfolio (awaiting entry)", idea["symbol"], horizon)
                 except ValueError:
-                    pass  # full / already held
+                    pass  # full / already committed
         return promoted
     except Exception:
-        log.exception("[ArmOnTap] tick failed")
+        log.exception("[ArmOnTap] arm tick failed")
         return 0
 
 
@@ -93,6 +186,13 @@ def _portfolio_tracker_loop() -> None:
         except Exception:
             log.exception("Portfolio tracker loop error")
         try:
+            # 1) advance armed ideas: trigger those whose entry just traded
+            #    through → ACTIVE; retire timed-out / run-away ones.
+            _arm_and_expire_pending()
+        except Exception:
+            log.exception("Portfolio tracker: pending trigger error")
+        try:
+            # 2) arm new Final Trade Ideas into freed/empty slots (as PENDING).
             _promote_final_ideas_on_tap()
         except Exception:
             log.exception("Portfolio tracker: arm-on-tap error")

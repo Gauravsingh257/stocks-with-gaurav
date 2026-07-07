@@ -755,9 +755,14 @@ export interface PortfolioPosition {
   days_held: number;
   confidence_score: number;
   reasoning: string;
-  status: "ACTIVE" | "TARGET_HIT" | "STOP_HIT" | "CLOSED" | "PARTIAL_EXIT";
+  // PENDING = armed, awaiting the planned entry to be traded through (no P&L,
+  // no days-held, excluded from analytics). EXPIRED = armed idea that never
+  // triggered and was retired (never a trade).
+  status: "PENDING" | "ACTIVE" | "TARGET_HIT" | "STOP_HIT" | "CLOSED" | "PARTIAL_EXIT" | "EXPIRED";
   exit_price: number | null;
   exit_reason: string | null;
+  arm_ref_price?: number | null;   // CMP at arm time (pullback vs breakout side)
+  entered_at?: string | null;      // when the entry actually triggered (null while PENDING)
   created_at: string;
   updated_at: string;
   closed_at: string | null;
@@ -807,7 +812,9 @@ export interface PortfolioJournalStats {
 
 export interface PortfolioBucketSummary {
   positions: PortfolioPosition[];
-  count: number;
+  count: number;           // LIVE (ACTIVE) count — analytics/return reflect this only
+  pending?: number;        // armed (awaiting entry)
+  used?: number;           // committed slots = active + pending
   max: number;
   journal_stats: PortfolioJournalStats;
 }

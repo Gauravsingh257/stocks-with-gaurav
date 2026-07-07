@@ -489,7 +489,7 @@ def select_from_final_ideas(horizon: str, max_picks: int) -> list[dict]:
                 "target_1": float(tgt) if tgt else None,
                 "target_2": None,
                 "confidence_score": float(r.get("confidence") or 0),
-                "reasoning": "Promoted from Final Trade Ideas (CMP-buy — price at entry zone).",
+                "reasoning": "Armed from Final Trade Ideas — awaiting entry tap (enters only if price trades through the planned entry).",
                 "recommendation_id": r.get("id"),
                 "scan_cmp": float(cmp),
             })
@@ -502,26 +502,34 @@ def select_from_final_ideas(horizon: str, max_picks: int) -> list[dict]:
 
 
 def select_and_promote(horizon: str) -> int:
-    """Select top ideas and auto-promote them into the portfolio. Returns count promoted.
+    """Arm top ideas into the portfolio as PENDING (awaiting entry). Returns count armed.
 
-    Primary source = the Final Trade Ideas feed with a live price-trigger gate
-    (PORTFOLIO_SOURCE_FINAL_IDEAS, default on). Falls back to the legacy
-    recommendation selector if that yields nothing, so promotion never stalls.
+    Source = the Final Trade Ideas feed with a live price-trigger gate
+    (PORTFOLIO_SOURCE_FINAL_IDEAS). If nothing there is genuinely actionable the
+    slot STAYS EMPTY — we do NOT fall back to an ungated legacy selector just to
+    fill it. Showing fewer than the cap is correct; injecting an unvalidated
+    candidate is the bug we are removing.
+
+    Promotions are armed (pending), not live: a position only becomes ACTIVE when
+    its planned entry is genuinely traded through (handled by the price tracker).
     """
     from services.portfolio_manager import promote_to_portfolio
     from dashboard.backend.db.portfolio import get_portfolio_counts
 
     use_final = os.getenv("PORTFOLIO_SOURCE_FINAL_IDEAS", "1").strip().lower() in {"1", "true", "yes"}
-    ideas: list[dict] = []
-    if use_final:
-        counts = get_portfolio_counts()
-        cur = counts.get(horizon.lower(), 0)
-        cap = counts.get(f"{horizon.lower()}_max", 20)
-        ideas = select_from_final_ideas(horizon, max_picks=max(0, cap - cur))
-    if not ideas:
-        ideas = select_top_ideas(horizon)
-    promoted = 0
+    if not use_final:
+        log.info("[IdeaSelector] Final-Ideas source disabled — no promotion (no ungated fallback).")
+        return 0
 
+    counts = get_portfolio_counts()
+    used = counts.get(f"{horizon.lower()}_used", counts.get(horizon.lower(), 0))
+    cap = counts.get(f"{horizon.lower()}_max", 20)
+    ideas = select_from_final_ideas(horizon, max_picks=max(0, cap - used))
+    if not ideas:
+        log.info("[IdeaSelector] No genuinely actionable %s candidate — slot left vacant.", horizon)
+        return 0
+
+    promoted = 0
     for idea in ideas:
         try:
             promote_to_portfolio(
@@ -535,10 +543,11 @@ def select_and_promote(horizon: str) -> int:
                 reasoning=idea.get("reasoning", ""),
                 recommendation_id=idea.get("recommendation_id"),
                 current_price=idea.get("scan_cmp"),
+                pending=True,   # ARM only — enters on genuine tap
             )
             promoted += 1
         except ValueError as exc:
             log.debug("Skip promote %s: %s", idea["symbol"], exc)
 
-    log.info("[IdeaSelector] Promoted %d %s ideas to portfolio", promoted, horizon)
+    log.info("[IdeaSelector] Armed %d %s ideas (awaiting entry)", promoted, horizon)
     return promoted

@@ -582,13 +582,16 @@ def _portfolio_performance(horizon: str) -> dict:
     """
     conn = get_connection()
     try:
+        # Exclude armed (PENDING) and retired (EXPIRED) rows entirely — they never
+        # entered, so they contribute NO R, no P&L, and no count to the track record.
         rows = [dict(r) for r in conn.execute(
             """
             SELECT id, symbol, horizon, direction, entry_price, stop_loss,
                    target_1, target_2, current_price, exit_price, profit_loss,
                    profit_loss_pct, status, days_held, high_since_entry,
                    low_since_entry, confidence_score, created_at, updated_at
-            FROM portfolio_positions WHERE horizon = ?
+            FROM portfolio_positions
+            WHERE horizon = ? AND status NOT IN ('PENDING','EXPIRED')
             ORDER BY datetime(created_at) DESC
             """,
             (horizon.upper(),),

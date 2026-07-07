@@ -50,9 +50,17 @@ CREATE TABLE IF NOT EXISTS portfolio_positions (
     confidence_score      REAL DEFAULT 0,
     reasoning             TEXT DEFAULT '',
     recommendation_id     INTEGER,
-    status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','TARGET_HIT','STOP_HIT','CLOSED','PARTIAL_EXIT')),
+    -- PENDING = armed, awaiting the planned entry to be genuinely traded through
+    -- (no P&L, no days-held, excluded from analytics). EXPIRED = an armed idea
+    -- that never triggered and was retired (never a trade → never journaled).
+    status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('PENDING','ACTIVE','TARGET_HIT','STOP_HIT','CLOSED','PARTIAL_EXIT','EXPIRED')),
     exit_price            REAL,
     exit_reason           TEXT,
+    -- arm_ref_price = CMP at arm time (decides pullback vs breakout trigger side).
+    -- entered_at    = when the entry ACTUALLY triggered (NULL while PENDING);
+    --                 days_held + P&L are measured from this, not from created_at.
+    arm_ref_price         REAL,
+    entered_at            TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
     closed_at             TEXT
@@ -65,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol);
 -- than once over time, so the old table-level UNIQUE(symbol,horizon,status) was
 -- wrong: a second STOP_HIT collided and crashed the price tracker mid-tick.)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique
-    ON portfolio_positions(symbol, horizon) WHERE status = 'ACTIVE';
+    ON portfolio_positions(symbol, horizon) WHERE status IN ('ACTIVE','PENDING');
 
 -- ─────────────────────────────────────────
 -- TABLE: portfolio_journal (immutable trade log)
@@ -156,6 +164,108 @@ def migrate_portfolio_positions() -> None:
         conn.close()
 
 
+def migrate_portfolio_pending() -> None:
+    """Add the arm-on-tap columns + expand the status CHECK to allow
+    PENDING / EXPIRED.
+
+    Two parts, both idempotent:
+      1. ADD COLUMN arm_ref_price / entered_at when missing (cheap, in place).
+      2. Rebuild the table when the status CHECK still forbids 'PENDING'
+         (SQLite can't ALTER a CHECK in place). Preserves every row + id so the
+         portfolio_journal FK references stay valid.
+
+    Runs AFTER migrate_portfolio_positions so it operates on the post-rebuild
+    table shape.
+    """
+    conn = get_connection()
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
+        if "arm_ref_price" not in cols:
+            conn.execute("ALTER TABLE portfolio_positions ADD COLUMN arm_ref_price REAL")
+        if "entered_at" not in cols:
+            conn.execute("ALTER TABLE portfolio_positions ADD COLUMN entered_at TEXT")
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='portfolio_positions'"
+        ).fetchone()
+        old_sql = (row[0] if row else "") or ""
+        # Only rebuild if the CHECK still lacks PENDING (i.e. pre-migration schema).
+        if "'PENDING'" in old_sql:
+            # Ensure the pending-aware unique index exists, then done.
+            conn.execute("DROP INDEX IF EXISTS idx_portfolio_active_unique")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique "
+                "ON portfolio_positions(symbol, horizon) WHERE status IN ('ACTIVE','PENDING')"
+            )
+            conn.commit()
+            return
+
+        cnt_before = conn.execute("SELECT COUNT(*) FROM portfolio_positions").fetchone()[0]
+        colnames = [r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()]
+        collist = ", ".join(colnames)
+        new_table = """
+        CREATE TABLE portfolio_positions_pend (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol                TEXT NOT NULL,
+            horizon               TEXT NOT NULL CHECK(horizon IN ('SWING','LONGTERM')),
+            direction             TEXT NOT NULL DEFAULT 'LONG' CHECK(direction IN ('LONG','SHORT')),
+            entry_price           REAL NOT NULL,
+            stop_loss             REAL NOT NULL,
+            target_1              REAL,
+            target_2              REAL,
+            current_price         REAL,
+            profit_loss           REAL NOT NULL DEFAULT 0,
+            profit_loss_pct       REAL NOT NULL DEFAULT 0,
+            drawdown              REAL NOT NULL DEFAULT 0,
+            drawdown_pct          REAL NOT NULL DEFAULT 0,
+            high_since_entry      REAL,
+            low_since_entry       REAL,
+            days_held             INTEGER NOT NULL DEFAULT 0,
+            confidence_score      REAL DEFAULT 0,
+            reasoning             TEXT DEFAULT '',
+            recommendation_id     INTEGER,
+            status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('PENDING','ACTIVE','TARGET_HIT','STOP_HIT','CLOSED','PARTIAL_EXIT','EXPIRED')),
+            exit_price            REAL,
+            exit_reason           TEXT,
+            arm_ref_price         REAL,
+            entered_at            TEXT,
+            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            closed_at             TEXT
+        )
+        """
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute(new_table)
+        conn.execute(f"INSERT INTO portfolio_positions_pend ({collist}) SELECT {collist} FROM portfolio_positions")
+        cnt_after = conn.execute("SELECT COUNT(*) FROM portfolio_positions_pend").fetchone()[0]
+        if cnt_after != cnt_before:
+            conn.execute("DROP TABLE portfolio_positions_pend")
+            conn.rollback()
+            logger.error("[Portfolio] pending migration aborted: row count %d != %d", cnt_after, cnt_before)
+            return
+        conn.execute("DROP TABLE portfolio_positions")
+        conn.execute("ALTER TABLE portfolio_positions_pend RENAME TO portfolio_positions")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_positions(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_horizon ON portfolio_positions(horizon, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique "
+            "ON portfolio_positions(symbol, horizon) WHERE status IN ('ACTIVE','PENDING')"
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.commit()
+        logger.warning("[Portfolio] migrated status CHECK → PENDING/EXPIRED + arm-on-tap columns (%d rows preserved)", cnt_after)
+    except Exception as exc:
+        logger.error("[Portfolio] migrate_portfolio_pending failed (non-fatal): %s", exc)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 def init_portfolio_db() -> None:
     """Create portfolio tables (idempotent)."""
     conn = get_connection()
@@ -166,6 +276,7 @@ def init_portfolio_db() -> None:
     finally:
         conn.close()
     migrate_portfolio_positions()
+    migrate_portfolio_pending()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -296,27 +407,44 @@ def reentry_guard_blocks(symbol: str, horizon: str, entry: float,
 def add_position(payload: dict) -> int:
     """
     Add a stock to the portfolio. Returns position ID.
-    Rejects if horizon is at max capacity or symbol already active in that horizon.
+
+    status:
+      - 'PENDING' (default for auto-promotions) = ARMED, awaiting the planned
+        entry to be genuinely traded through. No P&L / days-held until it
+        triggers; excluded from analytics. arm_ref_price records the CMP at arm
+        time (decides pullback vs breakout trigger side).
+      - 'ACTIVE' = live position (entered_at set now). Used for a genuine manual
+        fill or the reconciliation of an already-triggered position.
+
+    A "slot" is consumed by an ACTIVE *or* PENDING position, so capacity counts
+    both — the book never commits more than MAX per horizon. Rejects if the
+    symbol is already ACTIVE or PENDING in that horizon.
     """
     symbol = payload["symbol"].strip().upper()
     horizon = payload["horizon"].upper()
     if horizon not in ("SWING", "LONGTERM"):
         raise ValueError(f"Invalid horizon: {horizon}")
 
+    status = (payload.get("status") or "ACTIVE").upper()
+    if status not in ("PENDING", "ACTIVE"):
+        raise ValueError(f"add_position status must be PENDING or ACTIVE, got {status}")
+
     conn = get_connection()
     try:
-        # Check for existing active position
+        # A symbol already committed (armed or live) can't be committed again.
         existing = conn.execute(
-            "SELECT id FROM portfolio_positions WHERE symbol = ? AND horizon = ? AND status = 'ACTIVE'",
+            "SELECT id, status FROM portfolio_positions WHERE symbol = ? AND horizon = ? "
+            "AND status IN ('ACTIVE','PENDING')",
             (symbol, horizon),
         ).fetchone()
         if existing:
-            raise ValueError(f"{symbol} already active in {horizon} portfolio")
+            raise ValueError(f"{symbol} already {existing['status']} in {horizon} portfolio")
 
-        # Check capacity
+        # Capacity counts BOTH active and armed (each holds a slot).
         max_pos = MAX_SWING_POSITIONS if horizon == "SWING" else MAX_LONGTERM_POSITIONS
         count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM portfolio_positions WHERE horizon = ? AND status = 'ACTIVE'",
+            "SELECT COUNT(*) as cnt FROM portfolio_positions WHERE horizon = ? "
+            "AND status IN ('ACTIVE','PENDING')",
             (horizon,),
         ).fetchone()["cnt"]
         if count >= max_pos:
@@ -327,13 +455,18 @@ def add_position(payload: dict) -> int:
         t1 = float(payload.get("target_1") or 0) or None
         t2 = float(payload.get("target_2") or 0) or None
         cmp = float(payload.get("current_price") or entry)
+        arm_ref = float(payload.get("arm_ref_price") or cmp)
+        # A PENDING row has NOT entered yet → no entered_at, no live price shown
+        # as a fill. An ACTIVE row enters now.
+        entered_at = None if status == "PENDING" else datetime.now(_IST).isoformat()
 
         cursor = conn.execute(
             """
             INSERT INTO portfolio_positions
                 (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
-                 current_price, confidence_score, reasoning, recommendation_id, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+                 current_price, confidence_score, reasoning, recommendation_id, status,
+                 arm_ref_price, entered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 symbol, horizon,
@@ -342,11 +475,12 @@ def add_position(payload: dict) -> int:
                 float(payload.get("confidence_score", 0)),
                 payload.get("reasoning", ""),
                 payload.get("recommendation_id"),
+                status, arm_ref, entered_at,
             ),
         )
         conn.commit()
         pos_id = cursor.lastrowid
-        logger.info("[Portfolio] Added %s to %s (id=%d)", symbol, horizon, pos_id)
+        logger.info("[Portfolio] Added %s to %s as %s (id=%d)", symbol, horizon, status, pos_id)
         return pos_id
     finally:
         conn.close()
@@ -423,8 +557,16 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         conn.close()
 
 
-def get_portfolio(horizon: str | None = None, include_closed: bool = False) -> list[dict]:
-    """Get portfolio positions. Default: ACTIVE only."""
+def get_portfolio(horizon: str | None = None, include_closed: bool = False,
+                  include_pending: bool = False) -> list[dict]:
+    """Get portfolio positions.
+
+    Default: ACTIVE only (this is what the price tracker consumes — a PENDING row
+    has not entered, so it must NEVER be tracked/priced/exited as a live trade).
+    include_pending=True additionally returns armed (PENDING) rows for the API/UI
+    so they can be shown as "Awaiting Entry" (still excluded from P&L/analytics).
+    include_closed=True returns everything (history views).
+    """
     conn = get_connection()
     try:
         conditions = []
@@ -433,7 +575,10 @@ def get_portfolio(horizon: str | None = None, include_closed: bool = False) -> l
             conditions.append("horizon = ?")
             params.append(horizon.upper())
         if not include_closed:
-            conditions.append("status = 'ACTIVE'")
+            if include_pending:
+                conditions.append("status IN ('ACTIVE','PENDING')")
+            else:
+                conditions.append("status = 'ACTIVE'")
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         rows = conn.execute(
@@ -441,13 +586,137 @@ def get_portfolio(horizon: str | None = None, include_closed: bool = False) -> l
             SELECT * FROM portfolio_positions
             {where}
             ORDER BY
-                CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
+                CASE status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 ELSE 2 END,
                 datetime(created_at) DESC
             LIMIT 100
             """,
             params,
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_pending_positions(horizon: str | None = None) -> list[dict]:
+    """Armed (PENDING) positions awaiting an entry tap."""
+    conn = get_connection()
+    try:
+        if horizon:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_positions WHERE status = 'PENDING' AND horizon = ? "
+                "ORDER BY datetime(created_at) DESC",
+                (horizon.upper(),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_positions WHERE status = 'PENDING' "
+                "ORDER BY datetime(created_at) DESC",
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def activate_pending_position(position_id: int, trigger_price: float,
+                              entered_at: str | None = None) -> bool:
+    """Flip an armed PENDING position to ACTIVE — the entry genuinely triggered.
+
+    entry_price is UNCHANGED (the strategy's planned entry, which was just traded
+    through). days-held + P&L now measure from entered_at (= trigger time). Resets
+    the high/low-since-entry window to the trigger price so drawdown is measured
+    from the real entry, not the arm period. Returns True if a row flipped.
+    """
+    now = entered_at or datetime.now(_IST).isoformat()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT entry_price FROM portfolio_positions WHERE id = ? AND status = 'PENDING'",
+            (position_id,),
+        ).fetchone()
+        if not row:
+            return False
+        entry = float(row["entry_price"])
+        pl = round(trigger_price - entry, 2)
+        pl_pct = round((trigger_price - entry) / entry * 100, 2) if entry else 0.0
+        conn.execute(
+            """
+            UPDATE portfolio_positions SET
+                status = 'ACTIVE', entered_at = ?, current_price = ?,
+                high_since_entry = ?, low_since_entry = ?,
+                profit_loss = ?, profit_loss_pct = ?, drawdown = 0, drawdown_pct = 0,
+                days_held = 0, updated_at = ?
+            WHERE id = ? AND status = 'PENDING'
+            """,
+            (now, trigger_price, trigger_price, trigger_price, pl, pl_pct, now, position_id),
+        )
+        conn.commit()
+        logger.info("[Portfolio] ARM→ACTIVE id=%d triggered @%.2f (entry %.2f)",
+                    position_id, trigger_price, entry)
+        return True
+    finally:
+        conn.close()
+
+
+def reclassify_active_to_pending(position_id: int, arm_ref_price: float | None = None) -> bool:
+    """One-time reconciliation: demote an ACTIVE position back to PENDING because
+    its entry was NEVER actually traded through (a phantom entry). Wipes the
+    fabricated P&L / days-held so it accrues nothing until a genuine tap. Returns
+    True if a row changed."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE portfolio_positions SET
+                status = 'PENDING', entered_at = NULL,
+                profit_loss = 0, profit_loss_pct = 0, drawdown = 0, drawdown_pct = 0,
+                days_held = 0, high_since_entry = NULL, low_since_entry = NULL,
+                arm_ref_price = COALESCE(?, arm_ref_price, current_price, entry_price),
+                updated_at = ?
+            WHERE id = ? AND status = 'ACTIVE'
+            """,
+            (arm_ref_price, datetime.now(_IST).isoformat(), position_id),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+    finally:
+        conn.close()
+
+
+def backfill_entered_at(position_id: int, entered_at: str) -> bool:
+    """Reconciliation: for a legitimately-triggered ACTIVE position, stamp the
+    real entry date so days-held is measured from the tap (not from arming).
+    Only fills when currently NULL. Returns True if a row changed."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE portfolio_positions SET entered_at = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'ACTIVE' AND entered_at IS NULL",
+            (entered_at, datetime.now(_IST).isoformat(), position_id),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+    finally:
+        conn.close()
+
+
+def expire_pending_position(position_id: int, reason: str = "EXPIRED") -> bool:
+    """Retire an armed position that never triggered (ran away or timed out).
+
+    This is NOT a trade — it never entered — so it is NOT journaled. It simply
+    frees the slot. Returns True if a row was expired.
+    """
+    now = datetime.now(_IST).isoformat()
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE portfolio_positions SET status = 'EXPIRED', exit_reason = ?, "
+            "closed_at = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'",
+            (reason, now, now, position_id),
+        )
+        conn.commit()
+        if cur.rowcount:
+            logger.info("[Portfolio] PENDING expired id=%d (%s)", position_id, reason)
+        return bool(cur.rowcount)
     finally:
         conn.close()
 
@@ -462,17 +731,22 @@ def get_position_by_id(position_id: int) -> dict | None:
 
 
 def get_active_position_by_symbol(symbol: str, horizon: str | None = None) -> dict | None:
-    """Check if a symbol is already active in the portfolio."""
+    """Return the symbol's COMMITTED position (ACTIVE or armed PENDING) if any.
+
+    Used as the "already in the book?" guard by the selectors/promotion path, so
+    a symbol that is merely armed (awaiting entry) is not re-armed or duplicated.
+    """
     conn = get_connection()
     try:
         if horizon:
             row = conn.execute(
-                "SELECT * FROM portfolio_positions WHERE symbol = ? AND horizon = ? AND status = 'ACTIVE'",
+                "SELECT * FROM portfolio_positions WHERE symbol = ? AND horizon = ? "
+                "AND status IN ('ACTIVE','PENDING')",
                 (symbol.strip().upper(), horizon.upper()),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT * FROM portfolio_positions WHERE symbol = ? AND status = 'ACTIVE'",
+                "SELECT * FROM portfolio_positions WHERE symbol = ? AND status IN ('ACTIVE','PENDING')",
                 (symbol.strip().upper(),),
             ).fetchone()
         return dict(row) if row else None
@@ -507,17 +781,34 @@ def update_position_price(position_id: int, **kwargs) -> None:
 
 
 def get_portfolio_counts() -> dict:
-    """Get active position counts per horizon."""
+    """Position counts per horizon.
+
+    `swing`/`longterm` = ACTIVE (live) counts — what analytics/capacity-of-live
+    care about. `*_pending` = armed (awaiting entry). `*_used` = ACTIVE+PENDING,
+    the number of committed slots (this is what capacity is enforced against, so
+    an armed slot can't be double-filled). Cap = `*_max`.
+    """
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT horizon, COUNT(*) as cnt FROM portfolio_positions WHERE status = 'ACTIVE' GROUP BY horizon"
+            "SELECT horizon, status, COUNT(*) as cnt FROM portfolio_positions "
+            "WHERE status IN ('ACTIVE','PENDING') GROUP BY horizon, status"
         ).fetchall()
-        counts = {r["horizon"]: r["cnt"] for r in rows}
+        active = {"SWING": 0, "LONGTERM": 0}
+        pending = {"SWING": 0, "LONGTERM": 0}
+        for r in rows:
+            if r["status"] == "ACTIVE":
+                active[r["horizon"]] = r["cnt"]
+            elif r["status"] == "PENDING":
+                pending[r["horizon"]] = r["cnt"]
         return {
-            "swing": counts.get("SWING", 0),
+            "swing": active["SWING"],
+            "swing_pending": pending["SWING"],
+            "swing_used": active["SWING"] + pending["SWING"],
             "swing_max": MAX_SWING_POSITIONS,
-            "longterm": counts.get("LONGTERM", 0),
+            "longterm": active["LONGTERM"],
+            "longterm_pending": pending["LONGTERM"],
+            "longterm_used": active["LONGTERM"] + pending["LONGTERM"],
             "longterm_max": MAX_LONGTERM_POSITIONS,
         }
     finally:

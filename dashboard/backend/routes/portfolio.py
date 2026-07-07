@@ -46,18 +46,38 @@ def portfolio_summary():
 
 @router.get("/swing")
 def swing_portfolio(limit: int = Query(default=50, ge=1, le=50)):
-    """Active swing portfolio positions."""
-    from dashboard.backend.db.portfolio import get_portfolio, MAX_SWING_POSITIONS
-    positions = get_portfolio("SWING")
-    return {"items": positions[:limit], "count": len(positions), "max": MAX_SWING_POSITIONS, "horizon": "SWING"}
+    """Swing book: ACTIVE (live) + PENDING (armed, awaiting entry) positions.
+
+    `count` is the LIVE (active) count — analytics/return only ever reflect live
+    positions. Armed rows carry status='PENDING' so the UI shows them as
+    'Awaiting Entry' with no P&L."""
+    from dashboard.backend.db.portfolio import get_portfolio, get_portfolio_counts, MAX_SWING_POSITIONS
+    positions = get_portfolio("SWING", include_pending=True)
+    counts = get_portfolio_counts()
+    return {
+        "items": positions[:limit],
+        "count": counts["swing"],
+        "pending": counts["swing_pending"],
+        "used": counts["swing_used"],
+        "max": MAX_SWING_POSITIONS,
+        "horizon": "SWING",
+    }
 
 
 @router.get("/longterm")
 def longterm_portfolio(limit: int = Query(default=50, ge=1, le=50)):
-    """Active long-term portfolio positions."""
-    from dashboard.backend.db.portfolio import get_portfolio, MAX_LONGTERM_POSITIONS
-    positions = get_portfolio("LONGTERM")
-    return {"items": positions[:limit], "count": len(positions), "max": MAX_LONGTERM_POSITIONS, "horizon": "LONGTERM"}
+    """Long-term book: ACTIVE (live) + PENDING (armed) positions. See /swing."""
+    from dashboard.backend.db.portfolio import get_portfolio, get_portfolio_counts, MAX_LONGTERM_POSITIONS
+    positions = get_portfolio("LONGTERM", include_pending=True)
+    counts = get_portfolio_counts()
+    return {
+        "items": positions[:limit],
+        "count": counts["longterm"],
+        "pending": counts["longterm_pending"],
+        "used": counts["longterm_used"],
+        "max": MAX_LONGTERM_POSITIONS,
+        "horizon": "LONGTERM",
+    }
 
 
 @router.get("/counts")
@@ -71,7 +91,11 @@ def portfolio_counts():
 
 @router.post("/add")
 def add_position(req: AddPositionRequest):
-    """Add a stock to the portfolio."""
+    """Add a stock to the portfolio.
+
+    A manual add is an explicit user entry, so it goes LIVE immediately
+    (pending=False). The automated promotion paths arm-on-tap instead.
+    """
     from services.portfolio_manager import promote_to_portfolio
     try:
         pos_id = promote_to_portfolio(
@@ -84,6 +108,7 @@ def add_position(req: AddPositionRequest):
             confidence_score=req.confidence_score,
             reasoning=req.reasoning,
             recommendation_id=req.recommendation_id,
+            pending=False,
         )
         return {"ok": True, "position_id": pos_id, "symbol": req.symbol, "horizon": req.horizon}
     except ValueError as exc:
@@ -137,6 +162,25 @@ def auto_promote():
     swing_count = select_and_promote("SWING")
     longterm_count = select_and_promote("LONGTERM")
     return {"ok": True, "promoted": {"swing": swing_count, "longterm": longterm_count}}
+
+
+# ── Reconcile entries (one-time arm-on-tap migration) ─────────────────────
+
+@router.post("/reconcile-entries")
+def reconcile_entries(dry_run: bool = Query(default=True), token: str = Query(default="")):
+    """One-time reconciliation for arm-on-tap: reclassify ACTIVE positions whose
+    planned entry was never actually traded through into PENDING (phantom
+    entries), preserving genuinely-triggered ones. dry_run=True (default) returns
+    the impact report WITHOUT mutating anything. Set dry_run=false to apply.
+
+    Guarded by PORTFOLIO_RECONCILE_TOKEN when set (so an apply can't be triggered
+    casually)."""
+    import os
+    required = os.getenv("PORTFOLIO_RECONCILE_TOKEN", "").strip()
+    if not dry_run and required and token != required:
+        raise HTTPException(status_code=403, detail="reconcile token required to apply")
+    from services.portfolio_reconcile import reconcile_portfolio_entries
+    return reconcile_portfolio_entries(dry_run=dry_run)
 
 
 # ── Seed from existing data (one-time migration) ──────────────────────────

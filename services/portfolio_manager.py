@@ -38,23 +38,32 @@ def promote_to_portfolio(
     reasoning: str = "",
     recommendation_id: int | None = None,
     current_price: float | None = None,
+    pending: bool = True,
 ) -> int:
     """
     Promote a recommendation/signal into the persistent portfolio.
-    Returns position ID or raises ValueError if portfolio is full or symbol already active.
+    Returns position ID or raises ValueError if the book is full or the symbol
+    is already committed (ACTIVE or armed PENDING).
 
-    STRICT SLOT CONTROL: Will NEVER exceed MAX positions. Only adds when a slot is free.
+    ARM-ON-TAP: `pending=True` (default for the AUTOMATED promotion paths) arms
+    the idea as PENDING — it does NOT become a live position and accrues NO P&L
+    until its planned entry is genuinely traded through (the price tracker flips
+    it to ACTIVE on the real tap). `pending=False` is a genuine manual entry
+    (e.g. the /add endpoint) that goes live immediately.
+
+    STRICT SLOT CONTROL: an ACTIVE or PENDING position both hold a slot, so the
+    book NEVER commits more than MAX per horizon.
     """
     from dashboard.backend.db.portfolio import add_position, get_portfolio_counts, reentry_guard_blocks
 
     horizon = horizon.upper()
     max_pos = MAX_SWING if horizon == "SWING" else MAX_LONGTERM
 
-    # Pre-check: strict slot enforcement (add_position also checks, this is defense-in-depth)
+    # Pre-check: strict slot enforcement against COMMITTED slots (active+armed).
     counts = get_portfolio_counts()
-    current = counts.get(horizon.lower(), 0)
-    if current >= max_pos:
-        raise ValueError(f"{horizon} portfolio full ({current}/{max_pos}) — close a position first")
+    used = counts.get(f"{horizon.lower()}_used", counts.get(horizon.lower(), 0))
+    if used >= max_pos:
+        raise ValueError(f"{horizon} portfolio full ({used}/{max_pos}) — close a position first")
 
     # Defense-in-depth: setup-aware re-entry guard. Blocks re-promotion of the
     # same failed setup (same entry, recently structure-broken/stopped, still
@@ -74,27 +83,27 @@ def promote_to_portfolio(
         "reasoning": reasoning,
         "recommendation_id": recommendation_id,
         "current_price": current_price or entry_price,
+        "arm_ref_price": current_price or entry_price,
+        "status": "PENDING" if pending else "ACTIVE",
     })
 
-    # User-facing Telegram alert on entry. Mirrors the existing
-    # _send_portfolio_exit_alert pattern so the user gets symmetric
-    # notification: previously exits notified, entries went silent.
-    # Best-effort: never raises into the caller — promotion already
-    # succeeded at this point; alert is purely a side-effect.
+    # Telegram alert. Armed → "awaiting entry" (no fill claimed); live entry →
+    # the existing "Portfolio Entry" alert. The genuine fill alert for an armed
+    # idea is sent by the tracker when it actually triggers. Best-effort.
     try:
-        _send_portfolio_entry_alert({
-            "position_id": position_id,
-            "symbol": symbol,
-            "horizon": horizon,
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "target_1": target_1,
-            "target_2": target_2,
+        payload = {
+            "position_id": position_id, "symbol": symbol, "horizon": horizon,
+            "entry_price": entry_price, "stop_loss": stop_loss,
+            "target_1": target_1, "target_2": target_2,
             "confidence_score": confidence_score,
-        })
+        }
+        if pending:
+            _send_portfolio_armed_alert(payload)
+        else:
+            _send_portfolio_entry_alert(payload)
     except Exception:
-        log.exception("Failed to send entry alert for position %s (%s)",
-                      position_id, symbol)
+        log.exception("Failed to send %s alert for position %s (%s)",
+                      "armed" if pending else "entry", position_id, symbol)
 
     return position_id
 
@@ -129,51 +138,32 @@ def close_portfolio_position(position_id: int, exit_price: float, reason: str = 
 
 
 def auto_promote_from_recommendations() -> int:
+    """Arm empty slots from genuinely-actionable ideas (both horizons).
+
+    Delegates to the gated select_and_promote so there is exactly ONE promotion
+    policy: arm-on-tap from Final Trade Ideas, no ungated force-fill. A slot with
+    no qualifying candidate stays vacant.
     """
-    Auto-promote top recommendations into empty portfolio slots using the scoring engine.
-    Called by agents after a scan, or by the tracking loop.
+    from services.idea_selector import select_and_promote
 
-    STRICT SLOT CONTROL: rechecks capacity before each promotion to prevent races.
-    """
-    from services.idea_selector import select_swing_ideas, select_longterm_ideas
-
-    promoted = 0
-
-    for horizon, selector in [("SWING", select_swing_ideas), ("LONGTERM", select_longterm_ideas)]:
-        ideas = selector()  # already respects slot limits
-        for idea in ideas:
-            try:
-                promote_to_portfolio(
-                    symbol=idea["symbol"],
-                    horizon=horizon,
-                    entry_price=idea["entry_price"],
-                    stop_loss=idea["stop_loss"],
-                    target_1=idea.get("target_1"),
-                    target_2=idea.get("target_2"),
-                    confidence_score=idea.get("confidence_score", 0),
-                    reasoning=idea.get("reasoning", ""),
-                    recommendation_id=idea.get("recommendation_id"),
-                    current_price=idea.get("scan_cmp"),
-                )
-                promoted += 1
-                log.info("Auto-promoted %s to %s portfolio (score=%.1f)",
-                         idea["symbol"], horizon, idea.get("selection_score", 0))
-            except ValueError as exc:
-                log.debug("Skip promote %s: %s", idea["symbol"], exc)
-                if "full" in str(exc).lower():
-                    break  # No point trying more if portfolio is full
-
+    promoted = select_and_promote("SWING") + select_and_promote("LONGTERM")
     if promoted:
-        log.info("Auto-promoted %d positions into portfolio", promoted)
+        log.info("Armed %d positions into portfolio (awaiting entry)", promoted)
     return promoted
 
 
 def get_portfolio_summary() -> dict:
-    """Full portfolio state for API consumption."""
+    """Full portfolio state for API consumption.
+
+    `positions` includes armed (PENDING) rows so the UI can show 'Awaiting Entry',
+    but `count` is the LIVE (ACTIVE) count and `journal_stats` come only from
+    closed trades — so armed ideas never touch analytics, hit-rate, or return.
+    `pending`/`used` expose the armed count and committed-slot total.
+    """
     from dashboard.backend.db.portfolio import get_portfolio, get_portfolio_counts, get_journal_stats
 
-    swing = get_portfolio("SWING")
-    longterm = get_portfolio("LONGTERM")
+    swing = get_portfolio("SWING", include_pending=True)
+    longterm = get_portfolio("LONGTERM", include_pending=True)
     counts = get_portfolio_counts()
     swing_stats = get_journal_stats("SWING")
     longterm_stats = get_journal_stats("LONGTERM")
@@ -183,12 +173,16 @@ def get_portfolio_summary() -> dict:
         "swing": {
             "positions": swing,
             "count": counts["swing"],
+            "pending": counts["swing_pending"],
+            "used": counts["swing_used"],
             "max": counts["swing_max"],
             "journal_stats": swing_stats,
         },
         "longterm": {
             "positions": longterm,
             "count": counts["longterm"],
+            "pending": counts["longterm_pending"],
+            "used": counts["longterm_used"],
             "max": counts["longterm_max"],
             "journal_stats": longterm_stats,
         },
@@ -255,6 +249,61 @@ def _send_portfolio_entry_alert(position: dict) -> None:
         }, timeout=10)
     except Exception:
         log.warning("Portfolio entry alert: Telegram post failed (best-effort)")
+
+
+def _send_portfolio_armed_alert(position: dict) -> None:
+    """Telegram notification when an idea is ARMED (awaiting entry) — no fill yet.
+
+    Distinct from the entry alert so users are never told a position filled when
+    it is only waiting for its planned entry to be traded through. Best-effort."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return
+    horizon = position.get("horizon", "SWING").upper()
+    entry = position.get("entry_price", 0)
+    sl = position.get("stop_loss", 0)
+    t1 = position.get("target_1")
+    lines = [
+        f"⏳ <b>Armed — Awaiting Entry ({horizon})</b>",
+        "",
+        f"<b>{position['symbol']}</b>",
+        f"Planned entry: ₹{entry:.2f}",
+        f"SL: ₹{sl:.2f}" + (f" · T1: ₹{t1:.2f}" if t1 is not None else ""),
+        "<i>Enters only if price trades through the entry. No P&amp;L until then.</i>",
+    ]
+    try:
+        import requests
+        requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                      json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
+                      timeout=10)
+    except Exception:
+        log.warning("Portfolio armed alert: Telegram post failed (best-effort)")
+
+
+def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float,
+                                   trigger_price: float, stop_loss: float,
+                                   target_1: float | None = None) -> None:
+    """Telegram notification when an armed idea's entry ACTUALLY triggers (the
+    real fill). Called by the price tracker on arm→active. Best-effort."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return
+    lines = [
+        f"✅ <b>Entry Triggered ({horizon.upper()})</b>",
+        "",
+        f"<b>{symbol}</b>",
+        f"Entry ₹{entry_price:.2f} traded through (now ₹{trigger_price:.2f})",
+        f"SL: ₹{stop_loss:.2f}" + (f" · T1: ₹{target_1:.2f}" if target_1 is not None else ""),
+    ]
+    try:
+        import requests
+        requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                      json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
+                      timeout=10)
+    except Exception:
+        log.warning("Portfolio triggered alert: Telegram post failed (best-effort)")
 
 
 def _send_portfolio_exit_alert(result: dict) -> None:

@@ -124,9 +124,12 @@ class PositionTrackingService:
             dd = round(min(pl, 0.0), 2)
             dd_pct = round(min(pl_pct, 0.0), 2)
 
-            # Days held
+            # Days held — measured from the REAL entry (entered_at), not from when
+            # the idea was armed/promoted. Legacy rows (no entered_at) fall back to
+            # created_at so their held-count is unchanged.
             try:
-                created = datetime.fromisoformat(pos.created_at).date()
+                anchor = (pos.raw.get("entered_at") if isinstance(pos.raw, dict) else None) or pos.created_at
+                created = datetime.fromisoformat(anchor).date()
                 days_held = (today - created).days
             except Exception:
                 days_held = pos.days_held
