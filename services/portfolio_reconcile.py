@@ -103,6 +103,7 @@ def reconcile_portfolio_entries(
     reclassified: list[dict] = []
     preserved: list[dict] = []
     skipped: list[dict] = []
+    errors: list[dict] = []
     phantom_pnl_sum = 0.0
 
     for p in active:
@@ -116,29 +117,33 @@ def reconcile_portfolio_entries(
             continue
 
         triggered, cross_date = entry_traded_through(entry, ohlc)
-        if triggered:
-            # Genuine entry — preserve. Back-fill the real tap date if missing.
-            if not p.get("entered_at"):
-                if not dry_run:
+        try:
+            if triggered:
+                # Genuine entry — preserve. Back-fill the real tap date if missing.
+                if not p.get("entered_at") and not dry_run:
                     backfill_entered_at(p["id"], (cross_date or created))
-            preserved.append({
-                "symbol": sym, "id": p["id"], "entry": entry,
-                "entered_at": p.get("entered_at") or cross_date,
-                "pnl_pct": p.get("profit_loss_pct"),
-            })
-        else:
-            # Phantom — entry never traded through. Reclassify to PENDING.
-            phantom_pnl_sum += float(p.get("profit_loss_pct") or 0.0)
-            arm_ref = float(p.get("current_price") or entry)
-            if not dry_run:
-                reclassify_active_to_pending(p["id"], arm_ref_price=arm_ref)
-            reclassified.append({
-                "symbol": sym, "id": p["id"], "entry": entry,
-                "cmp": p.get("current_price"),
-                "phantom_pnl_pct": p.get("profit_loss_pct"),
-                "days_shown_held": p.get("days_held"),
-                "reason": "entry_never_traded_through",
-            })
+                preserved.append({
+                    "symbol": sym, "id": p["id"], "entry": entry,
+                    "entered_at": p.get("entered_at") or cross_date,
+                    "pnl_pct": p.get("profit_loss_pct"),
+                })
+            else:
+                # Phantom — entry never traded through. Reclassify to PENDING.
+                phantom_pnl_sum += float(p.get("profit_loss_pct") or 0.0)
+                arm_ref = float(p.get("current_price") or entry)
+                if not dry_run:
+                    reclassify_active_to_pending(p["id"], arm_ref_price=arm_ref)
+                reclassified.append({
+                    "symbol": sym, "id": p["id"], "entry": entry,
+                    "cmp": p.get("current_price"),
+                    "phantom_pnl_pct": p.get("profit_loss_pct"),
+                    "days_shown_held": p.get("days_held"),
+                    "reason": "entry_never_traded_through",
+                })
+        except Exception as exc:
+            # Per-position isolation: one bad write must not abort the batch.
+            log.exception("reconcile write failed for %s (id=%s)", sym, p.get("id"))
+            errors.append({"symbol": sym, "id": p["id"], "error": str(exc)})
 
     after = before if dry_run else get_portfolio_counts()
     return {
@@ -156,8 +161,10 @@ def reconcile_portfolio_entries(
         "reclassified_count": len(reclassified),
         "preserved_count": len(preserved),
         "skipped_count": len(skipped),
+        "error_count": len(errors),
         "phantom_unrealized_pnl_pct_removed": round(phantom_pnl_sum, 2),
         "reclassified": reclassified,
         "preserved": preserved,
         "skipped": skipped,
+        "errors": errors,
     }

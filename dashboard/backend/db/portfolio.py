@@ -179,6 +179,12 @@ def migrate_portfolio_pending() -> None:
     """
     conn = get_connection()
     try:
+        # Give the schema rebuild room to acquire the write lock behind the live
+        # price-tracker connection (WAL still needs exclusivity for DROP/RENAME).
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+        except Exception:
+            pass
         cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
         if "arm_ref_price" not in cols:
             conn.execute("ALTER TABLE portfolio_positions ADD COLUMN arm_ref_price REAL")
@@ -262,6 +268,26 @@ def migrate_portfolio_pending() -> None:
             conn.execute("PRAGMA foreign_keys=ON")
         except Exception:
             pass
+    finally:
+        conn.close()
+
+
+def portfolio_schema_diag() -> dict:
+    """Read-only diagnostic: does the live table allow PENDING, and which
+    arm-on-tap columns exist? Used to confirm the migration landed on prod."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='portfolio_positions'"
+        ).fetchone()
+        sql = (row[0] if row else "") or ""
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()]
+        return {
+            "allows_pending": "'PENDING'" in sql,
+            "has_arm_ref_price": "arm_ref_price" in cols,
+            "has_entered_at": "entered_at" in cols,
+            "columns": cols,
+        }
     finally:
         conn.close()
 
