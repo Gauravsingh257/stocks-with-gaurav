@@ -6,7 +6,8 @@ import type { PortfolioPosition, PortfolioJournalStats } from "@/lib/api";
 interface PortfolioSectionProps {
   title: string;
   positions: PortfolioPosition[];
-  count: number;
+  count: number;            // LIVE (ACTIVE) count
+  pending?: number;         // armed (awaiting entry) count
   max: number;
   journalStats: PortfolioJournalStats | null;
   horizon: "SWING" | "LONGTERM";
@@ -88,11 +89,13 @@ function plColor(v: number) {
 
 function statusBadge(status: string) {
   const map: Record<string, { label: string; color: string; bg: string }> = {
+    PENDING:     { label: "⏳ AWAITING ENTRY", color: "#f0c060", bg: "rgba(240,192,96,0.12)" },
     ACTIVE:      { label: "● ACTIVE",      color: "#00d18c", bg: "rgba(0,209,140,0.12)" },
     TARGET_HIT:  { label: "✓ TARGET HIT",  color: "#00ff88", bg: "rgba(0,255,136,0.12)" },
     STOP_HIT:    { label: "✕ STOP HIT",    color: "#ff4d6d", bg: "rgba(255,77,109,0.12)" },
     CLOSED:      { label: "CLOSED",         color: "#888",    bg: "rgba(136,136,136,0.10)" },
     PARTIAL_EXIT:{ label: "PARTIAL",        color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
+    EXPIRED:     { label: "EXPIRED",        color: "#888",    bg: "rgba(136,136,136,0.10)" },
   };
   const s = map[status] ?? { label: status, color: "#aaa", bg: "rgba(170,170,170,0.1)" };
   return (
@@ -220,11 +223,47 @@ function PositionCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
   );
 }
 
-export function PortfolioSection({ title, positions, count, max, journalStats, horizon }: PortfolioSectionProps) {
+// Armed idea awaiting its entry to be traded through. NO P&L, NO days-held —
+// it is not a live position yet. Shows the planned entry + how far CMP is from it.
+function PendingCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
+  const entry = pos.entry_price;
+  const cmp = pos.current_price ?? pos.arm_ref_price ?? entry;
+  const gapPct = entry > 0 ? ((cmp - entry) / entry) * 100 : 0;
+  const isPullback = (pos.arm_ref_price ?? cmp) >= entry;
+  const waitMsg = isPullback
+    ? `Waiting for a pullback to ₹${fmt(entry)} (CMP ${gapPct >= 0 ? "+" : ""}${fmt(gapPct, 1)}% above)`
+    : `Waiting for a breakout through ₹${fmt(entry)} (CMP ${fmt(gapPct, 1)}% away)`;
+  return (
+    <div className="glass" style={{ padding: "12px 16px", marginBottom: 8, borderLeft: "3px solid #f0c060", opacity: 0.92 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>#{rank}</span>
+          <a href={tvUrl(pos.symbol)} target="_blank" rel="noopener noreferrer"
+             style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--accent)", textDecoration: "none" }}>
+            NSE:{pos.symbol.replace(/^NSE:/, "")}
+          </a>
+          <span style={{ fontSize: "0.65rem", color: "var(--text-secondary)" }}>Armed {fmtDate(pos.created_at)}</span>
+        </div>
+        {statusBadge(pos.status)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8, fontSize: "0.78rem" }}>
+        <div><div style={{ color: "var(--text-secondary)", fontSize: "0.65rem" }}>PLANNED ENTRY</div><div style={{ fontWeight: 600 }}>₹{fmt(entry)}</div></div>
+        <div><div style={{ color: "var(--text-secondary)", fontSize: "0.65rem" }}>CMP</div><div style={{ fontWeight: 600 }}>₹{fmt(cmp)}</div></div>
+        <div><div style={{ color: "var(--text-secondary)", fontSize: "0.65rem" }}>STOP LOSS</div><div style={{ fontWeight: 600, color: "#ff4d6d" }}>₹{fmt(pos.stop_loss)}</div></div>
+        {pos.target_1 && <div><div style={{ color: "var(--text-secondary)", fontSize: "0.65rem" }}>TARGET 1</div><div style={{ fontWeight: 600, color: "#00d18c" }}>₹{fmt(pos.target_1)}</div></div>}
+      </div>
+      <div style={{ marginTop: 8, fontSize: "0.66rem", color: "#f0c060" }}>{waitMsg} · no P&amp;L until it triggers</div>
+    </div>
+  );
+}
+
+export function PortfolioSection({ title, positions, count, pending, max, journalStats, horizon }: PortfolioSectionProps) {
   const [showClosed, setShowClosed] = useState(false);
 
   const activePositions = positions.filter(p => p.status === "ACTIVE");
-  const closedPositions = positions.filter(p => p.status !== "ACTIVE");
+  const pendingPositions = positions.filter(p => p.status === "PENDING");
+  const closedPositions = positions.filter(p => !["ACTIVE", "PENDING", "EXPIRED"].includes(p.status));
+  const pendingCount = pending ?? pendingPositions.length;
 
   return (
     <div className="glass" style={{ padding: 16, position: "relative" }}>
@@ -234,7 +273,7 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
             {horizon === "SWING" ? "📊" : "🏦"} {title}
           </h2>
           <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-            {Math.min(count, max)}/{max} Active Slots
+            {Math.min(count, max)} Active{pendingCount > 0 && <> · <span style={{ color: "#f0c060" }}>{pendingCount} Awaiting Entry</span></>} · {Math.min(count + pendingCount, max)}/{max} slots
             {journalStats && journalStats.total_trades > 0 && (() => {
               const s = journalStats;
               const MIN_SAMPLE = 10; // don't headline stats off a tiny sample
@@ -276,18 +315,23 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
           >
             ⬇ CSV
           </button>
-          <div style={{
-            fontSize: "0.7rem", fontWeight: 700,
-            color: count >= max ? "#ff4d6d" : "#00d18c",
-            background: count >= max ? "rgba(255,77,109,0.1)" : "rgba(0,209,140,0.1)",
-            padding: "3px 10px", borderRadius: 999,
-          }}>
-            {count >= max ? "FULL" : `${max - count} SLOTS OPEN`}
-          </div>
+          {(() => {
+            const used = count + pendingCount;   // a slot is held by active OR armed
+            return (
+              <div style={{
+                fontSize: "0.7rem", fontWeight: 700,
+                color: used >= max ? "#ff4d6d" : "#00d18c",
+                background: used >= max ? "rgba(255,77,109,0.1)" : "rgba(0,209,140,0.1)",
+                padding: "3px 10px", borderRadius: 999,
+              }}>
+                {used >= max ? "FULL" : `${max - used} SLOTS OPEN`}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
-      {activePositions.length === 0 && (
+      {activePositions.length === 0 && pendingPositions.length === 0 && (
         <div style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.55 }}>
           Slots open · promote a name from the decision feed or run a scan — positions appear here automatically.
         </div>
@@ -296,6 +340,17 @@ export function PortfolioSection({ title, positions, count, max, journalStats, h
       {activePositions.map((pos, i) => (
         <PositionCard key={pos.id} pos={pos} rank={i + 1} />
       ))}
+
+      {pendingPositions.length > 0 && (
+        <div style={{ marginTop: activePositions.length > 0 ? 12 : 0 }}>
+          <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#f0c060", marginBottom: 6, letterSpacing: "0.03em" }}>
+            ⏳ AWAITING ENTRY ({pendingPositions.length}) — armed, not yet triggered · excluded from P&amp;L &amp; track record
+          </div>
+          {pendingPositions.map((pos, i) => (
+            <PendingCard key={pos.id} pos={pos} rank={activePositions.length + i + 1} />
+          ))}
+        </div>
+      )}
 
       {closedPositions.length > 0 && (
         <div style={{ marginTop: 8 }}>

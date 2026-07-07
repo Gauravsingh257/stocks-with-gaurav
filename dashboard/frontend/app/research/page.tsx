@@ -862,6 +862,7 @@ export default function ResearchPage() {
               title="Swing Portfolio"
               positions={portfolio.swing.positions}
               count={portfolio.swing.count}
+              pending={portfolio.swing.pending}
               max={portfolio.swing.max}
               journalStats={portfolio.swing.journal_stats}
               horizon="SWING"
@@ -870,6 +871,7 @@ export default function ResearchPage() {
               title="Long-Term Portfolio"
               positions={portfolio.longterm.positions}
               count={portfolio.longterm.count}
+              pending={portfolio.longterm.pending}
               max={portfolio.longterm.max}
               journalStats={portfolio.longterm.journal_stats}
               horizon="LONGTERM"
