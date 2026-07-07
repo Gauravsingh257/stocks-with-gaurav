@@ -173,14 +173,41 @@ def reconcile_entries(dry_run: bool = Query(default=True), token: str = Query(de
     entries), preserving genuinely-triggered ones. dry_run=True (default) returns
     the impact report WITHOUT mutating anything. Set dry_run=false to apply.
 
-    Guarded by PORTFOLIO_RECONCILE_TOKEN when set (so an apply can't be triggered
-    casually)."""
+    Self-heals: re-runs the PENDING migration first (idempotent) so an apply can
+    never fail because a startup rebuild lost a lock. Returns schema diagnostics
+    + any per-position errors instead of a bare 500.
+
+    Guarded by PORTFOLIO_RECONCILE_TOKEN when set."""
     import os
     required = os.getenv("PORTFOLIO_RECONCILE_TOKEN", "").strip()
     if not dry_run and required and token != required:
         raise HTTPException(status_code=403, detail="reconcile token required to apply")
+
+    from dashboard.backend.db.portfolio import migrate_portfolio_pending, portfolio_schema_diag
+    # Ensure the schema is fully migrated (retry the rebuild now, off the startup
+    # hot path where a tracker connection may have held the write lock).
+    try:
+        migrate_portfolio_pending()
+    except Exception as exc:
+        log.exception("reconcile: migration retry failed")
+        return {"ok": False, "stage": "migration", "error": str(exc), "schema": portfolio_schema_diag()}
+
+    schema = portfolio_schema_diag()
+    if not dry_run and not schema.get("allows_pending"):
+        # Refuse to apply against a table that still forbids PENDING.
+        return {"ok": False, "stage": "precheck",
+                "error": "table CHECK still forbids PENDING — migration incomplete",
+                "schema": schema}
+
     from services.portfolio_reconcile import reconcile_portfolio_entries
-    return reconcile_portfolio_entries(dry_run=dry_run)
+    try:
+        report = reconcile_portfolio_entries(dry_run=dry_run)
+        report["ok"] = True
+        report["schema"] = schema
+        return report
+    except Exception as exc:
+        log.exception("reconcile: apply failed")
+        return {"ok": False, "stage": "apply", "error": str(exc), "schema": portfolio_schema_diag()}
 
 
 # ── Seed from existing data (one-time migration) ──────────────────────────
