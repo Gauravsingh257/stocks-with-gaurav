@@ -160,6 +160,7 @@ export default function ResearchPage() {
   const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
   const [activeTab, setActiveTab] = useState<ResearchTab>("research");
+  const [portfolioView, setPortfolioView] = useState<"swing" | "swing-await" | "lt" | "lt-await">("swing");
   const decisionFeedLoadingRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const scanPollTokenRef = useRef(0);
@@ -858,24 +859,59 @@ export default function ResearchPage() {
         </div>
         {portfolio ? (
           <>
-            <PortfolioSection
-              title="Swing Portfolio"
-              positions={portfolio.swing.positions}
-              count={portfolio.swing.count}
-              pending={portfolio.swing.pending}
-              max={portfolio.swing.max}
-              journalStats={portfolio.swing.journal_stats}
-              horizon="SWING"
-            />
-            <PortfolioSection
-              title="Long-Term Portfolio"
-              positions={portfolio.longterm.positions}
-              count={portfolio.longterm.count}
-              pending={portfolio.longterm.pending}
-              max={portfolio.longterm.max}
-              journalStats={portfolio.longterm.journal_stats}
-              horizon="LONGTERM"
-            />
+            {/* Four parallel views so the page stays short: Swing (live) →
+                Swing awaiting → Long-Term (live) → Long-Term awaiting. */}
+            <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 10, background: "rgba(148,163,184,0.06)", border: "1px solid rgba(148,163,184,0.12)", marginBottom: 12, flexWrap: "wrap" }}>
+              {([
+                { key: "swing" as const,       label: "Swing",              n: portfolio.swing.count,       amber: false },
+                { key: "swing-await" as const, label: "Swing · Awaiting",   n: portfolio.swing.pending ?? 0, amber: true },
+                { key: "lt" as const,          label: "Long-Term",          n: portfolio.longterm.count,    amber: false },
+                { key: "lt-await" as const,    label: "Long-Term · Awaiting", n: portfolio.longterm.pending ?? 0, amber: true },
+              ]).map(({ key, label, n, amber }) => {
+                const active = portfolioView === key;
+                const accent = amber ? "#f0c060" : "var(--accent, #00d4ff)";
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setPortfolioView(key)}
+                    style={{
+                      flex: "1 1 160px",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                      padding: "8px 14px", borderRadius: 8,
+                      border: active ? `1px solid ${amber ? "rgba(240,192,96,0.4)" : "rgba(0,212,255,0.3)"}` : "1px solid transparent",
+                      background: active ? (amber ? "rgba(240,192,96,0.1)" : "rgba(0,212,255,0.1)") : "transparent",
+                      color: active ? accent : "var(--text-secondary)",
+                      fontWeight: active ? 750 : 600, fontSize: "0.78rem",
+                      cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {amber ? "⏳ " : ""}{label}
+                    <span style={{ fontSize: "0.7rem", opacity: 0.85, fontWeight: 700, color: active ? accent : "var(--text-dim)" }}>({n})</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {portfolioView === "swing" && (
+              <PortfolioSection title="Swing Portfolio" positions={portfolio.swing.positions}
+                count={portfolio.swing.count} pending={portfolio.swing.pending} max={portfolio.swing.max}
+                journalStats={portfolio.swing.journal_stats} horizon="SWING" viewMode="live" />
+            )}
+            {portfolioView === "swing-await" && (
+              <PortfolioSection title="Swing Portfolio" positions={portfolio.swing.positions}
+                count={portfolio.swing.count} pending={portfolio.swing.pending} max={portfolio.swing.max}
+                journalStats={portfolio.swing.journal_stats} horizon="SWING" viewMode="awaiting" />
+            )}
+            {portfolioView === "lt" && (
+              <PortfolioSection title="Long-Term Portfolio" positions={portfolio.longterm.positions}
+                count={portfolio.longterm.count} pending={portfolio.longterm.pending} max={portfolio.longterm.max}
+                journalStats={portfolio.longterm.journal_stats} horizon="LONGTERM" viewMode="live" />
+            )}
+            {portfolioView === "lt-await" && (
+              <PortfolioSection title="Long-Term Portfolio" positions={portfolio.longterm.positions}
+                count={portfolio.longterm.count} pending={portfolio.longterm.pending} max={portfolio.longterm.max}
+                journalStats={portfolio.longterm.journal_stats} horizon="LONGTERM" viewMode="awaiting" />
+            )}
           </>
         ) : (
           <div className="glass" style={{ padding: 18, border: "1px solid rgba(0,212,255,0.14)", borderRadius: 12 }}>

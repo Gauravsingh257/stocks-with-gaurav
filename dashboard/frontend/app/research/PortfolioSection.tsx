@@ -11,6 +11,9 @@ interface PortfolioSectionProps {
   max: number;
   journalStats: PortfolioJournalStats | null;
   horizon: "SWING" | "LONGTERM";
+  // "live" = active trades (+ closed history); "awaiting" = only armed
+  // (PENDING) ideas. Each is its own tab so the page stays short.
+  viewMode?: "live" | "awaiting";
 }
 
 function fmt(v: number | null | undefined, dec = 2) {
@@ -257,7 +260,7 @@ function PendingCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
   );
 }
 
-export function PortfolioSection({ title, positions, count, pending, max, journalStats, horizon }: PortfolioSectionProps) {
+export function PortfolioSection({ title, positions, count, pending, max, journalStats, horizon, viewMode = "live" }: PortfolioSectionProps) {
   const [showClosed, setShowClosed] = useState(false);
 
   const activePositions = positions.filter(p => p.status === "ACTIVE");
@@ -265,28 +268,46 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
   const closedPositions = positions.filter(p => !["ACTIVE", "PENDING", "EXPIRED"].includes(p.status));
   const pendingCount = pending ?? pendingPositions.length;
 
+  // ── AWAITING ENTRY view: only armed ideas (no P&L, not a live position) ──
+  if (viewMode === "awaiting") {
+    return (
+      <div className="glass" style={{ padding: 16, position: "relative" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <h2 style={{ margin: 0, fontSize: "1.05rem" }}>
+            {horizon === "SWING" ? "📊" : "🏦"} {title} — Awaiting Entry
+          </h2>
+          <span style={{
+            fontSize: "0.66rem", fontWeight: 700, color: "#f0c060",
+            background: "rgba(240,192,96,0.12)", border: "1px solid rgba(240,192,96,0.35)",
+            padding: "2px 9px", borderRadius: 999,
+          }}>
+            ⏳ {pendingCount}
+          </span>
+          <span style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>
+            armed, not yet triggered · excluded from P&amp;L &amp; track record
+          </span>
+        </div>
+        {pendingPositions.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            No armed ideas awaiting entry right now.
+          </div>
+        ) : (
+          pendingPositions.map((pos, i) => (
+            <PendingCard key={pos.id} pos={pos} rank={i + 1} />
+          ))
+        )}
+      </div>
+    );
+  }
+
+  // ── LIVE view: active trades (+ closed history) ──
   return (
     <div className="glass" style={{ padding: 16, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
-              {horizon === "SWING" ? "📊" : "🏦"} {title}
-            </h2>
-            {pendingCount > 0 && (
-              <span
-                title="Armed — not yet triggered. Excluded from P&L & track record."
-                style={{
-                  fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.03em",
-                  color: "#f0c060", background: "rgba(240,192,96,0.12)",
-                  border: "1px solid rgba(240,192,96,0.35)",
-                  padding: "2px 9px", borderRadius: 999, cursor: "help", whiteSpace: "nowrap",
-                }}
-              >
-                ⏳ {pendingCount} Awaiting Entry
-              </span>
-            )}
-          </div>
+          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
+            {horizon === "SWING" ? "📊" : "🏦"} {title}
+          </h2>
           <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
             {Math.min(count, max)} Active · {Math.min(count + pendingCount, max)}/{max} slots
             {journalStats && journalStats.total_trades > 0 && (() => {
@@ -346,23 +367,15 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
         </div>
       </div>
 
-      {activePositions.length === 0 && pendingPositions.length === 0 && (
+      {activePositions.length === 0 && (
         <div style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.55 }}>
-          Slots open · promote a name from the decision feed or run a scan — positions appear here automatically.
+          No live positions{pendingCount > 0 ? " — check the Awaiting Entry tab" : " · promote a name from the decision feed or run a scan"}.
         </div>
       )}
 
       {activePositions.map((pos, i) => (
         <PositionCard key={pos.id} pos={pos} rank={i + 1} />
       ))}
-
-      {pendingPositions.length > 0 && (
-        <div style={{ marginTop: activePositions.length > 0 ? 10 : 0 }}>
-          {pendingPositions.map((pos, i) => (
-            <PendingCard key={pos.id} pos={pos} rank={activePositions.length + i + 1} />
-          ))}
-        </div>
-      )}
 
       {closedPositions.length > 0 && (
         <div style={{ marginTop: 8 }}>
