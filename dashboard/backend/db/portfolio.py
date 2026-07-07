@@ -207,61 +207,52 @@ def migrate_portfolio_pending() -> None:
             conn.commit()
             return
 
+        import re
         cnt_before = conn.execute("SELECT COUNT(*) FROM portfolio_positions").fetchone()[0]
         colnames = [r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()]
         collist = ", ".join(colnames)
-        new_table = """
-        CREATE TABLE portfolio_positions_pend (
-            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol                TEXT NOT NULL,
-            horizon               TEXT NOT NULL CHECK(horizon IN ('SWING','LONGTERM')),
-            direction             TEXT NOT NULL DEFAULT 'LONG' CHECK(direction IN ('LONG','SHORT')),
-            entry_price           REAL NOT NULL,
-            stop_loss             REAL NOT NULL,
-            target_1              REAL,
-            target_2              REAL,
-            current_price         REAL,
-            profit_loss           REAL NOT NULL DEFAULT 0,
-            profit_loss_pct       REAL NOT NULL DEFAULT 0,
-            drawdown              REAL NOT NULL DEFAULT 0,
-            drawdown_pct          REAL NOT NULL DEFAULT 0,
-            high_since_entry      REAL,
-            low_since_entry       REAL,
-            days_held             INTEGER NOT NULL DEFAULT 0,
-            confidence_score      REAL DEFAULT 0,
-            reasoning             TEXT DEFAULT '',
-            recommendation_id     INTEGER,
-            status                TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('PENDING','ACTIVE','TARGET_HIT','STOP_HIT','CLOSED','PARTIAL_EXIT','EXPIRED')),
-            exit_price            REAL,
-            exit_reason           TEXT,
-            arm_ref_price         REAL,
-            entered_at            TEXT,
-            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
-            closed_at             TEXT
-        )
-        """
-        conn.execute("PRAGMA foreign_keys=OFF")
-        conn.execute(new_table)
-        conn.execute(f"INSERT INTO portfolio_positions_pend ({collist}) SELECT {collist} FROM portfolio_positions")
-        cnt_after = conn.execute("SELECT COUNT(*) FROM portfolio_positions_pend").fetchone()[0]
-        if cnt_after != cnt_before:
-            conn.execute("DROP TABLE portfolio_positions_pend")
-            conn.rollback()
-            logger.error("[Portfolio] pending migration aborted: row count %d != %d", cnt_after, cnt_before)
+
+        # Build the new table SQL by MUTATING the current definition, not a
+        # hardcoded copy — so any runtime-added columns (e.g. watchlist's
+        # `source`) are preserved. Swap only the status CHECK to allow
+        # PENDING/EXPIRED. (A hardcoded DDL that omitted `source` was why the
+        # INSERT…SELECT failed on prod.)
+        new_sql = old_sql.replace("portfolio_positions", "portfolio_positions_pend", 1)
+        new_check = ("CHECK(status IN ('PENDING','ACTIVE','TARGET_HIT','STOP_HIT',"
+                     "'CLOSED','PARTIAL_EXIT','EXPIRED'))")
+        new_sql = re.sub(r"CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)", new_check, new_sql, count=1)
+        if "'PENDING'" not in new_sql:
+            logger.error("[Portfolio] pending migration: could not rewrite status CHECK; aborting")
             return
-        conn.execute("DROP TABLE portfolio_positions")
-        conn.execute("ALTER TABLE portfolio_positions_pend RENAME TO portfolio_positions")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_positions(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_horizon ON portfolio_positions(horizon, status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol)")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique "
-            "ON portfolio_positions(symbol, horizon) WHERE status IN ('ACTIVE','PENDING')"
-        )
-        conn.execute("PRAGMA foreign_keys=ON")
+
+        # Run the schema surgery in AUTOCOMMIT so PRAGMA foreign_keys=OFF actually
+        # takes effect (it is a no-op inside a transaction).
         conn.commit()
-        logger.warning("[Portfolio] migrated status CHECK → PENDING/EXPIRED + arm-on-tap columns (%d rows preserved)", cnt_after)
+        prev_iso = conn.isolation_level
+        conn.isolation_level = None
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("DROP TABLE IF EXISTS portfolio_positions_pend")
+            conn.execute(new_sql)
+            conn.execute(f"INSERT INTO portfolio_positions_pend ({collist}) SELECT {collist} FROM portfolio_positions")
+            cnt_after = conn.execute("SELECT COUNT(*) FROM portfolio_positions_pend").fetchone()[0]
+            if cnt_after != cnt_before:
+                conn.execute("DROP TABLE portfolio_positions_pend")
+                logger.error("[Portfolio] pending migration aborted: row count %d != %d", cnt_after, cnt_before)
+                return
+            conn.execute("DROP TABLE portfolio_positions")
+            conn.execute("ALTER TABLE portfolio_positions_pend RENAME TO portfolio_positions")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_positions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_horizon ON portfolio_positions(horizon, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_symbol ON portfolio_positions(symbol)")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_unique "
+                "ON portfolio_positions(symbol, horizon) WHERE status IN ('ACTIVE','PENDING')"
+            )
+            conn.execute("PRAGMA foreign_keys=ON")
+        finally:
+            conn.isolation_level = prev_iso
+        logger.warning("[Portfolio] migrated status CHECK -> PENDING/EXPIRED + arm-on-tap columns (%d rows preserved)", cnt_after)
     except Exception as exc:
         logger.error("[Portfolio] migrate_portfolio_pending failed (non-fatal): %s", exc)
         try:
