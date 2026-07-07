@@ -269,11 +269,26 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
     <div className="glass" style={{ padding: 16, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
-            {horizon === "SWING" ? "📊" : "🏦"} {title}
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
+              {horizon === "SWING" ? "📊" : "🏦"} {title}
+            </h2>
+            {pendingCount > 0 && (
+              <span
+                title="Armed — not yet triggered. Excluded from P&L & track record."
+                style={{
+                  fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.03em",
+                  color: "#f0c060", background: "rgba(240,192,96,0.12)",
+                  border: "1px solid rgba(240,192,96,0.35)",
+                  padding: "2px 9px", borderRadius: 999, cursor: "help", whiteSpace: "nowrap",
+                }}
+              >
+                ⏳ {pendingCount} Awaiting Entry
+              </span>
+            )}
+          </div>
           <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-            {Math.min(count, max)} Active{pendingCount > 0 && <> · <span style={{ color: "#f0c060" }}>{pendingCount} Awaiting Entry</span></>} · {Math.min(count + pendingCount, max)}/{max} slots
+            {Math.min(count, max)} Active · {Math.min(count + pendingCount, max)}/{max} slots
             {journalStats && journalStats.total_trades > 0 && (() => {
               const s = journalStats;
               const MIN_SAMPLE = 10; // don't headline stats off a tiny sample
@@ -342,10 +357,7 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
       ))}
 
       {pendingPositions.length > 0 && (
-        <div style={{ marginTop: activePositions.length > 0 ? 12 : 0 }}>
-          <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#f0c060", marginBottom: 6, letterSpacing: "0.03em" }}>
-            ⏳ AWAITING ENTRY ({pendingPositions.length}) — armed, not yet triggered · excluded from P&amp;L &amp; track record
-          </div>
+        <div style={{ marginTop: activePositions.length > 0 ? 10 : 0 }}>
           {pendingPositions.map((pos, i) => (
             <PendingCard key={pos.id} pos={pos} rank={activePositions.length + i + 1} />
           ))}
