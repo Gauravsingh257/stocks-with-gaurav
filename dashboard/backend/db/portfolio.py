@@ -263,6 +263,31 @@ def migrate_portfolio_pending() -> None:
         conn.close()
 
 
+def migrate_portfolio_risk_columns() -> None:
+    """Add the risk-engine sizing columns (idempotent, in-place ADD COLUMN — no
+    rebuild). position_size = ₹ notional allocated by risk-normalized sizing;
+    risk_weight_pct = that as a % of notional capital; atr_pct / turnover_cr =
+    the liquidity metrics used to down-size. All nullable → legacy rows are
+    unaffected and the columns are harmless when the engine is disabled."""
+    cols_to_add = [
+        ("position_size", "REAL"),
+        ("risk_weight_pct", "REAL"),
+        ("atr_pct", "REAL"),
+        ("turnover_cr", "REAL"),
+    ]
+    conn = get_connection()
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
+        for name, decl in cols_to_add:
+            if name not in have:
+                conn.execute(f"ALTER TABLE portfolio_positions ADD COLUMN {name} {decl}")
+        conn.commit()
+    except Exception as exc:
+        logger.error("[Portfolio] migrate_portfolio_risk_columns failed (non-fatal): %s", exc)
+    finally:
+        conn.close()
+
+
 def portfolio_schema_diag() -> dict:
     """Read-only diagnostic: does the live table allow PENDING, and which
     arm-on-tap columns exist? Used to confirm the migration landed on prod."""
@@ -294,6 +319,7 @@ def init_portfolio_db() -> None:
         conn.close()
     migrate_portfolio_positions()
     migrate_portfolio_pending()
+    migrate_portfolio_risk_columns()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -323,7 +349,7 @@ MAX_LONGTERM_POSITIONS = int(os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
 REENTRY_GUARD_MODE = os.getenv("PORTFOLIO_REENTRY_GUARD", "on").strip().lower()
 REENTRY_COOLDOWN_DAYS = int(os.getenv("PORTFOLIO_REENTRY_COOLDOWN_DAYS", "10"))
 REENTRY_SAME_ENTRY_PCT = float(os.getenv("PORTFOLIO_REENTRY_SAME_ENTRY_PCT", "3.0"))
-_REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT", "STALE_EXIT"}
+_REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT", "STALE_EXIT", "TREND_BREAK"}
 
 
 def _reentry_would_block(symbol: str, horizon: str, entry: float,
@@ -477,24 +503,47 @@ def add_position(payload: dict) -> int:
         # as a fill. An ACTIVE row enters now.
         entered_at = None if status == "PENDING" else datetime.now(_IST).isoformat()
 
-        cursor = conn.execute(
-            """
-            INSERT INTO portfolio_positions
-                (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
-                 current_price, confidence_score, reasoning, recommendation_id, status,
-                 arm_ref_price, entered_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                symbol, horizon,
-                payload.get("direction", "LONG"),
-                entry, sl, t1, t2, cmp,
-                float(payload.get("confidence_score", 0)),
-                payload.get("reasoning", ""),
-                payload.get("recommendation_id"),
-                status, arm_ref, entered_at,
-            ),
-        )
+        # Risk-engine sizing fields (nullable — present only when the engine sized
+        # this position). Columns exist via migrate_portfolio_risk_columns.
+        _has_risk_cols = "position_size" in {
+            r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()
+        }
+        if _has_risk_cols:
+            cursor = conn.execute(
+                """
+                INSERT INTO portfolio_positions
+                    (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
+                     current_price, confidence_score, reasoning, recommendation_id, status,
+                     arm_ref_price, entered_at, position_size, risk_weight_pct, atr_pct, turnover_cr)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol, horizon, payload.get("direction", "LONG"),
+                    entry, sl, t1, t2, cmp,
+                    float(payload.get("confidence_score", 0)),
+                    payload.get("reasoning", ""), payload.get("recommendation_id"),
+                    status, arm_ref, entered_at,
+                    payload.get("position_size"), payload.get("risk_weight_pct"),
+                    payload.get("atr_pct"), payload.get("turnover_cr"),
+                ),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO portfolio_positions
+                    (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
+                     current_price, confidence_score, reasoning, recommendation_id, status,
+                     arm_ref_price, entered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol, horizon, payload.get("direction", "LONG"),
+                    entry, sl, t1, t2, cmp,
+                    float(payload.get("confidence_score", 0)),
+                    payload.get("reasoning", ""), payload.get("recommendation_id"),
+                    status, arm_ref, entered_at,
+                ),
+            )
         conn.commit()
         pos_id = cursor.lastrowid
         logger.info("[Portfolio] Added %s to %s as %s (id=%d)", symbol, horizon, status, pos_id)

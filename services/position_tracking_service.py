@@ -151,27 +151,42 @@ class PositionTrackingService:
             elif cmp <= sl:
                 new_status = "STOP_HIT"
                 exit_reason = "STOP_HIT"
-            else:
-                # Structure-break cull: underwater + long-held + below 200-DMA.
-                # (Its inner 200-DMA test may NOT fire, so it must not consume the
-                # exit chain — the stale check below still gets a chance.)
-                if structure_exit_on and days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
-                    dma200 = _get_200dma(pos.symbol)
-                    if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
+            elif structure_exit_on:
+                # `structure_exit_on` = this store permits auto-culls (system book
+                # yes; user book no). Within it, the risk engine's TREND-BREAK exit
+                # (200-DMA + RS<0) SUPERSEDES the legacy structure/stale culls when
+                # enabled; flip TREND_BREAK_EXIT_ENABLED=0 to fall back to legacy.
+                _tb_on = False
+                try:
+                    from services.risk_engine import cfg as _rcfg, evaluate_trend_break_exit
+                    _rc = _rcfg()
+                    _tb_on = _rc["RISK_ENGINE_ENABLED"] and _rc["TREND_BREAK_EXIT_ENABLED"]
+                except Exception:
+                    _tb_on = False
+
+                if _tb_on:
+                    dma200 = _get_200dma(pos.symbol) if days_held >= 1 else None
+                    tb = evaluate_trend_break_exit(pos.symbol, cmp, days_held, dma200)
+                    if tb.should_exit:
                         new_status = "CLOSED"
-                        exit_reason = "STRUCTURE_BREAK"
-                # Stale / dead-money cull: long-held but hovering near entry.
-                # Evaluated even when the structure branch did NOT exit (e.g.
-                # underwater but still above the 200-DMA) — that gap is exactly
-                # the non-mover we want to free the slot from.
-                if (
-                    exit_reason is None
-                    and stale_exit_on
-                    and days_held >= _STALE_EXIT_MIN_DAYS
-                    and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
-                ):
-                    new_status = "CLOSED"
-                    exit_reason = "STALE_EXIT"
+                        exit_reason = "TREND_BREAK"
+                else:
+                    # ── Legacy culls (rollback path) ──
+                    # Structure-break: underwater + long-held + below 200-DMA.
+                    if days_held >= _STRUCTURE_EXIT_MIN_DAYS and cmp < entry:
+                        dma200 = _get_200dma(pos.symbol)
+                        if dma200 and cmp < dma200 * (1.0 - _STRUCTURE_EXIT_BUFFER):
+                            new_status = "CLOSED"
+                            exit_reason = "STRUCTURE_BREAK"
+                    # Stale / dead-money cull: long-held but hovering near entry.
+                    if (
+                        exit_reason is None
+                        and stale_exit_on
+                        and days_held >= _STALE_EXIT_MIN_DAYS
+                        and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
+                    ):
+                        new_status = "CLOSED"
+                        exit_reason = "STALE_EXIT"
 
             is_exit = (new_status != "ACTIVE" and old_status == "ACTIVE")
             # On an exit, keep the row ACTIVE for the metric write so close()
