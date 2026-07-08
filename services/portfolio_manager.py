@@ -72,6 +72,26 @@ def promote_to_portfolio(
     if reentry_guard_blocks(symbol, horizon, float(entry_price), cmp=current_price):
         raise ValueError(f"{symbol} re-entry blocked — same failed setup within cooldown")
 
+    # Risk engine: stop-width cap + risk-normalized (liquidity/ATR-adjusted)
+    # sizing. Fully flag-gated — with RISK_ENGINE_ENABLED=0 it accepts every
+    # valid long at equal weight (legacy behavior). Every decision is logged.
+    _rsize: dict = {}
+    try:
+        from services.risk_engine import evaluate_promotion
+        decision = evaluate_promotion(symbol, horizon, float(entry_price), float(stop_loss))
+        if not decision.accepted:
+            raise ValueError(f"{symbol} rejected by risk engine: {decision.reason}")
+        _rsize = {
+            "position_size": decision.new_position_value,
+            "risk_weight_pct": decision.risk_weight_pct,
+            "atr_pct": decision.atr_pct,
+            "turnover_cr": decision.turnover_cr,
+        }
+    except ValueError:
+        raise
+    except Exception:
+        log.exception("risk engine promotion eval failed for %s — proceeding unsized", symbol)
+
     position_id = add_position({
         "symbol": symbol,
         "horizon": horizon,
@@ -85,6 +105,7 @@ def promote_to_portfolio(
         "current_price": current_price or entry_price,
         "arm_ref_price": current_price or entry_price,
         "status": "PENDING" if pending else "ACTIVE",
+        **_rsize,
     })
 
     # Telegram alert. Armed → "awaiting entry" (no fill claimed); live entry →
