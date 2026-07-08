@@ -1414,9 +1414,48 @@ export interface ScreenerResult {
   sample_locked?: { quality_score: number; tier: string; flip: string }[];
 }
 
+// ── Risk Engine Dashboard (internal, read-only) ────────────────────────────
+export interface RiskHistBucket { range: string; count: number }
+export interface RiskEngineSummary {
+  date: string;
+  promotions: {
+    total: number; accepted: number; rejected: number;
+    stop_cap_rejections: number; invalid_rejections: number;
+    sizing_adjustments: number; liquidity_adjustments: number;
+    avg_stop_width_pct: number | null;
+    accepted_weight_distribution: RiskHistBucket[];
+    rejections: { symbol: string; horizon: string; stop_width_pct: number | null; reason: string }[];
+  };
+  exits: {
+    trend_break: number;
+    detail: { symbol: string; cmp: number; dma200: number | null; rs_vs_nifty: number | null; days_held: number }[];
+  };
+  counterfactual: {
+    legacy_would_accept: number; new_accepted: number;
+    rejected_by_new_that_legacy_took: number;
+    notional_legacy_equal_weight: number; notional_new_risk_weighted: number;
+  };
+  flags: Record<string, boolean>;
+  portfolio: {
+    active_positions?: number; engine_sized?: number; legacy_sized?: number;
+    portfolio_heat_pct?: number; avg_stop_width_pct?: number | null;
+    stop_width_distribution?: RiskHistBucket[];
+    position_weight_distribution?: RiskHistBucket[];
+    sector_exposure?: { sector: string; risk_pct: number }[];
+  };
+}
+export interface RiskConfigHistoryEntry {
+  id: number; recorded_at: string; source: string; reason: string | null;
+  config: Record<string, unknown>; changes: Record<string, [unknown, unknown]>;
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
+  riskSummary: (date?: string) => get<RiskEngineSummary>(`/api/risk-engine/summary${date ? `?date=${date}` : ""}`),
+  riskConfig: () => get<{ config: Record<string, unknown>; versioned: boolean }>("/api/risk-engine/config"),
+  riskConfigHistory: (limit = 50) => get<{ history: RiskConfigHistoryEntry[] }>(`/api/risk-engine/config-history?limit=${limit}`),
+
   // Live state
   snapshot:     () => get<EngineSnapshot>("/api/snapshot"),
   activeTrades: () => get<{ active_trades: ActiveTrade[] }>("/api/active-trades"),

@@ -136,3 +136,41 @@ best-effort persisted to Redis lists `risk_engine:promotions:{date}` /
 
 `portfolio_positions` gains nullable columns (added in-place, legacy-safe):
 `position_size`, `risk_weight_pct`, `atr_pct`, `turnover_cr`.
+
+## Dashboard (internal, read-only)
+
+`/risk-engine` (frontend) + `/api/risk-engine/*` (backend) provide observability
+over the engine — **no writes, no trading logic**, driven entirely from the audit
+logs the engine already emits plus the current book:
+
+- Promotions accepted/rejected, stop-cap rejections, sizing & liquidity adjustments.
+- Trend-break exits (with the 200-DMA / RS detail).
+- Live-book **portfolio heat** (total capital at risk if every stop hit), average
+  stop width, position-size & stop-width distributions, sector exposure.
+- **Counterfactual**: how many promotions the *legacy* engine would have taken
+  vs the new one, and equal-weight vs risk-weighted notional.
+- The active configuration flags.
+
+Endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/risk-engine/summary?date=YYYY-MM-DD` | daily audit summary |
+| GET | `/api/risk-engine/config` | live config (auto-versions on change) |
+| GET | `/api/risk-engine/config-history?limit=N` | version history |
+| POST | `/api/risk-engine/config-history` `{reason}` | annotate a config change |
+
+### Config version history
+
+Every parameter change is recorded in `risk_config_history` (SQLite) with a
+timestamp, the exact diff (`{param: [old, new]}`), and a reason:
+
+- **AUTO** — each dashboard read snapshots the live `cfg()`; if it differs from
+  the last stored version a new row is appended (source=`auto`). This captures
+  env-var changes made on the platform.
+- **MANUAL** — `POST /api/risk-engine/config-history {"reason": "..."}` records
+  an operator note (source=`manual`).
+
+This is the audit trail that explains *why* the engine behaved differently on a
+given day — the basis for the "changes driven by statistically significant
+evidence" discipline going forward.
