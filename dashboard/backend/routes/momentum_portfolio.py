@@ -55,3 +55,28 @@ def config():
     c = cfg()
     keys = [k for k in c if k.startswith("MOMENTUM_") or k.startswith("MOM_")]
     return {"config": {k: c[k] for k in keys}}
+
+
+@router.get("/report")
+def report(date: str | None = Query(default=None)):
+    """The latest daily Momentum Portfolio Report (from Redis)."""
+    from datetime import date as _date
+    day = date or _date.today().isoformat()
+    try:
+        from dashboard.backend.cache import _get_redis
+        import json
+        r = _get_redis()
+        raw = r.get(f"momentum_portfolio:report:{day}") if r else None
+        return {"date": day, "report": (json.loads(raw) if raw else None)}
+    except Exception as exc:
+        log.debug("report fetch failed: %s", exc)
+        return {"date": day, "report": None}
+
+
+@router.post("/run")
+def run_cycle():
+    """Manually trigger one orchestration cycle (respects all flags — returns
+    {status: disabled} when the portfolio is off). Same entrypoint the scheduler
+    uses."""
+    from services.momentum_tracker import run_once
+    return run_once()

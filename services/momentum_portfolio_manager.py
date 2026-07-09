@@ -46,36 +46,47 @@ def _in_swing(symbol: str) -> bool:
         return False
 
 
-def _make_room(new_score: float) -> bool:
-    """Ensure a free slot for a candidate scoring `new_score`. Prefer expiring the
-    weakest PENDING; only displace an ACTIVE if the new score beats the weakest
-    by the configured edge. Returns True if room exists/was made."""
+def _make_room(candidate: dict) -> tuple[bool, str | None]:
+    """Ensure a slot for `candidate`, optimising OVERALL portfolio quality (score
+    + sector diversification), not merely the lowest score. Prefers expiring the
+    weakest PENDING; otherwise displaces the ACTIVE holding whose swap most
+    improves the book (via classifier.best_replacement_target). Never force-fills:
+    returns (False, None) when no beneficial replacement exists.
+
+    Returns (has_room, replacement_reason)."""
     from dashboard.backend.db import momentum_portfolio as db
+    from services import momentum_classifier
+    new_score = float(candidate.get("quality_score") or 0)
+
     counts = db.get_counts()
     if counts["used"] < counts["max"]:
-        return True
-    # Book is full — find the weakest committed row.
-    pend = [p for p in db.get_portfolio(include_pending=True) if p["status"] == "PENDING"]
+        return True, None
+
+    committed = db.get_portfolio(include_pending=True)
+    pend = [p for p in committed if p["status"] == "PENDING"]
     weakest_pending = min(pend, key=lambda p: p.get("quality_score") or 0, default=None)
     if weakest_pending and (weakest_pending.get("quality_score") or 0) < new_score:
-        db.expire_pending(weakest_pending["id"], "REPLACED")
-        return True
-    lowest = db.lowest_active_score()
-    edge = cfg()["MOMENTUM_REPLACEMENT_MIN_EDGE"]
-    if lowest and new_score > (lowest.get("quality_score") or 0) + edge:
-        # Displace the weakest ACTIVE at its current price (a managed exit).
-        px = float(lowest.get("current_price") or lowest["entry_price"])
-        db.close_position(lowest["id"], px, "REPLACED")
-        log.info("[MomentumPortfolio] replaced %s (score %.1f) with candidate score %.1f",
-                 lowest["symbol"], lowest.get("quality_score") or 0, new_score)
-        return True
-    return False
+        db.expire_pending(weakest_pending["id"], "REPLACED_BY_STRONGER_PENDING")
+        return True, f"displaced pending {weakest_pending['symbol']} (score {weakest_pending.get('quality_score')})"
+
+    active = [p for p in committed if p["status"] == "ACTIVE"]
+    target = momentum_classifier.best_replacement_target(candidate, active)
+    if target is not None:
+        px = float(target.get("current_price") or target["entry_price"])
+        reason = (f"quality-swap: out {target['symbol']} (score {target.get('quality_score')}, "
+                  f"{target.get('sector')}) → in {candidate['symbol']} (score {new_score}, "
+                  f"{candidate.get('sector')}); +{target.get('_quality_gain')} book quality")
+        db.close_position(target["id"], px, "REPLACED")
+        log.info("[MomentumPortfolio] %s", reason)
+        return True, reason
+    return False, None
 
 
 def arm(candidate: dict) -> int | None:
     """Arm a ranked momentum candidate as PENDING. `candidate` carries the entry
-    plan + features + score. Honors duplicate-exposure, capacity, and quality
-    replacement. Returns the new position id, or None if not armed."""
+    plan + features + score + discovery/momentum ranks + selection reason. Honors
+    duplicate-exposure, capacity, and QUALITY-OPTIMISING replacement. Returns the
+    new position id, or None if not armed (never force-fills)."""
     c = cfg()
     if not c["MOMENTUM_PORTFOLIO_ENABLED"]:
         return None
@@ -92,8 +103,9 @@ def arm(candidate: dict) -> int | None:
     if stop >= entry:
         return None
     score = float(candidate.get("quality_score") or 0)
-    if not _make_room(score):
-        log.info("[MomentumPortfolio] full — %s score %.1f below replacement bar", sym, score)
+    has_room, replacement_reason = _make_room(candidate)
+    if not has_room:
+        log.info("[MomentumPortfolio] full — %s score %.1f doesn't improve book quality", sym, score)
         return None
 
     notional, weight = size_position(entry, stop)
@@ -113,6 +125,10 @@ def arm(candidate: dict) -> int | None:
             "entry_reason": candidate.get("entry_reason"),
             "position_size": notional, "risk_weight_pct": weight,
             "reasoning": candidate.get("reasoning"),
+            "discovery_rank": candidate.get("discovery_rank"),
+            "momentum_rank": candidate.get("momentum_rank"),
+            "selection_reason": candidate.get("selection_reason"),
+            "replacement_reason": replacement_reason,
         })
     except ValueError as exc:
         log.debug("[MomentumPortfolio] arm skipped %s: %s", sym, exc)
@@ -246,15 +262,146 @@ def _atr(candles: list[dict], n: int = 14) -> float:
     return sum(trs[-k:]) / k if k else 0.0
 
 
+def rescore_active(data_provider: Callable[[str], tuple[float | None, list[dict]]],
+                   nifty: list[dict] | None = None) -> dict:
+    """Re-score every ACTIVE holding on today's data and classify it ELITE / GOOD
+    / WEAK / REPLACE. Updates quality_score + classification in the DB. Returns a
+    bucket summary + per-holding detail."""
+    from dashboard.backend.db import momentum_portfolio as db
+    from services.momentum_engine.metrics import compute_metrics
+    from services.momentum_engine import ranking
+    from services import momentum_classifier
+
+    active = [p for p in db.get_portfolio(include_pending=False) if p["status"] == "ACTIVE"]
+    buckets = {"ELITE": 0, "GOOD": 0, "WEAK": 0, "REPLACE": 0}
+    details = []
+    for p in active:
+        try:
+            _cmp, candles = data_provider(p["symbol"])
+        except Exception:
+            continue
+        if not candles:
+            continue
+        m = compute_metrics(candles, nifty)
+        if m is None:
+            continue
+        q = ranking.score(m, None, discovery_breakout_score=p.get("breakout_score"), sector_score=0.5)
+        cls = momentum_classifier.classify(q.score)
+        buckets[cls] = buckets.get(cls, 0) + 1
+        db.set_classification(p["id"], cls, q.score)
+        details.append({"symbol": p["symbol"], "score": q.score, "classification": cls,
+                        "sector": p.get("sector")})
+    return {"reclassified": len(details), "buckets": buckets, "details": details,
+            "replace_candidates": [d for d in details if d["classification"] == "REPLACE"]}
+
+
 def get_summary() -> dict:
     """Full independent portfolio snapshot for the API/UI."""
     from dashboard.backend.db import momentum_portfolio as db
+    from services import momentum_classifier
     counts = db.get_counts()
+    positions = db.get_portfolio(include_pending=True)
     return {
         "name": "Momentum Portfolio",
-        "positions": db.get_portfolio(include_pending=True),
+        "positions": positions,
         "count": counts["active"], "pending": counts["pending"],
         "used": counts["used"], "max": counts["max"],
         "journal_stats": db.get_journal_stats(),
+        "portfolio_quality": momentum_classifier.portfolio_quality(positions),
         "enabled": cfg()["MOMENTUM_PORTFOLIO_ENABLED"],
     }
+
+
+class MomentumPortfolioManager:
+    """The single orchestrator. The scheduler only calls `.run()`.
+
+    Providers are injected for testability; production defaults are resolved
+    lazily. One cycle: advance pending (tap/expire) → run the exit engine →
+    re-score + classify holdings → evaluate & rank fresh candidates → arm the
+    best (quality-optimising replacement, never force-filling) → build + persist
+    the daily report.
+    """
+
+    def __init__(self, cmp_provider=None, data_provider=None, candidate_provider=None,
+                 nifty: list[dict] | None = None):
+        self._cmp = cmp_provider
+        self._data = data_provider
+        self._candidates = candidate_provider
+        self._nifty = nifty
+
+    # ── default production providers (lazy) ──
+    def _cmp_provider(self):
+        if self._cmp:
+            return self._cmp
+        from services.trade_tracker import _fetch_cmp_batch
+        return _fetch_cmp_batch
+
+    def _data_provider(self):
+        if self._data:
+            return self._data
+        from services.momentum_candidate_pipeline import default_data_provider
+        return default_data_provider
+
+    def _candidate_provider(self):
+        if self._candidates:
+            return self._candidates
+        from services.momentum_candidate_pipeline import get_ranked_candidates
+        return lambda: get_ranked_candidates(nifty=self._nifty)
+
+    def run(self) -> dict:
+        c = cfg()
+        if not c["MOMENTUM_PORTFOLIO_ENABLED"]:
+            return {"status": "disabled"}
+        from services import momentum_classifier
+        from services.momentum_engine.router import current_regime
+        from dashboard.backend.db import momentum_portfolio as db
+
+        cmp_p, data_p = self._cmp_provider(), self._data_provider()
+        pending = process_pending(cmp_p)
+        exits = process_active(data_p)
+        rescore = rescore_active(data_p, self._nifty)
+
+        armed, rejected = [], []
+        try:
+            candidates = self._candidate_provider()() or []
+        except Exception:
+            log.exception("[MomentumPortfolio] candidate provider failed")
+            candidates = []
+        for cand in candidates:
+            pid = arm(cand)
+            if pid:
+                armed.append({"symbol": cand["symbol"], "score": cand.get("quality_score"),
+                              "entry_model": cand.get("entry_model"), "id": pid})
+            else:
+                rejected.append({"symbol": cand["symbol"], "score": cand.get("quality_score")})
+
+        positions = db.get_portfolio(include_pending=True)
+        report = {
+            "date": datetime.now(_IST).date().isoformat(),
+            "regime": current_regime(),
+            "pending": pending, "exits": exits, "rescore": rescore,
+            "candidates_evaluated": len(candidates),
+            "armed": armed, "rejected_count": len(rejected),
+            "counts": db.get_counts(),
+            "portfolio_quality": momentum_classifier.portfolio_quality(positions),
+            "journal_stats": db.get_journal_stats(),
+        }
+        _persist_report(report)
+        log.info("[MomentumPortfolio] run: armed=%d exits=%d triggered=%d rescored=%d regime=%s quality=%s",
+                 len(armed), exits.get("exited", 0), pending.get("triggered", 0),
+                 rescore.get("reclassified", 0), report["regime"],
+                 report["portfolio_quality"].get("quality"))
+        return report
+
+
+def _persist_report(report: dict) -> None:
+    """Best-effort daily report to Redis for the dashboard/audit. Never raises."""
+    try:
+        from dashboard.backend.cache import _get_redis
+        import json
+        r = _get_redis()
+        if r is not None:
+            r.setex(f"momentum_portfolio:report:{report['date']}", 3 * 86400,
+                    json.dumps(report, default=str))
+    except Exception:
+        pass

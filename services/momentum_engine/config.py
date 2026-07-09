@@ -102,6 +102,16 @@ def cfg() -> dict[str, Any]:
         "MOMENTUM_MAX_LOSS_PCT": _f("MOMENTUM_MAX_LOSS_PCT", 12.0),   # hard backstop
         "MOMENTUM_TIME_EXIT_DAYS": _i("MOMENTUM_TIME_EXIT_DAYS", 40),
         "MOMENTUM_PENDING_MAX_DAYS": _i("MOMENTUM_PENDING_MAX_DAYS", 7),
+        # ── Classification + quality-optimizing replacement (Phase B) ──
+        "MOM_CLASS_ELITE": _f("MOM_CLASS_ELITE", 78.0),
+        "MOM_CLASS_GOOD": _f("MOM_CLASS_GOOD", 64.0),
+        "MOM_CLASS_WEAK": _f("MOM_CLASS_WEAK", 50.0),
+        "MOM_MAX_SECTOR_SHARE": _f("MOM_MAX_SECTOR_SHARE", 0.34),      # diversification target
+        "MOM_SECTOR_CONCENTRATION_PENALTY": _f("MOM_SECTOR_CONCENTRATION_PENALTY", 20.0),
+        "MOM_REPLACE_MIN_QUALITY_GAIN": _f("MOM_REPLACE_MIN_QUALITY_GAIN", 2.0),
+        # candidate pipeline
+        "MOMENTUM_TRACKER_ENABLED": _flag("MOMENTUM_TRACKER_ENABLED", "0"),  # scheduler loop
+        "MOMENTUM_CANDIDATE_LIMIT": _i("MOMENTUM_CANDIDATE_LIMIT", 60),
     }
 
 

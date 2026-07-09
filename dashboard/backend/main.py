@@ -190,6 +190,16 @@ async def lifespan(app: FastAPI):
         log.info("Portfolio tracker started")
     except Exception as exc:
         log.warning("Portfolio tracker not started: %s", exc)
+    try:
+        # Independent Momentum scheduler — idles until MOMENTUM_TRACKER_ENABLED=1
+        # AND MOMENTUM_PORTFOLIO_ENABLED=1 (Swing/LT tracker unaffected).
+        from dashboard.backend.db.momentum_portfolio import init_momentum_db
+        init_momentum_db()
+        from services.momentum_tracker import start_momentum_tracker
+        start_momentum_tracker()
+        log.info("Momentum tracker started (gated)")
+    except Exception as exc:
+        log.warning("Momentum tracker not started: %s", exc)
     # ── Pre-warm discovery cache in background ─────────────────────────────
     def _prewarm_discovery():
         try:
