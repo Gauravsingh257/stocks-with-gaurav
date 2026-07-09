@@ -80,12 +80,49 @@ CREATE INDEX IF NOT EXISTS idx_mom_journal_closed ON momentum_journal(closed_at 
 """
 
 
+# Phase-B attribution columns (additive; nullable; safe on old rows).
+_ATTR_COLS = [
+    ("discovery_rank", "INTEGER"),
+    ("momentum_rank", "INTEGER"),
+    ("selection_reason", "TEXT"),
+    ("replacement_reason", "TEXT"),
+    ("classification", "TEXT"),   # ELITE | GOOD | WEAK | REPLACE
+]
+
+
+def _migrate_attr(conn) -> None:
+    have = {r[1] for r in conn.execute("PRAGMA table_info(momentum_positions)").fetchall()}
+    for name, decl in _ATTR_COLS:
+        if name not in have:
+            conn.execute(f"ALTER TABLE momentum_positions ADD COLUMN {name} {decl}")
+    have_j = {r[1] for r in conn.execute("PRAGMA table_info(momentum_journal)").fetchall()}
+    for name, decl in (("discovery_rank", "INTEGER"), ("momentum_rank", "INTEGER"),
+                       ("selection_reason", "TEXT"), ("replacement_reason", "TEXT")):
+        if name not in have_j:
+            conn.execute(f"ALTER TABLE momentum_journal ADD COLUMN {name} {decl}")
+
+
 def init_momentum_db() -> None:
     conn = get_connection()
     try:
         conn.executescript(_DDL)
+        _migrate_attr(conn)
         conn.commit()
         logger.info("[MomentumPortfolio] tables initialised")
+    finally:
+        conn.close()
+
+
+def set_classification(position_id: int, classification: str, quality_score: float | None = None) -> None:
+    conn = get_connection()
+    try:
+        if quality_score is not None:
+            conn.execute("UPDATE momentum_positions SET classification=?, quality_score=?, updated_at=? WHERE id=?",
+                         (classification, quality_score, datetime.now(_IST).isoformat(), position_id))
+        else:
+            conn.execute("UPDATE momentum_positions SET classification=?, updated_at=? WHERE id=?",
+                         (classification, datetime.now(_IST).isoformat(), position_id))
+        conn.commit()
     finally:
         conn.close()
 
@@ -96,6 +133,7 @@ _INSERT_COLS = [
     "risk_model", "regime", "sector", "rs_20d", "volume_ratio", "trend_quality", "atr_pct",
     "base_atr_pct", "breakout_score", "extension_atr", "entry_reason", "position_size",
     "risk_weight_pct", "reasoning",
+    "discovery_rank", "momentum_rank", "selection_reason", "replacement_reason",
 ]
 
 
