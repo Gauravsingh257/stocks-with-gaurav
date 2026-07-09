@@ -49,6 +49,7 @@ from dashboard.backend.routes.watchlist_os import router as watchlist_os_router
 from dashboard.backend.routes.command_center import router as command_center_router
 from dashboard.backend.routes.user_product import router as user_product_router
 from dashboard.backend.routes.risk_dashboard import router as risk_dashboard_router
+from dashboard.backend.routes.rejection_analysis import router as rejection_analysis_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 from dashboard.backend.terminal_ws import trades_ws_endpoint, start_terminal_ws, stop_terminal_ws
 
@@ -378,6 +379,7 @@ app.include_router(auth_router)
 app.include_router(watchlist_os_router)
 app.include_router(command_center_router)
 app.include_router(user_product_router)
+app.include_router(rejection_analysis_router)      # Phase-1: discovery→rejected export (read-only)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
 app.include_router(risk_dashboard_router)  # Read-only Risk Engine Dashboard (internal)
 try:
