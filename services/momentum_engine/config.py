@@ -81,9 +81,27 @@ def cfg() -> dict[str, Any]:
         "MOM_REGIMES_ALLOWED": os.getenv("MOM_REGIMES_ALLOWED", "TRENDING_UP,SIDEWAYS"),
         # (SIDEWAYS kept for early breakouts; disable via env to be stricter. TRENDING_DOWN never allowed.)
 
-        # ── Portfolio integration (Phase 7 — read here, applied there) ──
-        "MOMENTUM_MAX_POSITIONS": _i("MOMENTUM_MAX_POSITIONS", 6),   # hard sub-allocation cap within the shared swing book
-        "MOMENTUM_ALLOCATION_PCT": _f("MOMENTUM_ALLOCATION_PCT", 0.0),  # 0 until controlled rollout (Phase 12)
+        # ── Independent Momentum PORTFOLIO ──
+        "MOMENTUM_PORTFOLIO_ENABLED": _flag("MOMENTUM_PORTFOLIO_ENABLED", "0"),  # master for the live independent book
+        "MOMENTUM_MAX_POSITIONS": _i("MOMENTUM_MAX_POSITIONS", 20),
+        "MOMENTUM_ALLOCATION_PCT": _f("MOMENTUM_ALLOCATION_PCT", 0.0),
+        "MOMENTUM_ALLOW_DUP_EXPOSURE": _flag("MOMENTUM_ALLOW_DUP_EXPOSURE", "0"),  # skip names already ACTIVE in Swing
+        "MOMENTUM_REPLACEMENT_MIN_EDGE": _f("MOMENTUM_REPLACEMENT_MIN_EDGE", 5.0),  # new score must beat weakest by this
+        # risk / sizing profile (INDEPENDENT of the Swing risk engine)
+        "MOMENTUM_NOTIONAL_CAPITAL": _f("MOMENTUM_NOTIONAL_CAPITAL", 1_000_000.0),
+        "MOMENTUM_RISK_PER_TRADE_PCT": _f("MOMENTUM_RISK_PER_TRADE_PCT", 1.0),
+        # exit engine profile
+        "MOMENTUM_STOP_METHOD": os.getenv("MOMENTUM_STOP_METHOD", "hybrid"),
+        "MOMENTUM_STOP_K": _f("MOMENTUM_STOP_K", 1.5),
+        "MOMENTUM_STOP_MAX_PCT": _f("MOMENTUM_STOP_MAX_PCT", 10.0),
+        "MOMENTUM_TRAIL_METHOD": os.getenv("MOMENTUM_TRAIL_METHOD", "atr_chandelier"),
+        "MOMENTUM_TRAIL_K": _f("MOMENTUM_TRAIL_K", 3.0),
+        "MOMENTUM_TRAIL_EMA_N": _i("MOMENTUM_TRAIL_EMA_N", 20),
+        "MOMENTUM_TRAIL_STRUCT_LOOKBACK": _i("MOMENTUM_TRAIL_STRUCT_LOOKBACK", 10),
+        "MOMENTUM_BREAKEVEN_R": _f("MOMENTUM_BREAKEVEN_R", 1.0),
+        "MOMENTUM_MAX_LOSS_PCT": _f("MOMENTUM_MAX_LOSS_PCT", 12.0),   # hard backstop
+        "MOMENTUM_TIME_EXIT_DAYS": _i("MOMENTUM_TIME_EXIT_DAYS", 40),
+        "MOMENTUM_PENDING_MAX_DAYS": _i("MOMENTUM_PENDING_MAX_DAYS", 7),
     }
 
 
