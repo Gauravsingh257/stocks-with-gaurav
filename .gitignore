@@ -104,6 +104,9 @@ cloudflared.exe
 # --- TEMP SCRIPTS (prefixed with _) ---
 _*.py
 _*.txt
+# ...but never ignore package __init__ files (they match _*.py)
+!__init__.py
+!**/__init__.py
 
 # --- LARGE GENERATED FILES (not needed in repo) ---
 nfo_instruments.json
