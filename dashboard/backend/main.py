@@ -51,6 +51,7 @@ from dashboard.backend.routes.user_product import router as user_product_router
 from dashboard.backend.routes.risk_dashboard import router as risk_dashboard_router
 from dashboard.backend.routes.rejection_analysis import router as rejection_analysis_router
 from dashboard.backend.routes.momentum_portfolio import router as momentum_portfolio_router
+from dashboard.backend.routes.portfolio_intelligence import router as portfolio_intelligence_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 from dashboard.backend.terminal_ws import trades_ws_endpoint, start_terminal_ws, stop_terminal_ws
 
@@ -200,6 +201,16 @@ async def lifespan(app: FastAPI):
         log.info("Momentum tracker started (gated)")
     except Exception as exc:
         log.warning("Momentum tracker not started: %s", exc)
+    try:
+        # Portfolio Intelligence Layer scheduler — idles until PIL_ENABLED +
+        # PIL_REPORTS_ENABLED. Read-only over the engines; writes only pil_* tables.
+        from dashboard.backend.db.pil import ensure_tables as _pil_ensure
+        _pil_ensure()
+        from services.pil.scheduler import start_pil_scheduler
+        start_pil_scheduler()
+        log.info("PIL scheduler started (gated)")
+    except Exception as exc:
+        log.warning("PIL scheduler not started: %s", exc)
     # ── Pre-warm discovery cache in background ─────────────────────────────
     def _prewarm_discovery():
         try:
@@ -392,6 +403,7 @@ app.include_router(command_center_router)
 app.include_router(user_product_router)
 app.include_router(rejection_analysis_router)      # Phase-1: discovery→rejected export (read-only)
 app.include_router(momentum_portfolio_router)      # Independent Momentum Portfolio (read-only API)
+app.include_router(portfolio_intelligence_router)  # Portfolio Intelligence Layer (read-only; gated by PIL_ENABLED)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
 app.include_router(risk_dashboard_router)  # Read-only Risk Engine Dashboard (internal)
 try:

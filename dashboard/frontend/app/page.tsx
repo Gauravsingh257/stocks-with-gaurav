@@ -9,6 +9,7 @@ import {
   Target,
 } from "lucide-react";
 import { site } from "@/lib/site";
+import PilHomeRedirect from "@/components/PilHomeRedirect";
 
 export const metadata: Metadata = {
   title: "Educational SMC Research for NSE Traders",
@@ -55,6 +56,7 @@ const process = [
 export default function Home() {
   return (
     <main className="public-home">
+      <PilHomeRedirect />
       <nav className="public-nav" aria-label="Public navigation">
         <Link href="/" className="public-brand" aria-label={site.name}>
           <span className="public-brand-mark">SG</span>
