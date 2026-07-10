@@ -66,6 +66,36 @@ def comparison():
     return {"metrics": met, "order": ["SWING", "LONGTERM", "MOMENTUM", "COMBINED"]}
 
 
+@router.get("/exposure", dependencies=[Depends(_guard)])
+def exposure():
+    """Cross-portfolio exposure, concentration, correlation + threshold warnings."""
+    from services.pil import accounting, exposure as exp
+    return exp.compute(accounting.reconstruct_all())
+
+
+@router.get("/risk", dependencies=[Depends(_guard)])
+def risk():
+    """Compact risk view: concentration, beta, diversification, correlation,
+    per-book risk scores + active warnings."""
+    from services.pil import accounting, exposure as exp, metrics
+    books = accounting.reconstruct_all()
+    e = exp.compute(books)
+    met = metrics.metrics_all(books)
+    return {
+        "portfolio_beta": e["portfolio_beta"],
+        "hhi": e["hhi"],
+        "effective_holdings": e["effective_holdings"],
+        "diversification_score": e["diversification_score"],
+        "top10_pct": e["top10_pct"],
+        "cash_pct": e["cash_pct"],
+        "liquidity_coverage_pct": e["liquidity_coverage_pct"],
+        "correlation": e["correlation"],
+        "risk_scores": {b: met[b]["risk_score"] for b in met},
+        "max_drawdowns": {b: met[b]["max_drawdown_pct"] for b in met},
+        "warnings": e["warnings"],
+    }
+
+
 @router.get("/config", dependencies=[Depends(_guard)])
 def config():
     from services.pil import config as pil_config

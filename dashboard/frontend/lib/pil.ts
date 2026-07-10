@@ -62,6 +62,37 @@ export async function fetchComparison(): Promise<{ metrics: Record<string, BookM
   return pilFetch("/api/intelligence/comparison");
 }
 
+export interface Bucket { name: string; value: number; pct: number; count: number; books: string[]; }
+export interface Holding { symbol: string; value: number; pct: number; pct_nav: number; sector: string; books: string[]; }
+export interface Warning { type: string; severity: string; message: string; value: number; threshold: number; }
+
+export interface Exposure {
+  nav: number;
+  deployed: number;
+  cash_pct: number;
+  by_sector: Bucket[];
+  by_industry: Bucket[];
+  by_market_cap: Bucket[];
+  by_theme: Bucket[];
+  by_book: Bucket[];
+  holdings: Holding[];
+  top10: Holding[];
+  top10_pct: number;
+  largest_holding: Holding | null;
+  hhi: number;
+  effective_holdings: number;
+  diversification_score: number;
+  portfolio_beta: number;
+  liquidity_coverage_pct: number;
+  heatmap: Record<string, number | string>[];
+  correlation: { engines: string[]; matrix: Record<string, Record<string, number | null>> };
+  warnings: Warning[];
+}
+
+export async function fetchExposure(): Promise<Exposure> {
+  return pilFetch("/api/intelligence/exposure");
+}
+
 export async function fetchCombined(): Promise<{
   books: Record<string, { ledger: Record<string, unknown>; equity_curve: EquityPoint[]; metrics: BookMetrics }>;
   order: string[];
