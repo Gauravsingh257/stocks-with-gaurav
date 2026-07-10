@@ -24,6 +24,17 @@ Engine version: V4 Modular (`smc_mtf_engine_v4.py`) — v4.2.1. **System is LIVE
 | `models/` | Dataclass models (running trades, etc.) |
 | `smc_trading_engine/` | Reusable SMC library — only `strategy/entry_model.py` is imported by live engine |
 
+## Portfolio Intelligence Layer (PIL)
+Additive, **read-only** PMS layer above the three engines (Swing/LT/Momentum) — it
+only observes/measures/reports and **never influences an engine**. Flag-gated
+(`PIL_ENABLED`, default OFF). Code: `services/pil/` (accounting, metrics, exposure,
+scorecard, analytics, allocation, health, reports, alerts, scheduler). API:
+`dashboard/backend/routes/portfolio_intelligence.py` → `/api/intelligence/*`.
+Storage: isolated `pil_*` tables (`dashboard/backend/db/pil.py`). UI:
+`dashboard/frontend/app/intelligence/*` (nav gated by `NEXT_PUBLIC_PIL_ENABLED`).
+Reconstructs a ₹ virtual ledger from existing rows (Swing/LT are %-only) via a
+configurable book-capital accounting model. Docs: `docs/pil/`.
+
 ## Trade Data Flow
 1. Engine scans → `ACTIVE_TRADES` list (in-memory) in `smc_mtf_engine_v4.py`
 2. Crash recovery → persisted to `smc_engine_state.db` (SQLite key-value via `utils/state_db.py`)
