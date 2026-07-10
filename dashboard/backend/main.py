@@ -201,6 +201,16 @@ async def lifespan(app: FastAPI):
         log.info("Momentum tracker started (gated)")
     except Exception as exc:
         log.warning("Momentum tracker not started: %s", exc)
+    try:
+        # Portfolio Intelligence Layer scheduler — idles until PIL_ENABLED +
+        # PIL_REPORTS_ENABLED. Read-only over the engines; writes only pil_* tables.
+        from dashboard.backend.db.pil import ensure_tables as _pil_ensure
+        _pil_ensure()
+        from services.pil.scheduler import start_pil_scheduler
+        start_pil_scheduler()
+        log.info("PIL scheduler started (gated)")
+    except Exception as exc:
+        log.warning("PIL scheduler not started: %s", exc)
     # ── Pre-warm discovery cache in background ─────────────────────────────
     def _prewarm_discovery():
         try:

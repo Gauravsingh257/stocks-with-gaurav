@@ -16,8 +16,8 @@ const TABS: { href: string; label: string; enabled: boolean }[] = [
   { href: "/intelligence/scorecards", label: "Scorecards", enabled: true },
   { href: "/intelligence/analytics", label: "Analytics", enabled: true },
   { href: "/intelligence/allocation", label: "Allocation", enabled: true },
-  { href: "/intelligence/health", label: "Health", enabled: false },
-  { href: "/intelligence/reports", label: "Reports", enabled: false },
+  { href: "/intelligence/health", label: "Health", enabled: true },
+  { href: "/intelligence/reports", label: "Reports", enabled: true },
   { href: "/intelligence/alerts", label: "Alerts", enabled: false },
 ];
 

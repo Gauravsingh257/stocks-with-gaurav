@@ -140,6 +140,26 @@ export interface Allocation {
   warnings: Warning[];
 }
 
+export interface BookHealth { book: string; sub_scores: Record<string, number>; overall: number; status: string; worst_factor: string; best_factor: string; }
+export type HealthMap = Record<string, BookHealth> & { overall_status?: string; overall_score?: number };
+export async function fetchHealth(): Promise<HealthMap> { return pilFetch("/api/intelligence/health"); }
+
+export async function fetchReport(kind: "daily" | "monthly", period?: string): Promise<{ kind: string; period: string; payload: Record<string, unknown>; html?: string | null }> {
+  const q = new URLSearchParams({ kind });
+  if (period) q.set("period", period);
+  return pilFetch(`/api/intelligence/reports?${q.toString()}`);
+}
+
+export async function generateReport(kind: "daily" | "monthly", period?: string): Promise<{ kind: string; period: string; payload: Record<string, unknown>; html?: string | null }> {
+  const q = new URLSearchParams({ kind });
+  if (period) q.set("period", period);
+  const res = await fetch(`${API_BASE}/api/intelligence/reports/generate?${q.toString()}`, { method: "POST" });
+  if (!res.ok) throw new Error(`generate report → ${res.status}`);
+  return res.json();
+}
+
+export const STATUS_COLOR: Record<string, string> = { GREEN: "#34d399", YELLOW: "#f59e0b", RED: "#f43f5e" };
+
 export async function fetchAnalytics(): Promise<Analytics> { return pilFetch("/api/intelligence/analytics"); }
 export async function fetchAllocation(): Promise<Allocation> { return pilFetch("/api/intelligence/allocation"); }
 

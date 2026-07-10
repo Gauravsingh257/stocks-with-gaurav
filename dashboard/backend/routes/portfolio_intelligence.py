@@ -165,6 +165,43 @@ def set_allocation_targets(req: AllocationTargets):
     return al.compute(accounting.reconstruct_all())
 
 
+@router.get("/health", dependencies=[Depends(_guard)])
+def health():
+    """Per-book + combined health scores → GREEN/YELLOW/RED (Part 6)."""
+    from services.pil import accounting, health as h
+    return h.compute(accounting.reconstruct_all())
+
+
+@router.get("/reports", dependencies=[Depends(_guard)])
+def reports(kind: str = Query("daily", pattern="^(daily|monthly)$"),
+            period: str | None = None):
+    """Return a stored report (latest of `kind` if no period), or generate it."""
+    from services.pil import reports as rep
+    from dashboard.backend.db import pil as pildb
+    stored = pildb.get_report(kind, period)
+    if stored:
+        return stored
+    report = rep.build_monthly(period) if kind == "monthly" else rep.build_daily(period)
+    return {"kind": kind, "period": report["period"], "payload": report,
+            "html": report.get("html"), "generated": True}
+
+
+@router.get("/reports/list", dependencies=[Depends(_guard)])
+def reports_list(kind: str = Query("daily", pattern="^(daily|monthly)$"), limit: int = 24):
+    from dashboard.backend.db import pil as pildb
+    return {"kind": kind, "reports": pildb.list_reports(kind, limit)}
+
+
+@router.post("/reports/generate", dependencies=[Depends(_guard)])
+def reports_generate(kind: str = Query("daily", pattern="^(daily|monthly)$"),
+                     period: str | None = None):
+    """On-demand generation + persistence (also sends Telegram if enabled)."""
+    from services.pil import reports as rep
+    report = rep.generate_and_store(kind, period, notify=True)
+    return {"kind": kind, "period": report["period"], "html": report.get("html"),
+            "payload": {k: v for k, v in report.items() if k != "html"}}
+
+
 @router.get("/config", dependencies=[Depends(_guard)])
 def config():
     from services.pil import config as pil_config
