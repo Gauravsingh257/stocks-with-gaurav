@@ -172,9 +172,12 @@ async def lifespan(app: FastAPI):
     try:
         from dashboard.backend.db.portfolio import init_portfolio_db, seed_portfolio_from_recommendations
         init_portfolio_db()
+        # Boot seed is SILENT (no entry alerts) — pre-existing running trades
+        # aren't "new" entries. Real-time alerts fire from the tracker's
+        # _sync_engine_trades() for trades taken after boot.
         seeded = seed_portfolio_from_recommendations()
         if seeded:
-            log.info("[Portfolio] Seeded %d positions from existing running_trades", seeded)
+            log.info("[Portfolio] Seeded %d positions from existing running_trades", len(seeded))
     except Exception as exc:
         log.warning("Portfolio DB init failed (non-fatal): %s", exc)
     try:

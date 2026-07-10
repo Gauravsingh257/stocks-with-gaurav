@@ -982,10 +982,15 @@ def get_journal_stats(horizon: str | None = None) -> dict:
         conn.close()
 
 
-def seed_portfolio_from_recommendations() -> int:
+def seed_portfolio_from_recommendations() -> list[dict]:
     """
-    One-time migration: seed portfolio from existing active recommendations + running trades.
-    Skips any symbol already in portfolio.
+    Mirror the engine's live running_trades into the system portfolio.
+
+    Originally a one-time boot migration; now also called every tracker cycle so
+    engine trades taken intraday appear on the site within one cycle instead of
+    only at the next web restart. Skips any symbol already committed (ACTIVE or
+    armed PENDING). Returns the list of NEWLY-seeded positions so the caller can
+    fire a real-time entry alert for each (empty list when nothing new).
     """
     conn = get_connection()
     try:
@@ -1012,15 +1017,18 @@ def seed_portfolio_from_recommendations() -> int:
             ).fetchall()
         }
 
-        seeded = 0
+        new_positions: list[dict] = []
         for row in rows:
             row_d = dict(row)
             symbol = row_d["symbol"]
             horizon = row_d.get("agent_type") or "SWING"
 
-            # Skip if already in portfolio
+            # Skip if already committed — ACTIVE *or* armed PENDING. (Previously
+            # only ACTIVE was checked, so an arm-on-tap idea for the same symbol
+            # could be duplicated by the seed.)
             existing = conn.execute(
-                "SELECT 1 FROM portfolio_positions WHERE symbol = ? AND horizon = ? AND status = 'ACTIVE'",
+                "SELECT 1 FROM portfolio_positions WHERE symbol = ? AND horizon = ? "
+                "AND status IN ('ACTIVE','PENDING')",
                 (symbol, horizon),
             ).fetchone()
             if existing:
@@ -1042,14 +1050,22 @@ def seed_portfolio_from_recommendations() -> int:
             t1 = float(targets[0]) if len(targets) > 0 else None
             t2 = float(targets[-1]) if len(targets) > 1 else t1
 
+            # A seeded engine trade is a genuine live fill, so record the real
+            # entry time (entry_triggered_at) as entered_at and the entry as the
+            # arm reference — otherwise the row looks malformed (both null) and
+            # days-held can't anchor to the true entry.
+            entered_at = (row_d.get("entry_triggered_at") or row_d.get("created_at")
+                          or datetime.now(_IST).isoformat())
+            arm_ref = row_d.get("current_price") or row_d["entry_price"]
             conn.execute(
                 """
                 INSERT INTO portfolio_positions
                     (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
                      current_price, profit_loss, profit_loss_pct, drawdown, drawdown_pct,
                      high_since_entry, low_since_entry, days_held,
-                     confidence_score, reasoning, recommendation_id, status, created_at)
-                VALUES (?, ?, 'LONG', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
+                     confidence_score, reasoning, recommendation_id, status,
+                     arm_ref_price, entered_at, created_at)
+                VALUES (?, ?, 'LONG', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
                 """,
                 (
                     symbol, horizon,
@@ -1062,15 +1078,22 @@ def seed_portfolio_from_recommendations() -> int:
                     row_d.get("confidence_score", 0),
                     row_d.get("reasoning", ""),
                     row_d.get("recommendation_id"),
+                    arm_ref, entered_at,
                     row_d.get("created_at", datetime.now(_IST).isoformat()),
                 ),
             )
             active_counts[horizon] = active_counts.get(horizon, 0) + 1
-            seeded += 1
+            new_positions.append({
+                "symbol": symbol, "horizon": horizon,
+                "entry_price": float(row_d["entry_price"]),
+                "current_price": float(row_d.get("current_price") or row_d["entry_price"]),
+                "stop_loss": float(row_d["stop_loss"]),
+                "target_1": t1,
+            })
 
         conn.commit()
-        if seeded:
-            logger.info("[Portfolio] Seeded %d positions from existing running_trades", seeded)
-        return seeded
+        if new_positions:
+            logger.info("[Portfolio] Seeded %d position(s) from live running_trades", len(new_positions))
+        return new_positions
     finally:
         conn.close()

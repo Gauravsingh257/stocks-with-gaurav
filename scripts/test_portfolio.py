@@ -16,7 +16,7 @@ def main():
 
     # 2. Seed from existing running trades
     seeded = seed_portfolio_from_recommendations()
-    print(f"[OK] Seeded {seeded} positions from existing running_trades")
+    print(f"[OK] Seeded {len(seeded)} positions from existing running_trades")
 
     # 3. Check counts
     counts = get_portfolio_counts()

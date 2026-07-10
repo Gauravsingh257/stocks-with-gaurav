@@ -177,6 +177,40 @@ def _promote_final_ideas_on_tap() -> int:
         return 0
 
 
+def _sync_engine_trades() -> int:
+    """Mirror the engine's live running_trades into the system portfolio EVERY
+    cycle (not just at web boot) and fire an instant Telegram entry alert for
+    each newly-seeded position — so an engine trade taken intraday shows on the
+    site + notifies within one tracker cycle instead of at the next restart.
+
+    Flag-gated PORTFOLIO_LIVE_SYNC_ENABLED (default on). Best-effort; the boot
+    seed stays silent, so only trades taken AFTER boot ever alert here. Alerts
+    are inherently deduped: the seed skips symbols already committed, so a given
+    entry is seeded — and alerted — exactly once."""
+    if os.getenv("PORTFOLIO_LIVE_SYNC_ENABLED", "1").strip().lower() not in {"1", "true", "yes"}:
+        return 0
+    try:
+        from dashboard.backend.db.portfolio import seed_portfolio_from_recommendations
+        from services.portfolio_manager import send_portfolio_triggered_alert
+
+        new_rows = seed_portfolio_from_recommendations()
+        for r in new_rows:
+            try:
+                send_portfolio_triggered_alert(
+                    r["symbol"], r["horizon"], float(r["entry_price"]),
+                    float(r.get("current_price") or r["entry_price"]),
+                    float(r["stop_loss"]), r.get("target_1"),
+                )
+            except Exception:
+                log.warning("[LiveSync] entry alert failed for %s (best-effort)", r.get("symbol"))
+        if new_rows:
+            log.info("[LiveSync] mirrored %d engine trade(s) into portfolio + alerted", len(new_rows))
+        return len(new_rows)
+    except Exception:
+        log.exception("[LiveSync] engine-trade sync failed")
+        return 0
+
+
 def _portfolio_tracker_loop() -> None:
     from services.trade_tracker import _current_interval
     log.info("Portfolio tracker started")
@@ -196,6 +230,12 @@ def _portfolio_tracker_loop() -> None:
             _promote_final_ideas_on_tap()
         except Exception:
             log.exception("Portfolio tracker: arm-on-tap error")
+        try:
+            # 3) mirror engine live trades into the portfolio in real-time and
+            #    fire an instant Telegram entry alert for each new one.
+            _sync_engine_trades()
+        except Exception:
+            log.exception("Portfolio tracker: engine-trade live-sync error")
         try:
             # Watchlist entry-trigger monitor (flag-gated WATCHLIST_MONITOR_ENABLED;
             # inert until enabled). Same loop, no separate scheduler/engine.

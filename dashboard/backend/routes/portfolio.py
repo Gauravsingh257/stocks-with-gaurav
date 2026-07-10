@@ -216,8 +216,8 @@ def reconcile_entries(dry_run: bool = Query(default=True), token: str = Query(de
 def seed_from_existing():
     """One-time: seed portfolio from existing active running_trades."""
     from dashboard.backend.db.portfolio import seed_portfolio_from_recommendations
-    count = seed_portfolio_from_recommendations()
-    return {"ok": True, "seeded": count}
+    seeded = seed_portfolio_from_recommendations()
+    return {"ok": True, "seeded": len(seeded), "symbols": [p["symbol"] for p in seeded]}
 
 
 # ── Refresh prices (manual trigger) ──────────────────────────────────────
