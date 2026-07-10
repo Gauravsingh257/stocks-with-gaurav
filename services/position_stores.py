@@ -88,7 +88,9 @@ class PortfolioPositionStore:
     def update_metrics(self, position_id: int, **metrics) -> None:
         from dashboard.backend.db.portfolio import update_position_price
 
-        update_position_price(position_id, **metrics)
+        # Guarded: a per-tick refresh must never resurrect a row closed
+        # concurrently (manual close / auto-exit) — atomic no-clobber.
+        update_position_price(position_id, require_active=True, **metrics)
 
     def close(self, position_id: int, exit_price: float, exit_reason: str) -> None:
         from services.portfolio_manager import close_portfolio_position
@@ -149,7 +151,8 @@ class UserPositionStore:
     def update_metrics(self, position_id: int, **metrics) -> None:
         from dashboard.backend.db.watchlist_monitor import update_user_position_metrics
 
-        update_user_position_metrics(position_id, **metrics)
+        # Guarded: never resurrect a user position closed concurrently.
+        update_user_position_metrics(position_id, require_active=True, **metrics)
 
     def close(self, position_id: int, exit_price: float, exit_reason: str) -> None:
         from dashboard.backend.db.watchlist_monitor import close_user_position
