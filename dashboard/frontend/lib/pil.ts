@@ -93,6 +93,32 @@ export async function fetchExposure(): Promise<Exposure> {
   return pilFetch("/api/intelligence/exposure");
 }
 
+export interface AttrGroup { name: string; n: number; hit_rate: number; avg_pnl_pct: number; total_pnl_pct: number; }
+export interface Scorecard {
+  book: string; scope: string; period: string;
+  funnel: { closed: number; active: number; pending: number; expired: number; triggered_lifetime: number; accepted_lifetime: number };
+  performance: { closed_trades: number; hit_rate_pct: number; expectancy: number; expectancy_pct: number; profit_factor: number; avg_hold_days: number; realized_pnl: number };
+  attribution: {
+    best_sector: AttrGroup | null; worst_sector: AttrGroup | null;
+    best_entry_model: AttrGroup | null; worst_entry_model: AttrGroup | null;
+    best_regime: AttrGroup | null; worst_regime: AttrGroup | null;
+  };
+  notable: {
+    top_winners: { symbol: string; pnl_pct: number; exit_reason: string }[];
+    top_losers: { symbol: string; pnl_pct: number; exit_reason: string }[];
+    largest_missed_opportunity: { symbol: string; potential_upside_pct: number } | null;
+    largest_avoided_loss: { symbol: string; risk_avoided_pct: number } | null;
+  };
+  quality: { engine_quality_score: number; portfolio_quality_score: number; ranking_quality: number | null; replacement_efficiency: number | null };
+  error?: string;
+}
+
+export async function fetchScorecards(scope: "daily" | "monthly", period?: string): Promise<{ scope: string; period: string; cards: Record<string, Scorecard> }> {
+  const q = new URLSearchParams({ scope, refresh: "1" });
+  if (period) q.set("period", period);
+  return pilFetch(`/api/intelligence/scorecards?${q.toString()}`);
+}
+
 export async function fetchCombined(): Promise<{
   books: Record<string, { ledger: Record<string, unknown>; equity_curve: EquityPoint[]; metrics: BookMetrics }>;
   order: string[];

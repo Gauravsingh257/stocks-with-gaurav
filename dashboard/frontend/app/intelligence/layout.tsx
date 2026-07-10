@@ -13,7 +13,7 @@ import { LayoutDashboard } from "lucide-react";
 const TABS: { href: string; label: string; enabled: boolean }[] = [
   { href: "/intelligence", label: "Overview", enabled: true },
   { href: "/intelligence/risk", label: "Risk & Exposure", enabled: true },
-  { href: "/intelligence/scorecards", label: "Scorecards", enabled: false },
+  { href: "/intelligence/scorecards", label: "Scorecards", enabled: true },
   { href: "/intelligence/analytics", label: "Analytics", enabled: false },
   { href: "/intelligence/allocation", label: "Allocation", enabled: false },
   { href: "/intelligence/health", label: "Health", enabled: false },

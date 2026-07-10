@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 
 router = APIRouter(prefix="/api/intelligence", tags=["portfolio-intelligence"])
 log = logging.getLogger("dashboard.pil")
@@ -94,6 +94,27 @@ def risk():
         "max_drawdowns": {b: met[b]["max_drawdown_pct"] for b in met},
         "warnings": e["warnings"],
     }
+
+
+@router.get("/scorecards", dependencies=[Depends(_guard)])
+def scorecards(scope: str = Query("daily", pattern="^(daily|monthly)$"),
+               period: str | None = None, refresh: bool = False):
+    """Engine scorecards for all books. Returns the stored card when present
+    (unless refresh=1), else generates + persists on demand."""
+    from services.pil import scorecard
+    from dashboard.backend.db import pil as pildb
+    if not refresh:
+        # try cache first (fast path for the dashboard)
+        cached = {}
+        for b in ("SWING", "LONGTERM", "MOMENTUM", "COMBINED"):
+            card = pildb.get_scorecard(scope, b, period) if period else None
+            if card:
+                cached[b] = card
+        if len(cached) == 4:
+            return {"scope": scope, "period": period, "cards": cached, "cached": True}
+    cards = scorecard.generate_and_store(scope, period)
+    return {"scope": scope, "period": cards.get("COMBINED", {}).get("period", period),
+            "cards": cards, "cached": False}
 
 
 @router.get("/config", dependencies=[Depends(_guard)])
