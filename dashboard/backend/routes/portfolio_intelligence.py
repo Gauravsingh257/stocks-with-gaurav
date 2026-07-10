@@ -202,6 +202,21 @@ def reports_generate(kind: str = Query("daily", pattern="^(daily|monthly)$"),
             "payload": {k: v for k, v in report.items() if k != "html"}}
 
 
+@router.get("/alerts", dependencies=[Depends(_guard)])
+def alerts(active_only: bool = True, limit: int = 100):
+    """Active (or recent) intelligence alerts."""
+    from dashboard.backend.db import pil as pildb
+    return {"alerts": pildb.get_alerts(active_only=active_only, limit=limit)}
+
+
+@router.post("/alerts/evaluate", dependencies=[Depends(_guard)])
+def alerts_evaluate():
+    """Re-evaluate all alert rules now (dedup + self-clear). Also runs on each
+    scheduler tick when PIL_ALERTS_ENABLED."""
+    from services.pil import alerts as al
+    return al.evaluate(notify=True)
+
+
 @router.get("/config", dependencies=[Depends(_guard)])
 def config():
     from services.pil import config as pil_config

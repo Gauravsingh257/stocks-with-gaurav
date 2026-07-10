@@ -160,6 +160,16 @@ export async function generateReport(kind: "daily" | "monthly", period?: string)
 
 export const STATUS_COLOR: Record<string, string> = { GREEN: "#34d399", YELLOW: "#f59e0b", RED: "#f43f5e" };
 
+export interface Alert { id: number; ts: string; book: string; type: string; severity: string; message: string; value: number | null; threshold: number | null; active: number; }
+export async function fetchAlerts(activeOnly = true): Promise<{ alerts: Alert[] }> {
+  return pilFetch(`/api/intelligence/alerts?active_only=${activeOnly}`);
+}
+export async function evaluateAlerts(): Promise<{ fired: unknown[]; cleared: unknown[]; active_count: number }> {
+  const res = await fetch(`${API_BASE}/api/intelligence/alerts/evaluate`, { method: "POST" });
+  if (!res.ok) throw new Error(`evaluate alerts → ${res.status}`);
+  return res.json();
+}
+
 export async function fetchAnalytics(): Promise<Analytics> { return pilFetch("/api/intelligence/analytics"); }
 export async function fetchAllocation(): Promise<Allocation> { return pilFetch("/api/intelligence/allocation"); }
 

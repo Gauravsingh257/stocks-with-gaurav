@@ -120,6 +120,36 @@ export default function IntelligenceOverview() {
     });
   }, [curves]);
 
+  // Drawdown series from the combined curve (Part 9).
+  const drawdownData = useMemo(() => {
+    const c = curves["COMBINED"] || [];
+    let peak = -Infinity;
+    return c.map((p) => {
+      peak = Math.max(peak, p.value);
+      return { date: p.date, dd: peak ? Number((((p.value - peak) / peak) * 100).toFixed(2)) : 0 };
+    });
+  }, [curves]);
+
+  // 30-day rolling annualised Sharpe from the combined curve (Part 9).
+  const rollingSharpe = useMemo(() => {
+    const c = curves["COMBINED"] || [];
+    const rets: { date: string; r: number }[] = [];
+    for (let i = 1; i < c.length; i++) {
+      const prev = c[i - 1].value;
+      if (prev) rets.push({ date: c[i].date, r: c[i].value / prev - 1 });
+    }
+    const W = 30;
+    const out: { date: string; sharpe: number }[] = [];
+    for (let i = W; i <= rets.length; i++) {
+      const win = rets.slice(i - W, i).map((x) => x.r);
+      const mean = win.reduce((s, v) => s + v, 0) / W;
+      const sd = Math.sqrt(win.reduce((s, v) => s + (v - mean) ** 2, 0) / W);
+      const sharpe = sd > 0 ? (mean * 252) / (sd * Math.sqrt(252)) : 0;
+      out.push({ date: rets[i - 1].date, sharpe: Number(sharpe.toFixed(2)) });
+    }
+    return out;
+  }, [curves]);
+
   const returnsBar = useMemo(
     () =>
       ["SWING", "LONGTERM", "MOMENTUM", "COMBINED"].map((b) => ({
@@ -213,6 +243,40 @@ export default function IntelligenceOverview() {
           </BarChart>
         </ResponsiveContainer>
       </Panel>
+
+      {/* Drawdown + rolling Sharpe */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Panel title="Combined Drawdown" subtitle="Underwater curve (% from peak)">
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={drawdownData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+              <defs>
+                <linearGradient id="dd" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.05} />
+                  <stop offset="100%" stopColor="#f43f5e" stopOpacity={0.4} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-dim)" }} minTickGap={40} />
+              <YAxis tick={{ fontSize: 10, fill: "var(--text-dim)" }} width={44} tickFormatter={(v) => `${v}%`} />
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid rgba(244,63,94,0.3)", borderRadius: 8, fontSize: 12 }}
+                formatter={(v) => [`${Number(v)}%`, "Drawdown"]} />
+              <Area type="monotone" dataKey="dd" stroke="#f43f5e" fill="url(#dd)" strokeWidth={1.5} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Panel>
+
+        <Panel title="Rolling Sharpe (30d)" subtitle="Annualised, combined book">
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={rollingSharpe} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-dim)" }} minTickGap={40} />
+              <YAxis tick={{ fontSize: 10, fill: "var(--text-dim)" }} width={34} />
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid rgba(34,211,238,0.3)", borderRadius: 8, fontSize: 12 }} />
+              <Line type="monotone" dataKey="sharpe" stroke={BOOK_COLOR.COMBINED} dot={false} strokeWidth={1.8} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Panel>
+      </div>
 
       {/* Comparison grid */}
       <Panel title="Metric Comparison" subtitle="Every metric computed independently per engine + combined">

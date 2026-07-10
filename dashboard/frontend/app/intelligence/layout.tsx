@@ -18,7 +18,7 @@ const TABS: { href: string; label: string; enabled: boolean }[] = [
   { href: "/intelligence/allocation", label: "Allocation", enabled: true },
   { href: "/intelligence/health", label: "Health", enabled: true },
   { href: "/intelligence/reports", label: "Reports", enabled: true },
-  { href: "/intelligence/alerts", label: "Alerts", enabled: false },
+  { href: "/intelligence/alerts", label: "Alerts", enabled: true },
 ];
 
 export default function IntelligenceLayout({ children }: { children: React.ReactNode }) {
