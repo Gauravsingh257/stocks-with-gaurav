@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/intelligence", tags=["portfolio-intelligence"])
 log = logging.getLogger("dashboard.pil")
@@ -115,6 +116,53 @@ def scorecards(scope: str = Query("daily", pattern="^(daily|monthly)$"),
     cards = scorecard.generate_and_store(scope, period)
     return {"scope": scope, "period": cards.get("COMBINED", {}).get("period", period),
             "cards": cards, "cached": False}
+
+
+@router.get("/analytics", dependencies=[Depends(_guard)])
+def analytics():
+    """Combined-portfolio analytics: contribution, correlation, diversification
+    benefit, optimal allocation, engine leaderboard."""
+    from services.pil import accounting, analytics as an
+    return an.compute(accounting.reconstruct_all())
+
+
+class WhatIfRequest(BaseModel):
+    weights: dict[str, float]
+
+
+@router.post("/analytics/what-if", dependencies=[Depends(_guard)])
+def analytics_what_if(req: WhatIfRequest):
+    """Recompute combined risk/return under arbitrary engine weights."""
+    from services.pil import accounting, analytics as an
+    return an.what_if(accounting.reconstruct_all(), req.weights)
+
+
+@router.get("/analytics/playback", dependencies=[Depends(_guard)])
+def analytics_playback(start: str | None = None, end: str | None = None):
+    from services.pil import accounting, analytics as an
+    return an.playback(accounting.reconstruct_all(), start, end)
+
+
+@router.get("/allocation", dependencies=[Depends(_guard)])
+def allocation():
+    """Current vs target capital allocation, drift, rebalancing needs."""
+    from services.pil import accounting, allocation as al
+    return al.compute(accounting.reconstruct_all())
+
+
+class AllocationTargets(BaseModel):
+    weights: dict[str, float]
+
+
+@router.post("/allocation/targets", dependencies=[Depends(_guard)])
+def set_allocation_targets(req: AllocationTargets):
+    """Persist target allocation weights (normalised). PIL-only config write."""
+    from services.pil import accounting, allocation as al
+    try:
+        al.set_targets(req.weights)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return al.compute(accounting.reconstruct_all())
 
 
 @router.get("/config", dependencies=[Depends(_guard)])

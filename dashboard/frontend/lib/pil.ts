@@ -119,6 +119,46 @@ export async function fetchScorecards(scope: "daily" | "monthly", period?: strin
   return pilFetch(`/api/intelligence/scorecards?${q.toString()}`);
 }
 
+export interface WhatIfResult { weights: Record<string, number>; ann_return_pct: number; ann_vol_pct: number; sharpe: number; max_drawdown_pct: number; }
+export interface Analytics {
+  contribution: { rows: { book: string; pnl: number; contribution_pct: number; return_contribution_pct: number }[]; top_contributor: string | null };
+  correlation: { engines: string[]; matrix: Record<string, Record<string, number | null>> };
+  diversification: { weights: Record<string, number>; per_book_vol_pct: Record<string, number>; weighted_avg_vol_pct: number; combined_vol_pct: number; diversification_benefit_pct: number; diversification_ratio: number };
+  optimal: { max_sharpe: WhatIfResult | null; min_vol: WhatIfResult | null; current: WhatIfResult };
+  leaderboard: Record<string, string>;
+  per_engine: Record<string, { total_return_pct: number; max_drawdown_pct: number; sharpe: number; expectancy_pct: number }>;
+}
+
+export interface AllocationRow { book: string; current_value: number; current_weight: number; target_weight: number; deviation: number; target_value: number; required_delta: number; action: string; }
+export interface Allocation {
+  total_value: number;
+  targets: Record<string, number>;
+  rows: AllocationRow[];
+  rebalance_needed: boolean;
+  cash_required_to_rebalance: number;
+  max_drift: number;
+  warnings: Warning[];
+}
+
+export async function fetchAnalytics(): Promise<Analytics> { return pilFetch("/api/intelligence/analytics"); }
+export async function fetchAllocation(): Promise<Allocation> { return pilFetch("/api/intelligence/allocation"); }
+
+export async function whatIf(weights: Record<string, number>): Promise<WhatIfResult> {
+  const res = await fetch(`${API_BASE}/api/intelligence/analytics/what-if`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights }),
+  });
+  if (!res.ok) throw new Error(`what-if → ${res.status}`);
+  return res.json();
+}
+
+export async function setAllocationTargets(weights: Record<string, number>): Promise<Allocation> {
+  const res = await fetch(`${API_BASE}/api/intelligence/allocation/targets`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights }),
+  });
+  if (!res.ok) throw new Error(`set targets → ${res.status}`);
+  return res.json();
+}
+
 export async function fetchCombined(): Promise<{
   books: Record<string, { ledger: Record<string, unknown>; equity_curve: EquityPoint[]; metrics: BookMetrics }>;
   order: string[];
