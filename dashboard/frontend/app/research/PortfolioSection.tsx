@@ -10,10 +10,31 @@ interface PortfolioSectionProps {
   pending?: number;         // armed (awaiting entry) count
   max: number;
   journalStats: PortfolioJournalStats | null;
-  horizon: "SWING" | "LONGTERM";
+  horizon: "SWING" | "LONGTERM" | "MOMENTUM";
   // "live" = active trades (+ closed history); "awaiting" = only armed
   // (PENDING) ideas. Each is its own tab so the page stays short.
   viewMode?: "live" | "awaiting";
+}
+
+// Portfolio glyph per book.
+function horizonIcon(h: string): string {
+  return h === "SWING" ? "📊" : h === "LONGTERM" ? "🏦" : "🚀";
+}
+
+// Momentum re-scoring classification → colour.
+function classBadge(cls: string | null | undefined) {
+  if (!cls) return null;
+  const map: Record<string, { c: string; bg: string }> = {
+    ELITE: { c: "#00ff88", bg: "rgba(0,255,136,0.14)" },
+    GOOD: { c: "#00d18c", bg: "rgba(0,209,140,0.12)" },
+    WEAK: { c: "#f0c060", bg: "rgba(240,192,96,0.12)" },
+    REPLACE: { c: "#ff6b88", bg: "rgba(255,77,109,0.12)" },
+  };
+  const s = map[cls] || { c: "#aaa", bg: "rgba(170,170,170,0.1)" };
+  return (
+    <span style={{ fontSize: "0.6rem", fontWeight: 700, color: s.c, background: s.bg,
+      padding: "1px 6px", borderRadius: 999, border: `1px solid ${s.c}33` }}>{cls}</span>
+  );
 }
 
 function fmt(v: number | null | undefined, dec = 2) {
@@ -113,7 +134,7 @@ function statusBadge(status: string) {
   );
 }
 
-function PositionCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
+function PositionCard({ pos, rank }: { pos: PortfolioPosition & { classification?: string | null; quality_score?: number | null }; rank: number }) {
   const entry = pos.entry_price;
   const cmp = pos.current_price ?? entry;
   const sl = pos.stop_loss;
@@ -155,6 +176,12 @@ function PositionCard({ pos, rank }: { pos: PortfolioPosition; rank: number }) {
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {classBadge(pos.classification)}
+          {typeof pos.quality_score === "number" && (
+            <span style={{ fontSize: "0.6rem", color: "var(--text-secondary)" }}>
+              Q{pos.quality_score.toFixed(0)}
+            </span>
+          )}
           {statusBadge(pos.status)}
           <a href={tvUrl(pos.symbol)} target="_blank" rel="noopener noreferrer"
              style={{ fontSize: "0.65rem", color: "var(--text-secondary)" }}>
@@ -274,7 +301,7 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
       <div className="glass" style={{ padding: 16, position: "relative" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
           <h2 style={{ margin: 0, fontSize: "1.05rem" }}>
-            {horizon === "SWING" ? "📊" : "🏦"} {title} — Awaiting Entry
+            {horizonIcon(horizon)} {title} — Awaiting Entry
           </h2>
           <span style={{
             fontSize: "0.66rem", fontWeight: 700, color: "#f0c060",
@@ -306,7 +333,7 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
-            {horizon === "SWING" ? "📊" : "🏦"} {title}
+            {horizonIcon(horizon)} {title}
           </h2>
           <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
             {Math.min(count, max)} Active · {Math.min(count + pendingCount, max)}/{max} slots

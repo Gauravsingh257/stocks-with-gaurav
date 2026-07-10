@@ -6,7 +6,7 @@ import { Bot, RefreshCw, Zap, TrendingUp, History, Search, X, Download, ChevronD
 import { StaggerContainer, StaggerItem } from "@/components/MotionWrappers";
 import StockCard from "@/components/StockCard";
 
-import { api, type LayerReportResponse, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
+import { api, type LayerReportResponse, type MomentumSummary, type PortfolioSummary, type ResearchAggregatePerformance, type ResearchCoverageResponse, type ResearchDecisionCard, type ResearchDecisionFeedResponse, type RunningTradeMonitorItem, type ScanStatusResponse, type StockAnalysis, type StockSuggestion } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { isMarketLive, offHoursNotice } from "@/lib/marketSession";
 
@@ -138,6 +138,7 @@ export default function ResearchPage() {
   const [layerReport, setLayerReport] = useState<LayerReportResponse | null>(null);
   const [perf, setPerf] = useState<ResearchAggregatePerformance | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
+  const [momentum, setMomentum] = useState<MomentumSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [decisionFeedLoading, setDecisionFeedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -160,7 +161,7 @@ export default function ResearchPage() {
   const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
   const [activeTab, setActiveTab] = useState<ResearchTab>("research");
-  const [portfolioView, setPortfolioView] = useState<"swing" | "swing-await" | "lt" | "lt-await">("swing");
+  const [portfolioView, setPortfolioView] = useState<"swing" | "swing-await" | "lt" | "lt-await" | "momentum" | "momentum-await">("swing");
   const decisionFeedLoadingRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const scanPollTokenRef = useRef(0);
@@ -198,8 +199,9 @@ export default function ResearchPage() {
         api.researchPerformance(),
         api.portfolioSummary(),
         api.scanStatus(),
+        api.momentumSummary(),
       ]);
-      const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes, scanStatusRes] = results;
+      const [swingRes, longtermRes, runningRes, coverageRes, layerReportRes, perfRes, portfolioRes, scanStatusRes, momentumRes] = results;
       if (swingRes.status === "fulfilled") {
         setLastSwingScan((swingRes.value as Record<string, unknown>)?.last_scan_time as string | null ?? null);
         if ((swingRes.value as Record<string, unknown>)?.gated) setGated(true);
@@ -223,6 +225,9 @@ export default function ResearchPage() {
       }
       if (portfolioRes.status === "fulfilled") {
         setPortfolio(portfolioRes.value ?? null);
+      }
+      if (momentumRes.status === "fulfilled") {
+        setMomentum(momentumRes.value ?? null);
       }
       if (scanStatusRes.status === "fulfilled") {
         const nextStatus = scanStatusRes.value ?? null;
@@ -867,6 +872,12 @@ export default function ResearchPage() {
                 { key: "swing-await" as const, label: "Swing · Awaiting",   n: portfolio.swing.pending ?? 0, amber: true },
                 { key: "lt" as const,          label: "Long-Term",          n: portfolio.longterm.count,    amber: false },
                 { key: "lt-await" as const,    label: "Long-Term · Awaiting", n: portfolio.longterm.pending ?? 0, amber: true },
+                // Momentum book — independent, experimental. Only surfaced once the
+                // backend reports it (enabled or with any live/armed rows).
+                ...(momentum && (momentum.enabled || momentum.count > 0 || momentum.pending > 0) ? [
+                  { key: "momentum" as const,       label: "🚀 Momentum",            n: momentum.count,       amber: false },
+                  { key: "momentum-await" as const, label: "Momentum · Awaiting",    n: momentum.pending ?? 0, amber: true },
+                ] : []),
               ]).map(({ key, label, n, amber }) => {
                 const active = portfolioView === key;
                 const accent = amber ? "#f0c060" : "var(--accent, #00d4ff)";
@@ -911,6 +922,16 @@ export default function ResearchPage() {
               <PortfolioSection title="Long-Term Portfolio" positions={portfolio.longterm.positions}
                 count={portfolio.longterm.count} pending={portfolio.longterm.pending} max={portfolio.longterm.max}
                 journalStats={portfolio.longterm.journal_stats} horizon="LONGTERM" viewMode="awaiting" />
+            )}
+            {portfolioView === "momentum" && momentum && (
+              <PortfolioSection title="Momentum Portfolio" positions={momentum.positions}
+                count={momentum.count} pending={momentum.pending} max={momentum.max}
+                journalStats={momentum.journal_stats} horizon="MOMENTUM" viewMode="live" />
+            )}
+            {portfolioView === "momentum-await" && momentum && (
+              <PortfolioSection title="Momentum Portfolio" positions={momentum.positions}
+                count={momentum.count} pending={momentum.pending} max={momentum.max}
+                journalStats={momentum.journal_stats} horizon="MOMENTUM" viewMode="awaiting" />
             )}
           </>
         ) : (

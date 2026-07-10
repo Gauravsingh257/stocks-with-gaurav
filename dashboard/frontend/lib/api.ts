@@ -819,6 +819,33 @@ export interface PortfolioBucketSummary {
   journal_stats: PortfolioJournalStats;
 }
 
+// ── Independent Momentum Portfolio ──────────────────────────────────────────
+export interface MomentumPosition extends PortfolioPosition {
+  quality_score?: number | null;
+  classification?: "ELITE" | "GOOD" | "WEAK" | "REPLACE" | string | null;
+  entry_model?: string | null;
+  risk_model?: string | null;
+  sector?: string | null;
+  regime?: string | null;
+  rs_20d?: number | null;
+  discovery_rank?: number | null;
+  momentum_rank?: number | null;
+  selection_reason?: string | null;
+  replacement_reason?: string | null;
+}
+
+export interface MomentumSummary {
+  name: string;
+  positions: MomentumPosition[];
+  count: number;
+  pending: number;
+  used: number;
+  max: number;
+  journal_stats: PortfolioJournalStats & { expectancy_r?: number; profit_factor?: number };
+  portfolio_quality?: { quality: number; avg_score: number; max_sector_share: number; n: number };
+  enabled: boolean;
+}
+
 export interface PortfolioSummary {
   swing: PortfolioBucketSummary;
   longterm: PortfolioBucketSummary;
@@ -1572,6 +1599,7 @@ export const api = {
 
   // ── Portfolio (persistent positions) ──────────────────────────────────────
   portfolioSummary: () => get<PortfolioSummary>("/api/portfolio/summary"),
+  momentumSummary: () => get<MomentumSummary>("/api/momentum-portfolio/summary"),
   portfolioSwing: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/swing?limit=${limit}`),
   portfolioLongterm: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/longterm?limit=${limit}`),
   portfolioCounts: () => get<{ swing: number; swing_max: number; longterm: number; longterm_max: number }>("/api/portfolio/counts"),
