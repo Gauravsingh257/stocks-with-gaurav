@@ -57,8 +57,9 @@ def alerts_enabled() -> bool:
 
 
 def telegram_enabled() -> bool:
-    # Outward-facing (broadcasts to the Telegram channel) — stays opt-in.
-    return _flag("PIL_TELEGRAM_ENABLED", "0")
+    # Outward-facing (broadcasts to the Telegram channel). Enabled by owner
+    # request; set PIL_TELEGRAM_ENABLED=0 to silence.
+    return _flag("PIL_TELEGRAM_ENABLED", "1")
 
 
 # ── Capital model (accounting layer) ─────────────────────────────────────────
