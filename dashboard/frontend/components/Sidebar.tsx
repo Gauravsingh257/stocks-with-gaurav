@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, Radar
+  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, Radar, LayoutDashboard
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
+const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED === "1";
+
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
+  ...(PIL_ENABLED
+    ? [{ href: "/intelligence", label: "Portfolio Intel", icon: LayoutDashboard }]
+    : []),
   { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
   { href: "/research",        label: "AI Research",     icon: Bot           },
   { href: "/screeners",       label: "Screeners",       icon: Radar         },

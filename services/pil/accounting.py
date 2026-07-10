@@ -92,6 +92,24 @@ def _load_book(book: str) -> tuple[list[dict], list[dict], int, float]:
     raise ValueError(f"unknown book {book!r}")
 
 
+def _pending_count(book: str) -> int:
+    """Armed (awaiting-entry) positions — a Part-1 metric. No capital is
+    committed to them, so they stay out of the ledger; we only count them."""
+    book = book.upper()
+    try:
+        if book in ("SWING", "LONGTERM"):
+            from dashboard.backend.db.portfolio import get_portfolio_counts
+            c = get_portfolio_counts()
+            return int(c.get("swing_pending" if book == "SWING" else "longterm_pending", 0))
+        if book == "MOMENTUM":
+            from dashboard.backend.db.momentum_portfolio import get_counts
+            c = get_counts()
+            return int(c.get("pending", 0))
+    except Exception:
+        return 0
+    return 0
+
+
 def _lot_from_open(p: dict) -> dict:
     entry = float(p.get("entry_price") or 0)
     cur = float(p.get("current_price") or entry)
@@ -256,6 +274,7 @@ def reconstruct(book: str) -> dict:
         "total_return_pct": round((portfolio_value - initial_capital) / initial_capital * 100, 2)
         if initial_capital else 0.0,
         "open_positions": len(positions),
+        "pending_positions": _pending_count(book),
         "max_slots": max_slots,
         "positions": positions,
         "closed_trades": closed_trades,
@@ -316,7 +335,7 @@ def _empty_book(book: str) -> dict:
         "initial_capital": ic, "cash": ic, "invested": 0.0, "market_value": 0.0,
         "portfolio_value": ic, "realized_pnl": 0.0, "unrealized_pnl": 0.0,
         "total_pnl": 0.0, "total_return_pct": 0.0, "open_positions": 0,
-        "max_slots": 0, "positions": [], "closed_trades": [],
+        "pending_positions": 0, "max_slots": 0, "positions": [], "closed_trades": [],
         "equity_curve": [{"date": today, "value": ic}],
     }
 
@@ -374,6 +393,7 @@ def combine(books: list[dict]) -> dict:
         "unrealized_pnl": round(unrealized, 2), "total_pnl": round(realized + unrealized, 2),
         "total_return_pct": round((pv - ic) / ic * 100, 2) if ic else 0.0,
         "open_positions": len(positions),
+        "pending_positions": sum(b.get("pending_positions", 0) for b in books),
         "max_slots": sum(b["max_slots"] for b in books),
         "positions": positions, "closed_trades": closed_trades,
         "equity_curve": combined_curve or [{"date": _today().date().isoformat(), "value": round(pv, 2)}],

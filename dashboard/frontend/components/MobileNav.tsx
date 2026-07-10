@@ -2,9 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Eye, Globe, Sparkles, Radar } from "lucide-react";
+import { Bot, Eye, Globe, Sparkles, Radar, LayoutDashboard } from "lucide-react";
+
+const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED === "1";
 
 const ITEMS = [
+  ...(PIL_ENABLED
+    ? [{ href: "/intelligence", label: "Intel", icon: LayoutDashboard }]
+    : []),
   { href: "/terminal", label: "Terminal", icon: Sparkles },
   { href: "/research", label: "Research", icon: Bot },
   { href: "/screeners", label: "Screeners", icon: Radar },
