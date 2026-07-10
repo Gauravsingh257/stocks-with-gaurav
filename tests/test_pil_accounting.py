@@ -156,6 +156,9 @@ def test_allocation_targets_normalise_to_one(monkeypatch):
     assert tgt["SWING"] > tgt["MOMENTUM"]
 
 
-def test_enabled_defaults_off(monkeypatch):
+def test_enabled_defaults_on(monkeypatch):
+    # PIL ships live: ON unless explicitly disabled.
     monkeypatch.delenv("PIL_ENABLED", raising=False)
+    assert pil_config.enabled() is True
+    monkeypatch.setenv("PIL_ENABLED", "0")
     assert pil_config.enabled() is False

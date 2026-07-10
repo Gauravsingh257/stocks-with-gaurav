@@ -43,19 +43,21 @@ def _i(name: str, default: int) -> int:
 # ── Master + sub flags ───────────────────────────────────────────────────────
 
 def enabled() -> bool:
-    """Master switch. When False, PIL mounts nothing and computes nothing."""
-    return _flag("PIL_ENABLED", "0")
+    """Master switch. When False, PIL mounts nothing and computes nothing.
+    Defaults ON (live) — set PIL_ENABLED=0 to fully disable/rollback."""
+    return _flag("PIL_ENABLED", "1")
 
 
 def reports_enabled() -> bool:
-    return enabled() and _flag("PIL_REPORTS_ENABLED", "0")
+    return enabled() and _flag("PIL_REPORTS_ENABLED", "1")
 
 
 def alerts_enabled() -> bool:
-    return enabled() and _flag("PIL_ALERTS_ENABLED", "0")
+    return enabled() and _flag("PIL_ALERTS_ENABLED", "1")
 
 
 def telegram_enabled() -> bool:
+    # Outward-facing (broadcasts to the Telegram channel) — stays opt-in.
     return _flag("PIL_TELEGRAM_ENABLED", "0")
 
 

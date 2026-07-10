@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bot, Eye, Globe, Sparkles, Radar, LayoutDashboard } from "lucide-react";
 
-const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED === "1";
+// Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
+const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
 const ITEMS = [
   ...(PIL_ENABLED

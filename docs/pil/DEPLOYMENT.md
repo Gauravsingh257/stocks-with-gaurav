@@ -1,22 +1,24 @@
 # PIL Deployment Checklist
 
-PIL is **additive and flag-gated**; every flag defaults **OFF**, so merging is a
-no-op in production until you deliberately enable it.
+PIL is **additive and flag-gated**. It ships **LIVE by default** — the master +
+report + alert flags default ON, so merging to `main` makes PIL live on the next
+Railway/Vercel deploy with no dashboard steps. Telegram delivery stays opt-in.
+To disable/rollback, set `PIL_ENABLED=0` (see ROLLBACK.md).
 
 ## Feature flags
 
 | Flag | Where | Default | Controls |
 |------|-------|---------|----------|
-| `PIL_ENABLED` | backend | `0` | master — mounts the API + reconstruction; nothing runs without it |
-| `PIL_REPORTS_ENABLED` | backend | `0` | daily/monthly report scheduler |
-| `PIL_ALERTS_ENABLED` | backend | `0` | alert rule engine on the scheduler tick |
-| `PIL_TELEGRAM_ENABLED` | backend | `0` | push report/alert summaries to Telegram |
+| `PIL_ENABLED` | backend | `1` (live) | master — mounts the API + reconstruction; set `0` to fully disable |
+| `PIL_REPORTS_ENABLED` | backend | `1` | daily/monthly report scheduler |
+| `PIL_ALERTS_ENABLED` | backend | `1` | alert rule engine on the scheduler tick |
+| `PIL_TELEGRAM_ENABLED` | backend | `0` | push report/alert summaries to Telegram (opt-in — outward-facing) |
 | `PIL_CAPITAL_SWING` / `_LONGTERM` / `_MOMENTUM` | backend | 1000000 / 1000000 / 500000 | book capital (₹) |
 | `PIL_ALLOC_TARGET_SWING` / `_LONGTERM` / `_MOMENTUM` | backend | 0.60 / 0.25 / 0.15 | default allocation targets (DB-overridable) |
 | `PIL_RISK_FREE_RATE` | backend | 0.065 | Sharpe/Sortino risk-free rate |
 | `PIL_DAILY_REPORT_HOUR` | backend | 18 | IST hour for the evening daily report |
 | `PIL_MAX_SECTOR_SHARE`, `PIL_MAX_SINGLE_STOCK`, `PIL_MAX_TOP10_SHARE`, `PIL_MAX_DD_WARN`, `PIL_MIN_DIVERSIFICATION`, `PIL_MAX_CAPITAL_DRIFT`, `PIL_MAX_CORRELATION`, `PIL_MIN_LIQUIDITY_CR`, `PIL_MAX_MOMENTUM_ALLOC` | backend | see `config.py` | alert/warning thresholds |
-| `NEXT_PUBLIC_PIL_ENABLED` | Vercel | unset | shows the "Portfolio Intel" nav + section |
+| `NEXT_PUBLIC_PIL_ENABLED` | Vercel | ON unless `0` | shows the "Portfolio Intel" nav + section |
 | `NEXT_PUBLIC_PIL_HOMEPAGE` | Vercel | unset | (optional) redirect `/` → `/intelligence`. Leave OFF to keep the public marketing landing page |
 
 ## Rollout sequence

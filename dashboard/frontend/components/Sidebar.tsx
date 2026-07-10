@@ -8,7 +8,8 @@ import {
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
-const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED === "1";
+// Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
+const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
   ...(PIL_ENABLED
