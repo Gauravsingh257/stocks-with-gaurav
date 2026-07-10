@@ -167,16 +167,22 @@ _USER_METRIC_COLS = {
 }
 
 
-def update_user_position_metrics(position_id: int, **metrics) -> None:
+def update_user_position_metrics(position_id: int, *, require_active: bool = False, **metrics) -> None:
+    """`require_active=True` guards the write against resurrecting a position
+    closed between the tracker reading the active list and writing it back —
+    same atomic no-clobber guard as the system portfolio's update_position_price."""
     updates = {k: v for k, v in metrics.items() if k in _USER_METRIC_COLS}
     if not updates:
         return
     updates["updated_at"] = datetime.now(_IST).isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in updates)
+    where = "WHERE id = ?"
+    if require_active:
+        where += " AND status = 'ACTIVE'"
     conn = get_connection()
     try:
         conn.execute(
-            f"UPDATE user_positions SET {set_clause} WHERE id = ?",
+            f"UPDATE user_positions SET {set_clause} {where}",
             list(updates.values()) + [position_id],
         )
         conn.commit()

@@ -820,8 +820,17 @@ def get_active_position_by_symbol(symbol: str, horizon: str | None = None) -> di
         conn.close()
 
 
-def update_position_price(position_id: int, **kwargs) -> None:
-    """Update live price data for a position."""
+def update_position_price(position_id: int, *, require_active: bool = False, **kwargs) -> None:
+    """Update live price data for a position.
+
+    `require_active=True` makes the write conditional on the row still being
+    ACTIVE — an atomic concurrency guard. The price tracker reads the active
+    list, then (seconds later) writes each row back stamped ACTIVE; without the
+    guard, a position CLOSED in that window (a manual close or an auto-exit) gets
+    silently resurrected. With the guard the UPDATE simply matches 0 rows and is
+    skipped, so a close can never be clobbered. There is no read-then-write gap,
+    so no race remains.
+    """
     allowed = {
         "current_price", "profit_loss", "profit_loss_pct",
         "drawdown", "drawdown_pct", "high_since_entry", "low_since_entry",
@@ -833,12 +842,15 @@ def update_position_price(position_id: int, **kwargs) -> None:
 
     updates["updated_at"] = datetime.now(_IST).isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in updates)
+    where = "WHERE id = ?"
     values = list(updates.values()) + [position_id]
+    if require_active:
+        where += " AND status = 'ACTIVE'"
 
     conn = get_connection()
     try:
         conn.execute(
-            f"UPDATE portfolio_positions SET {set_clause} WHERE id = ?",
+            f"UPDATE portfolio_positions SET {set_clause} {where}",
             values,
         )
         conn.commit()
