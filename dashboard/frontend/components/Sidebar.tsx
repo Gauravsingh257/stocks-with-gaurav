@@ -13,7 +13,7 @@ const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
 const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
   ...(PIL_ENABLED
-    ? [{ href: "/intelligence", label: "Portfolio Intel", icon: LayoutDashboard }]
+    ? [{ href: "/intelligence", label: "Portfolio Intel", icon: LayoutDashboard, auth: true }]
     : []),
   { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
   { href: "/research",        label: "AI Research",     icon: Bot           },

@@ -12,7 +12,13 @@ To disable/rollback, set `PIL_ENABLED=0` (see ROLLBACK.md).
 | `PIL_ENABLED` | backend | `1` (live) | master — mounts the API + reconstruction; set `0` to fully disable |
 | `PIL_REPORTS_ENABLED` | backend | `1` | daily/monthly report scheduler |
 | `PIL_ALERTS_ENABLED` | backend | `1` | alert rule engine on the scheduler tick |
-| `PIL_TELEGRAM_ENABLED` | backend | `0` | push report/alert summaries to Telegram (opt-in — outward-facing) |
+| `PIL_TELEGRAM_ENABLED` | backend | `1` | push report/alert summaries to Telegram (set `0` to silence) |
+
+**Access:** the entire `/api/intelligence/*` surface (except the `/status` liveness
+probe) is **login-only** — `get_current_user` 401s any request without a valid
+bearer token, and the frontend section is gated behind auth. Portfolio holdings /
+P&L / capital are never publicly exposed. Set book capital from the **Allocation
+page → Book Capital** panel (persists to `pil_config`, read live).
 | `PIL_CAPITAL_SWING` / `_LONGTERM` / `_MOMENTUM` | backend | 1000000 / 1000000 / 500000 | book capital (₹) |
 | `PIL_ALLOC_TARGET_SWING` / `_LONGTERM` / `_MOMENTUM` | backend | 0.60 / 0.25 / 0.15 | default allocation targets (DB-overridable) |
 | `PIL_RISK_FREE_RATE` | backend | 0.065 | Sharpe/Sortino risk-free rate |

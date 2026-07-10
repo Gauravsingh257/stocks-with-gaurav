@@ -19,23 +19,28 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
+from dashboard.backend.routes.auth import get_current_user
+
 router = APIRouter(prefix="/api/intelligence", tags=["portfolio-intelligence"])
 log = logging.getLogger("dashboard.pil")
 
 
-def _guard() -> None:
-    """404 the entire PIL surface when the master flag is off."""
+def _guard(user: dict = Depends(get_current_user)) -> dict:
+    """Gate the entire PIL surface: PRIVATE (login required) + 404 when the master
+    flag is off. `get_current_user` 401s any request without a valid bearer token,
+    so portfolio data (holdings, P&L, capital) is never publicly exposed."""
     from services.pil import config as pil_config
     if not pil_config.enabled():
         raise HTTPException(status_code=404, detail="Portfolio Intelligence Layer is disabled")
+    return user
 
 
 @router.get("/status")
 def status():
-    """Lightweight liveness + config snapshot (does NOT require the guard so the
-    frontend can detect whether PIL is enabled)."""
+    """Public liveness probe — reveals only whether PIL is enabled (no config /
+    portfolio data). Everything else requires login."""
     from services.pil import config as pil_config
-    return {"enabled": pil_config.enabled(), "config": pil_config.cfg()}
+    return {"enabled": pil_config.enabled()}
 
 
 @router.get("/combined", dependencies=[Depends(_guard)])
@@ -215,6 +220,26 @@ def alerts_evaluate():
     scheduler tick when PIL_ALERTS_ENABLED."""
     from services.pil import alerts as al
     return al.evaluate(notify=True)
+
+
+class CapitalConfig(BaseModel):
+    capital: dict[str, float]
+
+
+@router.post("/config/capital", dependencies=[Depends(_guard)])
+def set_capital(req: CapitalConfig):
+    """Set each book's initial ₹ capital (persisted to pil_config, read live — no
+    redeploy). Drives every ₹-denominated metric. PIL-only config write."""
+    from dashboard.backend.db import pil as pildb
+    from services.pil import config as pil_config
+    valid = {"SWING", "LONGTERM", "MOMENTUM"}
+    applied = {}
+    for k, v in req.capital.items():
+        key = k.upper()
+        if key in valid and v is not None and float(v) >= 0:
+            pildb.set_config(f"capital.{key}", float(v))
+            applied[key] = float(v)
+    return {"capital": pil_config.all_book_capital(), "applied": applied}
 
 
 @router.get("/config", dependencies=[Depends(_guard)])

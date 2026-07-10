@@ -52,8 +52,15 @@ export interface BookMetrics {
 
 export interface EquityPoint { date: string; value: number; }
 
+/** Auth header from the stored login token — PIL data is private (login-only). */
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("swg-auth-token") : null;
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(extra ?? {}) };
+}
+
 export async function pilFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", headers: authHeaders() });
+  if (res.status === 401) throw new Error("Please sign in to view Portfolio Intelligence.");
   if (!res.ok) throw new Error(`PIL ${path} → ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -153,7 +160,7 @@ export async function fetchReport(kind: "daily" | "monthly", period?: string): P
 export async function generateReport(kind: "daily" | "monthly", period?: string): Promise<{ kind: string; period: string; payload: Record<string, unknown>; html?: string | null }> {
   const q = new URLSearchParams({ kind });
   if (period) q.set("period", period);
-  const res = await fetch(`${API_BASE}/api/intelligence/reports/generate?${q.toString()}`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/api/intelligence/reports/generate?${q.toString()}`, { method: "POST", headers: authHeaders() });
   if (!res.ok) throw new Error(`generate report → ${res.status}`);
   return res.json();
 }
@@ -165,17 +172,20 @@ export async function fetchAlerts(activeOnly = true): Promise<{ alerts: Alert[] 
   return pilFetch(`/api/intelligence/alerts?active_only=${activeOnly}`);
 }
 export async function evaluateAlerts(): Promise<{ fired: unknown[]; cleared: unknown[]; active_count: number }> {
-  const res = await fetch(`${API_BASE}/api/intelligence/alerts/evaluate`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/api/intelligence/alerts/evaluate`, { method: "POST", headers: authHeaders() });
   if (!res.ok) throw new Error(`evaluate alerts → ${res.status}`);
   return res.json();
 }
+
+export interface PilConfig { capital: Record<string, number>; combined_capital: number; allocation_targets: Record<string, number>; [k: string]: unknown; }
+export async function fetchPilConfig(): Promise<PilConfig> { return pilFetch("/api/intelligence/config"); }
 
 export async function fetchAnalytics(): Promise<Analytics> { return pilFetch("/api/intelligence/analytics"); }
 export async function fetchAllocation(): Promise<Allocation> { return pilFetch("/api/intelligence/allocation"); }
 
 export async function whatIf(weights: Record<string, number>): Promise<WhatIfResult> {
   const res = await fetch(`${API_BASE}/api/intelligence/analytics/what-if`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights }),
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ weights }),
   });
   if (!res.ok) throw new Error(`what-if → ${res.status}`);
   return res.json();
@@ -183,9 +193,17 @@ export async function whatIf(weights: Record<string, number>): Promise<WhatIfRes
 
 export async function setAllocationTargets(weights: Record<string, number>): Promise<Allocation> {
   const res = await fetch(`${API_BASE}/api/intelligence/allocation/targets`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights }),
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ weights }),
   });
   if (!res.ok) throw new Error(`set targets → ${res.status}`);
+  return res.json();
+}
+
+export async function setBookCapital(capital: Record<string, number>): Promise<{ capital: Record<string, number>; applied: Record<string, number> }> {
+  const res = await fetch(`${API_BASE}/api/intelligence/config/capital`, {
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ capital }),
+  });
+  if (!res.ok) throw new Error(`set capital → ${res.status}`);
   return res.json();
 }
 

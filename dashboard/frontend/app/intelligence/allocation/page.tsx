@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from "recharts";
-import { AlertTriangle, Save } from "lucide-react";
-import { Allocation, BOOK_LABEL, BOOK_COLOR, fetchAllocation, setAllocationTargets, fmtINR, fmtPct } from "@/lib/pil";
+import { AlertTriangle, Save, Wallet } from "lucide-react";
+import { Allocation, BOOK_LABEL, BOOK_COLOR, fetchAllocation, setAllocationTargets, fetchPilConfig, setBookCapital, fmtINR, fmtPct } from "@/lib/pil";
 
 const ENGINES = ["SWING", "LONGTERM", "MOMENTUM"];
 
@@ -67,6 +67,8 @@ export default function AllocationPage() {
           </ul>
         </div>
       )}
+
+      <CapitalEditor />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Current vs Target chart */}
@@ -152,6 +154,65 @@ export default function AllocationPage() {
           </table>
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function CapitalEditor() {
+  const [cap, setCap] = useState<Record<string, string>>({ SWING: "", LONGTERM: "", MOMENTUM: "" });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchPilConfig().then((c) => {
+      setCap({
+        SWING: String(c.capital.SWING ?? ""),
+        LONGTERM: String(c.capital.LONGTERM ?? ""),
+        MOMENTUM: String(c.capital.MOMENTUM ?? ""),
+      });
+    }).catch(() => {});
+  }, []);
+
+  async function save() {
+    setSaving(true); setSaved(false); setErr(null);
+    try {
+      await setBookCapital({
+        SWING: Number(cap.SWING), LONGTERM: Number(cap.LONGTERM), MOMENTUM: Number(cap.MOMENTUM),
+      });
+      setSaved(true);
+      setTimeout(() => { window.location.reload(); }, 700);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="glass rounded-xl p-4 border border-white/5">
+      <div className="flex items-center gap-2 mb-1">
+        <Wallet size={15} className="text-[var(--accent)]" />
+        <div className="text-sm font-semibold text-[var(--text-primary)]">Book Capital</div>
+      </div>
+      <div className="text-[0.68rem] text-[var(--text-dim)] mb-3">
+        Set each book&apos;s real ₹ capital — drives every ₹ metric. Saved live (no redeploy).
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+        {["SWING", "LONGTERM", "MOMENTUM"].map((b) => (
+          <div key={b}>
+            <label className="text-[0.62rem] uppercase tracking-wide" style={{ color: BOOK_COLOR[b] }}>{BOOK_LABEL[b]} (₹)</label>
+            <input type="number" min={0} value={cap[b]}
+              onChange={(e) => setCap({ ...cap, [b]: e.target.value })}
+              className="w-full mt-1 px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-sm text-[var(--text-primary)] tabular-nums" />
+          </div>
+        ))}
+        <button onClick={save} disabled={saving}
+          className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-lg bg-[var(--accent)]/20 text-[var(--accent)] hover:bg-[var(--accent)]/30 disabled:opacity-50">
+          <Save size={13} /> {saving ? "Saving…" : saved ? "Saved ✓" : "Save Capital"}
+        </button>
+      </div>
+      {err && <div className="text-rose-400 text-xs mt-2">{err}</div>}
     </div>
   );
 }

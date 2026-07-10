@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard } from "lucide-react";
+import { LayoutDashboard, Lock } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 
 /**
  * Portfolio Intelligence Layer — section shell.
@@ -23,6 +24,7 @@ const TABS: { href: string; label: string; enabled: boolean }[] = [
 
 export default function IntelligenceLayout({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  const { user, loading } = useAuth();
 
   return (
     <div className="min-h-screen">
@@ -80,7 +82,25 @@ export default function IntelligenceLayout({ children }: { children: React.React
         </div>
       </div>
 
-      <div className="px-4 md:px-8 py-6 max-w-[1600px] mx-auto">{children}</div>
+      <div className="px-4 md:px-8 py-6 max-w-[1600px] mx-auto">
+        {loading ? (
+          <div className="text-[var(--text-secondary)] text-sm py-20 text-center">Loading…</div>
+        ) : user ? (
+          children
+        ) : (
+          <div className="glass rounded-xl p-10 border border-white/5 text-center max-w-md mx-auto mt-10">
+            <Lock size={28} className="mx-auto mb-3 text-[var(--accent)]" />
+            <div className="text-[var(--text-primary)] font-semibold mb-1">Private dashboard</div>
+            <div className="text-[var(--text-secondary)] text-sm mb-4">
+              Portfolio Intelligence is login-only. Sign in to view combined performance,
+              exposure, allocation and reports.
+            </div>
+            <Link href="/login" className="inline-block px-4 py-2 text-sm rounded-lg bg-[var(--accent)]/20 text-[var(--accent)] hover:bg-[var(--accent)]/30">
+              Sign In
+            </Link>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

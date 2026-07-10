@@ -25,11 +25,14 @@ from dashboard.backend.routes import portfolio_intelligence as pi  # noqa: E402
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     pdb.init_portfolio_db()
+    from dashboard.backend.db import pil as pildb
+    pildb.ensure_tables()
     from dashboard.backend.db.schema import get_connection
     c = get_connection()
     try:
         c.execute("DELETE FROM portfolio_journal")
         c.execute("DELETE FROM portfolio_positions")
+        c.execute("DELETE FROM pil_config")   # clear capital/target overrides
         c.commit()
     finally:
         c.close()
@@ -82,6 +85,19 @@ def test_combined_books_closed_trade_into_metrics():
     assert sw["realized_pnl"] > 0
     # equity curve present for charts
     assert len(full["books"]["SWING"]["equity_curve"]) >= 1
+
+
+def test_set_capital_override_is_live():
+    from dashboard.backend.routes.portfolio_intelligence import set_capital, CapitalConfig
+    from services.pil import config as pil_config
+    r = set_capital(CapitalConfig(capital={"SWING": 2_500_000, "MOMENTUM": 750_000}))
+    assert r["capital"]["SWING"] == 2_500_000
+    assert r["capital"]["MOMENTUM"] == 750_000
+    # override is read live by the config layer
+    assert pil_config.book_capital("SWING") == 2_500_000
+    # reflected in the combined ledger initial capital
+    comp = pi.comparison()
+    assert comp["metrics"]["SWING"]["initial_capital"] == 2_500_000
 
 
 def test_all_metric_keys_present():

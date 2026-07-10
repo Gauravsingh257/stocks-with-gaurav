@@ -3,23 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bot, Eye, Globe, Sparkles, Radar, LayoutDashboard } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 
 // Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
 const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
 const ITEMS = [
   ...(PIL_ENABLED
-    ? [{ href: "/intelligence", label: "Intel", icon: LayoutDashboard }]
+    ? [{ href: "/intelligence", label: "Intel", icon: LayoutDashboard, auth: true }]
     : []),
   { href: "/terminal", label: "Terminal", icon: Sparkles },
   { href: "/research", label: "Research", icon: Bot },
   { href: "/screeners", label: "Screeners", icon: Radar },
   { href: "/oi-intelligence", label: "OI", icon: Eye },
   { href: "/market-intelligence", label: "Market", icon: Globe },
-];
+] as { href: string; label: string; icon: typeof LayoutDashboard; auth?: boolean }[];
 
 export default function MobileNav() {
   const path = usePathname();
+  const { user } = useAuth();
 
   return (
     <nav
@@ -27,7 +29,7 @@ export default function MobileNav() {
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0)" }}
     >
       <div className="flex items-center justify-start gap-0 min-w-max h-14 min-h-[44px] px-1">
-        {ITEMS.map(({ href, label, icon: Icon }) => {
+        {ITEMS.filter((it) => !it.auth || user).map(({ href, label, icon: Icon }) => {
           const active =
             path === href || (href !== "/" && path.startsWith(href));
           return (
