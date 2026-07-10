@@ -57,6 +57,14 @@ def config():
     return {"config": {k: c[k] for k in keys}}
 
 
+@router.get("/analytics")
+def analytics():
+    """Deep analytics: realised + open performance, Sharpe/Sortino, monthly, and
+    sector/regime/entry-model/risk-model attribution."""
+    from services.momentum_analytics import analytics as compute
+    return compute()
+
+
 @router.get("/report")
 def report(date: str | None = Query(default=None)):
     """The latest daily Momentum Portfolio Report (from Redis)."""
