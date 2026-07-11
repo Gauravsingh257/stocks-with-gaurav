@@ -1,10 +1,12 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
 import { useAuth } from "@/lib/auth";
-import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon, SlidersHorizontal } from "lucide-react";
+import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon, SlidersHorizontal, Search, LogIn, LogOut, Crown } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
+import { openGlobalSearch } from "@/components/CommandPalette";
 
 // Admin-only operator controls (Connect Kite, etc.) are gated by exact
 // email match. Anyone else logged in or anonymous never sees them.
@@ -28,11 +30,12 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   const { theme, toggle: toggleTheme } = useTheme();
   const { snapshot, status, globalStateVersion } = useEngineSocket();
   const health = useHealth();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const isAdmin = !!user && ADMIN_EMAILS.has((user.email || "").trim().toLowerCase());
   // Mobile diagnostics dropdown (info-hierarchy: keep only high-value trading
   // info inline on small screens; tuck diagnostics behind this control).
   const [showDiag, setShowDiag] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
 
   const regime = snapshot?.market_regime ?? "NEUTRAL";
   const rb = regimeBadge(regime);
@@ -188,6 +191,23 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
           </div>
         </div>
 
+        {/* Global search — always visible, all breakpoints. Opens the command
+            palette (stock symbol → /stock/[symbol], or any page). */}
+        <button
+          type="button"
+          onClick={openGlobalSearch}
+          title="Search stocks & pages (Ctrl/⌘+K)"
+          aria-label="Search"
+          className="grid place-items-center w-11 h-11 lg:w-8 lg:h-8 rounded-md shrink-0"
+          style={{
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            cursor: "pointer", color: "var(--text-secondary)",
+          }}
+        >
+          <Search size={16} />
+        </button>
+
         {/* Theme toggle — always visible (≥44px touch target on mobile) */}
         <button
           type="button"
@@ -252,6 +272,68 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
             </>
           )}
         </div>
+
+        {/* ── Auth — Login / Profile, always visible at every breakpoint.
+              Fixes the launch blocker where sign-in was reachable only from
+              the bottom of the mobile drawer. ─────────────────────────────── */}
+        {user ? (
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowProfile((v) => !v)}
+              aria-label="Account menu"
+              aria-expanded={showProfile}
+              className="grid place-items-center w-11 h-11 lg:w-8 lg:h-8 rounded-full shrink-0"
+              style={{
+                background: "var(--accent-dim)", border: "1px solid var(--accent)",
+                color: "var(--accent)", fontSize: "0.8rem", fontWeight: 700, cursor: "pointer",
+              }}
+            >
+              {(user.name?.[0] || user.email[0] || "?").toUpperCase()}
+            </button>
+            {showProfile && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowProfile(false)} aria-hidden />
+                <div
+                  className="absolute right-0 top-full mt-2 z-50 flex flex-col gap-1 rounded-lg p-2 min-w-[200px]"
+                  style={{
+                    background: "rgba(15,23,42,0.98)", border: "1px solid rgba(6,182,212,0.25)",
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.5)", backdropFilter: "blur(12px)",
+                  }}
+                >
+                  <div style={{ padding: "6px 10px", borderBottom: "1px solid var(--border)" }}>
+                    <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {user.name || user.email}
+                    </div>
+                    <div style={{ fontSize: "0.66rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                      {user.role === "PREMIUM" && <Crown size={10} color="#f59e0b" />}
+                      {user.role}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setShowProfile(false); logout(); }}
+                    className="flex items-center gap-2 rounded-md text-left"
+                    style={{ padding: "8px 10px", fontSize: "0.8rem", color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer" }}
+                  >
+                    <LogOut size={14} /> Sign out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-1.5 shrink-0 rounded-md font-semibold"
+            style={{
+              padding: "8px 12px", fontSize: "0.78rem",
+              background: "var(--accent-dim)", border: "1px solid var(--accent)", color: "var(--accent)",
+              textDecoration: "none",
+            }}
+          >
+            <LogIn size={14} /> <span className="hidden sm:inline">Sign In</span>
+          </Link>
+        )}
       </div>
       </div>
     </header>
