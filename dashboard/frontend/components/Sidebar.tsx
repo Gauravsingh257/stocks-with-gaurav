@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard
+  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard, Home
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
@@ -18,6 +18,7 @@ const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 //   Markets   ← OI Radar, Market Intel
 type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; match?: string[] };
 const NAV: NavItem[] = [
+  { href: "/command",         label: "Command Center", icon: Home },
   { href: "/terminal",        label: "Terminal",  icon: Sparkles },
   { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners"] },
   { href: "/watchlist",       label: "Watchlist", icon: Bookmark, auth: true },

@@ -2,20 +2,26 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth";
 
 /**
- * Optional homepage switch (Part 12). When NEXT_PUBLIC_PIL_HOMEPAGE=1 the root
- * route redirects to the Portfolio Intelligence dashboard, making PIL the
- * platform homepage. Kept behind its OWN flag (separate from the nav flag) so
- * enabling PIL never silently hijacks the public marketing landing page / SEO.
- * Renders nothing.
+ * Home routing for the root path. Logged-in users are sent to their Command
+ * Center (the default authenticated home, Sprint 1) — the public marketing page
+ * stays for anonymous visitors / SEO. Renders nothing.
+ *
+ * The legacy NEXT_PUBLIC_PIL_HOMEPAGE=1 override still points power users at the
+ * Portfolio dashboard if explicitly set.
  */
 export default function PilHomeRedirect() {
   const router = useRouter();
+  const { user, loading } = useAuth();
   useEffect(() => {
+    if (loading) return;
     if (process.env.NEXT_PUBLIC_PIL_HOMEPAGE === "1") {
       router.replace("/intelligence");
+    } else if (user) {
+      router.replace("/command");
     }
-  }, [router]);
+  }, [router, user, loading]);
   return null;
 }
