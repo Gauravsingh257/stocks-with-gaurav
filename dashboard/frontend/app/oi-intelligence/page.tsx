@@ -21,9 +21,10 @@ import { PCRGauge } from "./PCRGauge";
 import { OverallBiasCard } from "./OverallBiasCard";
 import { StrikeHeatmap } from "./StrikeHeatmap";
 import { ShortCoveringPanel } from "./ShortCoveringPanel";
-import { ExecutionQualityPanel } from "./ExecutionQualityPanel";
 import { PCRSparkline, BiasTimeline } from "./HistoryCharts";
 import { OIInterpretationEssentials } from "./OIInterpretationEssentials";
+import SectionTabs from "@/components/SectionTabs";
+import { MARKETS_TABS } from "@/lib/navGroups";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
@@ -180,6 +181,7 @@ export default function OIIntelligencePage() {
   /* ── Render ─────────────────────────────────────────────── */
   return (
     <StaggerContainer stagger={0.07} className="w-full max-w-screen-2xl mx-auto px-4 md:px-6 lg:px-8 py-6">
+      <SectionTabs items={MARKETS_TABS} label="Markets" />
       {/* Header */}
       <StaggerItem>
       <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
@@ -306,28 +308,19 @@ export default function OIIntelligencePage() {
           <OIInterpretationEssentials data={snapshot.interpretation} />
 
           {(snapshot.strike_heatmap?.length ?? 0) > 0 && (
-            <details className="glass" style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
-              <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-dim)", fontWeight: 700 }}>
-                Strike heatmap (detail)
-              </summary>
-              <div style={{ marginTop: 12 }}>
-                <StrikeHeatmap entries={snapshot.strike_heatmap} />
+            <div className="glass" style={{ padding: "14px 16px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ fontSize: "0.8rem", color: "var(--text-primary)", fontWeight: 700, marginBottom: 12 }}>
+                Strike Heatmap
+                <span style={{ fontSize: "0.68rem", color: "var(--text-dim)", fontWeight: 500, marginLeft: 8 }}>
+                  Where writers are concentrated — call/put OI by strike
+                </span>
               </div>
-            </details>
+              <StrikeHeatmap entries={snapshot.strike_heatmap} />
+            </div>
           )}
 
-          {((snapshot.short_covering_signals?.length ?? 0) > 0 || snapshot.execution_quality) && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {(snapshot.short_covering_signals?.length ?? 0) > 0 && (
-              <ShortCoveringPanel signals={snapshot.short_covering_signals} />
-            )}
-            {snapshot.execution_quality && (
-              <ExecutionQualityPanel
-                quality={snapshot.execution_quality}
-                scSignals={snapshot.short_covering_signals}
-              />
-            )}
-          </div>
+          {(snapshot.short_covering_signals?.length ?? 0) > 0 && (
+            <ShortCoveringPanel signals={snapshot.short_covering_signals} />
           )}
         </div>
         </StaggerItem>

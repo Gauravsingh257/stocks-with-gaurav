@@ -15,6 +15,8 @@ import Link from "next/link";
 import { Radar, Lock, Download, RefreshCw, TrendingUp, AlertTriangle, LogIn, Layers, Newspaper } from "lucide-react";
 import { api, ScreenerCatalogItem, ScreenerResult, ScreenerRow } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import SectionTabs from "@/components/SectionTabs";
+import { RESEARCH_TABS } from "@/lib/navGroups";
 
 // Scanner presentation metadata (keyed by stable scanner name).
 const SCANNER_META: Record<string, { label: string; blurb: string }> = {
@@ -151,6 +153,7 @@ export default function ScreenersPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
+      <SectionTabs items={RESEARCH_TABS} label="Research" />
       {/* Header */}
       <div className="flex items-center gap-3 mb-2">
         <div className="w-9 h-9 rounded-lg flex items-center justify-center"

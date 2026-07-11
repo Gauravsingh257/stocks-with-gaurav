@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen, BarChart2, Bot, Eye, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, Radar, LayoutDashboard
+  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
@@ -11,17 +11,20 @@ import { useAuth } from "@/lib/auth";
 // Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
 const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
-const NAV: { href: string; label: string; icon: typeof BarChart2; auth?: boolean }[] = [
+// Nav consolidated 8 flat items → 5 grouped destinations. Folded pages remain
+// one click away via <SectionTabs> inside each group:
+//   Research  ← Screeners
+//   Portfolio ← Track Record (/analytics), Journal
+//   Markets   ← OI Radar, Market Intel
+type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; match?: string[] };
+const NAV: NavItem[] = [
+  { href: "/terminal",        label: "Terminal",  icon: Sparkles },
+  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners"] },
+  { href: "/watchlist",       label: "Watchlist", icon: Bookmark, auth: true },
   ...(PIL_ENABLED
-    ? [{ href: "/intelligence", label: "Portfolio Intel", icon: LayoutDashboard, auth: true }]
-    : []),
-  { href: "/terminal",        label: "Trade Terminal",  icon: Sparkles      },
-  { href: "/research",        label: "AI Research",     icon: Bot           },
-  { href: "/screeners",       label: "Screeners",       icon: Radar         },
-  { href: "/watchlist",       label: "Watchlist",       icon: Bookmark, auth: true },
-  { href: "/analytics",       label: "Analytics",       icon: BarChart2     },
-  { href: "/oi-intelligence", label: "OI Intelligence", icon: Eye           },
-  { href: "/market-intelligence", label: "Market Intel", icon: Globe      },
+    ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
+    : [{ href: "/analytics",    label: "Portfolio", icon: LayoutDashboard, match: ["/analytics", "/journal"] }]),
+  { href: "/oi-intelligence", label: "Markets",   icon: Globe, match: ["/oi-intelligence", "/market-intelligence"] },
 ];
 
 export default function Sidebar({
@@ -88,9 +91,10 @@ export default function Sidebar({
 
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 mt-2">
-          {NAV.map(({ href, label, icon: Icon, auth }) => {
+          {NAV.map(({ href, label, icon: Icon, auth, match }) => {
             if (auth && !user) return null;
-            const active = path === href || (href !== "/" && path.startsWith(href));
+            const prefixes = match ?? [href];
+            const active = prefixes.some((p) => path === p || (p !== "/" && path.startsWith(p)));
             return (
               <Link
                 key={href}

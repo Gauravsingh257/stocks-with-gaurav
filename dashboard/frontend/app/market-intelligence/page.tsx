@@ -9,6 +9,8 @@ import {
   Globe, Calendar, DollarSign, TrendingUp, BarChart3,
   RefreshCw, AlertTriangle, Sun, ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
+import SectionTabs from "@/components/SectionTabs";
+import { MARKETS_TABS } from "@/lib/navGroups";
 import {
   api,
   MISnapshot,
@@ -167,6 +169,7 @@ export default function MarketIntelligencePage() {
 
   return (
     <StaggerContainer stagger={0.08} className="space-y-6">
+      <SectionTabs items={MARKETS_TABS} label="Markets" />
       {/* Header */}
       <StaggerItem>
       <div className="flex items-center justify-between">

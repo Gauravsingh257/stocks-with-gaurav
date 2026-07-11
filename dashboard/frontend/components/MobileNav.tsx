@@ -2,22 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Eye, Globe, Sparkles, Radar, LayoutDashboard } from "lucide-react";
+import { Bot, Globe, Sparkles, Bookmark, LayoutDashboard } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 // Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
 const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 
+// Mirrors the desktop Sidebar: 5 grouped destinations. Folded pages are reached
+// via <SectionTabs> inside each group.
 const ITEMS = [
-  ...(PIL_ENABLED
-    ? [{ href: "/intelligence", label: "Intel", icon: LayoutDashboard, auth: true }]
-    : []),
   { href: "/terminal", label: "Terminal", icon: Sparkles },
-  { href: "/research", label: "Research", icon: Bot },
-  { href: "/screeners", label: "Screeners", icon: Radar },
-  { href: "/oi-intelligence", label: "OI", icon: Eye },
-  { href: "/market-intelligence", label: "Market", icon: Globe },
-] as { href: string; label: string; icon: typeof LayoutDashboard; auth?: boolean }[];
+  { href: "/research", label: "Research", icon: Bot, match: ["/research", "/screeners"] },
+  { href: "/watchlist", label: "Watchlist", icon: Bookmark, auth: true },
+  ...(PIL_ENABLED
+    ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
+    : [{ href: "/analytics", label: "Portfolio", icon: LayoutDashboard, match: ["/analytics", "/journal"] }]),
+  { href: "/oi-intelligence", label: "Markets", icon: Globe, match: ["/oi-intelligence", "/market-intelligence"] },
+] as { href: string; label: string; icon: typeof LayoutDashboard; auth?: boolean; match?: string[] }[];
 
 export default function MobileNav() {
   const path = usePathname();
@@ -29,9 +30,9 @@ export default function MobileNav() {
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0)" }}
     >
       <div className="flex items-center justify-start gap-0 min-w-max h-14 min-h-[44px] px-1">
-        {ITEMS.filter((it) => !it.auth || user).map(({ href, label, icon: Icon }) => {
-          const active =
-            path === href || (href !== "/" && path.startsWith(href));
+        {ITEMS.filter((it) => !it.auth || user).map(({ href, label, icon: Icon, match }) => {
+          const prefixes = match ?? [href];
+          const active = prefixes.some((p) => path === p || (p !== "/" && path.startsWith(p)));
           return (
             <Link
               key={href}
