@@ -39,9 +39,12 @@ export function humanize(input?: string | null): string {
   if (!input) return "";
   let s = String(input);
   for (const [re, rep] of RULES) s = s.replace(re, rep);
-  // tidy: collapse doubled spaces, spaces before punctuation, leading separators
-  s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.;:—-])/g, "$1").trim();
+  // tidy: collapse doubled spaces; tighten spaces before sentence punctuation
+  // ONLY (never dashes — " — " is intentional spacing); trim leading separators.
+  s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
   s = s.replace(/^[\s—:-]+/, "");
+  // capitalize the first letter (rules can strip a leading word e.g. "Desk ")
+  if (s) s = s.charAt(0).toUpperCase() + s.slice(1);
   return s;
 }
 
