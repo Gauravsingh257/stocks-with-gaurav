@@ -14,6 +14,7 @@ import { ArrowRight, AlertTriangle, Eye, Sparkles, Compass, Wallet, Radar } from
 import { api, type CommandCenterResponse } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { computeNBA, marketPhase, type NBAAction, type NBAKind } from "@/lib/nba";
+import { track } from "@/lib/analytics";
 
 const KIND_ICON: Record<NBAKind, typeof Eye> = {
   risk: AlertTriangle,
@@ -38,6 +39,7 @@ export function NBACard({ action, hero = false }: { action: NBAAction; hero?: bo
   return (
     <Link
       href={action.href}
+      onClick={() => track("nba_clicked", { kind: action.kind, severity: action.severity, symbol: action.symbol, href: action.href, hero })}
       className="group flex items-center gap-3 rounded-xl transition-colors"
       style={{
         padding: hero ? "16px 18px" : "12px 14px",

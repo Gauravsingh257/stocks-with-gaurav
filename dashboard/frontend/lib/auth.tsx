@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { getBackendBase } from "./api";
+import { track, identify } from "./analytics";
 
 export interface AuthUser {
   id: number;
@@ -70,6 +71,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("swg-auth-token", data.token);
     setToken(data.token);
     setUser(data.user);
+    if (data.user?.id != null) identify(data.user.id, { role: data.user.role });
+    track("login", { role: data.user?.role });
   }, []);
 
   const register = useCallback(async (email: string, password: string, name: string) => {
@@ -86,6 +89,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("swg-auth-token", data.token);
     setToken(data.token);
     setUser(data.user);
+    if (data.user?.id != null) identify(data.user.id, { role: data.user.role });
+    track("signup", { role: data.user?.role });
   }, []);
 
   const logout = useCallback(() => {

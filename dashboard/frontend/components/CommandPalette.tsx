@@ -6,6 +6,7 @@ import {
   BarChart2, Bot, Eye, Search, Sparkles, Bookmark,
   LayoutDashboard, Radar, Globe, TrendingUp,
 } from "lucide-react";
+import { track } from "@/lib/analytics";
 
 /** Fire this from anywhere (e.g. the TopBar search button) to open the palette. */
 export const OPEN_SEARCH_EVENT = "swg:open-search";
@@ -99,6 +100,7 @@ export default function CommandPalette() {
       if (e.key === "Enter" && results[selected]) {
         e.preventDefault();
         const href = results[selected].href;
+        track("global_search", { query: q, href, is_stock: href.startsWith("/stock/") });
         closePalette();
         router.push(href);
       }
@@ -156,6 +158,7 @@ export default function CommandPalette() {
                   }`}
                   onMouseEnter={() => setSelected(i)}
                   onClick={() => {
+                    track("global_search", { query: q, href: r.href, is_stock: r.href.startsWith("/stock/") });
                     closePalette();
                     router.push(r.href);
                   }}

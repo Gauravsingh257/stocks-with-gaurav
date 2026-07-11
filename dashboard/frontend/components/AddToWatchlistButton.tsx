@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BookmarkPlus, Check } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { track } from "@/lib/analytics";
 
 /**
  * Adds a symbol to the watchlist.
@@ -67,6 +68,7 @@ export default function AddToWatchlistButton({
       } else {
         await api.addToWatchlist(token, clean);
       }
+      track("watchlist_stock_added", { symbol: clean, with_setup: Boolean(setup?.entry_price && setup?.stop_loss) });
       onAdded?.();
     } catch {
       setDone(false);
