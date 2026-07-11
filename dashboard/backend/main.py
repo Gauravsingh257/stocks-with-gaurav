@@ -52,6 +52,7 @@ from dashboard.backend.routes.risk_dashboard import router as risk_dashboard_rou
 from dashboard.backend.routes.rejection_analysis import router as rejection_analysis_router
 from dashboard.backend.routes.momentum_portfolio import router as momentum_portfolio_router
 from dashboard.backend.routes.portfolio_intelligence import router as portfolio_intelligence_router
+from dashboard.backend.routes.product_analytics import router as product_analytics_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
 from dashboard.backend.terminal_ws import trades_ws_endpoint, start_terminal_ws, stop_terminal_ws
 
@@ -222,6 +223,13 @@ async def lifespan(app: FastAPI):
         log.info("Morning brief scheduler started (gated)")
     except Exception as exc:
         log.warning("Morning brief scheduler not started: %s", exc)
+    try:
+        # First-party product-analytics event store (validation-phase KPIs/funnel).
+        from dashboard.backend.db.analytics import ensure_tables as _pa_ensure
+        _pa_ensure()
+        log.info("Product-analytics event store ready")
+    except Exception as exc:
+        log.warning("Product-analytics store not initialised: %s", exc)
     # ── Pre-warm discovery cache in background ─────────────────────────────
     def _prewarm_discovery():
         try:
@@ -415,6 +423,7 @@ app.include_router(user_product_router)
 app.include_router(rejection_analysis_router)      # Phase-1: discovery→rejected export (read-only)
 app.include_router(momentum_portfolio_router)      # Independent Momentum Portfolio (read-only API)
 app.include_router(portfolio_intelligence_router)  # Portfolio Intelligence Layer (read-only; gated by PIL_ENABLED)
+app.include_router(product_analytics_router)  # First-party product analytics (validation-phase KPIs/funnel)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
 app.include_router(risk_dashboard_router)  # Read-only Risk Engine Dashboard (internal)
 try:
