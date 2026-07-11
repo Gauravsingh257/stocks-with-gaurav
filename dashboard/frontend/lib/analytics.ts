@@ -23,6 +23,8 @@ declare global {
   }
 }
 
+import { API_BASE } from "@/lib/api";
+
 export const GA4_ID = process.env.NEXT_PUBLIC_GA4_ID || "";
 export const CLARITY_ID = process.env.NEXT_PUBLIC_CLARITY_ID || "";
 export const POSTHOG_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY || "";
@@ -31,9 +33,69 @@ export const ANALYTICS_ON = Boolean(GA4_ID || CLARITY_ID || POSTHOG_KEY);
 
 type Props = Record<string, string | number | boolean | null | undefined>;
 
-/** Fire a named product event to every configured provider. */
+// ── First-party identity (for our own Product Health dashboard) ──────────────
+function uuid(): string {
+  try {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  } catch { /* noop */ }
+  return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+/** Stable per-browser id (localStorage) — unique users + retention. */
+export function anonId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    let id = localStorage.getItem("swg_anon_id");
+    if (!id) { id = uuid(); localStorage.setItem("swg_anon_id", id); }
+    return id;
+  } catch { return ""; }
+}
+
+/** Per-session id (sessionStorage) — session duration + pages/session. */
+function sessionId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    let id = sessionStorage.getItem("swg_session_id");
+    if (!id) { id = uuid(); sessionStorage.setItem("swg_session_id", id); }
+    return id;
+  } catch { return ""; }
+}
+
+function device(): string {
+  if (typeof window === "undefined") return "server";
+  const w = window.innerWidth;
+  if (w < 768) return "mobile";
+  if (w < 1024) return "tablet";
+  return "desktop";
+}
+
+/** Fire-and-forget POST to our own event store. keepalive survives navigation. */
+function postFirstParty(event: string, props: Props): void {
+  if (typeof window === "undefined") return;
+  try {
+    const token = localStorage.getItem("swg-auth-token");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    fetch(`${API_BASE}/api/product-analytics/event`, {
+      method: "POST",
+      headers,
+      keepalive: true,
+      body: JSON.stringify({
+        event,
+        anon_id: anonId(),
+        session_id: sessionId(),
+        path: window.location.pathname,
+        device: device(),
+        props,
+      }),
+    }).catch(() => { /* best effort */ });
+  } catch { /* noop */ }
+}
+
+/** Fire a named product event to every configured provider + our own store. */
 export function track(event: string, props: Props = {}): void {
   if (typeof window === "undefined") return;
+  postFirstParty(event, props);
   try {
     window.gtag?.("event", event, props);
   } catch { /* noop */ }
@@ -51,6 +113,7 @@ export function track(event: string, props: Props = {}): void {
 /** Manual SPA page_view (GA4 is configured with send_page_view:false). */
 export function pageview(path: string): void {
   if (typeof window === "undefined") return;
+  postFirstParty("page_view", { path });
   try {
     if (GA4_ID) window.gtag?.("event", "page_view", { page_path: path, page_location: window.location.href });
   } catch { /* noop */ }
