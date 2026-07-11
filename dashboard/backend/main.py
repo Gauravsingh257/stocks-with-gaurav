@@ -214,6 +214,14 @@ async def lifespan(app: FastAPI):
         log.info("PIL scheduler started (gated)")
     except Exception as exc:
         log.warning("PIL scheduler not started: %s", exc)
+    try:
+        # Telegram Morning Brief — idles until MORNING_BRIEF_ENABLED=1. Reuses the
+        # deterministic daily-brief builder + the shared Telegram sender.
+        from dashboard.backend.services.morning_brief import start_morning_brief_scheduler
+        start_morning_brief_scheduler()
+        log.info("Morning brief scheduler started (gated)")
+    except Exception as exc:
+        log.warning("Morning brief scheduler not started: %s", exc)
     # ── Pre-warm discovery cache in background ─────────────────────────────
     def _prewarm_discovery():
         try:

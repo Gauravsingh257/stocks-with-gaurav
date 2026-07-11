@@ -14,9 +14,11 @@ import {
   ArrowDownRight,
   Activity,
 } from "lucide-react";
-import { api, type WatchlistIntelItem } from "@/lib/api";
+import { api, type WatchlistIntelItem, type WatchlistFeedEvent } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import WatchlistMonitor from "./WatchlistMonitor";
+import WatchlistEventFeed from "@/components/WatchlistEventFeed";
+import NextBestAction from "@/components/NextBestAction";
 import { useMergedMarketLtp } from "@/lib/realtimeRegistry";
 import { subscribeWatchlistOsHint } from "@/lib/watchlistOsBridge";
 
@@ -398,6 +400,7 @@ function PositionRow({
 export default function WatchlistPage() {
   const { user, token } = useAuth();
   const [intel, setIntel] = useState<WatchlistIntelItem[]>([]);
+  const [feed, setFeed] = useState<WatchlistFeedEvent[]>([]);
   const [savedSymbols, setSavedSymbols] = useState<{ symbol: string }[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
@@ -417,6 +420,7 @@ export default function WatchlistPage() {
         api.listPositions(token, "ACTIVE"),
       ]);
       setIntel(intelData.items || []);
+      setFeed(intelData.feed || []);
       setSavedSymbols(wl.items || []);
       setPositions(pos.items || []);
     } catch {
@@ -576,6 +580,12 @@ export default function WatchlistPage() {
           {error}
         </div>
       )}
+
+      {/* Next Best Action — no dead ends */}
+      <NextBestAction context="watchlist" />
+
+      {/* Desk activity — event timeline (reuses the existing operating feed) */}
+      <WatchlistEventFeed events={feed} />
 
       {/* Active Positions — held trades, full portfolio-style tracking (FIRST) */}
       {positions.length > 0 && (

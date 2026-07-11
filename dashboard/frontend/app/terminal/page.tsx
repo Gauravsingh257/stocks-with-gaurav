@@ -15,6 +15,7 @@ import AISummaryPanel from "./_components/AISummaryPanel";
 import SystemFlowDiagram from "./_components/SystemFlowDiagram";
 import AlertsBell from "./_components/AlertsBell";
 import MarketMonitoringEmpty from "@/components/MarketMonitoringEmpty";
+import NextBestAction from "@/components/NextBestAction";
 import { liveTradeToOpportunity, toOpportunities, type Opportunity } from "./_lib/opportunity";
 import { useLiveTrades, type TradeFilters } from "./_lib/useLiveTrades";
 import { useTerminalSummary } from "./_lib/useTerminalSummary";
@@ -217,6 +218,10 @@ export default function TerminalPage() {
         dailyPnl={dailyPnl}
         alertsBell={<AlertsBell />}
       />
+
+      <div style={{ marginBottom: 16 }}>
+        <NextBestAction context="terminal" />
+      </div>
 
       <AISummaryPanel
         data={summary}

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Globe, Sparkles, Bookmark, LayoutDashboard } from "lucide-react";
+import { Bot, Globe, Sparkles, Bookmark, LayoutDashboard, Home } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 // Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
@@ -11,6 +11,7 @@ const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 // Mirrors the desktop Sidebar: 5 grouped destinations. Folded pages are reached
 // via <SectionTabs> inside each group.
 const ITEMS = [
+  { href: "/command", label: "Home", icon: Home },
   { href: "/terminal", label: "Terminal", icon: Sparkles },
   { href: "/research", label: "Research", icon: Bot, match: ["/research", "/screeners"] },
   { href: "/watchlist", label: "Watchlist", icon: Bookmark, auth: true },
