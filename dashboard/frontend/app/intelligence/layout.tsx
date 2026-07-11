@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Lock } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import SectionTabs from "@/components/SectionTabs";
+import { PORTFOLIO_TABS } from "@/lib/navGroups";
 
 /**
  * Portfolio Intelligence Layer — section shell.
@@ -40,15 +42,18 @@ export default function IntelligenceLayout({ children }: { children: React.React
             </div>
             <div>
               <h1 className="neon-text text-base md:text-lg font-bold leading-tight">
-                Portfolio Intelligence
+                Portfolio
               </h1>
               <p className="text-[0.62rem] tracking-wide" style={{ color: "var(--text-dim)" }}>
-                MULTI-ENGINE PMS · OBSERVE · MEASURE · REPORT
+                MULTI-ENGINE PMS · TRACK RECORD · JOURNAL
               </p>
             </div>
           </div>
 
-          {/* Tabs */}
+          {/* Portfolio group: Intel · Track Record · Journal */}
+          <SectionTabs items={PORTFOLIO_TABS} />
+
+          {/* PIL sub-tabs */}
           <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 pt-2">
             {TABS.map((t) => {
               const active = t.href === path;
