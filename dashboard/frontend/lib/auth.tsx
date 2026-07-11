@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { getBackendBase } from "./api";
-import { track, identify } from "./analytics";
+import { track, identify, endSession } from "./analytics";
 
 export interface AuthUser {
   id: number;
@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {
           localStorage.removeItem("swg-auth-token");
           setToken(null);
+          endSession("token_expired");
         })
         .finally(() => setLoading(false));
     } else {
@@ -94,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    endSession("logout");
     localStorage.removeItem("swg-auth-token");
     setToken(null);
     setUser(null);
