@@ -14,6 +14,7 @@
  * "Open"), never transactional ("Buy"/"Sell").
  */
 import type { CommandCenterResponse } from "@/lib/api";
+import { humanize, friendlyStatus } from "@/lib/humanize";
 
 export type NBAKind =
   | "risk"        // something is deteriorating / needs protection
@@ -93,8 +94,8 @@ export function computeNBA(cc: CommandCenterResponse | null, ctx: MarketContext 
       id: `alert-${al.symbol}`,
       kind: "risk",
       severity: sev(al.severity) === "info" ? "high" : sev(al.severity),
-      headline: `${al.symbol} — ${al.action}`,
-      detail: "On your desk · needs a look before anything else",
+      headline: `${al.symbol} — ${humanize(al.action)}`,
+      detail: "On your list · worth a look before anything else",
       href: stockHref(al.symbol),
       cta: `Review ${al.symbol}`,
       symbol: al.symbol,
@@ -108,8 +109,8 @@ export function computeNBA(cc: CommandCenterResponse | null, ctx: MarketContext 
       id: `deteriorate-${d.symbol}`,
       kind: "risk",
       severity: "medium",
-      headline: `${d.symbol} weakening`,
-      detail: d.validated_overall ? String(d.validated_overall).replace(/_/g, " ") : "Structure deteriorating",
+      headline: `${d.symbol} losing strength`,
+      detail: d.validated_overall ? friendlyStatus(d.validated_overall as string) : "Momentum fading",
       href: stockHref(d.symbol),
       cta: `Check ${d.symbol}`,
       symbol: d.symbol,
@@ -128,7 +129,7 @@ export function computeNBA(cc: CommandCenterResponse | null, ctx: MarketContext 
       id: `matters-${i}`,
       kind,
       severity: s,
-      headline: ln.headline,
+      headline: humanize(ln.headline),
       href: ln.symbol ? stockHref(ln.symbol) : "/watchlist",
       cta: ln.symbol ? `Open ${ln.symbol}` : "Open watchlist",
       symbol: ln.symbol ?? undefined,
@@ -142,8 +143,8 @@ export function computeNBA(cc: CommandCenterResponse | null, ctx: MarketContext 
       id: `improve-${im.symbol}`,
       kind: "opportunity",
       severity: "low",
-      headline: `${im.symbol} readiness improving`,
-      detail: typeof im.readiness_delta_pct === "number" ? `${im.readiness_delta_pct >= 0 ? "+" : ""}${im.readiness_delta_pct.toFixed(1)} pts vs prior` : undefined,
+      headline: `${im.symbol} getting stronger`,
+      detail: typeof im.readiness_delta_pct === "number" ? `Strength up ${im.readiness_delta_pct >= 0 ? "+" : ""}${im.readiness_delta_pct.toFixed(1)} pts` : undefined,
       href: stockHref(im.symbol),
       cta: `Study ${im.symbol}`,
       symbol: im.symbol,
@@ -195,7 +196,7 @@ export function computeNBA(cc: CommandCenterResponse | null, ctx: MarketContext 
       kind: "explore",
       severity: "info",
       headline: "Start monitoring your first stock",
-      detail: "Add a name and the desk watches it for you",
+      detail: "Add a name and we'll watch it for you",
       href: "/research",
       cta: "Find a stock",
     });

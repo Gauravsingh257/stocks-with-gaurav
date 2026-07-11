@@ -23,6 +23,7 @@ import { useAuth } from "@/lib/auth";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { computeNBA, marketPhase } from "@/lib/nba";
 import { NBACard } from "@/components/NextBestAction";
+import { humanize, regimeContext } from "@/lib/humanize";
 
 function greeting(): string {
   const utc = Date.now() + new Date().getTimezoneOffset() * 60000;
@@ -93,11 +94,9 @@ export default function CommandCenterPage() {
     return list.slice(0, 8);
   }, [cc]);
 
-  const briefLine =
-    brief?.narrative_sections?.[0]?.body ||
-    brief?.sections?.find((s) => s.title === "Regime")?.body ||
-    "Desk brief loads at market context — check today's structure before acting.";
-
+  // "So what?" — a plain-language read of today's regime (Option A: general
+  // market context, not a per-stock instruction).
+  const moodLine = regimeContext(regime as string);
   const marketPhaseLabel = phase.marketOpen ? "MARKET LIVE" : phase.preOpen ? "PRE-OPEN" : "MARKET CLOSED";
 
   if (loading) {
@@ -146,10 +145,10 @@ export default function CommandCenterPage() {
             {user && typeof pnlR === "number" && (
               <Stat label="Daily P&L" value={`${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R`} color={pnlR >= 0 ? "var(--success)" : "var(--danger)"} />
             )}
-            <Stat label="On your desk" value={String(deskCount)} />
+            <Stat label="Watching" value={String(deskCount)} />
           </div>
         </div>
-        <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: "10px 0 0", lineHeight: 1.55 }}>{briefLine}</p>
+        <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", margin: "10px 0 0", lineHeight: 1.55 }}>{moodLine}</p>
       </div>
 
       {/* ② Next Best Action — the hero */}
@@ -164,9 +163,9 @@ export default function CommandCenterPage() {
       {user && deskCount === 0 && feed.length === 0 && (
         <div className="glass rounded-xl" style={{ padding: "20px", textAlign: "center" }}>
           <Eye size={22} color="var(--accent)" style={{ margin: "0 auto 8px" }} />
-          <div style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Your desk is empty</div>
+          <div style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Your watchlist is empty</div>
           <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", maxWidth: 420, margin: "0 auto 12px" }}>
-            Add a few stocks and the desk starts monitoring them — events show up here and in your morning brief.
+            Add a few stocks and we&apos;ll monitor them for you — events show up here and in your morning brief.
           </p>
           <Link href="/research" className="inline-flex items-center gap-1.5 rounded-lg font-semibold" style={{ padding: "8px 14px", fontSize: "0.8rem", background: "var(--accent-dim)", border: "1px solid var(--accent)", color: "var(--accent)", textDecoration: "none" }}>
             Find stocks to watch <ArrowRight size={14} />
@@ -177,7 +176,7 @@ export default function CommandCenterPage() {
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* ③ What deserves attention */}
-        <Panel title="What deserves your attention" icon={AlertTriangle} href="/watchlist" cta="Full desk">
+        <Panel title="What deserves your attention" icon={AlertTriangle} href="/watchlist" cta="Watchlist">
           {matters.length === 0 ? (
             <Empty>No priority items right now — the desk is quiet.</Empty>
           ) : (
@@ -188,7 +187,7 @@ export default function CommandCenterPage() {
                 return (
                   <Link key={i} href={href} className="flex items-start gap-2.5 rounded-lg group" style={{ padding: "8px 10px", textDecoration: "none", background: "rgba(255,255,255,0.02)" }}>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, marginTop: 6, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>{ln.headline}</span>
+                    <span style={{ flex: 1, fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>{humanize(ln.headline)}</span>
                     <ArrowRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ color: c, marginTop: 3 }} />
                   </Link>
                 );
@@ -200,7 +199,7 @@ export default function CommandCenterPage() {
         {/* ④ Your watchlist — event feed */}
         <Panel title="Your watchlist" icon={Eye} href="/watchlist" cta="Open feed">
           {feed.length === 0 ? (
-            <Empty>{deskCount === 0 ? "No stocks yet — add a few from Research." : "No new events on your desk today."}</Empty>
+            <Empty>{deskCount === 0 ? "No stocks yet — add a few from Research." : "No new events yet today."}</Empty>
           ) : (
             <div className="flex flex-col gap-1.5">
               {feed.map((e, i) => (
@@ -243,7 +242,7 @@ export default function CommandCenterPage() {
               {(brief?.sections ?? []).slice(0, 3).map((s, i) => (
                 <div key={i}>
                   <div style={{ fontSize: "0.66rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--accent)", marginBottom: 2 }}>{s.title}</div>
-                  <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>{s.body}</div>
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>{humanize(s.body)}</div>
                 </div>
               ))}
             </div>
@@ -254,7 +253,7 @@ export default function CommandCenterPage() {
       {/* Trust note */}
       <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", textAlign: "center", margin: "4px 0 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
         <Activity size={11} />
-        {cc?.trust_banner || "Signals and labels are desk rules + snapshots — analysis, not trade instructions."}
+        {humanize(cc?.trust_banner || "") || "Signals and labels are analysis from live market data — not trade instructions."}
       </p>
     </div>
   );

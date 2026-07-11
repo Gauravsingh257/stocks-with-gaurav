@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { ArrowRight, TrendingUp, TrendingDown, Target, Crosshair, Activity, Zap, Eye } from "lucide-react";
 import type { WatchlistFeedEvent } from "@/lib/api";
+import { humanize } from "@/lib/humanize";
 
 function sym(s?: string | null) {
   return String(s || "").replace("NSE:", "").trim().toUpperCase();
@@ -45,7 +46,7 @@ export default function WatchlistEventFeed({ events }: { events: WatchlistFeedEv
   return (
     <section>
       <div style={{ fontSize: "0.62rem", fontWeight: 800, color: "var(--text-dim)", letterSpacing: 0.5, marginBottom: 8, display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <Activity size={11} color="var(--accent)" /> DESK ACTIVITY ({ordered.length})
+        <Activity size={11} color="var(--accent)" /> RECENT ACTIVITY ({ordered.length})
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {ordered.slice(0, 20).map((e, i) => {
@@ -65,10 +66,10 @@ export default function WatchlistEventFeed({ events }: { events: WatchlistFeedEv
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: "0.86rem", fontWeight: 650, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {s && <span style={{ color, marginRight: 6 }}>{s}</span>}
-                  {e.headline || e.type || e.setup_status || "Update"}
+                  {humanize(e.headline || e.type || e.setup_status || "Update")}
                 </span>
                 {e.setup_status && e.headline && (
-                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>{e.setup_status}</span>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>{humanize(e.setup_status)}</span>
                 )}
               </span>
               {e.ts && <span style={{ fontSize: "0.66rem", color: "var(--text-dim)", whiteSpace: "nowrap" }}>{relativeTime(e.ts)}</span>}
