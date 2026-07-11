@@ -8,7 +8,7 @@
  * is the primary PMF-signal surface for the Sprint-1 validation window.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Activity, RefreshCw, TrendingDown } from "lucide-react";
+import { Activity, RefreshCw, TrendingDown, IndianRupee, Layers, HeartPulse, Zap, RotateCw, LogOut } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
@@ -21,9 +21,20 @@ interface Health {
   watchlist_adds: number; watchlist_opens: number; research_searches: number; ai_research_usage: number;
   avg_session_seconds: number; pages_per_session: number; telegram_link_clicks: number;
   day1_retention_pct: number | null; day1_cohort: number; day7_retention_pct: number | null;
+  session_endings?: Record<string, number>;
 }
 interface FunnelStage { stage: string; count: number; conversion_pct: number; overall_pct: number; }
 interface Funnel { window_days: number; since: string; stages: FunnelStage[]; note: string; }
+interface FeatureRow {
+  feature: string; event: string; unique_users: number; daily_uses: number; weekly_uses: number;
+  avg_session_seconds: number; repeat_usage_pct: number; adoption_pct: number;
+}
+interface Adoption { window_days: number; active_users: number; features: FeatureRow[]; }
+interface Business {
+  registered_users: number; premium_accounts: number; free_users: number; admin_users: number;
+  subscription_price_inr: number; mrr_estimate_inr: number; arpu_estimate_inr: number; estimate_note: string;
+  coming_soon: Record<string, string>;
+}
 
 function fmtDuration(s: number): string {
   if (!s || s <= 0) return "0s";
@@ -32,11 +43,20 @@ function fmtDuration(s: number): string {
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
 }
 
+function fmtINR(n: number): string {
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(2)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}k`;
+  return `₹${n}`;
+}
+
 export default function HealthPage() {
   const { user, token, loading: authLoading } = useAuth();
   const [days, setDays] = useState(7);
   const [health, setHealth] = useState<Health | null>(null);
   const [funnel, setFunnel] = useState<Funnel | null>(null);
+  const [adoption, setAdoption] = useState<Adoption | null>(null);
+  const [business, setBusiness] = useState<Business | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -47,14 +67,18 @@ export default function HealthPage() {
     setLoading(true); setErr(null);
     try {
       const h: Record<string, string> = { Authorization: `Bearer ${token}` };
-      const [hr, fr] = await Promise.all([
+      const [hr, fr, ar, br] = await Promise.all([
         fetch(`${API_BASE}/api/product-analytics/health?days=${days}`, { headers: h, cache: "no-store" }),
         fetch(`${API_BASE}/api/product-analytics/funnel?days=${days}`, { headers: h, cache: "no-store" }),
+        fetch(`${API_BASE}/api/product-analytics/adoption?days=${days}`, { headers: h, cache: "no-store" }),
+        fetch(`${API_BASE}/api/product-analytics/business`, { headers: h, cache: "no-store" }),
       ]);
       if (hr.status === 403 || fr.status === 403) { setErr("Admin access required."); return; }
       if (!hr.ok || !fr.ok) { setErr("Could not load product health."); return; }
       setHealth(await hr.json());
       setFunnel(await fr.json());
+      if (ar.ok) setAdoption(await ar.json());
+      if (br.ok) setBusiness(await br.json());
     } catch {
       setErr("Could not load product health.");
     } finally {
@@ -117,6 +141,24 @@ export default function HealthPage() {
         </div>
       </div>
 
+      {/* Founder summary — the four questions this page must answer at a glance */}
+      {health && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <FounderCard icon={HeartPulse} q="Is the product healthy?"
+            value={`${health.active_users} active`} sub={`last ${health.window_days}d`}
+            tone={health.active_users > 0 ? "good" : "dim"} />
+          <FounderCard icon={Zap} q="Are users engaged?"
+            value={`${health.nba_ctr_pct}% NBA CTR`} sub={`${health.pages_per_session} pages/session`}
+            tone={health.nba_ctr_pct >= 15 ? "good" : health.nba_ctr_pct > 0 ? "warn" : "dim"} />
+          <FounderCard icon={RotateCw} q="Are users returning?"
+            value={health.day1_retention_pct == null ? "—" : `${health.day1_retention_pct}% D1`} sub={`cohort ${health.day1_cohort}`}
+            tone={(health.day1_retention_pct ?? 0) >= 25 ? "good" : (health.day1_retention_pct ?? 0) > 0 ? "warn" : "dim"} />
+          <FounderCard icon={IndianRupee} q="Are subscriptions growing?"
+            value={business ? `${business.premium_accounts} paid` : "—"} sub={business ? `${fmtINR(business.mrr_estimate_inr)} MRR est` : ""}
+            tone={(business?.premium_accounts ?? 0) > 0 ? "good" : "dim"} />
+        </div>
+      )}
+
       {err && (
         <div className="glass rounded-xl" style={{ padding: "14px 16px", border: "1px solid rgba(251,113,133,0.3)", color: "var(--danger)", fontSize: "0.82rem" }}>{err}</div>
       )}
@@ -168,6 +210,124 @@ export default function HealthPage() {
           </p>
         </div>
       )}
+
+      {/* Business Health */}
+      {business && (
+        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
+          <div className="flex items-center gap-2 mb-1">
+            <IndianRupee size={15} color="var(--accent)" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Business Health</span>
+          </div>
+          <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 14px" }}>{business.estimate_note}</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MiniStat label="MRR (est.)" value={fmtINR(business.mrr_estimate_inr)} sub={`${business.premium_accounts} × ${fmtINR(business.subscription_price_inr)}`} accent />
+            <MiniStat label="Paid / Premium" value={String(business.premium_accounts)} sub="role-based (real)" />
+            <MiniStat label="Registered Users" value={String(business.registered_users)} sub={`${business.free_users} free`} />
+            <MiniStat label="ARPU (est.)" value={fmtINR(business.arpu_estimate_inr)} sub="MRR / registered" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            {Object.entries(business.coming_soon).map(([k, v]) => (
+              <div key={k} className="rounded-xl" style={{ padding: "12px 14px", border: "1px dashed var(--border)", opacity: 0.7 }}>
+                <div style={{ fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)" }}>{k.replace(/_/g, " ").replace(/pct/, "%")}</div>
+                <div style={{ fontSize: "0.82rem", fontWeight: 700, marginTop: 4, color: "var(--text-dim)" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: "0.62rem", color: "var(--text-dim)", margin: "12px 0 0" }}>
+            Dashed cards unlock when a billing system (Razorpay) ships — MRR/ARPU become real, and churn/renewal/refund/LTV/CAC become measurable.
+          </p>
+        </div>
+      )}
+
+      {/* Feature Adoption */}
+      {adoption && (
+        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Layers size={15} color="var(--accent)" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Feature Adoption</span>
+          </div>
+          <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 12px" }}>
+            Sorted by adoption. {adoption.active_users} active users in window. Use this to prioritise the roadmap.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", minWidth: 640 }}>
+              <thead>
+                <tr style={{ color: "var(--text-dim)", fontSize: "0.64rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Feature</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Unique</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Daily</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Weekly</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg time</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Repeat</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", width: 150 }}>Adoption</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adoption.features.map((f) => (
+                  <tr key={f.event} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "8px", fontWeight: 600, color: "var(--text-primary)" }}>{f.feature}</td>
+                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.unique_users}</td>
+                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.daily_uses}</td>
+                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.weekly_uses}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)" }}>{fmtDuration(f.avg_session_seconds)}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)" }}>{f.repeat_usage_pct}%</td>
+                    <td style={{ padding: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${Math.min(100, f.adoption_pct)}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--accent)", minWidth: 38, textAlign: "right" }}>{f.adoption_pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Session endings (churn signal) */}
+      {health && health.session_endings && Object.keys(health.session_endings).length > 0 && (
+        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <LogOut size={15} color="var(--accent)" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Session Endings</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(health.session_endings).map(([reason, count]) => (
+              <div key={reason} className="rounded-lg" style={{ padding: "8px 12px", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}>
+                <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)" }}>{count}</span>
+                <span style={{ fontSize: "0.72rem", color: "var(--text-dim)", marginLeft: 6 }}>{reason.replace(/_/g, " ")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FounderCard({ icon: Icon, q, value, sub, tone }: { icon: typeof HeartPulse; q: string; value: string; sub?: string; tone: "good" | "warn" | "dim" }) {
+  const color = tone === "good" ? "var(--success)" : tone === "warn" ? "var(--warning)" : "var(--text-secondary)";
+  return (
+    <div className="glass rounded-xl" style={{ padding: "14px 16px", borderLeft: `3px solid ${color}` }}>
+      <div className="flex items-center gap-1.5" style={{ color: "var(--text-dim)" }}>
+        <Icon size={13} />
+        <span style={{ fontSize: "0.66rem" }}>{q}</span>
+      </div>
+      <div style={{ fontSize: "1.2rem", fontWeight: 800, marginTop: 6, color }}>{value}</div>
+      {sub && <div style={{ fontSize: "0.62rem", color: "var(--text-dim)", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
+  return (
+    <div className="rounded-xl" style={{ padding: "12px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+      <div style={{ fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)" }}>{label}</div>
+      <div style={{ fontSize: "1.05rem", fontWeight: 800, marginTop: 4, color: accent ? "var(--accent)" : "var(--text-primary)" }}>{value}</div>
+      {sub && <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }

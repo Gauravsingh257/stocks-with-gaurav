@@ -82,3 +82,13 @@ def health(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_adm
 @router.get("/funnel")
 def funnel(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_admin)):
     return store.activation_funnel(days)
+
+
+@router.get("/adoption")
+def adoption(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_admin)):
+    return store.feature_adoption(days)
+
+
+@router.get("/business")
+def business(_admin: dict = Depends(require_admin)):
+    return store.business_health()

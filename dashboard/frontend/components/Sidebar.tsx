@@ -3,20 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard, Home
+  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard, Home, Activity
 } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
 
 // Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
 const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
+const ADMIN_EMAILS = new Set(["hellogaurav2577@gmail.com"]);
 
 // Nav consolidated 8 flat items → 5 grouped destinations. Folded pages remain
 // one click away via <SectionTabs> inside each group:
 //   Research  ← Screeners
 //   Portfolio ← Track Record (/analytics), Journal
 //   Markets   ← OI Radar, Market Intel
-type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; match?: string[] };
+type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; admin?: boolean; match?: string[] };
 const NAV: NavItem[] = [
   { href: "/command",         label: "Command Center", icon: Home },
   { href: "/terminal",        label: "Terminal",  icon: Sparkles },
@@ -26,6 +27,7 @@ const NAV: NavItem[] = [
     ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
     : [{ href: "/analytics",    label: "Portfolio", icon: LayoutDashboard, match: ["/analytics", "/journal"] }]),
   { href: "/oi-intelligence", label: "Markets",   icon: Globe, match: ["/oi-intelligence", "/market-intelligence"] },
+  { href: "/health",          label: "Product Health", icon: Activity, admin: true },
 ];
 
 export default function Sidebar({
@@ -37,6 +39,7 @@ export default function Sidebar({
 }) {
   const path = usePathname();
   const { user, logout } = useAuth();
+  const isAdmin = !!user && (user.role === "ADMIN" || ADMIN_EMAILS.has((user.email || "").toLowerCase()));
 
   return (
     <>
@@ -92,8 +95,9 @@ export default function Sidebar({
 
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 mt-2">
-          {NAV.map(({ href, label, icon: Icon, auth, match }) => {
+          {NAV.map(({ href, label, icon: Icon, auth, admin, match }) => {
             if (auth && !user) return null;
+            if (admin && !isAdmin) return null;
             const prefixes = match ?? [href];
             const active = prefixes.some((p) => path === p || (p !== "/" && path.startsWith(p)));
             return (

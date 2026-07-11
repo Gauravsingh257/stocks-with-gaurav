@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .schema import get_connection
 
@@ -181,6 +182,18 @@ def health_kpis(days: int = 7) -> Dict[str, Any]:
         retained = int(d1["retained"] or 0)
         d1_ret = round(100.0 * retained / cohort, 1) if cohort else None
 
+        # session-ending reasons (for churn analysis later)
+        session_endings: Dict[str, int] = {}
+        try:
+            for r in conn.execute(
+                "SELECT COALESCE(json_extract(props, '$.reason'), 'unknown') AS reason, COUNT(*) AS c"
+                " FROM product_events WHERE event = 'session_end' AND day >= ? GROUP BY reason",
+                (start,),
+            ).fetchall():
+                session_endings[str(r["reason"])] = int(r["c"])
+        except Exception:  # JSON1 not available — non-fatal
+            session_endings = {}
+
         return {
             "window_days": int(days),
             "since": start,
@@ -201,6 +214,7 @@ def health_kpis(days: int = 7) -> Dict[str, Any]:
             "day1_retention_pct": d1_ret,
             "day1_cohort": cohort,
             "day7_retention_pct": None,  # needs ≥7 days of data
+            "session_endings": session_endings,
         }
     finally:
         conn.close()
@@ -242,5 +256,126 @@ def activation_funnel(days: int = 7) -> Dict[str, Any]:
             s["overall_pct"] = round(100.0 * s["count"] / visitors, 1) if visitors else 0.0
         return {"window_days": int(days), "since": start, "stages": stages,
                 "note": "Loose funnel: users are counted at a stage if they performed that event in the window (not strictly sequential)."}
+    finally:
+        conn.close()
+
+
+# ── Feature adoption ─────────────────────────────────────────────────────────
+# (display name, event name) — one row per major module.
+_FEATURES: List[Tuple[str, str]] = [
+    ("Command Center", "command_center_viewed"),
+    ("Next Best Action", "nba_clicked"),
+    ("Terminal", "terminal_opened"),
+    ("Research", "research_opened"),
+    ("Screeners", "screeners_opened"),
+    ("Watchlist", "watchlist_opened"),
+    ("Watchlist Add", "watchlist_stock_added"),
+    ("Portfolio", "portfolio_viewed"),
+    ("OI Intelligence", "oi_intelligence_opened"),
+    ("Market Intel", "market_intel_opened"),
+    ("Track Record", "track_record_viewed"),
+    ("Global Search", "global_search"),
+]
+
+
+def feature_adoption(days: int = 7) -> Dict[str, Any]:
+    """Per-module usage: unique users, daily/weekly uses, avg session time with the
+    feature, repeat-usage %, and adoption % (unique users / active users). Sorted
+    by adoption. Drives roadmap prioritisation."""
+    ensure_tables()
+    start = _window_start(days)
+    today = _window_start(1)
+    week = _window_start(7)
+    conn = get_connection()
+    try:
+        total_active = int(conn.execute(
+            "SELECT COUNT(DISTINCT anon_id) AS c FROM product_events WHERE day >= ? AND anon_id IS NOT NULL",
+            (start,),
+        ).fetchone()["c"] or 0)
+
+        features: List[Dict[str, Any]] = []
+        for name, ev in _FEATURES:
+            unique = int(conn.execute(
+                "SELECT COUNT(DISTINCT anon_id) AS c FROM product_events WHERE event = ? AND day >= ? AND anon_id IS NOT NULL",
+                (ev, start),
+            ).fetchone()["c"] or 0)
+            daily = _count(conn, ev, today)
+            weekly = _count(conn, ev, week)
+            repeat_users = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM (SELECT anon_id FROM product_events"
+                " WHERE event = ? AND day >= ? AND anon_id IS NOT NULL GROUP BY anon_id HAVING COUNT(*) >= 2)",
+                (ev, start),
+            ).fetchone()["c"] or 0)
+            avg_time = conn.execute(
+                "WITH fs AS (SELECT DISTINCT session_id FROM product_events"
+                "            WHERE event = ? AND day >= ? AND session_id IS NOT NULL),"
+                "     sd AS (SELECT session_id, (julianday(MAX(ts)) - julianday(MIN(ts))) * 86400.0 AS dur"
+                "            FROM product_events WHERE session_id IN (SELECT session_id FROM fs) GROUP BY session_id)"
+                " SELECT AVG(dur) AS a FROM sd",
+                (ev, start),
+            ).fetchone()["a"]
+            features.append({
+                "feature": name,
+                "event": ev,
+                "unique_users": unique,
+                "daily_uses": daily,
+                "weekly_uses": weekly,
+                "avg_session_seconds": round(float(avg_time), 1) if avg_time is not None else 0.0,
+                "repeat_usage_pct": round(100.0 * repeat_users / unique, 1) if unique else 0.0,
+                "adoption_pct": round(100.0 * unique / total_active, 1) if total_active else 0.0,
+            })
+
+        features.sort(key=lambda x: (-x["adoption_pct"], -x["unique_users"]))
+        return {"window_days": int(days), "since": start,
+                "active_users": total_active, "features": features}
+    finally:
+        conn.close()
+
+
+# ── Business health ──────────────────────────────────────────────────────────
+def business_health() -> Dict[str, Any]:
+    """Subscription/revenue snapshot. Most fields are estimates or 'coming soon'
+    until a billing system exists — Premium role counts are real, MRR/ARPU are
+    derived estimates, and churn/renewal/refund/LTV/CAC need billing data."""
+    conn = get_connection()
+    try:
+        roles: Dict[str, int] = {}
+        try:
+            for r in conn.execute("SELECT role, COUNT(*) AS c FROM users GROUP BY role").fetchall():
+                roles[str(r["role"]).upper()] = int(r["c"])
+        except Exception:
+            roles = {}
+        premium = roles.get("PREMIUM", 0)
+        free = roles.get("FREE", 0)
+        admin = roles.get("ADMIN", 0)
+        registered = premium + free + admin
+        try:
+            price = int(os.getenv("SUBSCRIPTION_PRICE_INR", "1200"))
+        except ValueError:
+            price = 1200
+        mrr_est = premium * price
+        arpu_est = round(mrr_est / registered, 1) if registered else 0.0
+        return {
+            # real (role-derived)
+            "registered_users": registered,
+            "premium_accounts": premium,
+            "free_users": free,
+            "admin_users": admin,
+            "subscription_price_inr": price,
+            # estimates (no billing yet)
+            "mrr_estimate_inr": mrr_est,
+            "arpu_estimate_inr": arpu_est,
+            "estimate_note": "MRR/ARPU are estimates from Premium role counts — real figures arrive with a billing system.",
+            # coming soon (need billing/payment history)
+            "coming_soon": {
+                "active_subscribers": "Coming Soon",
+                "trial_users": "Coming Soon",
+                "renewal_rate_pct": "Coming Soon",
+                "churn_rate_pct": "Coming Soon",
+                "refund_rate_pct": "Coming Soon",
+                "ltv_inr": "Coming Soon",
+                "cac_inr": "Coming Soon",
+            },
+        }
     finally:
         conn.close()

@@ -12,7 +12,7 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import {
   GA4_ID, CLARITY_ID, POSTHOG_KEY, POSTHOG_HOST,
-  pageview, track, routeEvent,
+  pageview, track, routeEvent, endSession,
 } from "@/lib/analytics";
 
 export default function AnalyticsScripts() {
@@ -25,6 +25,19 @@ export default function AnalyticsScripts() {
     const named = routeEvent(pathname);
     if (named) track(named);
   }, [pathname]);
+
+  // Record the session ending on tab/browser close (once). `pagehide` is the
+  // reliable unload signal on both desktop and mobile Safari.
+  useEffect(() => {
+    let ended = false;
+    const onHide = () => {
+      if (ended) return;
+      ended = true;
+      endSession("closed_or_left");
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
 
   return (
     <>

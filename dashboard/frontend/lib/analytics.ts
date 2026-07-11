@@ -110,6 +110,35 @@ export function track(event: string, props: Props = {}): void {
   } catch { /* noop */ }
 }
 
+/**
+ * Record a session ending with a reason (logout / token_expired / closed …).
+ * Uses sendBeacon so it survives page unload; falls back to keepalive fetch.
+ * Feeds later churn analysis. sendBeacon can't set an auth header, so this
+ * lands anonymously (anon_id/session_id are enough to analyse endings).
+ */
+export function endSession(reason: string): void {
+  if (typeof window === "undefined") return;
+  const payload = JSON.stringify({
+    event: "session_end",
+    anon_id: anonId(),
+    session_id: sessionId(),
+    path: window.location.pathname,
+    device: device(),
+    props: { reason },
+  });
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(`${API_BASE}/api/product-analytics/event`, new Blob([payload], { type: "application/json" }));
+      return;
+    }
+  } catch { /* fall through */ }
+  try {
+    fetch(`${API_BASE}/api/product-analytics/event`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true, body: payload,
+    }).catch(() => {});
+  } catch { /* noop */ }
+}
+
 /** Manual SPA page_view (GA4 is configured with send_page_view:false). */
 export function pageview(path: string): void {
   if (typeof window === "undefined") return;
