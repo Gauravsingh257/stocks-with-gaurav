@@ -253,7 +253,7 @@ function ChartContent() {
     // labels above). It reads live options (labels on/off, hover, mobile).
     const zones = buildZones(data.zones);
     zonesRef.current = zones;
-    optsRef.current = { showLabels: showLabelsRef.current, hoveredId: null, mobile: container.clientWidth < 768 };
+    optsRef.current = { showLabels: showLabelsRef.current, hoveredId: null, mobile: window.innerWidth < 768 };
     const zonesPrimitive = new SmcZonesPrimitive(zones, () => optsRef.current);
     type PrimitiveArg = Parameters<typeof candleSeries.attachPrimitive>[0];
     candleSeries.attachPrimitive(zonesPrimitive as unknown as PrimitiveArg);
@@ -311,7 +311,7 @@ function ChartContent() {
           width: container.clientWidth,
           height: container.clientHeight,
         });
-        const mobile = container.clientWidth < 768;
+        const mobile = window.innerWidth < 768;
         if (optsRef.current.mobile !== mobile) {
           optsRef.current.mobile = mobile;
           primitiveRef.current?.requestUpdate();
