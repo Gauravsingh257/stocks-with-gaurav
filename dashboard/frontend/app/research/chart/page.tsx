@@ -14,6 +14,7 @@ import {
   CrosshairMode,
 } from "lightweight-charts";
 import { api, type ResearchChartData } from "@/lib/api";
+import { PriceBand } from "@/lib/priceBandPrimitive";
 
 function fmt(v: number) {
   return v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -175,8 +176,10 @@ function ChartContent() {
       });
     }
 
+    type PrimitiveArg = Parameters<typeof candleSeries.attachPrimitive>[0];
     for (const zone of data.zones) {
       if (zone.top === zone.bottom) {
+        // Single-price structure (e.g. CHoCH) → a dotted level line.
         candleSeries.createPriceLine({
           price: zone.top,
           color: zone.border_color,
@@ -185,6 +188,17 @@ function ChartContent() {
           axisLabelVisible: false,
           title: zone.label,
         });
+      } else {
+        // Range zone (Order Block / FVG / Weekly OB/FVG) → shaded band drawn
+        // directly on the chart, behind the candles.
+        const band = new PriceBand({
+          top: zone.top,
+          bottom: zone.bottom,
+          fill: zone.color,
+          border: zone.border_color,
+          label: zone.label,
+        });
+        candleSeries.attachPrimitive(band as unknown as PrimitiveArg);
       }
     }
 
