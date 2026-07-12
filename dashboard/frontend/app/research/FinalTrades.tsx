@@ -209,10 +209,10 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
         <div>
           <h2 className="m-0 text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
             <Flame size={20} className="text-emerald-400 shrink-0" aria-hidden />
-            <span>Final Trade Ideas</span>
+            <span>On the Radar</span>
           </h2>
           <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "0.78rem" }}>
-            Engine has done all the homework — open the chart and decide
+            High-conviction setups being tracked for a clean entry — they move into the Portfolio only when price triggers, not buy-now calls
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
