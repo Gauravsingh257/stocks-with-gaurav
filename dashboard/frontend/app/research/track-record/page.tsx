@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { ArrowLeft, TrendingUp, TrendingDown, Target, ShieldAlert, Clock } from "lucide-react";
-import { api, type TrackRecordPick, type TrackRecordSummary } from "@/lib/api";
+import { api, type TrackRecordPick } from "@/lib/api";
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   return (
@@ -29,7 +29,6 @@ const STATUS_CONFIG: Record<string, { bg: string; color: string; label: string }
 
 export default function TrackRecordPage() {
   const [picks, setPicks] = useState<TrackRecordPick[]>([]);
-  const [summary, setSummary] = useState<TrackRecordSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "swing" | "longterm">("all");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
@@ -39,7 +38,6 @@ export default function TrackRecordPage() {
     api.trackRecord(filter, 200)
       .then((res) => {
         setPicks(res.picks);
-        setSummary(res.summary);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -49,6 +47,31 @@ export default function TrackRecordPage() {
     if (statusFilter === "ALL") return picks;
     return picks.filter((p) => p.status === statusFilter);
   }, [picks, statusFilter]);
+
+  // KPIs recompute over the CURRENTLY-FILTERED rows so they react in real time
+  // to both the horizon (Swing/Long-Term) and the status filter — not just the
+  // server-side horizon summary.
+  const derived = useMemo(() => {
+    const rows = filtered;
+    const resolvedRows = rows.filter((p) => p.status === "TARGET_HIT" || p.status === "STOP_HIT");
+    const targetHit = rows.filter((p) => p.status === "TARGET_HIT").length;
+    const stopHit = rows.filter((p) => p.status === "STOP_HIT").length;
+    const resolved = resolvedRows.length;
+    const resolvedPnls = resolvedRows.map((p) => p.pnl_pct).filter((v): v is number => v !== null);
+    const allPnls = rows.map((p) => p.pnl_pct).filter((v): v is number => v !== null);
+    const round = (n: number, d = 1) => Math.round(n * 10 ** d) / 10 ** d;
+    return {
+      total_picks: rows.length,
+      resolved,
+      target_hit: targetHit,
+      stop_hit: stopHit,
+      hit_rate_pct: resolved > 0 ? round((targetHit / resolved) * 100) : 0,
+      avg_pnl_pct: resolvedPnls.length ? round(resolvedPnls.reduce((a, b) => a + b, 0) / resolvedPnls.length, 2) : 0,
+      best_pnl_pct: allPnls.length ? round(Math.max(...allPnls), 2) : 0,
+      worst_pnl_pct: allPnls.length ? round(Math.min(...allPnls), 2) : 0,
+      has_pnl: allPnls.length > 0,
+    };
+  }, [filtered]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -74,15 +97,15 @@ export default function TrackRecordPage() {
         </p>
       </div>
 
-      {/* Summary Cards */}
-      {summary && (
+      {/* Summary Cards — computed live from the applied filters */}
+      {!loading && (
         <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label="Total Signals" value={String(summary.total_picks)} color="var(--text-primary)" />
-          <StatCard label="Resolved" value={String(summary.resolved)} sub={`of ${summary.total_picks} · rest still open`} color="var(--text-primary)" />
-          <StatCard label="Hit Rate" value={summary.resolved > 0 ? `${summary.hit_rate_pct}%` : "—"} sub={`${summary.target_hit}W / ${summary.stop_hit}L of ${summary.resolved} resolved`} color={summary.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Avg P&L" value={summary.resolved > 0 ? `${summary.avg_pnl_pct > 0 ? "+" : ""}${summary.avg_pnl_pct}%` : "—"} sub={`on ${summary.resolved} resolved`} color={summary.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Best" value={`+${summary.best_pnl_pct}%`} color="#00e096" />
-          <StatCard label="Worst" value={`${summary.worst_pnl_pct}%`} color="#ff4757" />
+          <StatCard label={statusFilter === "ALL" ? "Total Signals" : "Matching Signals"} value={String(derived.total_picks)} color="var(--text-primary)" />
+          <StatCard label="Resolved" value={String(derived.resolved)} sub={`of ${derived.total_picks} · rest still open`} color="var(--text-primary)" />
+          <StatCard label="Hit Rate" value={derived.resolved > 0 ? `${derived.hit_rate_pct}%` : "—"} sub={`${derived.target_hit}W / ${derived.stop_hit}L of ${derived.resolved} resolved`} color={derived.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Avg P&L" value={derived.resolved > 0 ? `${derived.avg_pnl_pct > 0 ? "+" : ""}${derived.avg_pnl_pct}%` : "—"} sub={`on ${derived.resolved} resolved`} color={derived.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Best" value={derived.has_pnl ? `${derived.best_pnl_pct > 0 ? "+" : ""}${derived.best_pnl_pct}%` : "—"} color="#00e096" />
+          <StatCard label="Worst" value={derived.has_pnl ? `${derived.worst_pnl_pct}%` : "—"} color="#ff4757" />
         </div>
       )}
 
