@@ -528,7 +528,7 @@ export default function SystemFlowDiagram({
       name: "Final Trades",
       short: "Top 6",
       desc: "Highest-conviction setups",
-      detail: "Only names that passed ALL three layers. Surfaced as 'Final Trade Ideas' on the Research page and the top of 'Decision-ready setups' on this terminal.",
+      detail: "Only names that passed ALL three layers. Surfaced as 'On the Radar' on the Research page and the top of 'Decision-ready setups' on this terminal.",
       icon: Flame,
       color: "gold",
       endpoint: "/api/research/discovery → final_trades",
@@ -940,7 +940,7 @@ export default function SystemFlowDiagram({
             >
               <span style={{ color: "#00d4ff", fontWeight: 800 }}>Reading guide: </span>
               The five-stage funnel feeds <strong style={{ color: "var(--text-primary)" }}>Decision-ready setups</strong> (full feed) and
-              <strong style={{ color: "var(--text-primary)" }}> Final Trade Ideas</strong> (top 6).
+              <strong style={{ color: "var(--text-primary)" }}> On the Radar</strong> (top 6).
               <strong style={{ color: "var(--text-primary)" }}> Approaching Zones</strong> shows the watchlist subset.
               The three parallel engines below run separately and surface their own signals — they are NOT inputs to the funnel.
               Your <strong style={{ color: "var(--text-primary)" }}>Portfolio</strong> is whatever you've personally committed to track.

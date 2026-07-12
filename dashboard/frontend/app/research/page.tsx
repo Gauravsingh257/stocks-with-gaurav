@@ -640,7 +640,7 @@ export default function ResearchPage() {
             )}
           </div>
           <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.68rem", lineHeight: 1.45 }}>
-            Search results are analysis-only. Manual review becomes clearer after the decision engine promotes a stock into Final Trade Ideas.
+            Search results are analysis-only. Manual review becomes clearer after the decision engine promotes a stock into On the Radar.
           </p>
           {searching && (
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.14)", color: "var(--accent)", fontSize: "0.82rem", fontWeight: 750 }}>
@@ -726,7 +726,7 @@ export default function ResearchPage() {
           </div>
         </div>
         <p style={{ margin: "4px 0 0", fontSize: "0.68rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-          Filters the server-assigned decision buckets on this page. It does not move stocks between Final Trade Ideas, Watchlist, and Early Signals.
+          Filters the server-assigned decision buckets on this page. It does not move stocks between On the Radar, Watchlist, and Early Signals.
           {user?.role === "FREE" && " Free accounts see a preview list — upgrade to Premium to filter the full set."}
         </p>
         {filterSummary && (
