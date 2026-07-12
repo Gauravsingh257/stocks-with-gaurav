@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, Share2, Check } from "lucide-react";
+import { ArrowLeft, Share2, Check, Tag } from "lucide-react";
 import Link from "next/link";
 import {
   createChart,
@@ -14,10 +14,41 @@ import {
   CrosshairMode,
 } from "lightweight-charts";
 import { api, type ResearchChartData } from "@/lib/api";
-import { PriceBand } from "@/lib/priceBandPrimitive";
+import { SmcZonesPrimitive, type SmcZone, type ZoneOptions } from "@/lib/smcZonesPrimitive";
 
 function fmt(v: number) {
   return v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Compact label for mobile/narrow screens (Task 7).
+function abbreviate(label: string): string {
+  let s = label
+    .replace(/Order Block/gi, "OB")
+    .replace(/Fair Value Gap/gi, "FVG")
+    .replace(/Weekly/gi, "W")
+    .replace(/Bullish/gi, "Bull")
+    .replace(/Bearish/gi, "Bear")
+    .replace(/Structure/gi, "Struct")
+    .replace(/Demand/gi, "Dmd")
+    .replace(/Supply/gi, "Sup")
+    .replace(/\s+/g, " ")
+    .trim();
+  s = s.replace(/^W /, "W-");
+  return s;
+}
+function timeframeOf(label: string): string {
+  return /weekly/i.test(label) ? "Weekly" : "Daily";
+}
+function buildZones(zones: ResearchChartData["zones"]): SmcZone[] {
+  return zones.map((z, i) => ({
+    id: `${z.label}-${i}`,
+    label: z.label,
+    short: abbreviate(z.label),
+    top: z.top,
+    bottom: z.bottom,
+    fill: z.color,
+    border: z.border_color,
+  }));
 }
 
 function setupBadgeColor(setup: string): string {
@@ -69,10 +100,48 @@ function ChartContent() {
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const primitiveRef = useRef<SmcZonesPrimitive | null>(null);
+  const optsRef = useRef<ZoneOptions>({ showLabels: true, hoveredId: null, mobile: false });
+  const zonesRef = useRef<SmcZone[]>([]);
+  const currentPriceRef = useRef<number>(0);
+  const showLabelsRef = useRef<boolean>(true);
+  const hoverIdsRef = useRef<{ chart: string | null; legend: string | null }>({ chart: null, legend: null });
   const [data, setData] = useState<ResearchChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showLabels, setShowLabels] = useState(true);
+  // Which zone's legend row to highlight (driven by chart hover).
+  const [chartHoverId, setChartHoverId] = useState<string | null>(null);
+
+  // Persisted "Show Zone Labels" setting (Task 6).
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("chart:showLabels");
+      if (v === "0") setShowLabels(false);
+    } catch { /* ignore */ }
+  }, []);
+
+  // Recompute the effective hovered zone (chart hover wins over legend hover)
+  // and repaint the canvas only — no React re-render of the chart.
+  const applyHover = useCallback(() => {
+    optsRef.current.hoveredId = hoverIdsRef.current.chart ?? hoverIdsRef.current.legend;
+    primitiveRef.current?.requestUpdate();
+  }, []);
+
+  const setLegendHover = useCallback((id: string | null) => {
+    hoverIdsRef.current.legend = id;
+    applyHover();
+  }, [applyHover]);
+
+  // Reflect the label toggle into the live primitive.
+  useEffect(() => {
+    showLabelsRef.current = showLabels;
+    optsRef.current.showLabels = showLabels;
+    primitiveRef.current?.requestUpdate();
+    try { localStorage.setItem("chart:showLabels", showLabels ? "1" : "0"); } catch { /* ignore */ }
+  }, [showLabels]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -176,31 +245,63 @@ function ChartContent() {
       });
     }
 
+    // Current price (last close) — drives zone status in the tooltip.
+    const lastCandle = data.candles[data.candles.length - 1];
+    currentPriceRef.current = lastCandle ? lastCandle.close : 0;
+
+    // SMC zones + inline labels, drawn by one primitive (bands behind candles,
+    // labels above). It reads live options (labels on/off, hover, mobile).
+    const zones = buildZones(data.zones);
+    zonesRef.current = zones;
+    optsRef.current = { showLabels: showLabelsRef.current, hoveredId: null, mobile: container.clientWidth < 768 };
+    const zonesPrimitive = new SmcZonesPrimitive(zones, () => optsRef.current);
     type PrimitiveArg = Parameters<typeof candleSeries.attachPrimitive>[0];
-    for (const zone of data.zones) {
-      if (zone.top === zone.bottom) {
-        // Single-price structure (e.g. CHoCH) → a dotted level line.
-        candleSeries.createPriceLine({
-          price: zone.top,
-          color: zone.border_color,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dotted,
-          axisLabelVisible: false,
-          title: zone.label,
-        });
-      } else {
-        // Range zone (Order Block / FVG / Weekly OB/FVG) → shaded band drawn
-        // directly on the chart, behind the candles.
-        const band = new PriceBand({
-          top: zone.top,
-          bottom: zone.bottom,
-          fill: zone.color,
-          border: zone.border_color,
-          label: zone.label,
-        });
-        candleSeries.attachPrimitive(band as unknown as PrimitiveArg);
+    candleSeries.attachPrimitive(zonesPrimitive as unknown as PrimitiveArg);
+    primitiveRef.current = zonesPrimitive;
+
+    // Hover tooltip + zone↔legend sync via the crosshair (no per-frame React
+    // state; tooltip is positioned imperatively).
+    const onCrosshair = (param: { point?: { x: number; y: number }; time?: unknown }) => {
+      const tip = tooltipRef.current;
+      const pt = param.point;
+      if (!pt) {
+        if (tip) tip.style.display = "none";
+        if (hoverIdsRef.current.chart !== null) { hoverIdsRef.current.chart = null; setChartHoverId(null); applyHover(); }
+        return;
       }
-    }
+      const price = candleSeries.coordinateToPrice(pt.y);
+      const zone = price == null ? undefined : zonesRef.current.find(
+        (z) => price <= Math.max(z.top, z.bottom) && price >= Math.min(z.top, z.bottom),
+      );
+      if (!zone) {
+        if (tip) tip.style.display = "none";
+        if (hoverIdsRef.current.chart !== null) { hoverIdsRef.current.chart = null; setChartHoverId(null); applyHover(); }
+        return;
+      }
+      const hi = Math.max(zone.top, zone.bottom);
+      const lo = Math.min(zone.top, zone.bottom);
+      const cp = currentPriceRef.current;
+      const status = cp > hi ? "Price is currently ABOVE this zone"
+        : cp < lo ? "Price is currently BELOW this zone"
+        : "Price is currently INSIDE this zone";
+      if (tip) {
+        const range = hi === lo ? `₹${fmt(hi)}` : `₹${fmt(lo)} – ₹${fmt(hi)}`;
+        tip.innerHTML = `<div style="font-weight:700;color:#fff">${zone.label}</div>`
+          + `<div style="opacity:.75;margin-top:2px">${timeframeOf(zone.label)} · ${range}</div>`
+          + `<div style="margin-top:3px;color:${zone.border}">${status}</div>`;
+        tip.style.borderColor = zone.border;
+        tip.style.display = "block";
+        const tw = tip.offsetWidth || 160;
+        tip.style.left = `${Math.min(pt.x + 14, container.clientWidth - tw - 8)}px`;
+        tip.style.top = `${pt.y + 14}px`;
+      }
+      if (hoverIdsRef.current.chart !== zone.id) {
+        hoverIdsRef.current.chart = zone.id;
+        setChartHoverId(zone.id);
+        applyHover();
+      }
+    };
+    chart.subscribeCrosshairMove(onCrosshair);
 
     chart.timeScale().fitContent();
 
@@ -210,6 +311,11 @@ function ChartContent() {
           width: container.clientWidth,
           height: container.clientHeight,
         });
+        const mobile = container.clientWidth < 768;
+        if (optsRef.current.mobile !== mobile) {
+          optsRef.current.mobile = mobile;
+          primitiveRef.current?.requestUpdate();
+        }
       }
     });
     ro.observe(container);
@@ -221,7 +327,7 @@ function ChartContent() {
         chartRef.current = null;
       }
     };
-  }, [data]);
+  }, [data, applyHover]);
 
   useEffect(() => {
     const cleanup = renderChart();
@@ -277,6 +383,21 @@ function ChartContent() {
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button
+            onClick={() => setShowLabels((s) => !s)}
+            title="Show or hide the labels drawn on each SMC zone"
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              fontSize: "0.75rem", color: showLabels ? "#00e096" : "#94a3b8",
+              padding: "5px 12px", borderRadius: 6,
+              background: showLabels ? "rgba(0,224,150,0.12)" : "rgba(255,255,255,0.05)",
+              border: "1px solid " + (showLabels ? "rgba(0,224,150,0.3)" : "rgba(255,255,255,0.1)"),
+              cursor: "pointer", fontWeight: 500,
+            }}
+          >
+            {showLabels ? <Check size={13} /> : <Tag size={13} />}
+            Zone Labels
+          </button>
+          <button
             onClick={handleShare}
             style={{
               display: "flex", alignItems: "center", gap: 5,
@@ -323,6 +444,17 @@ function ChartContent() {
             </div>
           )}
           <div ref={chartContainerRef} style={{ width: "100%", height: "100%" }} />
+          {/* Hover tooltip (positioned imperatively on crosshair move) */}
+          <div
+            ref={tooltipRef}
+            style={{
+              position: "absolute", display: "none", pointerEvents: "none", zIndex: 20,
+              maxWidth: 220, padding: "7px 10px", borderRadius: 8,
+              background: "rgba(13,17,23,0.94)", border: "1px solid rgba(255,255,255,0.15)",
+              color: "#cbd5e1", fontSize: "0.72rem", lineHeight: 1.4,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.5)", backdropFilter: "blur(4px)",
+            }}
+          />
         </div>
 
         {/* Side panel — stacks below chart on mobile */}
@@ -366,14 +498,29 @@ function ChartContent() {
                 SMC Zones
               </div>
               <div style={{ display: "grid", gap: 6 }}>
-                {data.zones.map((z, i) => (
-                  <div key={i} style={{ padding: "6px 10px", borderRadius: 6, background: z.color, borderLeft: `3px solid ${z.border_color}` }}>
-                    <div style={{ fontSize: "0.68rem", color: z.border_color, fontWeight: 600, marginBottom: 2 }}>{z.label}</div>
-                    <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-                      {z.top === z.bottom ? <>₹{fmt(z.top)}</> : <>₹{fmt(z.bottom)} — ₹{fmt(z.top)}</>}
+                {data.zones.map((z, i) => {
+                  const zid = `${z.label}-${i}`;
+                  const active = chartHoverId === zid;
+                  return (
+                    <div
+                      key={i}
+                      onMouseEnter={() => setLegendHover(zid)}
+                      onMouseLeave={() => setLegendHover(null)}
+                      style={{
+                        padding: "6px 10px", borderRadius: 6, background: z.color,
+                        borderLeft: `3px solid ${z.border_color}`, cursor: "default",
+                        outline: active ? `1px solid ${z.border_color}` : "none",
+                        boxShadow: active ? `0 0 0 1px ${z.border_color}, 0 0 14px ${z.color}` : "none",
+                        transition: "box-shadow 0.15s, outline 0.15s",
+                      }}
+                    >
+                      <div style={{ fontSize: "0.68rem", color: z.border_color, fontWeight: 600, marginBottom: 2 }}>{z.label}</div>
+                      <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                        {z.top === z.bottom ? <>₹{fmt(z.top)}</> : <>₹{fmt(z.bottom)} — ₹{fmt(z.top)}</>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
