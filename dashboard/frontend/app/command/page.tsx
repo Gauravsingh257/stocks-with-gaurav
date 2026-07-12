@@ -1,37 +1,30 @@
 "use client";
 
 /**
- * /command — Morning Command Center (Sprint 1, V1).
+ * /command — Command Center (redesign).
  *
- * The default authenticated home. One screen that answers "what deserves my
- * attention today?" within 15 seconds, without opening five pages.
+ * Value-first homepage: leads with the engine's Top Opportunities + a Verified
+ * Track Record so a new paid user sees "why this is different" in ~5 seconds.
+ * Adaptive: new users get guided onboarding; returning users get their desk.
  *
- * Reuse-first: every widget is fed by an EXISTING endpoint —
- *   • /api/command-center  → what_matters_now, opportunities, watchlist feed, alerts
- *   • /api/market/daily-brief → regime + discovery narrative
- *   • live engine snapshot (WebSocket) → regime, daily P&L, signals
- * The only new logic is the rule-based NBA ranking (lib/nba) rendered up top.
+ * UX/layout/copy only — reuses EXISTING endpoints:
+ *   • /api/command-center      → opportunities, watchlist feed, priority lines
+ *   • /api/market/daily-brief  → regime + discovery narrative
+ *   • /api/analytics/track-record → verified hit-rate / avg return (real)
+ *   • live engine snapshot      → regime, daily P&L, signals
  */
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Sunrise, TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight,
-  AlertTriangle, Newspaper, Activity,
+  TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight, ChevronDown,
+  Newspaper, Activity, ShieldCheck, Search, Info,
 } from "lucide-react";
-import { api, type CommandCenterResponse, type DailyBriefResponse } from "@/lib/api";
+import { api, type CommandCenterResponse, type DailyBriefResponse, type TrackRecordSummary } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useEngineSocket } from "@/lib/useWebSocket";
-import { computeNBA, marketPhase } from "@/lib/nba";
-import { NBACard } from "@/components/NextBestAction";
+import { marketPhase } from "@/lib/nba";
 import { humanize, regimeContext } from "@/lib/humanize";
-
-function greeting(): string {
-  const utc = Date.now() + new Date().getTimezoneOffset() * 60000;
-  const h = new Date(utc + 5.5 * 3600000).getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
-}
+import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 
 function regimeMeta(r?: string | null) {
   const v = String(r || "").toUpperCase();
@@ -41,28 +34,53 @@ function regimeMeta(r?: string | null) {
   return { label: v || "NEUTRAL", color: "var(--text-secondary)", Icon: Minus };
 }
 
-const SEV_COLOR: Record<string, string> = {
-  high: "var(--danger)", medium: "var(--warning)", low: "var(--accent)", info: "var(--text-secondary)",
-};
+// SMC score → star tier + plain-language label (Refinement 3: never a bare 96/100).
+function scoreTier(score: number): { stars: number; label: string; color: string } {
+  if (score >= 90) return { stars: 5, label: "Excellent", color: "#34d399" };
+  if (score >= 80) return { stars: 4, label: "Strong", color: "#34d399" };
+  if (score >= 70) return { stars: 3, label: "Good", color: "#22d3ee" };
+  if (score >= 60) return { stars: 2, label: "Fair", color: "#fbbf24" };
+  return { stars: 1, label: "Building", color: "#fbbf24" };
+}
+
+// What the SMC score blends — shown in the "What builds this score?" explainer.
+const SCORE_FACTORS = [
+  "Market structure (BOS / CHoCH)",
+  "Order blocks (demand / supply)",
+  "Fair value gaps (FVG)",
+  "Liquidity sweeps",
+  "Volume expansion",
+  "Trend alignment",
+];
 
 function sym(s?: string | null) {
   return String(s || "").replace("NSE:", "").trim().toUpperCase();
 }
+
+const FAMILIAR = ["RELIANCE", "TCS", "HDFCBANK", "INFY"];
 
 export default function CommandCenterPage() {
   const { user, token } = useAuth();
   const { snapshot } = useEngineSocket();
   const [cc, setCc] = useState<CommandCenterResponse | null>(null);
   const [brief, setBrief] = useState<DailyBriefResponse | null>(null);
+  const [track, setTrack] = useState<TrackRecordSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showBrief, setShowBrief] = useState(false);
 
   useEffect(() => {
     let live = true;
-    Promise.allSettled([api.commandCenter(token ?? undefined), api.dailyBrief(token ?? undefined)])
-      .then(([c, b]) => {
+    Promise.allSettled([
+      api.commandCenter(token ?? undefined),
+      api.dailyBrief(token ?? undefined),
+      api.trackRecord("all", 100),
+    ])
+      .then(([c, b, t]) => {
         if (!live) return;
         if (c.status === "fulfilled") setCc(c.value);
         if (b.status === "fulfilled") setBrief(b.value);
+        if (t.status === "fulfilled") setTrack(t.value.summary);
       })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
@@ -74,171 +92,252 @@ export default function CommandCenterPage() {
   const pnlR = snapshot?.daily_pnl_r;
   const signalsToday = (cc?.signals_today as number) ?? snapshot?.signals_today ?? 0;
   const deskCount = cc?.personal_desk_symbols ?? 0;
-
-  const actions = useMemo(
-    () => computeNBA(cc, { ...phase, regime: regime ? String(regime) : null, watchlistCount: deskCount }),
-    [cc, phase, regime, deskCount],
-  );
-
-  const matters = (cc?.what_matters_now ?? []).slice(0, 6);
   const feed = (cc?.watchlist_feed_preview ?? []).slice(0, 6);
+  const moodLine = regimeContext(regime as string);
+  const marketPhaseLabel = phase.marketOpen ? "MARKET LIVE" : phase.preOpen ? "PRE-OPEN" : "MARKET CLOSED";
+
+  // Consolidated, de-duplicated opportunities (Refinement 2: no repeats).
   const opportunities = useMemo(() => {
     const seen = new Set<string>();
-    const list: { symbol: string; note?: string; score?: number }[] = [];
+    const list: { symbol: string; note?: string; score: number }[] = [];
     for (const o of [...(cc?.best_opportunities_now ?? []), ...(cc?.active_high_conviction ?? [])]) {
       const s = sym(o.symbol);
       if (!s || seen.has(s)) continue;
       seen.add(s);
-      list.push({ symbol: s, note: o.note, score: o.confidence_score });
+      list.push({ symbol: s, note: o.note, score: Number(o.confidence_score || 0) });
     }
-    return list.slice(0, 8);
+    return list.sort((a, b) => b.score - a.score);
   }, [cc]);
+  const top3 = opportunities.slice(0, 3);
+  const more = opportunities.slice(3, 8);
 
-  // "So what?" — a plain-language read of today's regime (Option A: general
-  // market context, not a per-stock instruction).
-  const moodLine = regimeContext(regime as string);
-  const marketPhaseLabel = phase.marketOpen ? "MARKET LIVE" : phase.preOpen ? "PRE-OPEN" : "MARKET CLOSED";
+  const hasPersonal = deskCount > 0 || feed.length > 0;
 
   if (loading) {
     return (
       <div style={{ textAlign: "center", padding: 80, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
-        Loading your command center…
+        Loading today&apos;s dashboard…
       </div>
     );
   }
 
   return (
     <div className="w-full max-w-screen-xl mx-auto flex flex-col gap-4">
-      {/* Greeting */}
+      {/* Header — value-first, not a greeting (Refinement 4) */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2.5">
-          <Sunrise size={22} color="var(--accent)" />
-          <div>
-            <h1 className="text-lg md:text-xl font-extrabold m-0" style={{ color: "var(--text-primary)" }}>
-              {greeting()}{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
-            </h1>
-            <p className="m-0" style={{ fontSize: "0.72rem", color: "var(--text-dim)" }}>
-              Here&apos;s what deserves your attention today
-            </p>
-          </div>
-        </div>
-        <span className="badge" style={{ fontSize: "0.62rem", color: "var(--text-secondary)" }}>
-          <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: phase.marketOpen ? "var(--success)" : "var(--text-dim)", display: "inline-block" }} />
-          {marketPhaseLabel}
-        </span>
-      </div>
-
-      {/* ① Market Mood banner */}
-      <div className="glass rounded-xl" style={{ padding: "16px 18px", borderLeft: `3px solid ${rm.color}` }}>
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="grid place-items-center rounded-lg shrink-0" style={{ width: 40, height: 40, background: `color-mix(in srgb, ${rm.color} 16%, transparent)`, color: rm.color }}>
-              <rm.Icon size={20} />
-            </div>
-            <div className="min-w-0">
-              <div style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-dim)" }}>Today&apos;s market mood</div>
-              <div style={{ fontWeight: 700, color: rm.color, fontSize: "1.05rem" }}>{rm.label}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-5">
-            <Stat label="Signals" value={String(signalsToday)} />
-            {user && typeof pnlR === "number" && (
-              <Stat label="Daily P&L" value={`${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R`} color={pnlR >= 0 ? "var(--success)" : "var(--danger)"} />
-            )}
-            <Stat label="Watching" value={String(deskCount)} />
-          </div>
-        </div>
-        <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", margin: "10px 0 0", lineHeight: 1.55 }}>{moodLine}</p>
-      </div>
-
-      {/* ② Next Best Action — the hero */}
-      {actions[0] && <NBACard action={actions[0]} hero />}
-      {actions.length > 1 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {actions.slice(1, 3).map((a) => <NBACard key={a.id} action={a} />)}
-        </div>
-      )}
-
-      {/* Empty state for brand-new users */}
-      {user && deskCount === 0 && feed.length === 0 && (
-        <div className="glass rounded-xl" style={{ padding: "20px", textAlign: "center" }}>
-          <Eye size={22} color="var(--accent)" style={{ margin: "0 auto 8px" }} />
-          <div style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Your watchlist is empty</div>
-          <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", maxWidth: 420, margin: "0 auto 12px" }}>
-            Add a few stocks and we&apos;ll monitor them for you — events show up here and in your morning brief.
+        <div>
+          <h1 className="text-lg md:text-2xl font-extrabold m-0" style={{ color: "var(--text-primary)" }}>
+            Today&apos;s Trading Dashboard
+          </h1>
+          <p className="m-0 flex items-center gap-2" style={{ fontSize: "0.72rem", color: "var(--text-dim)" }}>
+            <span style={{ color: rm.color, fontWeight: 700 }}>● {rm.label}</span>
+            <span>·</span>
+            <span>{moodLine.split("—")[0].trim()}</span>
           </p>
-          <Link href="/research" className="inline-flex items-center gap-1.5 rounded-lg font-semibold" style={{ padding: "8px 14px", fontSize: "0.8rem", background: "var(--accent-dim)", border: "1px solid var(--accent)", color: "var(--accent)", textDecoration: "none" }}>
-            Find stocks to watch <ArrowRight size={14} />
+        </div>
+        <div className="flex items-center gap-4">
+          <MiniStat label="Signals" value={String(signalsToday)} />
+          {user && typeof pnlR === "number" && (
+            <MiniStat label="Your day" value={`${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R`} color={pnlR >= 0 ? "var(--success)" : "var(--danger)"} />
+          )}
+          <span className="badge" style={{ fontSize: "0.62rem", color: "var(--text-secondary)" }}>
+            <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: phase.marketOpen ? "var(--success)" : "var(--text-dim)", display: "inline-block" }} />
+            {marketPhaseLabel}
+          </span>
+        </div>
+      </div>
+
+      {/* ★ HERO — Today's Top Opportunities (top 3, expandable) */}
+      <div className="glass rounded-xl" style={{ padding: "16px 18px", border: "1px solid rgba(16,185,129,0.3)", boxShadow: "0 18px 44px rgba(16,185,129,0.10)" }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Sparkles size={17} color="#34d399" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Today&apos;s Top Opportunities</span>
+          </div>
+          <Link href="/research" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
+            All on the radar <ArrowRight size={12} />
           </Link>
         </div>
+        {top3.length === 0 ? (
+          <Empty>No A-grade setups in the current scan. The engine is still monitoring structure — check Research for names approaching confirmation.</Empty>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {top3.map((o, i) => {
+              const tier = scoreTier(o.score);
+              const open = expanded === o.symbol;
+              return (
+                <div key={o.symbol} style={{ borderRadius: 11, border: `1px solid ${open ? tier.color : "rgba(255,255,255,0.06)"}`, background: "rgba(255,255,255,0.02)", overflow: "hidden" }}>
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(open ? null : o.symbol)}
+                    className="w-full flex items-center gap-3"
+                    style={{ padding: "12px 14px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
+                  >
+                    <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-dim)", width: 18 }}>{i + 1}</span>
+                    <span style={{ fontSize: "0.98rem", fontWeight: 800, color: "var(--text-primary)", minWidth: 96 }}>{o.symbol}</span>
+                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                      <span style={{ fontSize: "1.05rem", fontWeight: 800, color: tier.color, fontVariantNumeric: "tabular-nums" }}>{o.score.toFixed(0)}</span>
+                      <span style={{ fontSize: "0.62rem", color: "var(--text-dim)" }}>/100</span>
+                    </span>
+                    <span className="hidden sm:flex items-center gap-1.5">
+                      <Stars n={tier.stars} color={tier.color} />
+                      <span style={{ fontSize: "0.72rem", color: tier.color, fontWeight: 700 }}>{tier.label}</span>
+                    </span>
+                    <ChevronDown size={16} style={{ marginLeft: "auto", color: "var(--text-dim)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+                  </button>
+
+                  {open && (
+                    <div style={{ padding: "0 14px 14px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <div className="flex sm:hidden items-center gap-1.5 mt-3">
+                        <Stars n={tier.stars} color={tier.color} />
+                        <span style={{ fontSize: "0.72rem", color: tier.color, fontWeight: 700 }}>{tier.label}</span>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div className="flex items-center gap-1.5" style={{ fontSize: "0.66rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)", marginBottom: 6 }}>
+                          <Info size={12} /> What builds this score?
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                          {SCORE_FACTORS.map((f) => (
+                            <div key={f} className="flex items-center gap-1.5" style={{ fontSize: "0.74rem", color: "var(--text-secondary)" }}>
+                              <span style={{ color: tier.color }}>✓</span> {f}
+                            </div>
+                          ))}
+                        </div>
+                        <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "8px 0 0" }}>
+                          {humanize(o.note || "")} The SMC score (0–100) blends the confluence factors above — higher = more aligned.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-3">
+                        <Link
+                          href={`/research/chart?symbol=${encodeURIComponent(o.symbol)}&horizon=SWING`}
+                          className="inline-flex items-center gap-1.5 rounded-lg font-semibold"
+                          style={{ padding: "8px 14px", fontSize: "0.78rem", background: "#34d399", color: "#04130d", textDecoration: "none" }}
+                        >
+                          View Full Analysis <ArrowRight size={14} />
+                        </Link>
+                        <AddToWatchlistButton symbol={o.symbol} compact />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
+          Ranked by SMC score. Analysis of live market structure — not buy/sell advice.
+        </p>
+      </div>
+
+      {/* ★ Verified Track Record (Refinement 2: trust as a strong element, up top) */}
+      <div className="glass rounded-xl" style={{ padding: "16px 18px", border: "1px solid rgba(34,211,238,0.25)" }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={17} color="var(--accent)" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Verified Track Record</span>
+          </div>
+          <Link href="/research/track-record" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
+            View Complete History <ArrowRight size={12} />
+          </Link>
+        </div>
+        {track && track.resolved > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <TrustStat label="Hit Rate" value={`${track.hit_rate_pct}%`} color={track.hit_rate_pct >= 50 ? "var(--success)" : "var(--warning)"} big />
+            <TrustStat label="Resolved Setups" value={String(track.resolved)} sub={`of ${track.total_picks} tracked`} />
+            <TrustStat label="Average Return" value={`${track.avg_pnl_pct > 0 ? "+" : ""}${track.avg_pnl_pct}%`} color={track.avg_pnl_pct >= 0 ? "var(--success)" : "var(--danger)"} />
+            <TrustStat label="Last Updated" value="Today" sub="live, verified" />
+          </div>
+        ) : (
+          <Empty>Building a verified track record — hit-rate and average return appear as setups resolve. Every number ties to a logged, timestamped call.</Empty>
+        )}
+        <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
+          Computed only over <b>resolved</b> algorithmic setups (hypothetical, at the levels shown). Past performance doesn&apos;t guarantee future results.
+        </p>
+      </div>
+
+      {/* Adaptive band — onboarding (new) OR desk (returning) */}
+      {!hasPersonal ? (
+        <div className="glass rounded-xl" style={{ padding: "18px", border: "1px solid rgba(245,158,11,0.25)" }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Search size={17} color="var(--warning)" />
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Get started in 60 seconds</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap my-3" style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+            {["Search", "Analyze", "Add to Watchlist", "Get alerts"].map((step, i) => (
+              <span key={step} className="flex items-center gap-2">
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--accent-dim)", color: "var(--accent)", fontSize: "0.62rem", fontWeight: 800, display: "grid", placeItems: "center" }}>{i + 1}</span>
+                  {step}
+                </span>
+                {i < 3 && <ArrowRight size={12} style={{ color: "var(--text-dim)" }} />}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: "0.74rem", color: "var(--text-dim)", marginBottom: 8 }}>Track a stock you already follow:</div>
+          <div className="flex flex-wrap gap-2">
+            {FAMILIAR.map((s) => (
+              <Link key={s} href={`/research/chart?symbol=${s}&horizon=SWING`} className="inline-flex items-center gap-1.5 rounded-lg font-semibold" style={{ padding: "7px 13px", fontSize: "0.78rem", background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.25)", color: "var(--text-primary)", textDecoration: "none" }}>
+                {s}
+              </Link>
+            ))}
+            <Link href="/research" className="inline-flex items-center gap-1.5 rounded-lg" style={{ padding: "7px 13px", fontSize: "0.78rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", color: "var(--text-secondary)", textDecoration: "none" }}>
+              <Search size={13} /> Search any NSE stock
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Panel title="Your watchlist" icon={Eye} href="/watchlist" cta="Open feed">
+            {feed.length === 0 ? (
+              <Empty>No new events yet today.</Empty>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {feed.map((e, i) => (
+                  <Link key={i} href={e.symbol ? `/stock/${sym(e.symbol)}` : "/watchlist"} className="flex items-center gap-2.5 rounded-lg group" style={{ padding: "8px 10px", textDecoration: "none", background: "rgba(255,255,255,0.02)" }}>
+                    <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--accent)", minWidth: 54 }}>{sym(e.symbol) || "—"}</span>
+                    <span style={{ flex: 1, fontSize: "0.8rem", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {humanize(e.headline || e.type || e.setup_status || "Update")}
+                    </span>
+                    <ArrowRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ color: "var(--accent)" }} />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </Panel>
+          <Panel title="More opportunities" icon={Sparkles} href="/research" cta="Research">
+            {more.length === 0 ? (
+              <Empty>The top setups are all above — nothing more in the current scan.</Empty>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {more.map((o) => {
+                  const tier = scoreTier(o.score);
+                  return (
+                    <Link key={o.symbol} href={`/research/chart?symbol=${encodeURIComponent(o.symbol)}&horizon=SWING`} className="flex items-center gap-2.5 rounded-lg group" style={{ padding: "8px 10px", textDecoration: "none", background: "rgba(255,255,255,0.02)" }}>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--text-primary)", minWidth: 90 }}>{o.symbol}</span>
+                      <span style={{ fontSize: "0.82rem", fontWeight: 800, color: tier.color }}>{o.score.toFixed(0)}</span>
+                      <span style={{ fontSize: "0.68rem", color: tier.color }}>{tier.label}</span>
+                      <ArrowRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ color: "var(--accent)", marginLeft: "auto" }} />
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+        </div>
       )}
 
-      {/* Main grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* ③ What deserves attention */}
-        <Panel title="What deserves your attention" icon={AlertTriangle} href="/watchlist" cta="Watchlist">
-          {matters.length === 0 ? (
-            <Empty>No priority items right now — the desk is quiet.</Empty>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {matters.map((ln, i) => {
-                const c = SEV_COLOR[String(ln.severity).toLowerCase()] ?? "var(--text-secondary)";
-                const href = ln.symbol ? `/stock/${sym(ln.symbol)}` : "/watchlist";
-                return (
-                  <Link key={i} href={href} className="flex items-start gap-2.5 rounded-lg group" style={{ padding: "8px 10px", textDecoration: "none", background: "rgba(255,255,255,0.02)" }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, marginTop: 6, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>{humanize(ln.headline)}</span>
-                    <ArrowRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ color: c, marginTop: 3 }} />
-                  </Link>
-                );
-              })}
+      {/* Today's brief — supporting context, collapsible */}
+      {(brief?.sections ?? []).length > 0 && (
+        <div className="glass rounded-xl" style={{ padding: "14px 16px" }}>
+          <button type="button" onClick={() => setShowBrief((s) => !s)} className="w-full flex items-center justify-between" style={{ background: "none", border: "none", cursor: "pointer" }}>
+            <div className="flex items-center gap-2">
+              <Newspaper size={15} color="var(--accent)" />
+              <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)" }}>Today&apos;s brief</span>
             </div>
-          )}
-        </Panel>
-
-        {/* ④ Your watchlist — event feed */}
-        <Panel title="Your watchlist" icon={Eye} href="/watchlist" cta="Open feed">
-          {feed.length === 0 ? (
-            <Empty>{deskCount === 0 ? "No stocks yet — add a few from Research." : "No new events yet today."}</Empty>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {feed.map((e, i) => (
-                <Link key={i} href={e.symbol ? `/stock/${sym(e.symbol)}` : "/watchlist"} className="flex items-center gap-2.5 rounded-lg group" style={{ padding: "8px 10px", textDecoration: "none", background: "rgba(255,255,255,0.02)" }}>
-                  <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--accent)", minWidth: 54 }}>{sym(e.symbol) || "—"}</span>
-                  <span style={{ flex: 1, fontSize: "0.8rem", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {e.headline || e.type || e.setup_status || "Update"}
-                  </span>
-                  <ArrowRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ color: "var(--accent)" }} />
-                </Link>
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        {/* ⑤ Today's opportunities */}
-        <Panel title="Today's opportunities" icon={Sparkles} href="/research" cta="Research">
-          {opportunities.length === 0 ? (
-            <Empty>No discovery names in the current snapshot.</Empty>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {opportunities.map((o) => (
-                <Link key={o.symbol} href={`/stock/${o.symbol}`} className="inline-flex items-center gap-2 rounded-lg group" style={{ padding: "7px 11px", textDecoration: "none", background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.18)" }}>
-                  <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--text-primary)" }}>{o.symbol}</span>
-                  {typeof o.score === "number" && o.score > 0 && (
-                    <span style={{ fontSize: "0.66rem", color: "var(--accent)" }}>{o.score.toFixed(0)}</span>
-                  )}
-                </Link>
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        {/* ⑥ Today's brief */}
-        <Panel title="Today's brief" icon={Newspaper} href="/market-intelligence" cta="Market intel">
-          {(brief?.sections ?? []).length === 0 ? (
-            <Empty>Brief loads with market context.</Empty>
-          ) : (
-            <div className="flex flex-col gap-2.5">
+            <ChevronDown size={16} style={{ color: "var(--text-dim)", transform: showBrief ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+          </button>
+          {showBrief && (
+            <div className="flex flex-col gap-2.5 mt-3">
               {(brief?.sections ?? []).slice(0, 3).map((s, i) => (
                 <div key={i}>
                   <div style={{ fontSize: "0.66rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--accent)", marginBottom: 2 }}>{s.title}</div>
@@ -247,23 +346,43 @@ export default function CommandCenterPage() {
               ))}
             </div>
           )}
-        </Panel>
-      </div>
+        </div>
+      )}
 
-      {/* Trust note */}
-      <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", textAlign: "center", margin: "4px 0 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+      {/* Option A disclaimer */}
+      <p style={{ fontSize: "0.66rem", color: "var(--text-dim)", textAlign: "center", margin: "2px 0 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
         <Activity size={11} />
-        {humanize(cc?.trust_banner || "") || "Signals and labels are analysis from live market data — not trade instructions."}
+        {humanize(cc?.trust_banner || "") || "Signals, scores and labels are analysis from live market data — not trade instructions."}
       </p>
     </div>
   );
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+function Stars({ n, color }: { n: number; color: string }) {
+  return (
+    <span style={{ letterSpacing: "1px", fontSize: "0.8rem", lineHeight: 1 }}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span key={i} style={{ color: i <= n ? color : "var(--text-dim)", opacity: i <= n ? 1 : 0.4 }}>★</span>
+      ))}
+    </span>
+  );
+}
+
+function MiniStat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div style={{ textAlign: "right" }}>
-      <div style={{ fontSize: "0.58rem", color: "var(--text-dim)", letterSpacing: "0.05em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: "0.95rem", fontWeight: 700, color: color ?? "var(--text-primary)" }}>{value}</div>
+      <div style={{ fontSize: "0.55rem", color: "var(--text-dim)", letterSpacing: "0.05em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: "0.9rem", fontWeight: 700, color: color ?? "var(--text-primary)" }}>{value}</div>
+    </div>
+  );
+}
+
+function TrustStat({ label, value, sub, color, big }: { label: string; value: string; sub?: string; color?: string; big?: boolean }) {
+  return (
+    <div className="rounded-lg" style={{ padding: "12px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+      <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", letterSpacing: "0.05em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: big ? "1.7rem" : "1.25rem", fontWeight: 800, marginTop: 3, color: color ?? "var(--text-primary)", lineHeight: 1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -286,5 +405,5 @@ function Panel({ title, icon: Icon, href, cta, children }: { title: string; icon
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: "0.78rem", color: "var(--text-dim)", padding: "10px 4px", textAlign: "center" }}>{children}</div>;
+  return <div style={{ fontSize: "0.78rem", color: "var(--text-dim)", padding: "10px 4px", lineHeight: 1.5 }}>{children}</div>;
 }
