@@ -25,6 +25,19 @@ import { useEngineSocket } from "@/lib/useWebSocket";
 import { marketPhase } from "@/lib/nba";
 import { humanize, regimeContext } from "@/lib/humanize";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
+import Sparkline from "@/components/Sparkline";
+
+// Freshness — relative "updated X ago" (Refinement 3).
+function relTime(iso?: string | null, now = Date.now()): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
 
 function regimeMeta(r?: string | null) {
   const v = String(r || "").toUpperCase();
@@ -68,6 +81,14 @@ export default function CommandCenterPage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showBrief, setShowBrief] = useState(false);
+  const [spark, setSpark] = useState<Record<string, number[]>>({});
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  // Tick the "updated X ago" label without re-fetching.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -110,6 +131,31 @@ export default function CommandCenterPage() {
   }, [cc]);
   const top3 = opportunities.slice(0, 3);
   const more = opportunities.slice(3, 8);
+  const top3Key = top3.map((o) => o.symbol).join(",");
+
+  // Lightweight sparklines for the top-3 only — backgrounded after the main
+  // render so it never delays the hero. Reuses the existing chart-data endpoint.
+  useEffect(() => {
+    const syms = top3Key ? top3Key.split(",") : [];
+    if (syms.length === 0) return;
+    let live = true;
+    Promise.allSettled(syms.map((s) => api.researchChartData(s, "SWING"))).then((results) => {
+      if (!live) return;
+      const next: Record<string, number[]> = {};
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled" && Array.isArray(r.value.candles)) {
+          const closes = r.value.candles.map((c) => c.close).filter((n): n is number => typeof n === "number");
+          if (closes.length >= 2) next[syms[i]] = closes.slice(-30);
+        }
+      });
+      setSpark(next);
+    });
+    return () => { live = false; };
+  }, [top3Key]);
+
+  // Freshness (Refinement 3)
+  const engineVer = snapshot?._global_state_version ?? cc?._global_state_version;
+  const updatedLabel = relTime(snapshot?.snapshot_time, nowTick);
 
   const hasPersonal = deskCount > 0 || feed.length > 0;
 
@@ -135,15 +181,24 @@ export default function CommandCenterPage() {
             <span>{moodLine.split("—")[0].trim()}</span>
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <MiniStat label="Signals" value={String(signalsToday)} />
-          {user && typeof pnlR === "number" && (
-            <MiniStat label="Your day" value={`${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R`} color={pnlR >= 0 ? "var(--success)" : "var(--danger)"} />
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-4">
+            <MiniStat label="Signals" value={String(signalsToday)} />
+            {user && typeof pnlR === "number" && (
+              <MiniStat label="Your day" value={`${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R`} color={pnlR >= 0 ? "var(--success)" : "var(--danger)"} />
+            )}
+            <span className="badge" style={{ fontSize: "0.62rem", color: "var(--text-secondary)" }}>
+              <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: phase.marketOpen ? "var(--success)" : "var(--text-dim)", display: "inline-block" }} />
+              {marketPhaseLabel}
+            </span>
+          </div>
+          {(updatedLabel || engineVer) && (
+            <div style={{ fontSize: "0.6rem", color: "var(--text-dim)" }}>
+              {updatedLabel && <>Updated {updatedLabel}</>}
+              {updatedLabel && engineVer ? " · " : ""}
+              {engineVer ? `Engine v${engineVer}` : ""}
+            </div>
           )}
-          <span className="badge" style={{ fontSize: "0.62rem", color: "var(--text-secondary)" }}>
-            <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: phase.marketOpen ? "var(--success)" : "var(--text-dim)", display: "inline-block" }} />
-            {marketPhaseLabel}
-          </span>
         </div>
       </div>
 
@@ -183,7 +238,12 @@ export default function CommandCenterPage() {
                       <Stars n={tier.stars} color={tier.color} />
                       <span style={{ fontSize: "0.72rem", color: tier.color, fontWeight: 700 }}>{tier.label}</span>
                     </span>
-                    <ChevronDown size={16} style={{ marginLeft: "auto", color: "var(--text-dim)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+                    {spark[o.symbol] && spark[o.symbol].length >= 2 && (
+                      <span style={{ marginLeft: "auto" }}>
+                        <Sparkline data={spark[o.symbol]} positive={spark[o.symbol][spark[o.symbol].length - 1] >= spark[o.symbol][0]} />
+                      </span>
+                    )}
+                    <ChevronDown size={16} style={{ marginLeft: spark[o.symbol] ? 8 : "auto", color: "var(--text-dim)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
                   </button>
 
                   {open && (
@@ -237,14 +297,15 @@ export default function CommandCenterPage() {
             <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Verified Track Record</span>
           </div>
           <Link href="/research/track-record" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
-            View Complete History <ArrowRight size={12} />
+            View Performance <ArrowRight size={12} />
           </Link>
         </div>
         {track && track.resolved > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <TrustStat label="Hit Rate" value={`${track.hit_rate_pct}%`} color={track.hit_rate_pct >= 50 ? "var(--success)" : "var(--warning)"} big />
-            <TrustStat label="Resolved Setups" value={String(track.resolved)} sub={`of ${track.total_picks} tracked`} />
-            <TrustStat label="Average Return" value={`${track.avg_pnl_pct > 0 ? "+" : ""}${track.avg_pnl_pct}%`} color={track.avg_pnl_pct >= 0 ? "var(--success)" : "var(--danger)"} />
+          // Proof of activity + transparency first; statistical quality (hit
+          // rate) lives on the dedicated Track Record page (Refinement 1).
+          <div className="grid grid-cols-3 gap-3">
+            <TrustStat label="Resolved Setups" value={String(track.resolved)} sub={`of ${track.total_picks} tracked`} big />
+            <TrustStat label="Average Return" value={`${track.avg_pnl_pct > 0 ? "+" : ""}${track.avg_pnl_pct}%`} color={track.avg_pnl_pct >= 0 ? "var(--success)" : "var(--danger)"} big />
             <TrustStat label="Last Updated" value="Today" sub="live, verified" />
           </div>
         ) : (
