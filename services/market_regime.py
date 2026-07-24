@@ -33,7 +33,8 @@ EMA_SHORT = 20                 # Short EMA period (days)
 EMA_LONG = 50                  # Long EMA period (days)
 ADX_PERIOD = 14                # ADX lookback
 ADX_TREND_THRESHOLD = 25       # ADX above this = trending
-LOOKBACK_DAYS = 100            # Bars to fetch
+SMA_LONG = 200                 # Long SMA period (days) — secular trend / bull-bear line
+LOOKBACK_DAYS = 260            # Bars to fetch (>=200 for the 200DMA + ~52w high)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -50,6 +51,13 @@ class MarketRegime:
     adx: float = 0.0
     trend_slope: float = 0.0           # EMA20 slope (% per day)
     computed_at: float = 0.0
+
+    # Secular-trend context (added for the regime governor — additive/back-compat).
+    # Populated when >=SMA_LONG bars are available; otherwise best-effort proxies.
+    sma_200: float = 0.0               # 200-day simple moving average of NIFTY close
+    above_200dma: bool = False         # close > sma_200 (bull-bear dividing line)
+    pct_from_52w_high: float = 0.0     # how far below the 52w high, e.g. 7.5 = 7.5% below
+    has_200dma: bool = False           # True only when a full 200-bar SMA was available
 
     # Scoring adjustments for idea_selector
     swing_adjustments: dict = None      # type: ignore[assignment]
@@ -192,6 +200,15 @@ def detect_regime(force: bool = False) -> MarketRegime:
     else:
         slope = 0.0
 
+    # ── Secular-trend context (200DMA + 52w-high distance) for the governor ──
+    has_200 = len(closes) >= SMA_LONG
+    sma_window = min(SMA_LONG, len(closes))
+    sma_200 = sum(closes[-sma_window:]) / sma_window if sma_window > 0 else current_close
+    above_200 = current_close > sma_200
+    hi_window = min(252, len(highs))
+    hi_52w = max(highs[-hi_window:]) if hi_window > 0 else current_close
+    pct_from_high = ((hi_52w - current_close) / hi_52w * 100.0) if hi_52w > 0 else 0.0
+
     # Determine regime
     ema_bullish = current_ema_s > current_ema_l
     price_above_ema = current_close > current_ema_s
@@ -235,6 +252,10 @@ def detect_regime(force: bool = False) -> MarketRegime:
         computed_at=time.time(),
         swing_adjustments=swing_adj,
         longterm_adjustments=longterm_adj,
+        sma_200=round(sma_200, 2),
+        above_200dma=above_200,
+        pct_from_52w_high=round(max(0.0, pct_from_high), 2),
+        has_200dma=has_200,
     )
 
     _cached_regime = regime
@@ -265,6 +286,9 @@ def get_regime_summary() -> dict:
         "ema_long": r.ema_long,
         "adx": r.adx,
         "trend_slope_pct_per_day": r.trend_slope,
+        "sma_200": r.sma_200,
+        "above_200dma": r.above_200dma,
+        "pct_from_52w_high": r.pct_from_52w_high,
         "swing_adjustments": r.swing_adjustments,
         "longterm_adjustments": r.longterm_adjustments,
     }
