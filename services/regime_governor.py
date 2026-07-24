@@ -506,6 +506,27 @@ def _safe_strength() -> dict:
 
 # ── API / UI payload ──────────────────────────────────────────────────────────
 
+def _market_health_block(state_result: MarketStateResult | None, strength: dict | None) -> dict:
+    """EP1 Layer-1 Market Health (0–100) — additive, flag-gated. Returns {} when
+    disabled so exposure_state() is byte-identical to Phase 1. Never raises."""
+    try:
+        from services.market_health import compute_market_health, market_health_enabled
+        if not market_health_enabled():
+            return {}
+        h = compute_market_health(strength=strength)
+        if not h.get("available"):
+            return {"market_health": None}
+        return {
+            "market_health": h["score"],
+            "opportunity_level": h["opportunity_level"],
+            "health_subscores": h.get("subscores"),
+            "health_derived_state": h.get("derived_state"),
+        }
+    except Exception as exc:  # pragma: no cover
+        log.debug("market health block skipped: %s", exc)
+        return {}
+
+
 def exposure_state(state_result: MarketStateResult | None = None,
                    strength: dict | None = None) -> dict:
     """The exposure/regime block for the Research feed + Command Center + the
@@ -557,6 +578,7 @@ def exposure_state(state_result: MarketStateResult | None = None,
             "leading_sectors": leading,
             "advisory": policy.advisory,
             "as_of": datetime.now(timezone.utc).isoformat(),
+            **_market_health_block(state_result, strength),
         }
     except Exception as exc:  # pragma: no cover - never break a caller
         log.debug("exposure_state failed: %s", exc)
