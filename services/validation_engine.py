@@ -619,6 +619,28 @@ async def run_validation_scan(
     nifty_frames = await _fetch_frames([NIFTY_DAILY_SYMBOL], src, days, as_of)
     nifty_daily = df_to_candles(nifty_frames.get(NIFTY_DAILY_SYMBOL))
 
+    # Railway-safe sector strength: derive bands from the CONSTITUENT candles we
+    # just fetched (yfinance NSE sector-index tickers are blocked on Railway, so
+    # the index-based path returns all-"unknown" there). Populates the shared
+    # Redis cache read by the governor / sector scoring / /api/market/state.
+    # Gated on the sector features so nothing runs when they're all off
+    # (byte-identical). Best-effort — never breaks the scan.
+    try:
+        from services.regime_governor import (
+            governor_enabled,
+            sector_diversification_enabled,
+            sector_scoring_enabled,
+        )
+
+        if governor_enabled() or sector_scoring_enabled() or sector_diversification_enabled():
+            from services.sector_strength import compute_sector_strength_from_candles
+
+            _cand_map = {s: df_to_candles(f) for s, f in frames.items() if _has_usable_ohlc(f)}
+            if _cand_map:
+                compute_sector_strength_from_candles(_cand_map)
+    except Exception as exc:
+        log.debug("constituent sector strength refresh skipped: %s", exc)
+
     technical_map = await scan_technical(scan_symbols)
     for symbol, df in frames.items():
         snap = snapshot_from_ohlc(symbol, df) if _has_usable_ohlc(df) else None
