@@ -1080,6 +1080,7 @@ def create_stock_recommendation(payload: dict) -> int:
             )
 
             conn.commit()
+            _track_record_publish_safe(rec_id, payload)
             return rec_id
 
         # ── New recommendation ──
@@ -1147,9 +1148,20 @@ def create_stock_recommendation(payload: dict) -> int:
         )
 
         conn.commit()
+        _track_record_publish_safe(rec_id, payload)
         return rec_id
     finally:
         conn.close()
+
+
+def _track_record_publish_safe(rec_id: int, payload: dict) -> None:
+    """Best-effort append to the immutable track-record ledger (PR3). Isolated
+    table; a failure here must never affect recommendation creation."""
+    try:
+        from dashboard.backend.db import track_record
+        track_record.publish(rec_id, payload)
+    except Exception:
+        pass
 
 
 def log_signal_event(
@@ -1226,21 +1238,38 @@ def expire_old_recommendations(max_age_days: int = 7) -> int:
     """
     conn = get_connection()
     try:
-        cur = conn.execute(
-            """
-            UPDATE stock_recommendations
-            SET status = 'EXPIRED'
+        _predicate = """
+            FROM stock_recommendations
             WHERE status = 'ACTIVE'
               AND datetime(COALESCE(signals_updated_at, created_at)) < datetime('now', ? || ' days')
               AND id NOT IN (
                   SELECT DISTINCT recommendation_id FROM running_trades
                   WHERE status = 'RUNNING' AND recommendation_id IS NOT NULL
               )
-            """,
+        """
+        # Capture the ids about to expire so we can record them in the immutable
+        # track-record ledger BEFORE the row is recycled (the survivorship fix:
+        # timed-out ideas become a recorded EXPIRED outcome, never silently dropped).
+        to_expire = [int(r["id"]) for r in conn.execute(
+            "SELECT id " + _predicate, (f"-{max_age_days}",)
+        ).fetchall()]
+
+        cur = conn.execute(
+            "UPDATE stock_recommendations SET status = 'EXPIRED' WHERE id IN "
+            "(SELECT id " + _predicate + ")",
             (f"-{max_age_days}",),
         )
         expired = cur.rowcount
         conn.commit()
+
+        # Record EXPIRED outcomes (never-triggered / timed-out) — best-effort.
+        if to_expire:
+            try:
+                from dashboard.backend.db import track_record as _tr
+                for _rid in to_expire:
+                    _tr.resolve(_rid, "EXPIRED")
+            except Exception:
+                pass
         return expired
     finally:
         conn.close()
@@ -1424,6 +1453,27 @@ def close_recommendation(
                     (status, json.dumps({"exit_price": exit_price, "pnl_pct": pnl_pct, "pnl_r": pnl_r}), int(rec_id)),
                 )
                 conn.commit()
+            except Exception:
+                pass
+            # ── Immutable track-record ledger: record terminal outcome (PR3) ──
+            try:
+                from dashboard.backend.db import track_record as _tr
+                _mfe = _mae = None
+                _rt = conn.execute(
+                    "SELECT entry_price, high_since_entry, low_since_entry FROM running_trades "
+                    "WHERE recommendation_id = ? ORDER BY id DESC LIMIT 1",
+                    (int(rec_id),),
+                ).fetchone()
+                if _rt:
+                    _rt = dict(_rt)
+                    _e = float(_rt.get("entry_price") or 0)
+                    if _e > 0:
+                        if _rt.get("high_since_entry"):
+                            _mfe = round((float(_rt["high_since_entry"]) - _e) / _e * 100, 2)
+                        if _rt.get("low_since_entry"):
+                            _mae = round((float(_rt["low_since_entry"]) - _e) / _e * 100, 2)
+                _tr.resolve(int(rec_id), status, exit_price=float(exit_price),
+                            pnl_pct=float(pnl_pct), pnl_r=float(pnl_r), mfe_pct=_mfe, mae_pct=_mae)
             except Exception:
                 pass
         return changed

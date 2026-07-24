@@ -30,6 +30,14 @@ function targetOf(item: ResearchDecisionCard): number | null {
   return null;
 }
 
+// Entry-timing state (PR3) — READY/WATCH are actionable; IN_MOTION/MISSED are not.
+const ENTRY_STATE_CHIP: Record<string, { label: string; color: string }> = {
+  READY: { label: "Ready", color: "#34d399" },
+  WATCH: { label: "Watch", color: "#7dd3fc" },
+  IN_MOTION: { label: "In motion", color: "#fbbf24" },
+  MISSED: { label: "Missed", color: "#fda4af" },
+};
+
 // Compact reachability status (mirrors backend bands) — a chip, not a sentence.
 function statusChip(item: ResearchDecisionCard): { label: string; color: string } {
   const gap = item.entry_distance_pct;
@@ -152,9 +160,19 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                       {Number(item.confidence_score || 0).toFixed(1)}%
                     </td>
                     <td>
-                      <span style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 5, color: st.color, background: `color-mix(in srgb, ${st.color} 14%, transparent)`, border: `1px solid ${st.color}55`, fontWeight: 700, whiteSpace: "nowrap" }}>
-                        {st.label}
-                      </span>
+                      <div style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 5, color: st.color, background: `color-mix(in srgb, ${st.color} 14%, transparent)`, border: `1px solid ${st.color}55`, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          {st.label}
+                        </span>
+                        {item.entry_state && ENTRY_STATE_CHIP[item.entry_state] && (
+                          <span
+                            title={item.entry_actionable ? "Actionable now" : "Not actionable — already moved"}
+                            style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: 5, color: ENTRY_STATE_CHIP[item.entry_state].color, background: `color-mix(in srgb, ${ENTRY_STATE_CHIP[item.entry_state].color} 12%, transparent)`, border: `1px solid ${ENTRY_STATE_CHIP[item.entry_state].color}55`, fontWeight: 700, whiteSpace: "nowrap" }}
+                          >
+                            {ENTRY_STATE_CHIP[item.entry_state].label}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ textAlign: "right", fontFamily: "monospace", fontSize: "0.8rem" }}>{fmt(item.entry_price)}</td>
                     <td style={{ textAlign: "right", fontFamily: "monospace", fontSize: "0.8rem", color: "#ff4e6a" }}>{fmt(item.stop_loss)}</td>

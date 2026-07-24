@@ -296,10 +296,19 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
     except Exception:
         risk_reward = None
     entry_distance_pct, reachability = _serve_reachability(row.get("cmp"), entry)
+    # PR3 — READY / WATCH / IN_MOTION / MISSED entry-timing state (reusable).
+    try:
+        from services.entry_state import classify_entry_state
+        _es = classify_entry_state(row.get("cmp"), entry, stop,
+                                   [target] if target is not None else [])
+    except Exception:
+        _es = {"state": None, "actionable": None}
     return {
         "id": row.get("id"),
         "symbol": row.get("symbol"),
         "setup": "SMC_VALIDATION",
+        "entry_state": _es.get("state"),
+        "entry_actionable": _es.get("actionable"),
         "section": section,
         "entry_price": entry,
         "stop_loss": stop,
@@ -1464,6 +1473,33 @@ def run_longterm_scan(force: bool = Query(False, description="Bypass slot-full c
             "summary": str(e),
             "result": {},
         }
+
+
+@router.get("/api/research/track-record/ledger")
+@router.get("/research/track-record/ledger")
+def get_track_record_ledger(
+    horizon: str = Query("all", pattern="^(swing|longterm|all)$"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """Survivorship-free track record from the immutable ledger (PR3).
+
+    Unlike /track-record (which reads mutable, recyclable recommendation rows),
+    this reads `research_track_record` where every published idea — including
+    EXPIRED / never-triggered ones — is permanently recorded. The win rate is
+    over ALL resolved recommendations, so it is not inflated by dropping the
+    ideas that quietly timed out. Never raises.
+    """
+    try:
+        from dashboard.backend.db import track_record
+        h = None if horizon == "all" else horizon
+        return _safe_json_response({
+            "stats": track_record.stats(h),
+            "items": track_record.rows(h, limit=limit),
+            "source": "immutable_ledger",
+        })
+    except Exception:
+        log.exception("track-record ledger endpoint failed; serving safe empty payload")
+        return _safe_json_response({"stats": {"available": False}, "items": [], "source": "immutable_ledger"})
 
 
 @router.get("/api/research/track-record")

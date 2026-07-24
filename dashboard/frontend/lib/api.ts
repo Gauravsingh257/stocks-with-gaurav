@@ -947,6 +947,8 @@ export interface ResearchDecisionCard {
   scan_cmp?: number | null;
   entry_distance_pct?: number | null;
   reachability?: "actionable" | "waiting" | "unreachable" | "pre_breakout" | "unknown" | string | null;
+  entry_state?: "READY" | "WATCH" | "IN_MOTION" | "MISSED" | null;
+  entry_actionable?: boolean | null;
   entry_type?: string | null;
   expected_holding_period?: string | null;
   layer1_pass?: boolean;
@@ -1168,6 +1170,30 @@ export interface TrackRecordResponse {
   picks: TrackRecordPick[];
   total: number;
   summary: TrackRecordSummary;
+}
+
+export interface LedgerStats {
+  available: boolean;
+  horizon?: string;
+  total_published?: number;
+  resolved?: number;
+  open?: number;
+  target_hit?: number;
+  stop_hit?: number;
+  expired?: number;
+  win_rate_pct?: number | null;
+  avg_win_pct?: number | null;
+  avg_loss_pct?: number | null;
+  avg_holding_days?: number | null;
+  avg_rr_realized?: number | null;
+  expectancy_r?: number | null;
+  note?: string;
+}
+
+export interface TrackRecordLedgerResponse {
+  stats: LedgerStats;
+  items: Record<string, unknown>[];
+  source: string;
 }
 
 export interface ScanRunRow {
@@ -1621,6 +1647,9 @@ export const api = {
   runLongtermScan: () => post<ResearchRunResponse>("/api/research/run/longterm"),
   trackRecord: (horizon: "swing" | "longterm" | "all" = "all", limit = 100) =>
     get<TrackRecordResponse>(`/api/research/track-record?horizon=${horizon}&limit=${limit}`),
+  /** Survivorship-free track record from the immutable ledger (PR3). */
+  trackRecordLedger: (horizon: "swing" | "longterm" | "all" = "all", limit = 200) =>
+    get<TrackRecordLedgerResponse>(`/api/research/track-record/ledger?horizon=${horizon}&limit=${limit}`),
   submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
   scanStatus: () => get<ScanStatusResponse>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
