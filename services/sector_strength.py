@@ -151,6 +151,113 @@ def compute_sector_strength(*, refresh: bool = False) -> dict[str, Any]:
     return result
 
 
+_MIN_CONSTITUENTS = int(os.getenv("SECTOR_STRENGTH_MIN_CONSTITUENTS", "2"))
+
+
+def compute_sector_strength_from_candles(
+    data: dict[str, list[dict]], *, cache: bool = True
+) -> dict[str, Any]:
+    """Constituent-based sector strength — the RAILWAY-SAFE path.
+
+    yfinance NSE *index* tickers (^NSEBANK, ^CNXIT, …) are blocked from Railway's
+    datacenter IP, so `compute_sector_strength()` returns all-"unknown" there.
+    This variant derives each sector's relative strength from the CONSTITUENT
+    stocks' own OHLC (already fetched by the scan) — the same self-contained
+    approach `services/scanners/sector_rotation.py` uses successfully in prod.
+
+    `data` is {symbol: candles(list[dict with 'close'])}. A sector's rel-strength
+    = its stocks' mean N-bar return minus the whole scanned universe's mean
+    return (market breadth). Bands mirror the index-based path
+    (leading ≥ _LEAD_REL20_PCT, lagging ≤ _LAG_REL20_PCT). Written to the SAME
+    Redis key so the governor / endpoint / shadow all read this on their next hit.
+
+    Never raises — returns an empty-but-valid structure on any failure.
+    """
+    try:
+        from engine.swing import get_sector
+    except Exception as exc:
+        log.warning("sector_strength_from_candles: get_sector unavailable (%s)", exc)
+        return {"sectors": {}, "leading": [], "_served_from": "constituents_unavailable"}
+
+    def _closes(candles: list[dict]) -> list[float] | None:
+        try:
+            cl = [float(c["close"]) for c in candles if c.get("close") is not None]
+            return cl if len(cl) >= 21 else None
+        except Exception:
+            return None
+
+    sym_sector: dict[str, str] = {}
+    ret20: dict[str, float] = {}
+    ret50: dict[str, float] = {}
+    for sym, candles in (data or {}).items():
+        if not candles:
+            continue
+        cl = _closes(candles)
+        if cl is None:
+            continue
+        sym_sector[sym] = get_sector(sym)
+        r20 = _ret(cl, 20)
+        r50 = _ret(cl, 50)
+        if r20 is not None:
+            ret20[sym] = r20
+        if r50 is not None:
+            ret50[sym] = r50
+
+    breadth20 = (sum(ret20.values()) / len(ret20)) if ret20 else None
+    breadth50 = (sum(ret50.values()) / len(ret50)) if ret50 else None
+    if breadth20 is None:
+        return {"sectors": {}, "leading": [], "_served_from": "constituents_no_data"}
+
+    by_sector: dict[str, list[str]] = {}
+    for sym, sec in sym_sector.items():
+        by_sector.setdefault(sec, []).append(sym)
+
+    sectors: dict[str, dict[str, Any]] = {}
+    for sec, syms in by_sector.items():
+        if not sec or sec in ("Others", "Unknown"):
+            continue
+        s20 = [ret20[s] for s in syms if s in ret20]
+        s50 = [ret50[s] for s in syms if s in ret50]
+        if len(s20) < _MIN_CONSTITUENTS:
+            sectors[sec] = SectorScore(sec, "unknown", None, None, False).to_dict()
+            continue
+        rel20 = (sum(s20) / len(s20)) - breadth20
+        rel50 = ((sum(s50) / len(s50)) - breadth50) if (s50 and breadth50 is not None) else None
+        if rel20 >= _LEAD_REL20_PCT and (rel50 is None or rel50 >= 0):
+            band, lead = "leading", True
+        elif rel20 <= _LAG_REL20_PCT:
+            band, lead = "lagging", False
+        else:
+            band, lead = "neutral", False
+        sectors[sec] = SectorScore(sec, band, rel20, rel50, lead).to_dict()
+
+    result = {
+        "generated_for": date.today().isoformat(),
+        "breadth_ret_20d_pct": round(breadth20, 2),
+        "breadth_ret_50d_pct": None if breadth50 is None else round(breadth50, 2),
+        "sectors": sectors,
+        "leading": sorted(
+            [s for s, v in sectors.items() if v["is_leading"]],
+            key=lambda s: sectors[s]["rel_20d_pct"] or 0,
+            reverse=True,
+        ),
+        "constituents_used": len(ret20),
+        "_built_at": time.time(),
+        "_served_from": "constituents",
+    }
+    if cache:
+        try:
+            from dashboard.backend.cache import set as cache_set
+            cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
+        except Exception as exc:
+            log.debug("constituent sector strength cache write failed: %s", exc)
+    log.info(
+        "sector_strength_from_candles: %d stocks, breadth20=%.2f%%, %d leading (%s)",
+        len(ret20), breadth20, len(result["leading"]), ", ".join(result["leading"]) or "none",
+    )
+    return result
+
+
 def classify_symbol(symbol: str, strength: dict[str, Any] | None = None) -> dict[str, Any]:
     """Map a stock → its sector band. Unmapped/unknown is honest, not faked."""
     try:
