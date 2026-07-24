@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { ArrowLeft, TrendingUp, TrendingDown, Target, ShieldAlert, Clock } from "lucide-react";
 import { api, type TrackRecordPick } from "@/lib/api";
+import { LedgerSummary } from "./LedgerSummary";
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   return (
@@ -96,6 +97,9 @@ export default function TrackRecordPage() {
           Past performance does not guarantee future results. For educational purposes only — not investment advice.
         </p>
       </div>
+
+      {/* PR3 — survivorship-free headline from the immutable ledger (counts every idea, incl. expired) */}
+      <LedgerSummary horizon={filter} />
 
       {/* Summary Cards — computed live from the applied filters */}
       {!loading && (
