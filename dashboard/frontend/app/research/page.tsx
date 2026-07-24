@@ -30,6 +30,7 @@ import LiveSignals from "./LiveSignals";
 import { DailyIdeasLeadModal } from "./DailyIdeasLeadModal";
 import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
+import { MarketStateBanner } from "./MarketStateBanner";
 import { Watchlist } from "./Watchlist";
 import AnchorShadowChip from "./AnchorShadowChip";
 import AnchorShadowHeaderBadge from "./AnchorShadowHeaderBadge";
@@ -775,6 +776,10 @@ export default function ResearchPage() {
       {!loading && decisionFeedLoading && !decisionFeed && (
         <StaggerItem><div className="glass" style={{ padding: 12, color: "var(--text-secondary)" }}>Decision feed is warming up...</div></StaggerItem>
       )}
+
+      <StaggerItem>
+        <MarketStateBanner finalCount={decisionBuckets.final_trades.length} />
+      </StaggerItem>
 
       <StaggerItem>
         <FinalTrades items={filteredFinalTrades} />

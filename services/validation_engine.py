@@ -745,18 +745,52 @@ async def run_validation_scan(
             record.rejection_reason = []
         records.append(record)
 
-    decisions = build_decision_output(records, limit=top_k)
+    # PR1 — Regime Governor. When enabled, the graduated exposure gate replaces
+    # the "always show >=5" force-fill: quantity becomes an output of quality
+    # (0/1/2/5/10 all valid). When DISABLED nothing new runs on this path
+    # (no classify / no network) ⟹ byte-identical to prior behaviour.
+    governor_on = False
+    state_result = None
+    try:
+        from services.regime_governor import governor_enabled
+        governor_on = governor_enabled()
+        if governor_on:
+            from services.regime_governor import classify_market_state
+            state_result = classify_market_state()
+    except Exception as exc:
+        log.debug("regime governor classify skipped: %s", exc)
+        governor_on = False
+
+    # Governor-defensive states suppress the decision-engine backfill so watchlist
+    # / discovery are not manufactured to fill the page.
+    allow_backfill = True
+    if governor_on and state_result is not None:
+        from services.regime_governor import BEAR, CORRECTION, SIDEWAYS
+        allow_backfill = state_result.state not in (SIDEWAYS, CORRECTION, BEAR)
+
+    decisions = build_decision_output(records, limit=top_k, allow_backfill=allow_backfill)
     selected = list(decisions.final_trades)
     watchlist = list(decisions.watchlist)
     discovery = list(decisions.discovery)
-    min_unique_out = max(5, min(int(os.getenv("DISCOVERY_MIN_UNIQUE_SYMBOLS", "5")), top_k))
-    selected, watchlist, discovery = ensure_minimum_discovery_outputs(
-        records,
-        selected,
-        watchlist,
-        discovery,
-        min_unique=min_unique_out,
-    )
+
+    if governor_on and state_result is not None:
+        from services.regime_governor import apply_to_records, get_policy
+        smc_band_of = lambda r: _smc_score(getattr(r, "smc", None), horizon) / 10.0
+        policy = get_policy(state_result.state)
+        selected, _sel_diag = apply_to_records(selected, horizon, smc_band_of, state_result)
+        # Watchlist/discovery are informational tiers — cap them to the policy
+        # ceiling but do not force-fill (no ensure_minimum in governor mode).
+        watchlist = watchlist[: policy.max_ideas]
+        discovery = discovery[: policy.max_ideas]
+    else:
+        min_unique_out = max(5, min(int(os.getenv("DISCOVERY_MIN_UNIQUE_SYMBOLS", "5")), top_k))
+        selected, watchlist, discovery = ensure_minimum_discovery_outputs(
+            records,
+            selected,
+            watchlist,
+            discovery,
+            min_unique=min_unique_out,
+        )
 
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
@@ -806,6 +840,18 @@ async def run_validation_scan(
         "signals_generated": sig_total,
         "reason_for_zero_signals": reason_empty if sig_total == 0 else "",
     }
+    # Attach the regime-governor exposure block to diagnostics ONLY when the
+    # governor is enforcing (keeps the flag-OFF path free of extra network /
+    # byte-identical). The Research UI reads market state from the dedicated
+    # GET /api/market/state endpoint, which computes on demand regardless.
+    diagnostics["governor_enforced"] = governor_on
+    if governor_on and state_result is not None:
+        try:
+            from services.regime_governor import exposure_state
+            diagnostics["market_state"] = state_result.state
+            diagnostics["exposure"] = exposure_state(state_result)
+        except Exception as exc:
+            log.debug("exposure_state attach skipped: %s", exc)
 
     log.info(
         "[%s] validation scan %s: total=%d l1=%d l2=%d l3=%d selected=%d logged=%d sig_out=%d",

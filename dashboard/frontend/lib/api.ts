@@ -1478,7 +1478,30 @@ export interface RiskConfigHistoryEntry {
 
 // ── API Functions ─────────────────────────────────────────────────────────────
 
+export interface MarketStateResponse {
+  governor_enabled: boolean;
+  market_state: "STRONG_BULL" | "WEAK_BULL" | "SIDEWAYS" | "CORRECTION" | "BEAR" | "UNKNOWN";
+  regime_raw?: string;
+  confidence?: number;
+  nifty_close?: number;
+  above_200dma?: boolean;
+  pct_from_52w_high?: number;
+  adx?: number;
+  exposure_pct: number;
+  cash_pct: number;
+  exposure_label: string;
+  suggested_max_ideas?: number;
+  min_confidence?: number;
+  min_rr?: number;
+  sector_requirement?: string;
+  leading_sectors?: string[];
+  advisory: string;
+  as_of?: string;
+}
+
 export const api = {
+  /** Regime-governor exposure block — market state, suggested exposure/cash %, leading sectors. */
+  marketState: () => get<MarketStateResponse>("/api/market/state"),
   riskSummary: (date?: string) => get<RiskEngineSummary>(`/api/risk-engine/summary${date ? `?date=${date}` : ""}`),
   riskConfig: () => get<{ config: Record<string, unknown>; versioned: boolean }>("/api/risk-engine/config"),
   riskConfigHistory: (limit = 50) => get<{ history: RiskConfigHistoryEntry[] }>(`/api/risk-engine/config-history?limit=${limit}`),

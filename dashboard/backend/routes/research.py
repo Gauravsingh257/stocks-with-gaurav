@@ -1229,6 +1229,32 @@ def get_running_trades(limit: int = Query(40, ge=1, le=200)):
     return _safe_json_response(payload)
 
 
+@router.get("/api/market/state")
+@router.get("/market/state")
+def get_market_state():
+    """Regime-governor exposure block for the Research feed + Command Center.
+
+    Returns the current market state (STRONG_BULL … BEAR), suggested exposure /
+    cash %, the graduated policy (max ideas, min confidence/RR), and leading
+    sectors. Informational even when the governor is disabled (it does not
+    change what the feed serves — enforcement is separate and flag-gated).
+    Never raises: degrades to a safe UNKNOWN payload.
+    """
+    try:
+        from services.regime_governor import exposure_state
+        return _safe_json_response(exposure_state())
+    except Exception:
+        log.exception("market/state endpoint failed; serving safe fallback")
+        return _safe_json_response({
+            "governor_enabled": False,
+            "market_state": "UNKNOWN",
+            "exposure_pct": 100,
+            "cash_pct": 0,
+            "exposure_label": "🟢 Normal",
+            "advisory": "Market state unavailable.",
+        })
+
+
 @router.get("/api/research/coverage")
 @router.get("/research/coverage")
 def get_research_coverage(target_universe: int = Query(2200, ge=100, le=5000)):

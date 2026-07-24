@@ -193,6 +193,10 @@ class RankingResult:
     rejections: list[RejectionRecord] | None = None
     fallback_used: bool = False
     fallback_ideas: list[RankedIdea] | None = None
+    # Regime-governor context (additive; populated only when the governor is
+    # enabled, else None ⟹ back-compat / byte-identical behaviour).
+    market_state: str | None = None
+    governor: dict | None = None
 
 
 def _stable_unit(symbol: str, salt: str) -> float:
@@ -957,6 +961,35 @@ async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: 
     except Exception as exc:
         log.debug("[%s] regime/sector shadow log skipped: %s", horizon, exc)
 
+    # PR1 — Regime Governor ENFORCEMENT. Flag-gated: when disabled this block is
+    # a no-op and `ideas` is returned exactly as before (byte-identical). When
+    # enabled, apply the graduated exposure gate (confidence/RR/sector caps).
+    # `ideas` is already sorted best-first by rank_score above.
+    market_state = None
+    governor_diag = None
+    try:
+        from services.regime_governor import (
+            apply_to_ideas,
+            classify_market_state,
+            exposure_state,
+            governor_enabled,
+        )
+
+        state_result = classify_market_state()
+        market_state = state_result.state
+        if governor_enabled():
+            before = len(ideas)
+            ideas, diag = apply_to_ideas(ideas, horizon, state_result)
+            governor_diag = diag.to_dict()
+            governor_diag["exposure"] = exposure_state(state_result)
+            log.info(
+                "[%s][GOVERNOR] state=%s enforced: %d → %d ideas (killed conf=%d rr=%d sector=%d capped=%d)",
+                horizon, market_state, before, len(ideas),
+                diag.killed_confidence, diag.killed_rr, diag.killed_sector, diag.capped,
+            )
+    except Exception as exc:
+        log.debug("[%s] regime governor skipped: %s", horizon, exc)
+
     return RankingResult(
         horizon=horizon,
         universe=universe,
@@ -967,6 +1000,8 @@ async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: 
         rejections=rejections,
         fallback_used=bool(fallback_ideas),
         fallback_ideas=fallback_ideas,
+        market_state=market_state,
+        governor=governor_diag,
     )
 
 

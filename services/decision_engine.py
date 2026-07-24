@@ -145,8 +145,15 @@ def _priority_bucket(records: list[DecisionRecord], limit: int) -> tuple[list[De
     return final_trades, watchlist, discovery
 
 
-def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> DecisionOutput:
-    """Split full-pipeline records into one server-owned decision section per symbol."""
+def build_decision_output(records: list[DecisionRecord], limit: int = 10,
+                          allow_backfill: bool = True) -> DecisionOutput:
+    """Split full-pipeline records into one server-owned decision section per symbol.
+
+    `allow_backfill` (default True ⟹ back-compat): when False, the cascading
+    near-setup / relaxed backfills that manufacture watchlist/discovery to fill
+    an otherwise-empty page are skipped. The Regime Governor passes False in
+    defensive states so a weak market is allowed to show fewer / zero tiers.
+    """
     ordered = sorted(records, key=_band_rank, reverse=True)
     final_trades, watchlist, discovery = _priority_bucket(ordered, limit)
 
@@ -154,12 +161,12 @@ def build_decision_output(records: list[DecisionRecord], limit: int = 10) -> Dec
     watchlist = [record for record in watchlist if _symbol_key(record) not in used]
     discovery = [record for record in discovery if _symbol_key(record) not in used]
 
-    if len(watchlist) == 0:
+    if allow_backfill and len(watchlist) == 0:
         watchlist = near_valid_setups(ordered, limit=min(3, limit), excluded=used)
     used.update(_symbol_key(record) for record in watchlist)
     discovery = [record for record in discovery if _symbol_key(record) not in used]
 
-    if len(discovery) == 0:
+    if allow_backfill and len(discovery) == 0:
         discovery = relaxed_filter(ordered, limit=limit, excluded=used)
 
     log.debug(
