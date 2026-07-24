@@ -1495,6 +1495,11 @@ export interface MarketStateResponse {
   min_rr?: number;
   sector_requirement?: string;
   leading_sectors?: string[];
+  lagging_sectors?: string[];
+  sector_bands?: Record<string, string>;
+  sector_leadership_enabled?: boolean;
+  sector_diversification_enabled?: boolean;
+  max_per_sector?: number;
   advisory: string;
   as_of?: string;
 }

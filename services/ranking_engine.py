@@ -227,6 +227,22 @@ def _score_candidates(rows: list[FactorRow], horizon: Horizon) -> list[tuple[Fac
     growth = _percentile([r.factors["growth"] for r in rows])
     quality = _percentile([r.factors["quality"] for r in rows])
 
+    # PR2 — sector-leadership multiplicative scoring (flag-gated). When enabled,
+    # final_score = base_score * sector_multiplier so leaders float up and
+    # laggards are heavily penalised BEFORE the final ranking sort. Disabled ⟹
+    # base score unchanged (byte-identical).
+    _sector_scoring = False
+    _strength = None
+    try:
+        from services.regime_governor import sector_multiplier, sector_scoring_enabled
+        _sector_scoring = sector_scoring_enabled()
+        if _sector_scoring:
+            from services.sector_strength import compute_sector_strength
+            _strength = compute_sector_strength()
+    except Exception as exc:
+        log.debug("sector scoring unavailable: %s", exc)
+        _sector_scoring = False
+
     scored: list[tuple[FactorRow, float]] = []
     for idx, row in enumerate(rows):
         if horizon == "SWING":
@@ -247,6 +263,8 @@ def _score_candidates(rows: list[FactorRow], horizon: Horizon) -> list[tuple[Fac
                 + (0.10 * sent[idx])
                 + (0.08 * liq[idx])
             )
+        if _sector_scoring:
+            score *= sector_multiplier(getattr(row, "symbol", ""), _strength)
         scored.append((row, score))
     return scored
 
@@ -989,6 +1007,29 @@ async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: 
             )
     except Exception as exc:
         log.debug("[%s] regime governor skipped: %s", horizon, exc)
+
+    # PR2 — sector diversification cap (max N per sector). Flag-gated and
+    # independent of the governor. Applied last so it caps the final ordered
+    # set. Disabled ⟹ no-op (byte-identical).
+    try:
+        from services.regime_governor import (
+            enforce_sector_diversification,
+            sector_diversification_enabled,
+        )
+
+        if sector_diversification_enabled():
+            before = len(ideas)
+            ideas, div_diag = enforce_sector_diversification(
+                ideas, symbol_of=lambda i: getattr(i, "symbol", "")
+            )
+            governor_diag = governor_diag or {}
+            governor_diag["diversification"] = div_diag
+            log.info(
+                "[%s][DIVERSIFY] %d → %d ideas (max %s/sector, dropped=%d)",
+                horizon, before, len(ideas), div_diag.get("cap"), div_diag.get("dropped"),
+            )
+    except Exception as exc:
+        log.debug("[%s] sector diversification skipped: %s", horizon, exc)
 
     return RankingResult(
         horizon=horizon,

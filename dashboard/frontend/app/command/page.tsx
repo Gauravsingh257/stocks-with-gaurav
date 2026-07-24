@@ -26,6 +26,7 @@ import { marketPhase } from "@/lib/nba";
 import { humanize, regimeContext } from "@/lib/humanize";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 import Sparkline from "@/components/Sparkline";
+import { ExposureRegimePanel } from "./ExposureRegimePanel";
 
 // Freshness — relative "updated X ago" (Refinement 3).
 function relTime(iso?: string | null, now = Date.now()): string {
@@ -201,6 +202,9 @@ export default function CommandCenterPage() {
           )}
         </div>
       </div>
+
+      {/* Market regime + exposure — first thing users see (PR2) */}
+      <ExposureRegimePanel ideaCount={opportunities.length} />
 
       {/* ★ HERO — Today's Top Opportunities (top 3, expandable) */}
       <div className="glass rounded-xl" style={{ padding: "16px 18px", border: "1px solid rgba(16,185,129,0.3)", boxShadow: "0 18px 44px rgba(16,185,129,0.10)" }}>

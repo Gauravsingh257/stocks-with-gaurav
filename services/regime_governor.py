@@ -424,6 +424,86 @@ def apply_to_records(records: list, horizon: str, smc_band_of,
     )
 
 
+# ── Sector leadership: multiplicative scoring + diversification (PR2) ─────────
+
+def sector_scoring_enabled() -> bool:
+    """Flag: multiply stock score by its sector-strength multiplier before ranking."""
+    return _truthy(os.getenv("SECTOR_LEADERSHIP_SCORING_ENABLED", "0"))
+
+
+def sector_diversification_enabled() -> bool:
+    """Flag: cap the number of ideas per sector (max_per_sector)."""
+    return _truthy(os.getenv("SECTOR_DIVERSIFICATION_ENABLED", "0"))
+
+
+def max_per_sector() -> int:
+    return max(1, _envi("MAX_PER_SECTOR", 2))
+
+
+# Band → score multiplier. Leading sectors get a meaningful boost, lagging a
+# heavy penalty; unknown is neutral (honest — no fabricated tilt). Env-tunable.
+_BAND_MULT_DEFAULT = {"leading": 1.15, "neutral": 1.0, "lagging": 0.6, "unknown": 1.0}
+
+
+def sector_multiplier(symbol: str, strength: dict | None = None) -> float:
+    """Multiplier in [~0.4, ~1.3] for a stock's sector-strength band.
+
+    Used as `final_score = stock_score * sector_multiplier` so leaders float up
+    and laggards are heavily penalised *before* final ranking. Never raises;
+    unknown/unmapped sectors return 1.0 (neutral), so a data gap can't distort
+    ranking or silently drop a name.
+    """
+    try:
+        band = _sector_band(str(symbol), strength)
+    except Exception:
+        return 1.0
+    default = _BAND_MULT_DEFAULT.get(band, 1.0)
+    return _envf(f"SECTOR_MULT_{band.upper()}", default)
+
+
+def _sector_of(symbol: str, strength: dict | None) -> str:
+    try:
+        from services.sector_strength import classify_symbol
+        return str(classify_symbol(symbol, strength).get("sector") or "Unknown")
+    except Exception:
+        return "Unknown"
+
+
+def enforce_sector_diversification(items: list, symbol_of, strength: dict | None = None,
+                                   cap: int | None = None) -> tuple[list, dict]:
+    """Keep at most `cap` items per sector, preserving the caller's (best-first)
+    order. Returns (kept, diagnostics). "Unknown" sectors are NOT capped
+    (we don't group honestly-unknown names into one bucket).
+    """
+    cap = cap if cap is not None else max_per_sector()
+    strength = strength if strength is not None else _safe_strength()
+    kept: list = []
+    per_sector: dict[str, int] = {}
+    dropped: list[dict] = []
+    for it in items:
+        sym = str(symbol_of(it) or "")
+        sector = _sector_of(sym, strength)
+        if sector in ("Unknown", "Others", ""):
+            kept.append(it)
+            continue
+        used = per_sector.get(sector, 0)
+        if used >= cap:
+            dropped.append({"symbol": sym, "sector": sector})
+            continue
+        per_sector[sector] = used + 1
+        kept.append(it)
+    return kept, {"cap": cap, "kept": len(kept), "dropped": len(dropped),
+                  "per_sector": per_sector, "dropped_items": dropped[:50]}
+
+
+def _safe_strength() -> dict:
+    try:
+        from services.sector_strength import compute_sector_strength
+        return compute_sector_strength()
+    except Exception:
+        return {}
+
+
 # ── API / UI payload ──────────────────────────────────────────────────────────
 
 def exposure_state(state_result: MarketStateResult | None = None,
@@ -440,12 +520,25 @@ def exposure_state(state_result: MarketStateResult | None = None,
             state_result = classify_market_state()
         policy = get_policy(state_result.state)
         leading: list[str] = []
+        lagging: list[str] = []
+        sector_bands: dict[str, str] = {}
         try:
-            from services.sector_strength import compute_sector_strength
-            leading = list((strength or compute_sector_strength()).get("leading") or [])
+            strength = strength if strength is not None else _safe_strength()
+            leading = list(strength.get("leading") or [])
+            secs = strength.get("sectors") or {}
+            for name, sv in secs.items():
+                band = (sv or {}).get("band", "unknown")
+                sector_bands[name] = band
+                if band == "lagging":
+                    lagging.append(name)
         except Exception:
-            leading = []
+            leading, lagging, sector_bands = [], [], {}
         return {
+            "sector_leadership_enabled": sector_scoring_enabled(),
+            "sector_diversification_enabled": sector_diversification_enabled(),
+            "max_per_sector": max_per_sector(),
+            "lagging_sectors": lagging,
+            "sector_bands": sector_bands,
             "governor_enabled": governor_enabled(),
             "market_state": state_result.state,
             "regime_raw": state_result.regime_raw,

@@ -792,6 +792,21 @@ async def run_validation_scan(
             min_unique=min_unique_out,
         )
 
+    # PR2 — sector diversification on the final (selected) bucket (flag-gated,
+    # independent of the governor). Disabled ⟹ no-op / byte-identical.
+    try:
+        from services.regime_governor import (
+            enforce_sector_diversification,
+            sector_diversification_enabled,
+        )
+
+        if sector_diversification_enabled():
+            selected, _div = enforce_sector_diversification(
+                selected, symbol_of=lambda r: getattr(r, "symbol", "")
+            )
+    except Exception as exc:
+        log.debug("feed sector diversification skipped: %s", exc)
+
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
     total_universe = universe.total_size if symbols is None and universe.total_size else int(target_universe)
