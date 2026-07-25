@@ -953,6 +953,12 @@ export interface ResearchDecisionCard {
   exceptionalism_threshold?: number | null;
   exceptionalism_qualifies?: boolean | null;
   exceptionalism_reason?: string | null;
+  decision_trace?: {
+    headline?: string;
+    trace?: string;
+    why_short?: string | null;
+    factors?: { label: string; detail: string; tone: string }[];
+  } | null;
   entry_type?: string | null;
   expected_holding_period?: string | null;
   layer1_pass?: boolean;
