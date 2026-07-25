@@ -81,6 +81,34 @@ def report(date: str | None = Query(default=None)):
         return {"date": day, "report": None}
 
 
+@router.get("/funnel")
+def funnel(days: int = Query(default=3, ge=1, le=3)):
+    """Why the book picked what it picked — the per-stage selection funnel from
+    the most recent daily reports (regime → discovery pool → data → eligibility →
+    entry model → armed), with the top rejection gates. This is what makes an
+    empty Momentum book self-explaining instead of silent."""
+    from datetime import date as _date, timedelta
+    import json
+    try:
+        from dashboard.backend.cache import _get_redis
+        r = _get_redis()
+    except Exception as exc:
+        log.debug("funnel redis unavailable: %s", exc)
+        r = None
+    out = []
+    for i in range(days):
+        day = (_date.today() - timedelta(days=i)).isoformat()
+        raw = r.get(f"momentum_portfolio:report:{day}") if r is not None else None
+        if not raw:
+            continue
+        rep = json.loads(raw)
+        out.append({"date": day, "regime": rep.get("regime"),
+                    "funnel": rep.get("funnel") or {},
+                    "armed": rep.get("armed") or [],
+                    "counts": rep.get("counts") or {}})
+    return {"days": out, "count": len(out)}
+
+
 @router.post("/run")
 def run_cycle():
     """Manually trigger one orchestration cycle (respects all flags — returns

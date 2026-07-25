@@ -328,6 +328,7 @@ class MomentumPortfolioManager:
         self._data = data_provider
         self._candidates = candidate_provider
         self._nifty = nifty
+        self._nifty_resolved = nifty is not None
 
     # ── default production providers (lazy) ──
     def _cmp_provider(self):
@@ -342,11 +343,28 @@ class MomentumPortfolioManager:
         from services.momentum_candidate_pipeline import default_data_provider
         return default_data_provider
 
+    def _nifty_series(self) -> list[dict] | None:
+        """The benchmark series used for relative strength. Resolved ONCE per
+        cycle and shared by candidate evaluation and holding re-scoring — without
+        it `rs_20d` is None and every candidate fails the `rs_unknown` gate."""
+        if not self._nifty_resolved:
+            from services.momentum_candidate_pipeline import default_nifty_provider
+            try:
+                self._nifty = default_nifty_provider() or None
+            except Exception:
+                log.exception("[MomentumPortfolio] benchmark fetch failed")
+                self._nifty = None
+            self._nifty_resolved = True
+        return self._nifty
+
     def _candidate_provider(self):
         if self._candidates:
             return self._candidates
         from services.momentum_candidate_pipeline import get_ranked_candidates
-        return lambda: get_ranked_candidates(nifty=self._nifty)
+        # `nifty_provider` too: if resolution already failed this cycle, the
+        # pipeline's own fallback must reuse that verdict rather than re-download.
+        return lambda: get_ranked_candidates(nifty=self._nifty_series(),
+                                             nifty_provider=lambda: self._nifty_series() or [])
 
     def run(self) -> dict:
         c = cfg()
@@ -359,14 +377,21 @@ class MomentumPortfolioManager:
         cmp_p, data_p = self._cmp_provider(), self._data_provider()
         pending = process_pending(cmp_p)
         exits = process_active(data_p)
-        rescore = rescore_active(data_p, self._nifty)
+        rescore = rescore_active(data_p, self._nifty_series())
 
         armed, rejected = [], []
+        funnel: dict = {}
         try:
-            candidates = self._candidate_provider()() or []
-        except Exception:
+            # Read the funnel off the BATCH, not off `candidates`: an empty batch
+            # is falsy, so `or []` would discard the diagnostics in exactly the
+            # case they exist to explain — a cycle that armed nothing.
+            batch = self._candidate_provider()()
+            candidates = list(batch or [])
+            funnel = dict(getattr(batch, "funnel", {}) or {})
+        except Exception as exc:
             log.exception("[MomentumPortfolio] candidate provider failed")
             candidates = []
+            funnel = {"blocked_by": "candidate_provider_error", "error": repr(exc)}
         for cand in candidates:
             pid = arm(cand)
             if pid:
@@ -380,17 +405,25 @@ class MomentumPortfolioManager:
             "date": datetime.now(_IST).date().isoformat(),
             "regime": current_regime(),
             "pending": pending, "exits": exits, "rescore": rescore,
+            # NOTE: `candidates_evaluated` counts candidates that PASSED the
+            # engine and reached the arming stage. The full per-stage picture
+            # (discovery pool → data → eligibility → entry model) is in `funnel`.
             "candidates_evaluated": len(candidates),
+            "funnel": funnel,
             "armed": armed, "rejected_count": len(rejected),
+            "rejected": rejected[:20],
             "counts": db.get_counts(),
             "portfolio_quality": momentum_classifier.portfolio_quality(positions),
             "journal_stats": db.get_journal_stats(),
         }
         _persist_report(report)
-        log.info("[MomentumPortfolio] run: armed=%d exits=%d triggered=%d rescored=%d regime=%s quality=%s",
+        log.info("[MomentumPortfolio] run: armed=%d exits=%d triggered=%d rescored=%d regime=%s "
+                 "quality=%s funnel=%s",
                  len(armed), exits.get("exited", 0), pending.get("triggered", 0),
                  rescore.get("reclassified", 0), report["regime"],
-                 report["portfolio_quality"].get("quality"))
+                 report["portfolio_quality"].get("quality"),
+                 {k: funnel.get(k) for k in ("benchmark_bars", "discovery_pool", "no_data",
+                                             "eligibility_failed", "no_entry_model", "accepted")})
         return report
 
 
