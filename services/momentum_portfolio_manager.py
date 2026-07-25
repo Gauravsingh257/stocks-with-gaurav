@@ -361,7 +361,10 @@ class MomentumPortfolioManager:
         if self._candidates:
             return self._candidates
         from services.momentum_candidate_pipeline import get_ranked_candidates
-        return lambda: get_ranked_candidates(nifty=self._nifty_series())
+        # `nifty_provider` too: if resolution already failed this cycle, the
+        # pipeline's own fallback must reuse that verdict rather than re-download.
+        return lambda: get_ranked_candidates(nifty=self._nifty_series(),
+                                             nifty_provider=lambda: self._nifty_series() or [])
 
     def run(self) -> dict:
         c = cfg()
@@ -379,8 +382,12 @@ class MomentumPortfolioManager:
         armed, rejected = [], []
         funnel: dict = {}
         try:
-            candidates = self._candidate_provider()() or []
-            funnel = dict(getattr(candidates, "funnel", {}) or {})
+            # Read the funnel off the BATCH, not off `candidates`: an empty batch
+            # is falsy, so `or []` would discard the diagnostics in exactly the
+            # case they exist to explain — a cycle that armed nothing.
+            batch = self._candidate_provider()()
+            candidates = list(batch or [])
+            funnel = dict(getattr(batch, "funnel", {}) or {})
         except Exception as exc:
             log.exception("[MomentumPortfolio] candidate provider failed")
             candidates = []

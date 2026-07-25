@@ -125,6 +125,41 @@ def test_run_resolves_benchmark_once_and_reports_funnel(monkeypatch):
     assert report["candidates_evaluated"] == 1 and len(report["armed"]) == 1
 
 
+def test_run_keeps_funnel_when_nothing_is_armed(monkeypatch):
+    """The zero-candidate cycle is exactly the case the funnel exists to explain,
+    so an EMPTY (falsy) batch must not lose its diagnostics."""
+    import services.momentum_candidate_pipeline as pipe
+    empty = pipe.CandidateBatch([], {"discovery_pool": 60, "eligibility_failed": 60,
+                                     "accepted": 0, "top_gate_failures": {"rs_below_min": 44}})
+    m = MomentumPortfolioManager(cmp_provider=lambda syms: {},
+                                 data_provider=lambda s: (None, []),
+                                 candidate_provider=lambda: empty, nifty=[])
+    report = m.run()
+    assert report["armed"] == [] and report["candidates_evaluated"] == 0
+    assert report["funnel"]["discovery_pool"] == 60
+    assert report["funnel"]["top_gate_failures"] == {"rs_below_min": 44}
+
+
+def test_run_resolves_benchmark_once_even_when_fetch_fails(monkeypatch):
+    """A failed benchmark fetch must not be retried by the pipeline fallback
+    within the same cycle."""
+    import services.momentum_candidate_pipeline as pipe
+    calls = {"n": 0}
+
+    def _fail():
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(pipe, "default_nifty_provider", _fail)
+    monkeypatch.setattr(pipe, "_discovery_symbols", lambda day, limit: [])
+    monkeypatch.setenv("MOMENTUM_REGIME_GATE_ENABLED", "0")
+    m = MomentumPortfolioManager(cmp_provider=lambda syms: {},
+                                 data_provider=lambda s: (None, []))
+    report = m.run()
+    assert calls["n"] == 1
+    assert report["funnel"]["benchmark_bars"] == 0
+
+
 def test_run_reports_candidate_provider_failure(monkeypatch):
     def _boom():
         raise RuntimeError("yfinance down")
