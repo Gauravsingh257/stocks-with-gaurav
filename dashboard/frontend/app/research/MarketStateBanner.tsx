@@ -73,6 +73,12 @@ export function MarketStateBanner({ finalCount }: { finalCount: number }) {
             <div style={{ fontWeight: 700, fontSize: "0.98rem", color: tone.fg }}>
               {state.exposure_label} · {STATE_LABEL[state.market_state] ?? state.market_state}
             </div>
+            {typeof state.market_health === "number" && (
+              <div style={{ fontSize: "0.66rem", opacity: 0.8, marginTop: 2 }}>
+                Market Health <strong>{state.market_health}/100</strong>
+                {state.opportunity_level && <> · Opportunity: <strong>{state.opportunity_level}</strong></>}
+              </div>
+            )}
           </div>
         </div>
 

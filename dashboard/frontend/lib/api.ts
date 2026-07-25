@@ -1523,6 +1523,10 @@ export interface MarketStateResponse {
   leading_sectors?: string[];
   lagging_sectors?: string[];
   sector_bands?: Record<string, string>;
+  market_health?: number | null;
+  opportunity_level?: "RICH" | "NORMAL" | "SELECTIVE" | "SCARCE" | null;
+  health_subscores?: Record<string, number | null>;
+  health_derived_state?: string | null;
   sector_leadership_enabled?: boolean;
   sector_diversification_enabled?: boolean;
   max_per_sector?: number;

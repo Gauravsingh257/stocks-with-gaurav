@@ -632,14 +632,24 @@ async def run_validation_scan(
             sector_scoring_enabled,
         )
 
-        if governor_enabled() or sector_scoring_enabled() or sector_diversification_enabled():
-            from services.sector_strength import compute_sector_strength_from_candles
+        from services.market_health import market_health_enabled
 
+        _need_candles = (
+            governor_enabled() or sector_scoring_enabled()
+            or sector_diversification_enabled() or market_health_enabled()
+        )
+        if _need_candles:
             _cand_map = {s: df_to_candles(f) for s, f in frames.items() if _has_usable_ohlc(f)}
             if _cand_map:
-                compute_sector_strength_from_candles(_cand_map)
+                if governor_enabled() or sector_scoring_enabled() or sector_diversification_enabled():
+                    from services.sector_strength import compute_sector_strength_from_candles
+                    compute_sector_strength_from_candles(_cand_map)
+                if market_health_enabled():
+                    # Layer-1 breadth from the same candles (% above 50/200-DMA, adv/decline).
+                    from services.market_health import breadth_from_candles
+                    breadth_from_candles(_cand_map)
     except Exception as exc:
-        log.debug("constituent sector strength refresh skipped: %s", exc)
+        log.debug("in-scan sector/breadth refresh skipped: %s", exc)
 
     technical_map = await scan_technical(scan_symbols)
     for symbol, df in frames.items():

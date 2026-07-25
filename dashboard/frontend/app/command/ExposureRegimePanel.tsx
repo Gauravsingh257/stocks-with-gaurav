@@ -64,6 +64,12 @@ export function ExposureRegimePanel({ ideaCount }: { ideaCount?: number }) {
             <div style={{ fontWeight: 800, fontSize: "1.02rem", color }}>
               {s.exposure_label} · {STATE_LABEL[s.market_state] ?? s.market_state}
             </div>
+            {typeof s.market_health === "number" && (
+              <div style={{ fontSize: "0.68rem", opacity: 0.8, marginTop: 2 }}>
+                Market Health <strong>{s.market_health}/100</strong>
+                {s.opportunity_level && <> · Opportunity: <strong>{s.opportunity_level}</strong></>}
+              </div>
+            )}
           </div>
         </div>
         {typeof ideaCount === "number" && (
