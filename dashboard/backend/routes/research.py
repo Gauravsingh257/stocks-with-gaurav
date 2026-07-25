@@ -303,12 +303,23 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
                                    [target] if target is not None else [])
     except Exception:
         _es = {"state": None, "actionable": None}
+    _exc = row.get("exceptionalism") or {}
+    if isinstance(_exc, str):
+        try:
+            import json as _json_exc
+            _exc = _json_exc.loads(_exc)
+        except Exception:
+            _exc = {}
     return {
         "id": row.get("id"),
         "symbol": row.get("symbol"),
         "setup": "SMC_VALIDATION",
         "entry_state": _es.get("state"),
         "entry_actionable": _es.get("actionable"),
+        "exceptionalism": _exc.get("exceptionalism"),
+        "exceptionalism_threshold": _exc.get("threshold"),
+        "exceptionalism_qualifies": _exc.get("qualifies"),
+        "exceptionalism_reason": _exc.get("reason"),
         "section": section,
         "entry_price": entry,
         "stop_loss": stop,
