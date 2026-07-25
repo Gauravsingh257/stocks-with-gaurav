@@ -949,6 +949,10 @@ export interface ResearchDecisionCard {
   reachability?: "actionable" | "waiting" | "unreachable" | "pre_breakout" | "unknown" | string | null;
   entry_state?: "READY" | "WATCH" | "IN_MOTION" | "MISSED" | null;
   entry_actionable?: boolean | null;
+  exceptionalism?: number | null;
+  exceptionalism_threshold?: number | null;
+  exceptionalism_qualifies?: boolean | null;
+  exceptionalism_reason?: string | null;
   entry_type?: string | null;
   expected_holding_period?: string | null;
   layer1_pass?: boolean;

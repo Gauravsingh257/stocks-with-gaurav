@@ -98,6 +98,7 @@ class LayerValidationRecord:
     quality: dict | None = None
     smc: dict | None = None
     score_breakdown: dict | None = None
+    exceptionalism: dict | None = None   # EP2 verdict (score/threshold/qualifies/reason/breakdown)
 
     @property
     def section(self) -> str:
@@ -128,11 +129,13 @@ class LayerValidationRecord:
             "near_setup": self.near_setup,
             "section": self.section,
             "rejection_reason": self.rejection_reason,
+            "exceptionalism": self.exceptionalism or {},
             "layer_details": {
                 "discovery": self.discovery or {},
                 "quality": self.quality or {},
                 "smc": self.smc or {},
                 "score_breakdown": self.score_breakdown or {},
+                "exceptionalism": self.exceptionalism or {},
             },
         }
 
@@ -166,6 +169,10 @@ class LayerValidationRecord:
             "potential_setup": tier == "WATCHLIST",
             "section": self.section,
             "rejection_reason": self.rejection_reason,
+            "exceptionalism": (self.exceptionalism or {}).get("exceptionalism"),
+            "exceptionalism_threshold": (self.exceptionalism or {}).get("threshold"),
+            "exceptionalism_qualifies": (self.exceptionalism or {}).get("qualifies"),
+            "exceptionalism_reason": (self.exceptionalism or {}).get("reason"),
             "layer_details": self.to_dict()["layer_details"],
             "reasoning": _record_reasoning(self),
             "technical_signals": _record_technical_signals(self),
@@ -651,6 +658,39 @@ async def run_validation_scan(
     except Exception as exc:
         log.debug("in-scan sector/breadth refresh skipped: %s", exc)
 
+    # ── EP2 — Stock Exceptionalism context (computed ONCE per scan) ──
+    # Shadow by default: every scanned stock gets an exceptionalism verdict logged
+    # (signals_log) for later threshold calibration. Enforcement (filtering the
+    # served feed) is separate and flag-gated; when EXCEPTIONALISM_ENABLED=0 the
+    # served recommendations are byte-identical.
+    _exc_active = False
+    _exc_health = None
+    _exc_nifty_ret20 = None
+    _exc_strength = None
+    try:
+        from services.exceptionalism import exceptionalism_enabled, exceptionalism_shadow_enabled
+        _exc_active = exceptionalism_enabled() or exceptionalism_shadow_enabled()
+        if _exc_active:
+            try:
+                from services.market_health import compute_market_health
+                _h = compute_market_health()
+                _exc_health = _h.get("score") if _h.get("available") else None
+            except Exception:
+                _exc_health = None
+            if nifty_daily and len(nifty_daily) >= 21:
+                try:
+                    _n0 = float(nifty_daily[-21]["close"]); _n1 = float(nifty_daily[-1]["close"])
+                    _exc_nifty_ret20 = (_n1 - _n0) / _n0 * 100.0 if _n0 > 0 else None
+                except Exception:
+                    _exc_nifty_ret20 = None
+            try:
+                from services.sector_strength import compute_sector_strength
+                _exc_strength = compute_sector_strength()
+            except Exception:
+                _exc_strength = None
+    except Exception as exc:
+        log.debug("exceptionalism context skipped: %s", exc)
+
     technical_map = await scan_technical(scan_symbols)
     for symbol, df in frames.items():
         snap = snapshot_from_ohlc(symbol, df) if _has_usable_ohlc(df) else None
@@ -775,6 +815,33 @@ async def run_validation_scan(
         record.final_selected = record.layer3_pass
         if record.final_selected:
             record.rejection_reason = []
+
+        # EP2 — compute the exceptionalism verdict for EVERY scanned stock (shadow
+        # dataset for later calibration). Cheap: get_sector is a static dict lookup.
+        if _exc_active:
+            try:
+                from services.entry_state import classify_entry_state
+                from services.exceptionalism import score_and_qualify
+                from services.sector_strength import classify_symbol
+                _sc = classify_symbol(symbol, _exc_strength) if _exc_strength else {"band": "unknown", "rel_20d_pct": None}
+                _rr = None
+                if record.entry and record.stop_loss and record.targets:
+                    _risk = abs(float(record.entry) - float(record.stop_loss))
+                    if _risk > 0:
+                        _rr = abs(max(record.targets) - float(record.entry)) / _risk
+                _es = classify_entry_state(record.cmp, record.entry, record.stop_loss, record.targets)
+                record.exceptionalism = score_and_qualify(
+                    discovery=record.discovery,
+                    smc_band=_smc_score(record.smc, horizon) / 10.0,
+                    rr=_rr,
+                    nifty_ret20=_exc_nifty_ret20,
+                    sector_rel20=_sc.get("rel_20d_pct"),
+                    sector_band=_sc.get("band"),
+                    entry_state=_es.get("state"),
+                    market_health=_exc_health,
+                )
+            except Exception as exc:
+                log.debug("exceptionalism compute failed for %s: %s", symbol, exc)
         records.append(record)
 
     # PR1 — Regime Governor. When enabled, the graduated exposure gate replaces
@@ -838,6 +905,32 @@ async def run_validation_scan(
             )
     except Exception as exc:
         log.debug("feed sector diversification skipped: %s", exc)
+
+    # EP2 — Exceptionalism as the PRIMARY gate (flag-gated). When enabled, the
+    # served `selected` is rebuilt from every stock with a tradable plan that
+    # clears required_exceptionalism(market_health) — count is emergent, and an
+    # exceptional stock surfaces even if its sector is not leading (override).
+    # When disabled, `selected` is exactly what the governor/legacy path produced
+    # (byte-identical). Watchlist/discovery are left as the context tiers.
+    try:
+        from services.exceptionalism import exceptionalism_enabled as _exc_on
+        if _exc_on():
+            soft_ceiling = int(os.getenv("EXCEPTIONALISM_SOFT_CEILING", "20"))
+            qualified = [
+                r for r in records
+                if r.entry is not None and (r.exceptionalism or {}).get("qualifies")
+            ]
+            qualified.sort(key=lambda r: float((r.exceptionalism or {}).get("exceptionalism") or 0.0), reverse=True)
+            selected = qualified[:soft_ceiling]
+            overrides = [r.symbol for r in selected if (r.exceptionalism or {}).get("reason") == "exceptional_override"]
+            if overrides:
+                log.info("[EP2] exceptional overrides surfaced (lagging sector): %s", overrides)
+            log.info(
+                "[EP2] exceptionalism gate: %d qualified → %d shown (health=%s)",
+                len(qualified), len(selected), _exc_health,
+            )
+    except Exception as exc:
+        log.debug("exceptionalism enforcement skipped: %s", exc)
 
     shortfall = max(0, int(target_universe) - len(scan_symbols))
     missed = shortfall + len(no_data_symbols)
