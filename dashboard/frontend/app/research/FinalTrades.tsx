@@ -161,7 +161,7 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                         <span>{Number(item.confidence_score || 0).toFixed(1)}%</span>
                         {typeof item.exceptionalism === "number" && (
                           <span
-                            title={`Exceptionalism ${item.exceptionalism}${item.exceptionalism_threshold != null ? ` vs threshold ${item.exceptionalism_threshold}` : ""}${item.exceptionalism_reason ? ` · ${item.exceptionalism_reason}` : ""}`}
+                            title={item.decision_trace?.trace || `Exceptionalism ${item.exceptionalism}${item.exceptionalism_threshold != null ? ` vs threshold ${item.exceptionalism_threshold}` : ""}${item.exceptionalism_reason ? ` · ${item.exceptionalism_reason}` : ""}`}
                             style={{
                               fontSize: "0.6rem", fontWeight: 700, letterSpacing: 0.2,
                               color: item.exceptionalism_reason === "exceptional_override" ? "#c084fc"

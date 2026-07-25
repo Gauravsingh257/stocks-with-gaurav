@@ -32,6 +32,18 @@ const STATE_LABEL: Record<string, string> = {
   UNKNOWN: "Unknown",
 };
 
+// "Why N today, not 12" — teaches that a short list reflects a weak tape, not a bug.
+function selectivityLine(health: number | undefined, shown: number): string | null {
+  if (typeof health !== "number") return null;
+  if (health < 45) {
+    if (shown === 0) return null; // cash-mode block already covers this
+    const noun = shown === 1 ? "name" : "names";
+    return `The market is weak, so the bar is raised — most stocks don't qualify today. These ${shown} ${noun} cleared it by standing out against a soft tape.`;
+  }
+  if (health < 60) return "A mixed tape — only the stronger setups qualify today.";
+  return null; // healthy: a longer list needs no explanation
+}
+
 export function MarketStateBanner({ finalCount }: { finalCount: number }) {
   const [state, setState] = useState<MarketStateResponse | null>(null);
 
@@ -124,6 +136,12 @@ export function MarketStateBanner({ finalCount }: { finalCount: number }) {
 
       {!cashMode && defensive && (
         <div style={{ marginTop: 10, fontSize: "0.8rem", opacity: 0.8 }}>{state.advisory}</div>
+      )}
+
+      {!cashMode && selectivityLine(state.market_health ?? undefined, finalCount) && (
+        <div style={{ marginTop: 8, fontSize: "0.76rem", opacity: 0.75, fontStyle: "italic" }}>
+          {selectivityLine(state.market_health ?? undefined, finalCount)}
+        </div>
       )}
     </div>
   );

@@ -310,7 +310,21 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
             _exc = _json_exc.loads(_exc)
         except Exception:
             _exc = {}
+    # EP3 — per-recommendation "why surfaced" decision trace (additive, best-effort).
+    _trace = None
+    try:
+        from services.decision_trace import build_decision_trace
+        _trace = build_decision_trace(
+            symbol=row.get("symbol"),
+            exceptionalism=_exc if isinstance(_exc, dict) else None,
+            entry_state=_es.get("state"),
+            confidence=confidence,
+            setup=row.get("setup"),
+        )
+    except Exception:
+        _trace = None
     return {
+        "decision_trace": _trace,
         "id": row.get("id"),
         "symbol": row.get("symbol"),
         "setup": "SMC_VALIDATION",
