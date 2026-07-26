@@ -272,12 +272,67 @@ def false_positive_rate(rows: list[ShadowRow], horizon: int) -> dict:
             "precision": round((len(picks) - len(fp)) / len(picks) * 100, 1)}
 
 
+def _qualified_with_fwd(rows: list[ShadowRow], horizon: int) -> list[ShadowRow]:
+    out = []
+    for r in rows:
+        if r.qualifies is True and horizon in r.forward and r.forward[horizon].get("ret") is not None:
+            out.append(r)
+    return out
+
+
+def _pick_row(r: ShadowRow, horizon: int) -> dict:
+    f = r.forward.get(horizon, {})
+    return {
+        "symbol": str(r.symbol).replace("NSE:", ""),
+        "date": r.date,
+        "entry": round(r.cmp, 2) if r.cmp else None,
+        "exc": r.exceptionalism,
+        "health": r.market_health,
+        "ret_pct": f.get("ret"),
+        "max_dd_pct": f.get("mae"),
+    }
+
+
+def notable_picks(rows: list[ShadowRow], horizon: int = 20, top_n: int = 30, bottom_n: int = 30) -> dict:
+    """Best/worst individual QUALIFIED picks (what the engine would have bought)."""
+    q = _qualified_with_fwd(rows, horizon)
+    q.sort(key=lambda r: r.forward[horizon]["ret"], reverse=True)
+    return {
+        "horizon": horizon,
+        "best": [_pick_row(r, horizon) for r in q[:top_n]],
+        "worst": [_pick_row(r, horizon) for r in q[-bottom_n:][::-1]] if len(q) >= bottom_n else
+                 [_pick_row(r, horizon) for r in q[::-1]],
+    }
+
+
+def overall_summary(rows: list[ShadowRow], horizon: int = 20) -> dict:
+    """Return-vs-drawdown of the QUALIFIED set (equal-weight, one 'trade' per obs)."""
+    q = _qualified_with_fwd(rows, horizon)
+    if not q:
+        return {"n": 0}
+    rets = [r.forward[horizon]["ret"] for r in q]
+    maes = [r.forward[horizon]["mae"] for r in q if r.forward[horizon].get("mae") is not None]
+    wins = [x for x in rets if x > 0]
+    return {
+        "n": len(q),
+        "hit_rate_pct": round(len(wins) / len(rets) * 100, 1),
+        "avg_return_pct": round(statistics.mean(rets), 2),
+        "total_return_equal_weight_pct": round(sum(rets), 1),
+        "best_return_pct": round(max(rets), 2),
+        "worst_return_pct": round(min(rets), 2),
+        "avg_max_drawdown_pct": round(statistics.mean(maes), 2) if maes else None,
+        "worst_drawdown_pct": round(min(maes), 2) if maes else None,
+    }
+
+
 def build_report(rows: list[ShadowRow]) -> dict:
     covered = {h: sum(1 for r in rows if h in r.forward) for h in HORIZONS}
     return {
         "total_rows": len(rows),
         "with_exceptionalism": sum(1 for r in rows if r.exceptionalism is not None),
         "forward_coverage": covered,
+        "overall_qualified_20d": overall_summary(rows, 20),
+        "notable_picks_20d": notable_picks(rows, 20),
         "by_horizon": {
             h: {
                 "by_exceptionalism": bucket_by_exceptionalism(rows, h),
@@ -313,6 +368,28 @@ def render_markdown(report: dict) -> str:
         md.append("> ⚠️ **No exceptionalism data yet.** Let `EXCEPTIONALISM_SHADOW` run across "
                   "several live sessions and allow ~20 trading days for the forward windows, then re-run.")
         return "\n".join(md)
+
+    # ── Overall qualified-set return vs drawdown (20-day) ──
+    ov = report.get("overall_qualified_20d") or {}
+    if ov.get("n"):
+        md.append("## Overall — Qualified Picks (20-day, equal-weight)\n")
+        md.append(f"- Picks: **{ov['n']}** · hit rate **{ov['hit_rate_pct']}%**")
+        md.append(f"- **Avg return {ov['avg_return_pct']}%** · best {ov['best_return_pct']}% · worst {ov['worst_return_pct']}%")
+        md.append(f"- **Avg max-drawdown {ov['avg_max_drawdown_pct']}%** · worst drawdown {ov['worst_drawdown_pct']}%")
+        md.append(f"- Total return if you took all {ov['n']} equal-weight: **{ov['total_return_equal_weight_pct']}%** "
+                  f"(sum of per-trade returns — illustrative, not compounded)\n")
+
+    np_ = report.get("notable_picks_20d") or {}
+    _cols = [("symbol", "Stock"), ("date", "Signal date"), ("entry", "Entry ₹"),
+             ("exc", "EXC"), ("health", "Mkt Health"), ("ret_pct", "20D ret %"), ("max_dd_pct", "Max DD %")]
+    if np_.get("best"):
+        md.append(f"### 🏆 Best {len(np_['best'])} qualified picks (by 20-day return)\n")
+        md.append(_tbl(np_["best"], _cols))
+        md.append("")
+    if np_.get("worst"):
+        md.append(f"### 🔻 Worst {len(np_['worst'])} qualified picks (by 20-day return)\n")
+        md.append(_tbl(np_["worst"], _cols))
+        md.append("")
 
     for h in HORIZONS:
         b = report["by_horizon"][h]

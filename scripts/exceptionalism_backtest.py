@@ -260,6 +260,7 @@ def main() -> None:
     ap.add_argument("--nifty", default=os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50"))
     ap.add_argument("--history-days", type=int, default=750)
     ap.add_argument("--pace", type=float, default=0.0, help="seconds to sleep between fetches (avoids yfinance throttling)")
+    ap.add_argument("--cache", default=None, help="pickle path: load fetched history if it exists, else fetch + save (makes re-runs instant)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
@@ -273,24 +274,38 @@ def main() -> None:
     else:
         ap.error("provide --universe N (recommended) or --symbols FILE")
 
-    print(f"Fetching history for {len(symbols)} symbols + Nifty …")
-    try:
-        nifty_bars = _fetch_full_history(args.nifty, args.history_days)
-    except Exception as exc:
-        print(f"Could not fetch Nifty history ({exc}); aborting.")
-        return
     hist: dict[str, list[dict]] = {}
-    for i, s in enumerate(symbols, 1):
+    nifty_bars: list[dict] = []
+    if args.cache and os.path.exists(args.cache):
+        import pickle
+        print(f"Loading cached history from {args.cache} …")
+        with open(args.cache, "rb") as fh:
+            blob = pickle.load(fh)
+        hist, nifty_bars = blob.get("hist", {}), blob.get("nifty", [])
+        print(f"Loaded {len(hist)} symbols from cache.")
+    else:
+        print(f"Fetching history for {len(symbols)} symbols + Nifty …")
         try:
-            bars = _fetch_full_history(s, args.history_days)
-        except Exception:
-            bars = []          # one bad symbol never kills the run
-        if len(bars) >= MIN_TRAILING_BARS:
-            hist[s] = bars
-        if args.pace:
-            time.sleep(args.pace)
-        if i % 50 == 0:
-            print(f"  … {i}/{len(symbols)} fetched")
+            nifty_bars = _fetch_full_history(args.nifty, args.history_days)
+        except Exception as exc:
+            print(f"Could not fetch Nifty history ({exc}); aborting.")
+            return
+        for i, s in enumerate(symbols, 1):
+            try:
+                bars = _fetch_full_history(s, args.history_days)
+            except Exception:
+                bars = []          # one bad symbol never kills the run
+            if len(bars) >= MIN_TRAILING_BARS:
+                hist[s] = bars
+            if args.pace:
+                time.sleep(args.pace)
+            if i % 50 == 0:
+                print(f"  … {i}/{len(symbols)} fetched")
+        if args.cache:
+            import pickle
+            with open(args.cache, "wb") as fh:
+                pickle.dump({"hist": hist, "nifty": nifty_bars}, fh)
+            print(f"Saved history cache → {args.cache} (re-runs will be instant).")
 
     as_of = _pick_as_of_dates(nifty_bars, args.start, args.end, args.cadence)
     print(f"Backtesting {len(hist)} symbols across {len(as_of)} as-of dates …")
