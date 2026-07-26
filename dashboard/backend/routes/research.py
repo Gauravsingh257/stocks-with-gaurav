@@ -303,13 +303,24 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
                                    [target] if target is not None else [])
     except Exception:
         _es = {"state": None, "actionable": None}
-    _exc = row.get("exceptionalism") or {}
+    # Exceptionalism verdict is persisted inside layer_details JSON (no top-level
+    # signals_log column), so read it there. Fall back to a top-level key for
+    # forward-compat. Best-effort — never break the card.
+    import json as _json_exc
+    _ld = row.get("layer_details") or {}
+    if isinstance(_ld, str):
+        try:
+            _ld = _json_exc.loads(_ld)
+        except Exception:
+            _ld = {}
+    _exc = (_ld.get("exceptionalism") if isinstance(_ld, dict) else None) or row.get("exceptionalism") or {}
     if isinstance(_exc, str):
         try:
-            import json as _json_exc
             _exc = _json_exc.loads(_exc)
         except Exception:
             _exc = {}
+    if not isinstance(_exc, dict):
+        _exc = {}
     # EP3 — per-recommendation "why surfaced" decision trace (additive, best-effort).
     _trace = None
     try:
