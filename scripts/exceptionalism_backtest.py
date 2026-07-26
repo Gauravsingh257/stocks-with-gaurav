@@ -212,11 +212,21 @@ def _attach_forward(row: ShadowRow, bars: list[dict], dates: list[str], as_of: s
 
 # ── data fetch + date selection (production path) ─────────────────────────────
 
-def _fetch_full_history(symbol: str, days: int) -> list[dict]:
+def _fetch_full_history(symbol: str, days: int, *, retries: int = 3) -> list[dict]:
     from data.ingestion import DataIngestion
     src = os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
-    df = DataIngestion(source=src).fetch_historical(symbol, interval="day", days=days)
-    return _bars_from_df(df)
+    last_exc = None
+    for _ in range(max(1, retries)):
+        try:
+            df = DataIngestion(source=src).fetch_historical(symbol, interval="day", days=days)
+            bars = _bars_from_df(df)
+            if bars:
+                return bars
+        except Exception as exc:   # intermittent yfinance tz/SSL flakiness → retry
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    return []
 
 
 def _pick_as_of_dates(nifty_bars: list[dict], start: str, end: str, cadence: int) -> list[str]:
@@ -237,19 +247,32 @@ def _load_symbols(path: str, limit: int) -> list[str]:
 
 
 def main() -> None:
+    import time
+
     ap = argparse.ArgumentParser(description="Historical Exceptionalism backtest (offline, read-only).")
-    ap.add_argument("--symbols", required=True, help="JSON file: list of NSE symbols")
+    ap.add_argument("--symbols", default=None, help="JSON file of NSE symbols (else use --universe)")
+    ap.add_argument("--universe", type=int, default=0,
+                    help="pull this many CLEAN equity symbols via load_nse_universe (recommended over a raw file)")
     ap.add_argument("--start", required=True, help="backtest start YYYY-MM-DD")
     ap.add_argument("--end", required=True, help="backtest end YYYY-MM-DD (leave ~1mo before today for 20D fwd)")
     ap.add_argument("--cadence", type=int, default=5, help="as-of every N trading days (default 5 = weekly)")
     ap.add_argument("--limit", type=int, default=300, help="max symbols (keep runtime sane)")
     ap.add_argument("--nifty", default=os.getenv("RESEARCH_NIFTY_SYMBOL", "NSE:NIFTY 50"))
     ap.add_argument("--history-days", type=int, default=750)
+    ap.add_argument("--pace", type=float, default=0.0, help="seconds to sleep between fetches (avoids yfinance throttling)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
 
-    symbols = _load_symbols(args.symbols, args.limit)
+    if args.universe > 0:
+        from services.universe_manager import load_nse_universe
+        symbols = [s if s.startswith("NSE:") else f"NSE:{s}"
+                   for s in load_nse_universe(target_size=args.universe).symbols][: args.limit]
+    elif args.symbols:
+        symbols = _load_symbols(args.symbols, args.limit)
+    else:
+        ap.error("provide --universe N (recommended) or --symbols FILE")
+
     print(f"Fetching history for {len(symbols)} symbols + Nifty …")
     try:
         nifty_bars = _fetch_full_history(args.nifty, args.history_days)
@@ -264,6 +287,8 @@ def main() -> None:
             bars = []          # one bad symbol never kills the run
         if len(bars) >= MIN_TRAILING_BARS:
             hist[s] = bars
+        if args.pace:
+            time.sleep(args.pace)
         if i % 50 == 0:
             print(f"  … {i}/{len(symbols)} fetched")
 
