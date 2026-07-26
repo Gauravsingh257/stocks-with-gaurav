@@ -155,7 +155,22 @@ export function FinalTrades({ items }: { items: ResearchDecisionCard[] }) {
                         {symbol} <ExternalLink size={11} style={{ opacity: 0.6 }} />
                       </Link>
                     </td>
-                    <td style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>{setupLabel(item.setup)}</td>
+                    <td style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+                      <div>{setupLabel(item.setup)}</div>
+                      {item.decision_trace?.headline && (
+                        <div
+                          title={item.decision_trace?.trace || ""}
+                          style={{
+                            fontSize: "0.64rem", marginTop: 2, fontWeight: 600,
+                            color: item.decision_trace.headline === "Exceptional override" ? "#c084fc"
+                              : item.decision_trace.headline === "Clears today's bar" ? "#34d399" : "var(--text-dim)",
+                          }}
+                        >
+                          {item.decision_trace.headline}
+                          {item.decision_trace.why_short ? ` · ${item.decision_trace.why_short}` : ""}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ textAlign: "right", color: "#00e096", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
                       <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                         <span>{Number(item.confidence_score || 0).toFixed(1)}%</span>

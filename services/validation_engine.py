@@ -588,6 +588,33 @@ async def _fetch_frames(symbols: list[str], source: str, days: int, as_of: str |
     return dict(pairs)
 
 
+def apply_exceptionalism_final_gate(records, soft_ceiling: int = 20):
+    """Make `final_selected` authoritative to the exceptionalism-qualified set.
+
+    The public decision feed (`_signals_log_row_to_decision_card` sections by
+    `final_selected`) and portfolio promotion (`select_from_final_ideas` reads
+    `final_selected`) both then honor the exceptionalism gate. Mutates each
+    record in place; returns (selected, n_qualified). Only called when
+    EXCEPTIONALISM_ENABLED — when off, `final_selected` stays SMC-based.
+    """
+    qualified = [
+        r for r in records
+        if getattr(r, "entry", None) is not None
+        and (getattr(r, "exceptionalism", None) or {}).get("qualifies")
+    ]
+    qualified.sort(
+        key=lambda r: float((getattr(r, "exceptionalism", None) or {}).get("exceptionalism") or 0.0),
+        reverse=True,
+    )
+    selected = qualified[: max(0, int(soft_ceiling))]
+    sel_ids = {id(r) for r in selected}
+    for r in records:
+        r.final_selected = id(r) in sel_ids
+        if r.final_selected:
+            r.rejection_reason = []
+    return selected, len(qualified)
+
+
 async def run_validation_scan(
     horizon: Horizon = "SWING",
     *,
@@ -922,18 +949,13 @@ async def run_validation_scan(
         from services.exceptionalism import exceptionalism_enabled as _exc_on
         if _exc_on():
             soft_ceiling = int(os.getenv("EXCEPTIONALISM_SOFT_CEILING", "20"))
-            qualified = [
-                r for r in records
-                if r.entry is not None and (r.exceptionalism or {}).get("qualifies")
-            ]
-            qualified.sort(key=lambda r: float((r.exceptionalism or {}).get("exceptionalism") or 0.0), reverse=True)
-            selected = qualified[:soft_ceiling]
+            selected, _n_qual = apply_exceptionalism_final_gate(records, soft_ceiling)
             overrides = [r.symbol for r in selected if (r.exceptionalism or {}).get("reason") == "exceptional_override"]
             if overrides:
                 log.info("[EP2] exceptional overrides surfaced (lagging sector): %s", overrides)
             log.info(
-                "[EP2] exceptionalism gate: %d qualified → %d shown (health=%s)",
-                len(qualified), len(selected), _exc_health,
+                "[EP2] exceptionalism gate: %d qualified → %d final_selected (health=%s)",
+                _n_qual, len(selected), _exc_health,
             )
     except Exception as exc:
         log.debug("exceptionalism enforcement skipped: %s", exc)
