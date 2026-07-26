@@ -68,15 +68,32 @@ def compute_book_stats(
     book: str,
     duplicates_excluded: int = 0,
     population: str = POPULATION_CLOSED_BOOK,
+    open_positions: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict:
-    """Canonical metrics for one book of closed trades.
+    """Canonical metrics for one book: realised (closed) + open (mark-to-market).
 
     `trades` must ALREADY be the clean population — callers filter duplicates at
     the query so the rows they display and the rows counted here are identical.
     `duplicates_excluded` is passed through purely so the exclusion is auditable.
 
-    Every returned figure is computed over the same rows. That invariant is the
-    whole point of this function: do not add a field derived from a different set.
+    `open_positions` are the ACTIVE (genuinely entered) rows. Their unrealised
+    P&L is what makes the book return move with the market instead of only when
+    something closes — a book holding 19 green positions is not flat. PENDING
+    rows are excluded by the caller: they are armed, not entered, so they carry
+    no P&L.
+
+    Two things stay deliberately separate:
+      * RETURN blends realised + unrealised, because that is what a portfolio
+        return means — `total_book_return_pct`.
+      * WIN RATE stays realised-only (`hit_rate_pct`). An open position at +0.3%
+        has not won anything yet; folding live marks into a win rate makes it
+        swing with the tape and quietly overstates the record. The open book is
+        reported alongside as counts (`open_winners`/`open_losers`) and a
+        clearly-named `blended_hit_rate_pct` for anyone who wants it — but the
+        headline rate must remain the realised one.
+
+    Every closed-trade figure is computed over the same rows. That invariant is
+    the point of this function: do not add a field derived from a different set.
     """
     rows = [t for t in trades]
     n = len(rows)
@@ -102,6 +119,17 @@ def compute_book_stats(
 
     hit_rate = round(wins / n * 100, 1) if n else 0.0
 
+    # ── Open book (mark-to-market) ───────────────────────────────────────────
+    opens = [p for p in (open_positions or [])]
+    open_pnls = [_f(p.get("profit_loss_pct")) for p in opens]
+    open_n = len(opens)
+    open_sum = round(sum(open_pnls), 2)
+    open_win = sum(1 for p in open_pnls if p > 0)
+    realized_book = round(sum_pct / slots, 2)
+    unrealized_book = round(open_sum / slots, 2)
+    total_book = round(realized_book + unrealized_book, 2)
+    blended_n = n + open_n
+
     return {
         "book": book,
         # ── the published basis, carried with the numbers ──
@@ -124,9 +152,29 @@ def compute_book_stats(
         # ── returns: the two quantities, named for what they are ──
         "avg_trade_return_pct": round(sum(pnls) / n, 2) if n else 0.0,
         "sum_trade_return_pct": sum_pct,
-        "book_return_pct": round(sum_pct / slots, 2),
         "book_slots": slots,
         "book_return_basis": f"equal-weight {slots}-slot book (each trade = 1/{slots} of capital)",
+        # ── Return: realised + open, explicitly named ────────────────────────
+        # Render `total_book_return_pct` as THE return — it moves with the market
+        # because it marks the open book. The two components are exposed so the
+        # split is visible rather than implied.
+        "realized_book_return_pct": realized_book,
+        "unrealized_book_return_pct": unrealized_book,
+        "total_book_return_pct": total_book,
+        # ── Open book ────────────────────────────────────────────────────────
+        "open_positions": open_n,
+        "open_winners": open_win,
+        "open_losers": open_n - open_win,
+        "open_sum_pct": open_sum,
+        "open_avg_pct": round(open_sum / open_n, 2) if open_n else 0.0,
+        # Closed wins + currently-green opens over everything entered. Disclosed
+        # for completeness; `hit_rate_pct` (realised) stays the headline because
+        # an open position has not won until it closes.
+        "blended_hit_rate_pct": round((wins + open_win) / blended_n * 100, 1) if blended_n else 0.0,
+        "blended_trades": blended_n,
+        # `book_return_pct` predates the split and means REALISED only. Kept for
+        # older consumers; prefer the explicit names above.
+        "book_return_pct": realized_book,
         "best_pnl_pct": round(max(pnls), 2) if pnls else 0.0,
         "worst_pnl_pct": round(min(pnls), 2) if pnls else 0.0,
         "avg_days_held": round(sum(days) / n, 1) if n else 0.0,

@@ -249,3 +249,91 @@ def test_track_record_declares_its_different_basis():
         pytest.skip("track record ledger not initialised in this environment")
     assert tr["population"] != get_journal_stats("SWING")["population"]
     assert tr["win_definition"] and tr["differs_from_portfolio_books"]
+
+
+# ── Open book: the return must mark to market ─────────────────────────────────
+
+def _open(symbol: str, entry: float, cmp: float) -> int:
+    """Create an ACTIVE position sitting at an unrealised P&L."""
+    pid = add_position({
+        "symbol": symbol, "horizon": "SWING", "entry_price": entry,
+        "stop_loss": entry * 0.9, "target_1": entry * 1.2, "status": "ACTIVE",
+    })
+    c = get_connection()
+    try:
+        c.execute("UPDATE portfolio_positions SET current_price = ?, profit_loss_pct = ? WHERE id = ?",
+                  (cmp, round((cmp - entry) / entry * 100, 2), pid))
+        c.commit()
+    finally:
+        c.close()
+    return pid
+
+
+def test_return_includes_open_positions_marked_to_market():
+    """A book holding green positions must not report as flat."""
+    from dashboard.backend.db.portfolio import MAX_SWING_POSITIONS as N
+    _trade("NSE:CLOSED1", 100.0, 110.0, "TARGET_HIT")     # +10% realised
+    _open("NSE:OPEN1", 100.0, 120.0)                       # +20% unrealised
+    _open("NSE:OPEN2", 100.0, 90.0)                        # -10% unrealised
+
+    s = get_journal_stats("SWING")
+    assert s["realized_book_return_pct"] == pytest.approx(10.0 / N, abs=0.01)
+    assert s["unrealized_book_return_pct"] == pytest.approx(10.0 / N, abs=0.01)
+    assert s["total_book_return_pct"] == pytest.approx(20.0 / N, abs=0.01)
+    assert s["open_positions"] == 2 and s["open_winners"] == 1 and s["open_losers"] == 1
+
+
+def test_return_moves_when_price_moves():
+    """The published return must respond to the tape, not only to closes."""
+    pid = _open("NSE:MOVER", 100.0, 105.0)
+    before = get_journal_stats("SWING")["total_book_return_pct"]
+    c = get_connection()
+    try:
+        c.execute("UPDATE portfolio_positions SET current_price = 130, profit_loss_pct = 30 WHERE id = ?", (pid,))
+        c.commit()
+    finally:
+        c.close()
+    after = get_journal_stats("SWING")["total_book_return_pct"]
+    assert after > before, "book return did not move when the position's price moved"
+
+
+def test_pending_positions_never_move_the_return():
+    """Armed-but-not-entered rows carry no P&L."""
+    from dashboard.backend.db.portfolio import MAX_SWING_POSITIONS as N
+    _trade("NSE:CLOSED1", 100.0, 110.0, "TARGET_HIT")
+    pid = add_position({
+        "symbol": "NSE:ARMED", "horizon": "SWING", "entry_price": 100.0,
+        "stop_loss": 90.0, "target_1": 120.0, "status": "PENDING",
+    })
+    c = get_connection()
+    try:
+        c.execute("UPDATE portfolio_positions SET current_price = 500, profit_loss_pct = 400 WHERE id = ?", (pid,))
+        c.commit()
+    finally:
+        c.close()
+    s = get_journal_stats("SWING")
+    assert s["open_positions"] == 0
+    assert s["unrealized_book_return_pct"] == 0.0
+    assert s["total_book_return_pct"] == pytest.approx(10.0 / N, abs=0.01)
+
+
+def test_win_rate_stays_realised_only():
+    """Open marks must not inflate the headline win rate."""
+    _trade("NSE:LOSER", 100.0, 90.0, "STOP_HIT")           # realised loss
+    _open("NSE:GREEN1", 100.0, 120.0)
+    _open("NSE:GREEN2", 100.0, 130.0)
+    s = get_journal_stats("SWING")
+    assert s["hit_rate_pct"] == 0.0, "headline win rate must ignore open positions"
+    assert s["total_trades"] == 1
+    # blended is disclosed separately for anyone who wants it
+    assert s["blended_hit_rate_pct"] == pytest.approx(2 / 3 * 100, abs=0.1)
+    assert s["blended_trades"] == 3
+
+
+def test_include_open_false_gives_realised_only_view():
+    """The consistency check relies on this switch."""
+    _trade("NSE:CLOSED1", 100.0, 110.0, "TARGET_HIT")
+    _open("NSE:OPEN1", 100.0, 150.0)
+    s = get_journal_stats("SWING", include_open=False)
+    assert s["open_positions"] == 0
+    assert s["total_book_return_pct"] == s["realized_book_return_pct"]

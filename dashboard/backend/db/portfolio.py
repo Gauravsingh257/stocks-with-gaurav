@@ -1070,12 +1070,12 @@ def get_journal(horizon: str | None = None, limit: int = 50,
         conn.close()
 
 
-def get_journal_stats(horizon: str | None = None) -> dict:
-    """Aggregate journal performance stats.
+def get_journal_stats(horizon: str | None = None, include_open: bool = True) -> dict:
+    """Book performance: realised (closed) + open (mark-to-market).
 
-    Two invariants this function must never break again:
+    Three invariants this function must never break again:
 
-    1. ONE POPULATION. Every number returned is computed over the same rows —
+    1. ONE POPULATION. Every closed-trade number is computed over the same rows —
        real trades only (`is_duplicate = 0`). Previously the headline win rate
        was computed on a de-duplicated population while the return was summed
        over ALL rows including duplicates, so the two figures in the same
@@ -1084,10 +1084,16 @@ def get_journal_stats(horizon: str | None = None) -> dict:
 
     2. NO SUM-OF-PERCENTAGES PRESENTED AS A RETURN. `SUM(profit_loss_pct)` adds
        percentages of different capital bases and is NOT a portfolio return; on
-       an N-slot equal-weight book each trade moves capital by pct/N. The sum is
-       still returned, but under the honest name `sum_trade_return_pct`, and the
-       actual book figure is `book_return_pct`. Render `book_return_pct` when
-       the label says "return".
+       an N-slot equal-weight book each trade moves capital by pct/N.
+
+    3. THE RETURN MARKS THE OPEN BOOK. `total_book_return_pct` = realised +
+       unrealised, so it moves as prices move. Reporting only closed trades made
+       a book holding 19 green positions look flat. Win rate stays realised-only
+       — an open position has not won until it closes (`blended_hit_rate_pct` is
+       exposed for completeness but must not be the headline).
+
+    `include_open=False` gives the realised-only view (used by the consistency
+    check, which compares against the visible closed-trade rows).
     """
     from dashboard.backend.db.perf_stats import compute_book_stats
 
@@ -1119,6 +1125,19 @@ def get_journal_stats(horizon: str | None = None) -> dict:
             ).fetchone()["c"] or 0
         else:
             duplicates_excluded = 0
+
+        # Open book — ACTIVE only. PENDING rows are armed, not entered, so they
+        # carry no P&L and must never move the return. Marking these live is what
+        # makes the published return respond to the market instead of only
+        # changing when a position closes.
+        if include_open:
+            ow = "WHERE status = 'ACTIVE' AND horizon = ?" if hz else "WHERE status = 'ACTIVE'"
+            open_positions = [dict(r) for r in conn.execute(
+                f"SELECT symbol, profit_loss_pct FROM portfolio_positions {ow}",
+                [hz] if hz else [],
+            ).fetchall()]
+        else:
+            open_positions = []
     finally:
         conn.close()
 
@@ -1133,6 +1152,7 @@ def get_journal_stats(horizon: str | None = None) -> dict:
     return compute_book_stats(
         trades, slots=slots, book=hz or "ALL",
         duplicates_excluded=duplicates_excluded,
+        open_positions=open_positions,
     )
 
 
