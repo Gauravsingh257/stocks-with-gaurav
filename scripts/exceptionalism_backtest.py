@@ -212,18 +212,21 @@ def _attach_forward(row: ShadowRow, bars: list[dict], dates: list[str], as_of: s
 
 # ── data fetch + date selection (production path) ─────────────────────────────
 
-def _fetch_full_history(symbol: str, days: int, *, retries: int = 3) -> list[dict]:
+def _fetch_full_history(symbol: str, days: int, *, retries: int = 4, backoff: float = 0.0) -> list[dict]:
+    import time as _t
     from data.ingestion import DataIngestion
     src = os.getenv("RESEARCH_DATA_SOURCE", "yfinance")
     last_exc = None
-    for _ in range(max(1, retries)):
+    for attempt in range(max(1, retries)):
         try:
             df = DataIngestion(source=src).fetch_historical(symbol, interval="day", days=days)
             bars = _bars_from_df(df)
             if bars:
                 return bars
-        except Exception as exc:   # intermittent yfinance tz/SSL flakiness → retry
+        except Exception as exc:   # intermittent yfinance tz/SSL flakiness / throttle → retry
             last_exc = exc
+        if backoff and attempt < retries - 1:
+            _t.sleep(backoff * (attempt + 1))   # growing wait rides out soft throttles
     if last_exc is not None:
         raise last_exc
     return []
@@ -286,13 +289,15 @@ def main() -> None:
     else:
         print(f"Fetching history for {len(symbols)} symbols + Nifty …")
         try:
-            nifty_bars = _fetch_full_history(args.nifty, args.history_days)
+            # Nifty is the gate — retry hard with backoff to ride out soft throttles.
+            nifty_bars = _fetch_full_history(args.nifty, args.history_days, retries=8, backoff=6.0)
         except Exception as exc:
-            print(f"Could not fetch Nifty history ({exc}); aborting.")
+            print(f"Could not fetch Nifty history ({exc}); aborting. "
+                  f"yfinance is rate-limiting this machine — wait ~30-60 min (or run tomorrow morning) and re-run.")
             return
         for i, s in enumerate(symbols, 1):
             try:
-                bars = _fetch_full_history(s, args.history_days)
+                bars = _fetch_full_history(s, args.history_days, backoff=max(1.0, args.pace))
             except Exception:
                 bars = []          # one bad symbol never kills the run
             if len(bars) >= MIN_TRAILING_BARS:
