@@ -42,6 +42,8 @@ def _clamp(v, lo: float = 0.0, hi: float = 100.0) -> float:
         v = float(v)
     except (TypeError, ValueError):
         return 0.0
+    if v != v or v in (float("inf"), float("-inf")):   # NaN / ±Inf → floor (JSON-safe)
+        return lo
     return max(lo, min(hi, v))
 
 

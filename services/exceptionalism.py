@@ -65,9 +65,12 @@ def _envf(name: str, default: float) -> float:
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
     try:
-        return max(lo, min(hi, float(v)))
+        v = float(v)
     except (TypeError, ValueError):
         return lo
+    if v != v or v in (float("inf"), float("-inf")):   # NaN / ±Inf → floor (JSON-safe)
+        return lo
+    return max(lo, min(hi, v))
 
 
 def _scale(value: float, lo: float, hi: float) -> float:
