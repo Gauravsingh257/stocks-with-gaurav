@@ -35,7 +35,9 @@ export function PerformanceOverview({ data }: Props) {
       label: "Avg Closed P&L",
       value: `${data.avg_closed_pnl_pct >= 0 ? "+" : ""}${fmt(data.avg_closed_pnl_pct, 2)}%`,
       color: plColor(data.avg_closed_pnl_pct),
-      sub: `Total: ${data.total_pnl_pct >= 0 ? "+" : ""}${fmt(data.total_pnl_pct, 2)}%`,
+      // Sum of per-trade percentages — NOT a portfolio return. Labelled
+      // explicitly so it can't be read as one (see PortfolioSection header).
+      sub: `Sum of trade returns: ${data.total_pnl_pct >= 0 ? "+" : ""}${fmt(data.total_pnl_pct, 2)}%`,
     },
     {
       label: "Avg Open P&L",

@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS portfolio_journal (
     exit_reason           TEXT NOT NULL,
     created_at            TEXT NOT NULL,
     closed_at             TEXT NOT NULL DEFAULT (datetime('now')),
+    -- 1 = this row is a re-seed artifact of a setup already journaled (same
+    -- symbol+horizon+entry+origin), NOT an independent trade. Rows are never
+    -- deleted (the journal is immutable) but duplicates are excluded from every
+    -- published statistic. See mark_journal_duplicates().
+    is_duplicate          INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(position_id) REFERENCES portfolio_positions(id)
 );
 CREATE INDEX IF NOT EXISTS idx_journal_horizon ON portfolio_journal(horizon, closed_at DESC);
@@ -288,6 +293,113 @@ def migrate_portfolio_risk_columns() -> None:
         conn.close()
 
 
+def migrate_journal_duplicate_flag() -> None:
+    """Add portfolio_journal.is_duplicate (idempotent ADD COLUMN) and backfill it.
+
+    Why this exists: the seed path used to re-create a position for an engine
+    trade that was still open after the portfolio had already exited it, so the
+    SAME setup was journaled over and over (observed: CIPLA x11 closed inside 51
+    minutes, APTUS x10 — identical entry and identical origin created_at). Those
+    rows are a bug artifact, not trades, and they were dominating the published
+    win rate and return.
+    """
+    conn = get_connection()
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
+        if "is_duplicate" not in have:
+            conn.execute("ALTER TABLE portfolio_journal ADD COLUMN is_duplicate INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+    except Exception as exc:
+        logger.error("[Portfolio] migrate_journal_duplicate_flag failed (non-fatal): %s", exc)
+        conn.close()
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    mark_journal_duplicates()
+
+
+def mark_journal_duplicates(dry_run: bool = False) -> dict:
+    """Flag re-seed artifacts in portfolio_journal. Idempotent; safe to re-run.
+
+    Duplicate key = (symbol, horizon, entry_price rounded to 2dp, created_at).
+    `created_at` is the ORIGIN timestamp copied from the source recommendation,
+    so every re-seed of one engine trade carries the identical value while a
+    genuine later re-entry of the same name carries a different one. That makes
+    the key precise: it collapses the churn loop without ever merging two real
+    trades (verified — SAMMAANCAP re-entered at the same price from a different
+    origin stays counted twice).
+
+    The row kept as canonical is the LAST by closed_at: it is the terminal
+    outcome of that holding (e.g. CIPLA's final STOP_HIT), which is what actually
+    happened. Nothing is deleted — the journal stays immutable; duplicates are
+    only marked so statistics can exclude them.
+    """
+    conn = get_connection()
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
+        if "is_duplicate" not in have:
+            return {"ok": False, "reason": "is_duplicate column missing"}
+
+        rows = conn.execute(
+            "SELECT id, symbol, horizon, entry_price, created_at, closed_at, profit_loss_pct "
+            "FROM portfolio_journal ORDER BY datetime(closed_at) ASC, id ASC"
+        ).fetchall()
+
+        groups: dict[tuple, list] = {}
+        for r in rows:
+            key = (
+                str(r["symbol"]).strip().upper(),
+                str(r["horizon"]).strip().upper(),
+                round(float(r["entry_price"] or 0), 2),
+                str(r["created_at"] or ""),
+            )
+            groups.setdefault(key, []).append(r)
+
+        dupe_ids: list[int] = []
+        detail: list[dict] = []
+        for key, grp in groups.items():
+            if len(grp) < 2:
+                continue
+            # keep the terminal (last-closed) row; everything before it is churn
+            losers = grp[:-1]
+            dupe_ids.extend(int(r["id"]) for r in losers)
+            detail.append({
+                "symbol": key[0], "horizon": key[1], "entry_price": key[2],
+                "rows": len(grp), "marked": len(losers),
+                "pnl_pct_removed": round(sum(float(r["profit_loss_pct"] or 0) for r in losers), 2),
+                "kept_row_pnl_pct": round(float(grp[-1]["profit_loss_pct"] or 0), 2),
+            })
+
+        keep_ids = [int(r["id"]) for r in rows if int(r["id"]) not in set(dupe_ids)]
+        if not dry_run:
+            # Full re-assert (both directions) so the flag is always derivable
+            # from the data — never sticky if a group later gains a real row.
+            conn.execute("UPDATE portfolio_journal SET is_duplicate = 0")
+            if dupe_ids:
+                conn.executemany(
+                    "UPDATE portfolio_journal SET is_duplicate = 1 WHERE id = ?",
+                    [(i,) for i in dupe_ids],
+                )
+            conn.commit()
+
+        if dupe_ids:
+            logger.warning("[Portfolio] journal dedupe: %d duplicate row(s) across %d setup(s) flagged%s",
+                           len(dupe_ids), len(detail), " (dry-run)" if dry_run else "")
+        return {
+            "ok": True, "dry_run": dry_run,
+            "total_rows": len(rows), "duplicates": len(dupe_ids), "clean_rows": len(keep_ids),
+            "groups": sorted(detail, key=lambda d: -d["marked"]),
+        }
+    except Exception as exc:
+        logger.error("[Portfolio] mark_journal_duplicates failed (non-fatal): %s", exc)
+        return {"ok": False, "reason": str(exc)}
+    finally:
+        conn.close()
+
+
 def portfolio_schema_diag() -> dict:
     """Read-only diagnostic: does the live table allow PENDING, and which
     arm-on-tap columns exist? Used to confirm the migration landed on prod."""
@@ -320,6 +432,7 @@ def init_portfolio_db() -> None:
     migrate_portfolio_positions()
     migrate_portfolio_pending()
     migrate_portfolio_risk_columns()
+    migrate_journal_duplicate_flag()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -588,25 +701,55 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
             (final_status, exit_price, exit_reason, pl, pl_pct, exit_price, now_str, now_str, position_id),
         )
 
+        # Self-maintaining duplicate detection. Any write path (seed, promote,
+        # manual, future ones) that re-creates a position for an origin already
+        # journaled gets flagged here at insert time, so statistics can never
+        # again be inflated by re-seed churn even if a new path forgets the
+        # guards upstream. The journal row itself is still written — history is
+        # immutable; only its weight in published stats changes. The EARLIER row
+        # is demoted so the newest close stays canonical (terminal outcome).
+        _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
+        _has_dupe_col = "is_duplicate" in _cols
+        prior_ids: list[int] = []
+        if _has_dupe_col:
+            prior_ids = [
+                int(r["id"]) for r in conn.execute(
+                    "SELECT id FROM portfolio_journal WHERE symbol = ? AND horizon = ? "
+                    "AND ROUND(entry_price, 2) = ROUND(?, 2) AND created_at = ?",
+                    (pos["symbol"], pos["horizon"], entry, pos["created_at"]),
+                ).fetchall()
+            ]
+
         # Journal entry (immutable — never deleted)
+        cols = ("position_id, symbol, horizon, direction, entry_price, exit_price, "
+                "stop_loss, target_1, target_2, profit_loss, profit_loss_pct, "
+                "days_held, high_since_entry, low_since_entry, confidence_score, "
+                "reasoning, exit_reason, created_at, closed_at")
+        vals = [
+            position_id, pos["symbol"], pos["horizon"], pos["direction"],
+            entry, exit_price, pos["stop_loss"], pos.get("target_1"),
+            pos.get("target_2"), pl, pl_pct, pos.get("days_held", 0),
+            pos.get("high_since_entry"), pos.get("low_since_entry"),
+            pos.get("confidence_score"), pos.get("reasoning"),
+            exit_reason, pos["created_at"], now_str,
+        ]
+        if _has_dupe_col:
+            cols += ", is_duplicate"
+            vals.append(0)  # newest close is always the canonical one
         conn.execute(
-            """
-            INSERT INTO portfolio_journal
-                (position_id, symbol, horizon, direction, entry_price, exit_price,
-                 stop_loss, target_1, target_2, profit_loss, profit_loss_pct,
-                 days_held, high_since_entry, low_since_entry, confidence_score,
-                 reasoning, exit_reason, created_at, closed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                position_id, pos["symbol"], pos["horizon"], pos["direction"],
-                entry, exit_price, pos["stop_loss"], pos.get("target_1"),
-                pos.get("target_2"), pl, pl_pct, pos.get("days_held", 0),
-                pos.get("high_since_entry"), pos.get("low_since_entry"),
-                pos.get("confidence_score"), pos.get("reasoning"),
-                exit_reason, pos["created_at"], now_str,
-            ),
+            f"INSERT INTO portfolio_journal ({cols}) VALUES ({', '.join('?' * len(vals))})",
+            tuple(vals),
         )
+        if prior_ids:
+            conn.executemany(
+                "UPDATE portfolio_journal SET is_duplicate = 1 WHERE id = ?",
+                [(i,) for i in prior_ids],
+            )
+            logger.warning(
+                "[Portfolio] %s re-journaled for an origin already closed (%d prior row(s) "
+                "demoted to duplicate) — a write path bypassed the re-seed guard",
+                pos["symbol"], len(prior_ids),
+            )
         conn.commit()
         logger.info("[Portfolio] Closed %s (id=%d, reason=%s, PL=%.2f%%)",
                      pos["symbol"], position_id, exit_reason, pl_pct)
@@ -893,14 +1036,29 @@ def get_portfolio_counts() -> dict:
         conn.close()
 
 
-def get_journal(horizon: str | None = None, limit: int = 50) -> list[dict]:
-    """Get closed trade journal entries (immutable history)."""
+def get_journal(horizon: str | None = None, limit: int = 50,
+                include_duplicates: bool = False) -> list[dict]:
+    """Get closed trade journal entries (immutable history).
+
+    Re-seed artifacts are hidden by default so the visible history matches the
+    population the published stats are computed over — the two must never
+    disagree. Pass include_duplicates=True for the raw audit view.
+    """
     conn = get_connection()
     try:
+        _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
+        dupe = "" if (include_duplicates or "is_duplicate" not in _cols) else " AND is_duplicate = 0"
         if horizon:
             rows = conn.execute(
-                "SELECT * FROM portfolio_journal WHERE horizon = ? ORDER BY datetime(closed_at) DESC LIMIT ?",
+                f"SELECT * FROM portfolio_journal WHERE horizon = ?{dupe} "
+                f"ORDER BY datetime(closed_at) DESC LIMIT ?",
                 (horizon.upper(), limit),
+            ).fetchall()
+        elif dupe:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_journal WHERE is_duplicate = 0 "
+                "ORDER BY datetime(closed_at) DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -913,85 +1071,69 @@ def get_journal(horizon: str | None = None, limit: int = 50) -> list[dict]:
 
 
 def get_journal_stats(horizon: str | None = None) -> dict:
-    """Aggregate journal performance stats."""
+    """Aggregate journal performance stats.
+
+    Two invariants this function must never break again:
+
+    1. ONE POPULATION. Every number returned is computed over the same rows —
+       real trades only (`is_duplicate = 0`). Previously the headline win rate
+       was computed on a de-duplicated population while the return was summed
+       over ALL rows including duplicates, so the two figures in the same
+       sentence described different trade sets (45.7% vs -41.37%, where the same
+       clean population was +24.97%).
+
+    2. NO SUM-OF-PERCENTAGES PRESENTED AS A RETURN. `SUM(profit_loss_pct)` adds
+       percentages of different capital bases and is NOT a portfolio return; on
+       an N-slot equal-weight book each trade moves capital by pct/N. The sum is
+       still returned, but under the honest name `sum_trade_return_pct`, and the
+       actual book figure is `book_return_pct`. Render `book_return_pct` when
+       the label says "return".
+    """
+    from dashboard.backend.db.perf_stats import compute_book_stats
+
+    hz = (horizon or "").upper() or None
     conn = get_connection()
     try:
-        where = "WHERE horizon = ?" if horizon else ""
-        params = [horizon.upper()] if horizon else []
+        # Duplicate exclusion — degrade gracefully if the migration hasn't run.
+        _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
+        has_dupe = "is_duplicate" in _cols
+        dupe_clause = "is_duplicate = 0" if has_dupe else "1=1"
 
-        row = conn.execute(
-            f"""
-            SELECT
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN profit_loss_pct > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN profit_loss_pct <= 0 THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN exit_reason = 'TARGET_HIT' THEN 1 ELSE 0 END) as target_hits,
-                SUM(CASE WHEN exit_reason = 'STOP_HIT' THEN 1 ELSE 0 END) as stop_hits,
-                SUM(CASE WHEN exit_reason = 'STRUCTURE_BREAK' THEN 1 ELSE 0 END) as structure_exits,
-                SUM(CASE WHEN exit_reason NOT IN ('TARGET_HIT','STOP_HIT','STRUCTURE_BREAK') THEN 1 ELSE 0 END) as other_exits,
-                ROUND(AVG(profit_loss_pct), 2) as avg_pnl_pct,
-                ROUND(SUM(profit_loss_pct), 2) as total_pnl_pct,
-                MAX(profit_loss_pct) as best_pnl_pct,
-                MIN(profit_loss_pct) as worst_pnl_pct,
-                ROUND(AVG(days_held), 1) as avg_days_held
-            FROM portfolio_journal
-            {where}
-            """,
+        if hz:
+            where, params = f"WHERE horizon = ? AND {dupe_clause}", [hz]
+        else:
+            where, params = f"WHERE {dupe_clause}", []
+
+        # Fetch the clean rows and let the canonical engine do ALL arithmetic —
+        # this function must never compute a metric of its own again.
+        trades = [dict(r) for r in conn.execute(
+            f"SELECT profit_loss_pct, exit_reason, days_held FROM portfolio_journal {where}",
             params,
-        ).fetchone()
+        ).fetchall()]
 
-        total = row["total_trades"] or 0
-        wins = row["wins"] or 0
-        target_hits = row["target_hits"] or 0
-
-        # ── Unique-setup view ────────────────────────────────────────────────
-        # Collapse repeat re-entries of the SAME setup (same symbol + same entry
-        # price) into ONE representative trade (earliest by closed_at). This is
-        # what the churn bug (e.g. APTUS re-promoted 9x at the same entry) and the
-        # now-live re-entry guard concern. Shown alongside the realized numbers so
-        # a single failed setup recorded N times doesn't N-count the loss.
-        # NOTE: this is an ADJUSTED metric — the realized hit_rate_pct above
-        # remains the ground truth across all closed trades.
-        urows = conn.execute(
-            f"SELECT symbol, entry_price, profit_loss_pct, closed_at "
-            f"FROM portfolio_journal {where} ORDER BY datetime(closed_at) ASC",
-            params,
-        ).fetchall()
-        _seen: dict[tuple, float] = {}
-        for ur in urows:
-            key = (str(ur["symbol"]).upper(), round(float(ur["entry_price"] or 0), 2))
-            if key not in _seen:  # keep earliest occurrence as representative
-                _seen[key] = float(ur["profit_loss_pct"] or 0)
-        unique_total = len(_seen)
-        unique_wins = sum(1 for p in _seen.values() if p > 0)
-
-        return {
-            "total_trades": total,
-            "wins": wins,
-            "losses": row["losses"] or 0,
-            # hit_rate_pct = % of ALL closed trades that were net positive (realized truth).
-            "hit_rate_pct": round(wins / total * 100, 1) if total > 0 else 0.0,
-            # Unique-setup view: repeat re-entries of the same setup collapsed to one.
-            "unique_trades": unique_total,
-            "unique_wins": unique_wins,
-            "unique_hit_rate_pct": round(unique_wins / unique_total * 100, 1) if unique_total > 0 else 0.0,
-            "repeat_reentries_collapsed": total - unique_total,
-            # Exit-reason breakdown so the UI can distinguish "hit target" from
-            # "cut early by structure-break" from "stopped out" — otherwise a
-            # low win rate hides a positive-expectancy system.
-            "target_hits": target_hits,
-            "stop_hits": row["stop_hits"] or 0,
-            "structure_exits": row["structure_exits"] or 0,
-            "other_exits": row["other_exits"] or 0,
-            "target_hit_rate_pct": round(target_hits / total * 100, 1) if total > 0 else 0.0,
-            "avg_pnl_pct": row["avg_pnl_pct"] or 0.0,
-            "total_pnl_pct": row["total_pnl_pct"] or 0.0,
-            "best_pnl_pct": row["best_pnl_pct"] or 0.0,
-            "worst_pnl_pct": row["worst_pnl_pct"] or 0.0,
-            "avg_days_held": row["avg_days_held"] or 0.0,
-        }
+        if has_dupe:
+            dup_where = "WHERE horizon = ? AND is_duplicate = 1" if hz else "WHERE is_duplicate = 1"
+            duplicates_excluded = conn.execute(
+                f"SELECT COUNT(*) AS c FROM portfolio_journal {dup_where}",
+                [hz] if hz else [],
+            ).fetchone()["c"] or 0
+        else:
+            duplicates_excluded = 0
     finally:
         conn.close()
+
+    # Slots = the book's capacity. Without a horizon this is the combined book.
+    if hz == "SWING":
+        slots = MAX_SWING_POSITIONS
+    elif hz == "LONGTERM":
+        slots = MAX_LONGTERM_POSITIONS
+    else:
+        slots = MAX_SWING_POSITIONS + MAX_LONGTERM_POSITIONS
+
+    return compute_book_stats(
+        trades, slots=slots, book=hz or "ALL",
+        duplicates_excluded=duplicates_excluded,
+    )
 
 
 def seed_portfolio_from_recommendations() -> list[dict]:
@@ -1045,6 +1187,36 @@ def seed_portfolio_from_recommendations() -> list[dict]:
             ).fetchone()
             if existing:
                 continue
+
+            # ── Already-exited guard (fixes the re-seed churn loop) ───────────
+            # The engine holds a trade until ITS own exit; the portfolio applies
+            # its own exit rules (stale / structure / trend break) and can close
+            # first. When that happened the row above stopped matching, so the
+            # next tracker cycle re-seeded the same still-RUNNING engine trade,
+            # the portfolio exited it again, and the journal accumulated one
+            # phantom "completed trade" per cycle (CIPLA x11 in 51 minutes,
+            # APTUS x10). Once the portfolio has exited a given origin, that
+            # exposure is done — never resurrect it from the same engine trade.
+            origin_created = str(row_d.get("created_at") or "")
+            already_exited = conn.execute(
+                "SELECT 1 FROM portfolio_journal WHERE symbol = ? AND horizon = ? "
+                "AND ROUND(entry_price, 2) = ROUND(?, 2) AND created_at = ? LIMIT 1",
+                (symbol, horizon, float(row_d["entry_price"] or 0), origin_created),
+            ).fetchone()
+            if already_exited:
+                logger.debug("[Portfolio] seed skip %s/%s — already exited this origin (%s)",
+                             symbol, horizon, origin_created)
+                continue
+
+            # Setup-aware re-entry guard — the seed path bypassed it entirely, so
+            # a failed setup could re-enter the book here even while the selector
+            # path correctly refused it.
+            try:
+                if reentry_guard_blocks(symbol, horizon, float(row_d["entry_price"] or 0),
+                                        cmp=float(row_d.get("current_price") or 0) or None):
+                    continue
+            except Exception as exc:  # fail open — never suppress a real fill on a guard error
+                logger.warning("[Portfolio] seed re-entry guard errored for %s (allowing): %s", symbol, exc)
 
             # Respect capacity — never seed past MAX for the horizon.
             cap = MAX_SWING_POSITIONS if horizon == "SWING" else MAX_LONGTERM_POSITIONS

@@ -798,12 +798,25 @@ export interface PortfolioJournalStats {
   structure_exits?: number;
   other_exits?: number;
   target_hit_rate_pct?: number;
-  // Unique-setup view (repeat re-entries of the same setup collapsed to one).
+  // Deprecated aliases. These once carried a SECOND population (setup-collapsed)
+  // while total_pnl_pct summed ALL rows, so the headline showed a win rate and a
+  // return computed over different trade sets. The backend now mirrors them onto
+  // the single published basis. Do not render these — use hit_rate_pct.
   unique_trades?: number;
   unique_wins?: number;
   unique_hit_rate_pct?: number;
   repeat_reentries_collapsed?: number;
+  // Re-seed artifacts excluded from every field above (audit trail).
+  duplicates_excluded?: number;
   avg_pnl_pct: number;
+  avg_trade_return_pct?: number;
+  /** Sum of per-trade percentages. NOT a portfolio return — never label it one. */
+  sum_trade_return_pct?: number;
+  /** Equal-weight book return: each trade is 1/book_slots of capital. Render THIS as "return". */
+  book_return_pct?: number;
+  book_slots?: number;
+  book_return_basis?: string;
+  /** @deprecated same value as sum_trade_return_pct; kept for older consumers. */
   total_pnl_pct: number;
   best_pnl_pct: number;
   worst_pnl_pct: number;

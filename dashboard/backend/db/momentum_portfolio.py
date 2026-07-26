@@ -356,30 +356,44 @@ def get_journal(limit: int = 100) -> list[dict]:
 
 
 def get_journal_stats() -> dict:
+    """Momentum book metrics — same canonical engine as Swing/Long-Term.
+
+    Routed through db.perf_stats so the three books can never disagree about
+    what a "win" or a "return" is. This used to count a win as `r_multiple > 0`
+    while the portfolio books used `profit_loss_pct > 0`; equivalent in sign for
+    a long, but two definitions in two places is how surfaces drift apart.
+    R-based figures (profit factor, avg win/loss R) stay here — they are genuine
+    momentum-only extras, not redefinitions of the shared metrics.
+    """
+    from dashboard.backend.db.perf_stats import compute_book_stats
+
     init_momentum_db()
     conn = get_connection()
     try:
+        trades = [dict(r) for r in conn.execute(
+            "SELECT profit_loss_pct, exit_reason, days_held, r_multiple FROM momentum_journal"
+        ).fetchall()]
         row = conn.execute(
-            "SELECT COUNT(*) n, "
-            "SUM(CASE WHEN r_multiple>0 THEN 1 ELSE 0 END) wins, "
-            "ROUND(AVG(profit_loss_pct),2) avg_pnl, ROUND(SUM(profit_loss_pct),2) tot_pnl, "
-            "ROUND(AVG(r_multiple),3) exp_r, ROUND(AVG(days_held),1) avg_hold, "
-            "ROUND(AVG(CASE WHEN r_multiple>0 THEN r_multiple END),2) avg_win_r, "
+            "SELECT ROUND(AVG(CASE WHEN r_multiple>0 THEN r_multiple END),2) avg_win_r, "
             "ROUND(AVG(CASE WHEN r_multiple<=0 THEN r_multiple END),2) avg_loss_r "
             "FROM momentum_journal"
         ).fetchone()
-        n = row["n"] or 0; wins = row["wins"] or 0
         gross = conn.execute("SELECT "
             "COALESCE(SUM(CASE WHEN r_multiple>0 THEN r_multiple END),0), "
             "COALESCE(ABS(SUM(CASE WHEN r_multiple<=0 THEN r_multiple END)),0) "
             "FROM momentum_journal").fetchone()
         pf = round(gross[0] / gross[1], 2) if gross[1] else (float("inf") if gross[0] else 0.0)
-        return {
-            "total_trades": n, "wins": wins, "hit_rate_pct": round(wins / n * 100, 1) if n else 0.0,
-            "avg_pnl_pct": row["avg_pnl"] or 0.0, "total_pnl_pct": row["tot_pnl"] or 0.0,
-            "expectancy_r": row["exp_r"] or 0.0, "profit_factor": pf,
-            "avg_win_r": row["avg_win_r"] or 0.0, "avg_loss_r": row["avg_loss_r"] or 0.0,
-            "avg_days_held": row["avg_hold"] or 0.0,
-        }
     finally:
         conn.close()
+
+    stats = compute_book_stats(trades, slots=MAX_MOMENTUM_POSITIONS, book="MOMENTUM")
+    stats.update({
+        "profit_factor": pf,
+        "avg_win_r": row["avg_win_r"] or 0.0,
+        "avg_loss_r": row["avg_loss_r"] or 0.0,
+    })
+    # expectancy_r is None when no trade carries an r_multiple; the momentum UI
+    # has always shown 0.0 for an empty book.
+    if stats.get("expectancy_r") is None:
+        stats["expectancy_r"] = 0.0
+    return stats
