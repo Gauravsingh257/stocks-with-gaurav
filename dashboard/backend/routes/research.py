@@ -378,7 +378,7 @@ def _latest_logged_decision_payload(top_k: int, min_turnover_cr: float, src: str
     final = [card for card in cards if card.get("section") == "final"][:top_k]
     watchlist = [card for card in cards if card.get("section") == "watchlist"][:top_k]
     discovery = [card for card in cards if card.get("section") == "discovery"][:top_k]
-    return {
+    payload = {
         "data_source": src,
         "universe_size": (report.get("coverage") or {}).get("total_universe") or report.get("funnel", {}).get("total") or len(cards),
         "scanned": (report.get("coverage") or {}).get("scanned") or report.get("funnel", {}).get("total") or len(cards),
@@ -400,6 +400,12 @@ def _latest_logged_decision_payload(top_k: int, min_turnover_cr: float, src: str
         "cache_ttl_sec": DECISION_CACHE_SECONDS,
         "min_turnover_cr": min_turnover_cr,
     }
+    # Strip any NaN/±Inf so strict JSON serialization (finalize_endpoint) can never
+    # 500 the decision feed — exceptionalism/technical values from bad OHLC can be
+    # non-finite; the source _clamp fix + this belt-and-suspenders both apply.
+    return _strip_non_finite(payload)
+
+
 def _extract_fundamentals(row: dict) -> dict:
     """Pull structured fundamental metrics from fundamental_factors or parse from
     fundamental_signals text as a fallback for older DB records.
