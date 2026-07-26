@@ -638,23 +638,29 @@ async def run_validation_scan(
             sector_diversification_enabled,
             sector_scoring_enabled,
         )
-
         from services.market_health import market_health_enabled
+        from services.exceptionalism import exceptionalism_enabled, exceptionalism_shadow_enabled
 
+        # yfinance NSE sector-index tickers are blocked on Railway, so the
+        # CONSTITUENT-based sector strength (+ breadth) is the only reliable
+        # source. It must refresh whenever ANY consumer needs sector/breadth —
+        # the selection flags, the market-health rotation sub-score, OR the
+        # exceptionalism SHADOW (so the calibration dataset carries clean sector
+        # signal even before selection flags are enabled). Cheap: pure arithmetic
+        # over candles we already fetched (no network). Never changes what the
+        # feed serves — enforcement stays flag-gated below.
         _need_candles = (
-            governor_enabled() or sector_scoring_enabled()
-            or sector_diversification_enabled() or market_health_enabled()
+            governor_enabled() or sector_scoring_enabled() or sector_diversification_enabled()
+            or market_health_enabled() or exceptionalism_shadow_enabled() or exceptionalism_enabled()
         )
         if _need_candles:
             _cand_map = {s: df_to_candles(f) for s, f in frames.items() if _has_usable_ohlc(f)}
             if _cand_map:
-                if governor_enabled() or sector_scoring_enabled() or sector_diversification_enabled():
-                    from services.sector_strength import compute_sector_strength_from_candles
-                    compute_sector_strength_from_candles(_cand_map)
-                if market_health_enabled():
-                    # Layer-1 breadth from the same candles (% above 50/200-DMA, adv/decline).
-                    from services.market_health import breadth_from_candles
-                    breadth_from_candles(_cand_map)
+                from services.sector_strength import compute_sector_strength_from_candles
+                compute_sector_strength_from_candles(_cand_map)
+                # Layer-1 breadth from the same candles (% above 50/200-DMA, adv/decline).
+                from services.market_health import breadth_from_candles
+                breadth_from_candles(_cand_map)
     except Exception as exc:
         log.debug("in-scan sector/breadth refresh skipped: %s", exc)
 
