@@ -1708,7 +1708,7 @@ async def get_discovery(
             payload["cache_ttl_sec"] = max(0, int(DECISION_CACHE_SECONDS - age))
             return finalize_endpoint(
                 "discovery",
-                payload,
+                _strip_non_finite(payload),   # NaN-safe: a stale cached payload must not 500
                 valid_discovery_redis_write,
                 discovery_atomic=True,
             )
@@ -1718,7 +1718,7 @@ async def get_discovery(
         out = dict(rsnap)
         out.setdefault("snapshot_source", "redis")
         out.setdefault("cache_hit", False)
-        return out
+        return _strip_non_finite(out)
 
     if not refresh:
         logged_payload = _latest_logged_decision_payload(top_k, min_turnover_cr, src)
