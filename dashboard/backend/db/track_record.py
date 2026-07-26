@@ -267,6 +267,20 @@ def stats(horizon: str | None = None) -> dict:
         "avg_holding_days": _avg([r["holding_days"] for r in resolved]),
         "avg_rr_realized": expectancy_r,        # mean R across all resolved
         "expectancy_r": expectancy_r,
+        # ── Declared basis ────────────────────────────────────────────────────
+        # This ledger measures a DIFFERENT population and a DIFFERENT win
+        # definition from the portfolio books (db/perf_stats.py), so its win rate
+        # legitimately will not match theirs. Both are stated explicitly so the
+        # difference reads as deliberate rather than as two contradictory truths
+        # about the same thing. Do not "reconcile" these numbers by changing one
+        # — they answer different questions.
+        "population": "every idea published to the research ledger, including EXPIRED ones never traded",
+        "win_definition": "reached target (EXPIRED and STOP_HIT both count as non-wins)",
+        "return_definition": "per-idea % and R only — this ledger holds no capital, so it has no book return",
+        "differs_from_portfolio_books": (
+            "Portfolio win rate counts any net-positive exit over positions actually held; "
+            "this counts target-reached over every idea published. Different questions, different numbers."
+        ),
         "note": "Win rate is over ALL resolved recommendations including EXPIRED — survivorship-free.",
     }
 

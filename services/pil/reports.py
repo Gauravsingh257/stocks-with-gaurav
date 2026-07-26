@@ -72,9 +72,14 @@ def _entries_exits(date_str: str) -> tuple[list[dict], list[dict], list[dict]]:
                 continue
         for table, book_col in (("portfolio_journal", "horizon"), ("momentum_journal", None)):
             try:
+                # Real exits only — a re-seed artifact would list the same
+                # position as several separate exits in the daily report.
+                # COALESCE keeps this working on momentum_journal, which has no
+                # is_duplicate column (no re-seed path feeds it).
+                dupe = " AND COALESCE(is_duplicate, 0) = 0" if table == "portfolio_journal" else ""
                 for r in conn.execute(
                     f"SELECT symbol, profit_loss_pct, exit_reason{',' + book_col if book_col else ''} "
-                    f"FROM {table} WHERE substr(closed_at,1,10)=?",
+                    f"FROM {table} WHERE substr(closed_at,1,10)=?{dupe}",
                     (date_str,),
                 ).fetchall():
                     d = dict(r); d["book"] = d.get(book_col) if book_col else "MOMENTUM"

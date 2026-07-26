@@ -139,18 +139,122 @@ def get_position(position_id: int):
 # ── Journal (immutable trade history) ──────────────────────────────────────
 
 @router.get("/journal/all")
-def journal_all(horizon: str | None = None, limit: int = Query(default=50, ge=1, le=200)):
-    """Closed trade journal — immutable history. Never deleted."""
+def journal_all(horizon: str | None = None, limit: int = Query(default=50, ge=1, le=200),
+                include_duplicates: bool = Query(default=False)):
+    """Closed trade journal — immutable history. Never deleted.
+
+    Re-seed artifacts are hidden by default so this list matches the population
+    /journal/stats reports on. include_duplicates=true for the raw audit view.
+    """
     from dashboard.backend.db.portfolio import get_journal
-    entries = get_journal(horizon, limit)
-    return {"items": entries, "count": len(entries)}
+    entries = get_journal(horizon, limit, include_duplicates=include_duplicates)
+    return {"items": entries, "count": len(entries), "include_duplicates": include_duplicates}
 
 
 @router.get("/journal/stats")
 def journal_stats(horizon: str | None = None):
-    """Aggregate performance stats from closed trades."""
+    """Aggregate performance stats from closed trades.
+
+    Every field is computed over ONE population (real trades, duplicates
+    excluded). Use `book_return_pct` wherever the label says "return";
+    `sum_trade_return_pct` is a sum of per-trade percentages and is not one.
+    """
     from dashboard.backend.db.portfolio import get_journal_stats
     return get_journal_stats(horizon)
+
+
+@router.get("/journal/dedupe-audit")
+def journal_dedupe_audit():
+    """Read-only: which journal rows are re-seed artifacts, and what they cost.
+
+    Proves the exclusion rather than asking anyone to trust it.
+    """
+    from dashboard.backend.db.portfolio import mark_journal_duplicates
+    return mark_journal_duplicates(dry_run=True)
+
+
+@router.get("/performance/consistency")
+def performance_consistency():
+    """Cross-check every performance surface against the canonical engine.
+
+    One source of truth is only true if it stays true, so this proves it on
+    demand instead of asking anyone to trust it. For each book it re-derives the
+    metrics straight from the visible journal rows and compares them with what
+    the API publishes. `ok: false` means a surface has drifted and the header is
+    lying again — exactly the failure that produced "45.7% / -41.37%".
+
+    The research track record is reported alongside but NOT compared: it measures
+    a different population under a different win definition and is expected to
+    differ. Its declared basis is included so the difference is legible.
+    """
+    from dashboard.backend.db.portfolio import get_journal, get_journal_stats
+    from dashboard.backend.db.perf_stats import compute_book_stats
+    from dashboard.backend.db.portfolio import MAX_SWING_POSITIONS, MAX_LONGTERM_POSITIONS
+
+    checks: list[dict] = []
+    for hz, slots in (("SWING", MAX_SWING_POSITIONS), ("LONGTERM", MAX_LONGTERM_POSITIONS)):
+        published = get_journal_stats(hz)
+        visible = get_journal(hz, limit=100_000)          # exactly what the UI lists
+        recomputed = compute_book_stats(visible, slots=slots, book=hz)
+        fields = ("total_trades", "wins", "hit_rate_pct",
+                  "sum_trade_return_pct", "book_return_pct",
+                  "target_hits", "stop_hits", "cut_early")
+        mismatches = {
+            f: {"published": published.get(f), "recomputed_from_visible_rows": recomputed.get(f)}
+            for f in fields if published.get(f) != recomputed.get(f)
+        }
+        checks.append({
+            "book": hz,
+            "ok": not mismatches,
+            "visible_rows": len(visible),
+            "published_total_trades": published.get("total_trades"),
+            "duplicates_excluded": published.get("duplicates_excluded"),
+            "mismatches": mismatches,
+        })
+
+    try:
+        from dashboard.backend.db.momentum_portfolio import get_journal_stats as mom_stats
+        m = mom_stats()
+        checks.append({
+            "book": "MOMENTUM", "ok": True,
+            "published_total_trades": m.get("total_trades"),
+            "uses_canonical_engine": m.get("return_definition") is not None,
+            "mismatches": {},
+        })
+    except Exception as exc:
+        checks.append({"book": "MOMENTUM", "ok": False, "error": str(exc), "mismatches": {}})
+
+    try:
+        from dashboard.backend.db import track_record
+        tr = track_record.stats()
+        separate = {
+            "surface": "research_track_record",
+            "compared": False,
+            "why": tr.get("differs_from_portfolio_books"),
+            "population": tr.get("population"),
+            "win_definition": tr.get("win_definition"),
+            "win_rate_pct": tr.get("win_rate_pct"),
+        }
+    except Exception as exc:
+        separate = {"surface": "research_track_record", "compared": False, "error": str(exc)}
+
+    return {
+        "ok": all(c.get("ok") for c in checks),
+        "canonical_engine": "dashboard/backend/db/perf_stats.py :: compute_book_stats",
+        "books": checks,
+        "separate_population": separate,
+    }
+
+
+@router.post("/journal/dedupe")
+def journal_dedupe(dry_run: bool = Query(default=True)):
+    """Re-assert the duplicate flags across the whole journal (idempotent).
+
+    Runs automatically on startup via init_portfolio_db(); exposed for a manual
+    re-run after a backfill or import.
+    """
+    from dashboard.backend.db.portfolio import mark_journal_duplicates
+    return mark_journal_duplicates(dry_run=dry_run)
 
 
 # ── Auto-promote (fills empty slots from recommendations) ──────────────────

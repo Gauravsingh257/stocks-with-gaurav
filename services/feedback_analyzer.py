@@ -268,7 +268,11 @@ def _fetch_closed_trades(horizon: str) -> list[dict]:
             FROM portfolio_journal j
             LEFT JOIN portfolio_positions p ON j.position_id = p.id
             LEFT JOIN stock_recommendations r ON p.recommendation_id = r.id
-            WHERE j.horizon = ?
+            -- Real trades only. Re-seed artifacts (one held position journaled
+            -- repeatedly — CIPLA appeared 11 times) would weight that single
+            -- outcome 11x in the learning loop and teach the wrong lesson.
+            -- Same population every other performance surface reports on.
+            WHERE j.horizon = ? AND COALESCE(j.is_duplicate, 0) = 0
             ORDER BY j.closed_at DESC
             """,
             (horizon,),
