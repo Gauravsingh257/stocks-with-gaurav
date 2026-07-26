@@ -383,10 +383,16 @@ def get_journal_stats() -> dict:
             "COALESCE(ABS(SUM(CASE WHEN r_multiple<=0 THEN r_multiple END)),0) "
             "FROM momentum_journal").fetchone()
         pf = round(gross[0] / gross[1], 2) if gross[1] else (float("inf") if gross[0] else 0.0)
+        # Open book, marked to market — same contract as swing/LT. ACTIVE only:
+        # PENDING rows are armed, not entered.
+        open_positions = [dict(r) for r in conn.execute(
+            "SELECT symbol, profit_loss_pct FROM momentum_positions WHERE status = 'ACTIVE'"
+        ).fetchall()]
     finally:
         conn.close()
 
-    stats = compute_book_stats(trades, slots=MAX_MOMENTUM_POSITIONS, book="MOMENTUM")
+    stats = compute_book_stats(trades, slots=MAX_MOMENTUM_POSITIONS, book="MOMENTUM",
+                               open_positions=open_positions)
     stats.update({
         "profit_factor": pf,
         "avg_win_r": row["avg_win_r"] or 0.0,

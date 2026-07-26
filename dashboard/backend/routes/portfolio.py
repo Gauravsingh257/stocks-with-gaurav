@@ -193,7 +193,10 @@ def performance_consistency():
 
     checks: list[dict] = []
     for hz, slots in (("SWING", MAX_SWING_POSITIONS), ("LONGTERM", MAX_LONGTERM_POSITIONS)):
-        published = get_journal_stats(hz)
+        # Realised-only on both sides: this check compares the published closed-
+        # trade figures against the closed-trade rows the UI lists. Open-book
+        # marks move with the market and have no journal rows to check against.
+        published = get_journal_stats(hz, include_open=False)
         visible = get_journal(hz, limit=100_000)          # exactly what the UI lists
         recomputed = compute_book_stats(visible, slots=slots, book=hz)
         fields = ("total_trades", "wins", "hit_rate_pct",

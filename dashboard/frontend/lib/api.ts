@@ -812,10 +812,24 @@ export interface PortfolioJournalStats {
   avg_trade_return_pct?: number;
   /** Sum of per-trade percentages. NOT a portfolio return — never label it one. */
   sum_trade_return_pct?: number;
-  /** Equal-weight book return: each trade is 1/book_slots of capital. Render THIS as "return". */
+  /** @deprecated realised-only. Use total_book_return_pct for the published return. */
   book_return_pct?: number;
   book_slots?: number;
   book_return_basis?: string;
+  /** Realised (closed trades), slot-weighted. */
+  realized_book_return_pct?: number;
+  /** Open positions marked to market, slot-weighted — moves with the tape. */
+  unrealized_book_return_pct?: number;
+  /** realised + unrealised. THIS is the book's return; render it as "Book return". */
+  total_book_return_pct?: number;
+  open_positions?: number;
+  open_winners?: number;
+  open_losers?: number;
+  open_sum_pct?: number;
+  open_avg_pct?: number;
+  /** Closed wins + currently-green opens. Disclosed, never the headline — an open position hasn't won yet. */
+  blended_hit_rate_pct?: number;
+  blended_trades?: number;
   /** @deprecated same value as sum_trade_return_pct; kept for older consumers. */
   total_pnl_pct: number;
   best_pnl_pct: number;

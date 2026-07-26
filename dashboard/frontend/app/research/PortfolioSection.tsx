@@ -357,19 +357,34 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
               const basis = `${s.wins}/${s.total_trades} closed trades net positive.`
                 + (excluded > 0 ? ` Excludes ${excluded} duplicate row(s) from the re-seed bug — same setup journaled repeatedly, not separate trades.` : "");
 
-              // Render the BOOK return (each trade = 1/slots of capital), never
-              // the sum of per-trade percentages: summing percentages of
+              // Render the BOOK return (each position = 1/slots of capital),
+              // never the sum of per-trade percentages: summing percentages of
               // different capital bases overstates the move ~slots-fold.
+              //
+              // The headline return marks the OPEN book too, so it moves with
+              // the tape. Closed-only made a book holding 19 green positions
+              // look flat. The realised/open split is shown next to it so the
+              // live component is never mistaken for banked profit.
               const sumPct = s.sum_trade_return_pct ?? s.total_pnl_pct;
-              const bookPct = s.book_return_pct;
-              const hasBook = typeof bookPct === "number";
-              const shown = hasBook ? bookPct! : sumPct;
+              const realized = s.realized_book_return_pct ?? s.book_return_pct;
+              const openPct = s.unrealized_book_return_pct;
+              const totalPct = s.total_book_return_pct;
+              const hasBook = typeof totalPct === "number" || typeof realized === "number";
+              const shown = (totalPct ?? realized ?? sumPct);
+              const hasSplit = typeof totalPct === "number" && typeof openPct === "number"
+                && typeof realized === "number" && (s.open_positions ?? 0) > 0;
               const retLabel = hasBook ? "Book return" : "Sum of trade returns";
               const retTitle = hasBook
-                ? `${s.book_return_basis ?? `equal-weight ${s.book_slots ?? "N"}-slot book`}. Sum of the ${s.total_trades} individual trade returns is ${sumPct > 0 ? "+" : ""}${sumPct}% — that is a sum of percentages on different capital bases, not a portfolio return.`
+                ? `${s.book_return_basis ?? `equal-weight ${s.book_slots ?? "N"}-slot book`}. `
+                  + (hasSplit
+                      ? `Realised ${realized! > 0 ? "+" : ""}${realized}% from ${s.total_trades} closed trades, plus ${openPct! > 0 ? "+" : ""}${openPct}% unrealised across ${s.open_positions} open position(s) (${s.open_winners} up / ${s.open_losers} down) marked at the latest price. `
+                      : "")
+                  + `Sum of the ${s.total_trades} individual closed-trade returns is ${sumPct > 0 ? "+" : ""}${sumPct}% — a sum of percentages on different capital bases, not a portfolio return.`
                 : `Sum of ${s.total_trades} individual trade returns. Not a portfolio return.`;
               return (
-                <> · <span title={basis} style={{ color: winRate >= 50 ? "#00d18c" : "#f0c060", fontWeight: 700, borderBottom: "1px dotted currentColor", cursor: "help" }}>{winRate}% win rate</span> · {s.total_trades} completed · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · <span title={retTitle} style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}>{retLabel}:</span> <span style={{ color: plColor(shown), fontWeight: 700 }}>{shown > 0 ? "+" : ""}{shown}%</span></>
+                <> · <span title={basis} style={{ color: winRate >= 50 ? "#00d18c" : "#f0c060", fontWeight: 700, borderBottom: "1px dotted currentColor", cursor: "help" }}>{winRate}% win rate</span> · {s.total_trades} completed · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · <span title={retTitle} style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}>{retLabel}:</span> <span style={{ color: plColor(shown), fontWeight: 700 }}>{shown > 0 ? "+" : ""}{shown}%</span>{hasSplit && (
+                  <span style={{ color: "var(--text-secondary)" }}> (<span title="Banked from closed trades">realised {realized! > 0 ? "+" : ""}{realized}%</span> · <span title={`${s.open_positions} open position(s): ${s.open_winners} up / ${s.open_losers} down, marked at the latest price. Not banked until they close.`}>open {openPct! > 0 ? "+" : ""}{openPct}%</span>)</span>
+                )}</>
               );
             })()}
           </span>
