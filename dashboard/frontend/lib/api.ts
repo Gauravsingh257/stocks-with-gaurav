@@ -827,9 +827,11 @@ export interface PortfolioJournalStats {
   open_losers?: number;
   open_sum_pct?: number;
   open_avg_pct?: number;
-  /** Closed wins + currently-green opens. Disclosed, never the headline — an open position hasn't won yet. */
+  /** Closed wins + currently-green opens. Disclosed beside the realised rate, never in its place. */
   blended_hit_rate_pct?: number;
   blended_trades?: number;
+  /** Most recent closed winners — banked outcomes the header can point at. */
+  recent_banked?: { symbol: string; pnl_pct: number; closed_at: string; exit_reason: string }[];
   /** @deprecated same value as sum_trade_return_pct; kept for older consumers. */
   total_pnl_pct: number;
   best_pnl_pct: number;

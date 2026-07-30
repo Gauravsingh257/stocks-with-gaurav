@@ -1113,7 +1113,8 @@ def get_journal_stats(horizon: str | None = None, include_open: bool = True) -> 
         # Fetch the clean rows and let the canonical engine do ALL arithmetic —
         # this function must never compute a metric of its own again.
         trades = [dict(r) for r in conn.execute(
-            f"SELECT profit_loss_pct, exit_reason, days_held FROM portfolio_journal {where}",
+            f"SELECT symbol, profit_loss_pct, exit_reason, days_held, closed_at "
+            f"FROM portfolio_journal {where}",
             params,
         ).fetchall()]
 

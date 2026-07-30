@@ -49,6 +49,9 @@ RETURN_DEFINITION = (
 )
 POPULATION_CLOSED_BOOK = "closed positions actually held in this book (re-seed duplicates excluded)"
 
+# How many recently-banked winners the header surfaces.
+RECENT_BANKED_LIMIT = 3
+
 # Exit reasons treated as "cut early" — neither a target nor a stop.
 _TARGET = "TARGET_HIT"
 _STOP = "STOP_HIT"
@@ -117,6 +120,21 @@ def compute_book_stats(
     r_vals = [_f(t.get("r_multiple")) for t in rows if t.get("r_multiple") is not None]
     days = [_f(t.get("days_held")) for t in rows]
 
+    # ── Recently banked wins ─────────────────────────────────────────────────
+    # Once a position exits, its P&L is frozen and it leaves the open book, so a
+    # big win stops being visible anywhere except as a small nudge inside an
+    # aggregate — banking SCANSTL at +51.18% moved the realised book by only
+    # +2.56pp and the blended win rate not at all. Surfacing the actual closes
+    # makes realised outcomes legible instead of buried.
+    banked = sorted(
+        ({"symbol": str(t.get("symbol") or "").replace("NSE:", ""),
+          "pnl_pct": round(_f(t.get("profit_loss_pct")), 2),
+          "closed_at": str(t.get("closed_at") or "")[:10],
+          "exit_reason": str(t.get("exit_reason") or "")}
+         for t in rows if _f(t.get("profit_loss_pct")) > 0 and t.get("closed_at")),
+        key=lambda x: x["closed_at"], reverse=True,
+    )[:RECENT_BANKED_LIMIT]
+
     hit_rate = round(wins / n * 100, 1) if n else 0.0
 
     # ── Open book (mark-to-market) ───────────────────────────────────────────
@@ -172,6 +190,8 @@ def compute_book_stats(
         # an open position has not won until it closes.
         "blended_hit_rate_pct": round((wins + open_win) / blended_n * 100, 1) if blended_n else 0.0,
         "blended_trades": blended_n,
+        # Most recent closed winners — a banked result the header can point at.
+        "recent_banked": banked,
         # `book_return_pct` predates the split and means REALISED only. Kept for
         # older consumers; prefer the explicit names above.
         "book_return_pct": realized_book,
