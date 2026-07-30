@@ -275,8 +275,18 @@ def _send_portfolio_entry_alert(position: dict) -> None:
 def _send_portfolio_armed_alert(position: dict) -> None:
     """Telegram notification when an idea is ARMED (awaiting entry) — no fill yet.
 
-    Distinct from the entry alert so users are never told a position filled when
-    it is only waiting for its planned entry to be traded through. Best-effort."""
+    OFF by default. An armed idea is not an entry signal: it only says the system
+    is watching a level, and most arms expire without ever triggering, so these
+    flooded the channel with messages that required no action and often described
+    a position that never existed. The actionable alerts are unaffected — the fill
+    alert is sent by the tracker when the entry is genuinely traded through
+    (send_portfolio_triggered_alert), and a manual/live entry still sends
+    _send_portfolio_entry_alert.
+
+    Set PORTFOLIO_ARMED_ALERTS=1 to turn them back on; no redeploy needed.
+    """
+    if os.getenv("PORTFOLIO_ARMED_ALERTS", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
     if not bot_token or not chat_id:
