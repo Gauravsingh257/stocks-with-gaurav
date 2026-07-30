@@ -371,7 +371,7 @@ def get_journal_stats() -> dict:
     conn = get_connection()
     try:
         trades = [dict(r) for r in conn.execute(
-            "SELECT profit_loss_pct, exit_reason, days_held, r_multiple FROM momentum_journal"
+            "SELECT symbol, profit_loss_pct, exit_reason, days_held, r_multiple, closed_at FROM momentum_journal"
         ).fetchall()]
         row = conn.execute(
             "SELECT ROUND(AVG(CASE WHEN r_multiple>0 THEN r_multiple END),2) avg_win_r, "

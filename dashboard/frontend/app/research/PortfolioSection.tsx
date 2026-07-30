@@ -347,33 +347,32 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
               const stop = s.stop_hits ?? 0;
               const cut = (s.structure_exits ?? 0) + (s.other_exits ?? 0);
 
-              // Headline win rate = BLENDED: closed wins + currently-green open
-              // positions, over everything entered. Chosen deliberately so the
-              // rate describes the same book the return does (both now include
-              // open marks) rather than the return moving while the rate sat
-              // still on closed trades only.
+              // Headline win rate = REALISED (settled closes only), with the
+              // blended figure disclosed beside it.
               //
-              // The trade-off, stated so nobody rediscovers it as a bug: this
-              // number MOVES WITH THE TAPE. A green day lifts it without a
-              // single trade closing, and a red day drops it. The realised rate
-              // — the settled, non-moving record — is carried in the tooltip
-              // alongside the open split, so the basis is disclosed rather than
-              // silently swapped. Set `useBlended = false` to headline the
-              // realised rate instead; nothing else needs to change.
-              const useBlended = true;
+              // We briefly headlined the blended rate so it would describe the
+              // same book as the return. It backfired for a structural reason
+              // worth recording: a winner is ALREADY in the blended numerator
+              // while it is open, so closing it at target is a mathematical
+              // no-op — banking SCANSTL at +51.18% moved the blended rate not
+              // at all, and two replacement positions opening red actually
+              // dragged it 57.6% -> 55.9% on the same day. A rate that cannot
+              // respond to the outcome it is supposed to measure is the wrong
+              // headline. The realised rate moved 46.8% -> 49.0% on those same
+              // closes, which is the behaviour a track record should have.
               const excluded = s.duplicates_excluded ?? 0;
               const openN = s.open_positions ?? 0;
               const hasBlend = typeof s.blended_hit_rate_pct === "number" && openN > 0;
-              const winRate = (useBlended && hasBlend) ? s.blended_hit_rate_pct! : s.hit_rate_pct;
-              const realisedBasis = `${s.wins}/${s.total_trades} closed trades net positive = ${s.hit_rate_pct}% realised.`;
-              const basis = (useBlended && hasBlend)
-                ? `${(s.wins ?? 0) + (s.open_winners ?? 0)}/${s.blended_trades} entered positions currently net positive — `
-                  + `${s.wins} of ${s.total_trades} closed plus ${s.open_winners} of ${openN} still open. `
-                  + `Open positions are marked at the latest price, so this rate moves with the market until they close. `
-                  + realisedBasis
-                  + (excluded > 0 ? ` Excludes ${excluded} duplicate row(s) from the re-seed bug — same setup journaled repeatedly, not separate trades.` : "")
-                : realisedBasis
-                  + (excluded > 0 ? ` Excludes ${excluded} duplicate row(s) from the re-seed bug — same setup journaled repeatedly, not separate trades.` : "");
+              const winRate = s.hit_rate_pct;
+              const dupeNote = excluded > 0
+                ? ` Excludes ${excluded} duplicate row(s) from the re-seed bug — same setup journaled repeatedly, not separate trades.`
+                : "";
+              const basis = `${s.wins}/${s.total_trades} closed trades net positive. `
+                + `Settled outcomes only — a position's P&L is frozen at exit and never re-marked, so this rate only moves when a trade actually closes.`
+                + (hasBlend
+                    ? ` Including the ${openN} open position(s) marked at the latest price, ${(s.wins ?? 0) + (s.open_winners ?? 0)}/${s.blended_trades} are currently net positive = ${s.blended_hit_rate_pct}%; that figure moves with the market.`
+                    : "")
+                + dupeNote;
 
               // Render the BOOK return (each position = 1/slots of capital),
               // never the sum of per-trade percentages: summing percentages of
@@ -399,11 +398,29 @@ export function PortfolioSection({ title, positions, count, pending, max, journa
                       : "")
                   + `Sum of the ${s.total_trades} individual closed-trade returns is ${sumPct > 0 ? "+" : ""}${sumPct}% — a sum of percentages on different capital bases, not a portfolio return.`
                 : `Sum of ${s.total_trades} individual trade returns. Not a portfolio return.`;
+              // Recently banked winners. A closed position leaves the open book
+              // and its P&L freezes, so without this a +51% result is visible
+              // only as a couple of decimal places inside an aggregate.
+              const banked = (s.recent_banked ?? []).slice(0, 3);
               return (
-                <> · <span title={basis} style={{ color: winRate >= 50 ? "#00d18c" : "#f0c060", fontWeight: 700, borderBottom: "1px dotted currentColor", cursor: "help" }}>{winRate}% win rate</span> · {(useBlended && hasBlend)
-                  ? <span title={`Win rate is over all ${s.blended_trades} entered positions: ${s.total_trades} closed and ${openN} still open. The exit breakdown below covers the ${s.total_trades} closed ones.`} style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}>{s.total_trades} completed + {openN} open</span>
+                <> · <span title={basis} style={{ color: winRate >= 50 ? "#00d18c" : "#f0c060", fontWeight: 700, borderBottom: "1px dotted currentColor", cursor: "help" }}>{winRate}% win rate</span>{hasBlend && (
+                  <span title={`Including the ${openN} open position(s) marked at the latest price. Moves with the market; the headline rate counts settled closes only.`} style={{ color: "var(--text-secondary)", borderBottom: "1px dotted currentColor", cursor: "help" }}> ({s.blended_hit_rate_pct}% incl. open)</span>
+                )} · {hasBlend
+                  ? <span title={`${s.total_trades} closed trades (the exit breakdown below covers these) and ${openN} positions still open.`} style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}>{s.total_trades} completed + {openN} open</span>
                   : <>{s.total_trades} completed</>} · <span style={{ color: "#00d18c" }}>{tgt} target</span> / <span style={{ color: "var(--text-secondary)" }}>{cut} cut early</span> / <span style={{ color: "#ff4d6d" }}>{stop} stopped</span> · <span title={retTitle} style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}>{retLabel}:</span> <span style={{ color: plColor(shown), fontWeight: 700 }}>{shown > 0 ? "+" : ""}{shown}%</span>{hasSplit && (
-                  <span style={{ color: "var(--text-secondary)" }}> (<span title="Banked from closed trades">realised {realized! > 0 ? "+" : ""}{realized}%</span> · <span title={`${s.open_positions} open position(s): ${s.open_winners} up / ${s.open_losers} down, marked at the latest price. Not banked until they close.`}>open {openPct! > 0 ? "+" : ""}{openPct}%</span>)</span>
+                  <span style={{ color: "var(--text-secondary)" }}> (<span title="Banked from closed trades — frozen at exit, never re-marked">realised {realized! > 0 ? "+" : ""}{realized}%</span> · <span title={`${s.open_positions} open position(s): ${s.open_winners} up / ${s.open_losers} down, marked at the latest price. Not banked until they close.`}>open {openPct! > 0 ? "+" : ""}{openPct}%</span>)</span>
+                )}
+                {banked.length > 0 && (
+                  <div style={{ marginTop: 3, fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+                    Recently banked: {banked.map((b, i) => (
+                      <span key={b.symbol + b.closed_at}>
+                        {i > 0 && " · "}
+                        <span title={`Closed ${b.closed_at}${b.exit_reason ? ` (${b.exit_reason.replace(/_/g, " ").toLowerCase()})` : ""} — locked in at exit`}>
+                          {b.symbol} <span style={{ color: "#00d18c", fontWeight: 700 }}>+{b.pnl_pct}%</span>
+                        </span>
+                      </span>
+                    ))}
+                  </div>
                 )}</>
               );
             })()}

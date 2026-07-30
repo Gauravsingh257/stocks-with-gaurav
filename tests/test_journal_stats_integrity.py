@@ -337,3 +337,62 @@ def test_include_open_false_gives_realised_only_view():
     s = get_journal_stats("SWING", include_open=False)
     assert s["open_positions"] == 0
     assert s["total_book_return_pct"] == s["realized_book_return_pct"]
+
+
+# ── A banked target hit must be visible ───────────────────────────────────────
+
+def test_target_hit_moves_the_realised_rate_and_book():
+    """The regression that prompted this: banking a winner must change the
+    headline. SCANSTL closed at +51.18% and the blended rate did not move at
+    all (it already counted the position as a green open), so the realised rate
+    is what the header reports."""
+    from dashboard.backend.db.portfolio import MAX_SWING_POSITIONS as N
+    _trade("NSE:OLDLOSS", 100.0, 90.0, "STOP_HIT")
+    pid = _open("NSE:BIGWIN", 100.0, 151.18)          # sitting green, unrealised
+
+    before = get_journal_stats("SWING")
+    assert before["hit_rate_pct"] == 0.0
+    assert before["blended_hit_rate_pct"] == 50.0
+
+    close_position(pid, 151.18, "TARGET_HIT")
+    after = get_journal_stats("SWING")
+
+    # Realised rate responds to the close; blended is unchanged by construction.
+    assert after["hit_rate_pct"] == 50.0, "realised rate must rise on a banked win"
+    assert after["blended_hit_rate_pct"] == 50.0, "blended cannot reward a close"
+    # The gain moves from unrealised into realised; the total is conserved.
+    assert after["realized_book_return_pct"] == pytest.approx((51.18 - 10.0) / N, abs=0.01)
+    assert after["unrealized_book_return_pct"] == 0.0
+    assert after["total_book_return_pct"] == pytest.approx(before["total_book_return_pct"], abs=0.01)
+
+
+def test_recent_banked_surfaces_closed_winners_newest_first():
+    _trade("NSE:WIN1", 100.0, 110.0, "TARGET_HIT")
+    _trade("NSE:WIN2", 100.0, 151.18, "TARGET_HIT")
+    _trade("NSE:LOSS1", 100.0, 90.0, "STOP_HIT")
+    banked = get_journal_stats("SWING")["recent_banked"]
+    syms = [b["symbol"] for b in banked]
+    assert "LOSS1" not in syms, "only winners are surfaced as banked"
+    assert set(syms) == {"WIN1", "WIN2"}
+    assert all(b["pnl_pct"] > 0 and b["closed_at"] for b in banked)
+    assert len(banked) <= 3
+
+
+def test_closed_position_pnl_is_frozen_and_never_re_marked():
+    """Answers 'does the system keep tracking after target/SL?' — it must not."""
+    pid = _open("NSE:FROZEN", 100.0, 150.0)
+    close_position(pid, 150.0, "TARGET_HIT")
+    before = get_journal_stats("SWING")
+
+    # Simulate the stock moving hard after we exited.
+    c = get_connection()
+    try:
+        c.execute("UPDATE portfolio_positions SET current_price = 500, profit_loss_pct = 400 WHERE id = ?", (pid,))
+        c.commit()
+    finally:
+        c.close()
+
+    after = get_journal_stats("SWING")
+    assert after["sum_trade_return_pct"] == before["sum_trade_return_pct"] == 50.0
+    assert after["total_book_return_pct"] == before["total_book_return_pct"]
+    assert after["open_positions"] == 0, "a closed position must never re-enter the open book"
