@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { api, type MarketStateResponse } from "@/lib/api";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
 import { useAuth } from "@/lib/auth";
@@ -20,6 +21,21 @@ function regimeBadge(r: string) {
   return { cls: "badge badge-neutral", dot: "var(--muted)", label: "NEUTRAL" };
 }
 
+// Market Health = the single authoritative market-regime model (same one the
+// Research page's banner uses). The top-bar chip surfaces it so the whole site
+// shows ONE consistent regime label — no more "BULLISH tape" vs "Defensive" clash.
+const MH_LABEL: Record<string, string> = {
+  STRONG_BULL: "Strong Bull", WEAK_BULL: "Weak Bull", SIDEWAYS: "Sideways",
+  CORRECTION: "Correction", BEAR: "Bear", UNKNOWN: "Neutral",
+};
+function mhTone(exposureLabel?: string): string {
+  const l = exposureLabel || "";
+  if (l.includes("Aggressive") || l.includes("Normal")) return "var(--success)";
+  if (l.includes("Defensive")) return "var(--warning)";
+  if (l.includes("Risk-Off")) return "var(--danger)";
+  return "var(--muted)";
+}
+
 interface TopBarProps {
   onMenuClick?: () => void;
   terminalLayout?: boolean;
@@ -36,6 +52,17 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
   // info inline on small screens; tuck diagnostics behind this control).
   const [showDiag, setShowDiag] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+
+  // Single source of truth for the market-regime label (Market Health model).
+  const [mktState, setMktState] = useState<MarketStateResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.marketState().then((s) => alive && setMktState(s)).catch(() => {});
+    load();
+    const id = setInterval(load, 5 * 60 * 1000);  // refresh every 5 min
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const mhLabel = mktState ? (MH_LABEL[mktState.market_state] ?? mktState.market_state) : null;
 
   const regime = snapshot?.market_regime ?? "NEUTRAL";
   const rb = regimeBadge(regime);
@@ -123,7 +150,7 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
       >
-        Market regime {rb.label}. {sigToday} of {maxSig} signals today.
+        Market {mhLabel ?? rb.label}. {sigToday} of {maxSig} signals today.
       </div>
 
       {/* Hamburger - mobile only */}
@@ -158,11 +185,25 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
         {paper ? "PAPER" : "LIVE"}<span className="hidden sm:inline"> · {snapshot?.engine_mode ?? "—"}</span>
       </span>
 
-      {/* Regime */}
-      <span className={`${rb.cls} shrink-0`}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: rb.dot, display: "inline-block" }} />
-        {rb.label}
-      </span>
+      {/* Market regime — Market Health model (matches the Research banner).
+          Falls back to the engine tape regime only if Market Health is unavailable. */}
+      {mktState ? (
+        <span
+          className="badge shrink-0"
+          title={`Market Health ${Math.round(mktState.market_health ?? 0)}/100`
+            + (mktState.opportunity_level ? ` · ${mktState.opportunity_level}` : "")
+            + (mktState.exposure_label ? ` · ${mktState.exposure_label}` : "")}
+          style={{ color: mhTone(mktState.exposure_label), whiteSpace: "nowrap" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: mhTone(mktState.exposure_label), display: "inline-block" }} />
+          {mhLabel}{typeof mktState.market_health === "number" ? ` · ${Math.round(mktState.market_health)}` : ""}
+        </span>
+      ) : (
+        <span className={`${rb.cls} shrink-0`}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: rb.dot, display: "inline-block" }} />
+          {rb.label}
+        </span>
+      )}
 
       {/* Circuit breaker */}
       {cb && (
