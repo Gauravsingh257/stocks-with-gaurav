@@ -53,6 +53,14 @@ _PENDING_RUNAWAY_PCT = float(os.getenv("PORTFOLIO_PENDING_RUNAWAY_PCT", "15.0"))
 # re-hit target — a phantom +8.63%. Past this threshold the arm is retired.
 _PENDING_MAX_SLIP_PCT = float(os.getenv("PORTFOLIO_PENDING_MAX_SLIP_PCT", "2.0"))
 
+# Lifecycle-ledger resync cadence, in tracker cycles.
+_LC_EVERY_N_CYCLES = max(int(os.getenv("LIFECYCLE_SYNC_EVERY_N_CYCLES", "5")), 1)
+_lc_cycle = 0
+
+
+class _SkipLifecycle(Exception):
+    """Control-flow marker: this cycle is not a ledger-sync cycle."""
+
 
 def _arm_and_expire_pending() -> int:
     """Advance every armed (PENDING) system-portfolio idea:
@@ -282,6 +290,14 @@ def _portfolio_tracker_loop() -> None:
             # without each module having to remember to write, which is exactly
             # the kind of "one writer forgot" gap that let the books and the
             # published record drift apart in the first place.
+            # Throttled: the ledger sweep touches every row and takes a write
+            # lock on a database the web service reads on every request. Running
+            # it on each tick added contention for no benefit — a few minutes of
+            # staleness on a history view costs nothing.
+            global _lc_cycle
+            _lc_cycle += 1
+            if _lc_cycle % _LC_EVERY_N_CYCLES != 0:
+                raise _SkipLifecycle()
             from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lc_backfill
             _lc_backfill()
             # Roll up analytics once per cycle so the trend endpoints read a
@@ -297,6 +313,8 @@ def _portfolio_tracker_loop() -> None:
             # without charts — they enrich the detail page, they don't gate it.
             from dashboard.backend.db.lifecycle_capture import capture_missing_charts as _lc_charts
             _lc_charts(limit=int(os.getenv("LIFECYCLE_CHART_CAPTURE_PER_CYCLE", "5")))
+        except _SkipLifecycle:
+            pass
         except Exception:
             log.exception("Portfolio tracker: lifecycle ledger sync error")
         interval = _current_interval()

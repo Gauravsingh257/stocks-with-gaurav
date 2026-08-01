@@ -171,33 +171,52 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("Trade tracker not started: %s", exc)
     # ── Canonical trade-lifecycle ledger ─────────────────────────────────────
-    # Track Record reads ONLY this. Backfill is idempotent (deterministic UUIDs)
-    # so running it every boot re-syncs any rows written while this process was
-    # down without ever duplicating one. Non-fatal: a failure here must not stop
-    # the app, it only leaves the ledger stale until the next boot or a manual
-    # POST /api/lifecycle/backfill.
+    # Track Record reads ONLY this.
+    #
+    # RUNS IN A BACKGROUND THREAD, NEVER ON THE STARTUP PATH. FastAPI does not
+    # serve a single request until every startup handler returns, so doing the
+    # ledger migration + backfill inline meant the app could not answer Railway's
+    # healthcheck while it worked. It timed out at 4:53 and took the whole site
+    # down with a 502. Schema migration and a few hundred upserts are not
+    # something the liveness probe should ever be waiting on.
+    #
+    # Deferring costs nothing: the backfill is idempotent, and the portfolio
+    # tracker re-runs it every cycle, so a boot that skipped it entirely would
+    # still converge within one interval.
     try:
-        from dashboard.backend.db.trade_lifecycle import init_lifecycle_db
-        from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lifecycle_backfill
-        init_lifecycle_db()
-        _res = _lifecycle_backfill()
-        logger.info("[Lifecycle] ledger ready: %s", _res)
-        # Bind the serving loop so the trackers (plain threads) can publish
-        # lifecycle events onto the SSE bus without a loop of their own.
+        import asyncio as _asyncio
+        from dashboard.backend.lifecycle_bus import bind_loop
+        # The loop bind is instant and must happen on the loop thread, so it is
+        # the one piece that stays inline.
+        bind_loop(_asyncio.get_running_loop())
+    except Exception:
+        logger.debug("[Lifecycle] bus loop bind skipped", exc_info=True)
+
+    def _lifecycle_warmup() -> None:
         try:
-            import asyncio as _asyncio
-            from dashboard.backend.lifecycle_bus import bind_loop
-            bind_loop(_asyncio.get_running_loop())
+            from dashboard.backend.db.trade_lifecycle import init_lifecycle_db
+            from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lifecycle_backfill
+            init_lifecycle_db()
+            logger.info("[Lifecycle] ledger ready: %s", _lifecycle_backfill())
         except Exception:
-            logger.debug("[Lifecycle] bus loop bind skipped", exc_info=True)
-        # Seed today's analytics rollup so trend views have a point immediately.
+            logger.exception("[Lifecycle] init/backfill failed (non-fatal)")
+        try:
+            from dashboard.backend.db.lifecycle_chain import link_chains
+            link_chains()
+        except Exception:
+            logger.debug("[Lifecycle] chain link skipped", exc_info=True)
         try:
             from dashboard.backend.db.lifecycle_analytics import snapshot_stats
             snapshot_stats()
         except Exception:
             logger.debug("[Lifecycle] initial snapshot skipped", exc_info=True)
+
+    try:
+        import threading as _threading
+        _threading.Thread(target=_lifecycle_warmup, daemon=True,
+                          name="lifecycle-warmup").start()
     except Exception:
-        logger.exception("[Lifecycle] init/backfill failed (non-fatal)")
+        logger.exception("[Lifecycle] warmup thread failed to start (non-fatal)")
 
     # ── Portfolio system ─────────────────────────────────────────────────────
     try:
