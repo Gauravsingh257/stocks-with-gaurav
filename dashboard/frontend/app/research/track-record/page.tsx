@@ -18,11 +18,12 @@
  *      P&L. "The level we published was reached" is not "we held this".
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ShieldAlert, X } from "lucide-react";
 import {
   api, LifecycleTrade, LifecycleStats, LifecycleFacets, LifecycleTimeline,
+  LifecycleAnalytics,
 } from "@/lib/api";
 
 const PAGE_SIZE = 50;
@@ -105,6 +106,8 @@ export default function TrackRecordPage() {
   const [facets, setFacets] = useState<LifecycleFacets | null>(null);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<LifecycleTimeline | null>(null);
+  const [adv, setAdv] = useState<LifecycleAnalytics | null>(null);
+  const [live, setLive] = useState(false);
 
   // Filters are serialised once and shared by both calls, so the cards and the
   // table can never describe different populations.
@@ -133,11 +136,44 @@ export default function TrackRecordPage() {
   }, [filters, page]);
 
   useEffect(() => { load(); }, [load]);
-  // Keep in step with live book changes without a manual refresh.
   useEffect(() => {
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, [load]);
+    api.lifecycleAnalytics(portfolio).then(setAdv).catch(() => setAdv(null));
+  }, [portfolio]);
+
+  // Push, not poll. The server announces every lifecycle transition over SSE,
+  // so the page reacts the moment a book changes instead of re-asking on a
+  // timer. `load` is read through a ref so the stream is opened once and is not
+  // torn down every time a filter changes.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      try {
+        es = new EventSource(api.lifecycleStreamUrl());
+        es.onopen = () => setLive(true);
+        es.onmessage = (m) => {
+          try {
+            const d = JSON.parse(m.data);
+            if (d.event === "LIFECYCLE_UPDATED") loadRef.current();
+          } catch { /* keepalive frames are not JSON */ }
+        };
+        es.onerror = () => {
+          setLive(false);
+          es?.close();
+          // Reconnect with a fixed backoff; a dropped stream must degrade to
+          // "reconnecting", never to a silently stale page.
+          if (!closed) retry = setTimeout(connect, 5000);
+        };
+      } catch { setLive(false); }
+    };
+    connect();
+    return () => { closed = true; es?.close(); if (retry) clearTimeout(retry); };
+  }, []);
 
   const pages = Math.ceil(total / PAGE_SIZE);
 
@@ -152,6 +188,13 @@ export default function TrackRecordPage() {
         <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,212,255,0.12)", color: "#00d4ff" }}>
           Full lifecycle ledger
         </span>
+        <span title={live ? "Streaming live updates" : "Reconnecting…"}
+              style={{ fontSize: "0.66rem", padding: "2px 8px", borderRadius: 999, display: "flex", alignItems: "center", gap: 5,
+                       background: live ? "rgba(0,224,150,0.12)" : "rgba(240,192,96,0.12)",
+                       color: live ? "#00e096" : "#f0c060" }}>
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
+          {live ? "Live" : "Reconnecting"}
+        </span>
       </div>
 
       <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 8, alignItems: "flex-start", borderLeft: "3px solid #f0c060" }}>
@@ -163,6 +206,18 @@ export default function TrackRecordPage() {
           Past performance does not guarantee future results. Educational purposes only — not investment advice.
         </p>
       </div>
+
+      {stats && (stats.ideas_generated ?? 0) > 0 && (
+        <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "0.66rem", color: "var(--text-secondary)" }}>LIFECYCLE FUNNEL</span>
+          <span style={{ fontSize: "0.8rem" }}><strong>{stats.ideas_generated}</strong> ideas generated</span>
+          <span style={{ color: "var(--text-secondary)" }}>→</span>
+          <span style={{ fontSize: "0.8rem" }}><strong>{stats.positions_taken}</strong> entries taken
+            <span style={{ color: "var(--text-secondary)" }}> ({stats.idea_to_entry_pct}%)</span></span>
+          <span style={{ color: "var(--text-secondary)" }}>→</span>
+          <span style={{ fontSize: "0.8rem", color: "#00e096" }}><strong>{stats.target_hits}</strong> targets hit</span>
+        </div>
+      )}
 
       {stats && (
         <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
@@ -178,6 +233,22 @@ export default function TrackRecordPage() {
           <StatCard label="Pending Entries" value={String(stats.pending_entries)} color="#f0c060" />
           <StatCard label="Expired" value={String(stats.expired_signals)} />
           <StatCard label="Never Executed" value={String(stats.never_executed)} />
+        </div>
+      )}
+
+      {adv && adv.closed_trades > 0 && (
+        <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
+          <StatCard label="Expectancy" value={`${adv.expectancy_pct! > 0 ? "+" : ""}${adv.expectancy_pct}%`} sub="per trade" color={(adv.expectancy_pct ?? 0) >= 0 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Profit Factor" value={adv.profit_factor != null ? String(adv.profit_factor) : "—"} color={(adv.profit_factor ?? 0) >= 1 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Payoff Ratio" value={adv.payoff_ratio != null ? `${adv.payoff_ratio}x` : "—"} />
+          <StatCard label="Sharpe" value={adv.sharpe != null ? String(adv.sharpe) : "—"} />
+          <StatCard label="Sortino" value={adv.sortino != null ? String(adv.sortino) : "—"} />
+          <StatCard label="Max Drawdown" value={adv.max_drawdown_pct != null ? `${adv.max_drawdown_pct}%` : "—"} color="#ff4757" />
+          <StatCard label="Recovery Factor" value={adv.recovery_factor != null ? String(adv.recovery_factor) : "—"} />
+          <StatCard label="Avg MFE" value={adv.avg_mfe_pct != null ? `+${adv.avg_mfe_pct}%` : "—"} sub="best excursion" color="#00e096" />
+          <StatCard label="Avg MAE" value={adv.avg_mae_pct != null ? `${adv.avg_mae_pct}%` : "—"} sub="worst excursion" color="#ff4757" />
+          <StatCard label="Time to Target" value={adv.avg_time_to_target_days != null ? `${adv.avg_time_to_target_days}d` : "—"} />
+          <StatCard label="Time to Stop" value={adv.avg_time_to_stop_days != null ? `${adv.avg_time_to_stop_days}d` : "—"} />
         </div>
       )}
 

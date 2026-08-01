@@ -284,6 +284,10 @@ def _portfolio_tracker_loop() -> None:
             # published record drift apart in the first place.
             from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lc_backfill
             _lc_backfill()
+            # Roll up analytics once per cycle so the trend endpoints read a
+            # stored row instead of recomputing the whole history per request.
+            from dashboard.backend.db.lifecycle_analytics import snapshot_stats as _lc_snap
+            _lc_snap(periods=("DAILY",), portfolios=("ALL", "SWING", "LONGTERM", "MOMENTUM"))
         except Exception:
             log.exception("Portfolio tracker: lifecycle ledger sync error")
         interval = _current_interval()
