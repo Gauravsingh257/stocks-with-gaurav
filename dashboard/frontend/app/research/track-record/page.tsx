@@ -1,283 +1,332 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import Link from "next/link";
-import { ArrowLeft, TrendingUp, TrendingDown, Target, ShieldAlert, Clock } from "lucide-react";
-import { api, type TrackRecordPick } from "@/lib/api";
-import { LedgerSummary } from "./LedgerSummary";
+/**
+ * Track Record — the canonical lifecycle ledger.
+ *
+ * This page reads ONLY /api/lifecycle/*. It never touches research
+ * recommendations. Previously it rendered `stock_recommendations`, which
+ * records IDEAS rather than trades, so names that were never taken into any
+ * book (TIL, STALLION, PNGJL, SENCO…) appeared as successful "Target Hit"
+ * trades while real portfolio trades — SCANSTL closed at +51.18% — were absent
+ * entirely, and the page's win rate could never agree with the books'.
+ *
+ * Two rules the layout enforces:
+ *   1. Summary cards come from a SEPARATE stats call over the whole filtered
+ *      set, never from the rows on screen — a page or a status filter can never
+ *      become the headline.
+ *   2. An idea that never filled is shown as Never Executed and carries no
+ *      P&L. "The level we published was reached" is not "we held this".
+ */
 
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { ArrowLeft, ShieldAlert, X } from "lucide-react";
+import {
+  api, LifecycleTrade, LifecycleStats, LifecycleFacets, LifecycleTimeline,
+} from "@/lib/api";
+
+const PAGE_SIZE = 50;
+
+const PORTFOLIOS = ["ALL", "SWING", "LONGTERM", "MOMENTUM", "RESEARCH", "MANUAL", "PAPER"];
+const STATUSES = [
+  "ALL", "AWAITING_ENTRY", "ENTRY_TRIGGERED", "ACTIVE", "PARTIAL_EXIT",
+  "TARGET_HIT", "STOP_HIT", "EXPIRED", "CANCELLED", "NEVER_EXECUTED",
+];
+const EXECUTION = ["ALL", "EXECUTED", "NEVER_EXECUTED"];
+const ENGINES = ["ALL", "SMC", "MOMENTUM", "MANUAL", "AI"];
+const MONTHS = ["All", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const CONFIDENCE = [{ l: "Any", v: "" }, { l: "90+", v: "90" }, { l: "80+", v: "80" },
+                    { l: "70+", v: "70" }, { l: "60+", v: "60" }];
+const OUTCOMES = ["ALL", "WINNER", "LOSER"];
+
+const label = (s: string) =>
+  s.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Executed outcomes get outcome colours; unexecuted states stay neutral so a
+ *  never-taken idea can never look like a win. */
+function statusStyle(s: string): { bg: string; fg: string } {
+  switch (s) {
+    case "TARGET_HIT": return { bg: "rgba(0,224,150,0.14)", fg: "#00e096" };
+    case "STOP_HIT": return { bg: "rgba(255,71,87,0.14)", fg: "#ff4757" };
+    case "ACTIVE":
+    case "ENTRY_TRIGGERED":
+    case "PARTIAL_EXIT":
+    case "TRAILING_SL": return { bg: "rgba(0,212,255,0.12)", fg: "#00d4ff" };
+    case "AWAITING_ENTRY": return { bg: "rgba(240,192,96,0.12)", fg: "#f0c060" };
+    case "MANUAL_CLOSED": return { bg: "rgba(160,160,180,0.14)", fg: "#b9b9c6" };
+    default: return { bg: "rgba(120,120,140,0.12)", fg: "#8b8b9a" };
+  }
+}
+
+function StatCard({ label: l, value, sub, color }: {
+  label: string; value: string; sub?: string; color?: string;
+}) {
   return (
-    <div className="glass" style={{ padding: "16px 20px", minWidth: 140 }}>
-      <div style={{ fontSize: "0.65rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-secondary)", marginBottom: 4 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: "1.4rem", fontWeight: 700, color }}>{value}</div>
-      {sub && <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginTop: 2 }}>{sub}</div>}
+    <div className="glass" style={{ padding: "10px 14px", minWidth: 132, flexShrink: 0 }}>
+      <div style={{ fontSize: "1.25rem", fontWeight: 700, color: color ?? "var(--text-primary)" }}>{value}</div>
+      <div style={{ fontSize: "0.66rem", color: "var(--text-secondary)", marginTop: 2 }}>{l}</div>
+      {sub && <div style={{ fontSize: "0.6rem", color: "var(--text-secondary)", opacity: 0.75 }}>{sub}</div>}
     </div>
   );
 }
 
-const STATUS_CONFIG: Record<string, { bg: string; color: string; label: string }> = {
-  TARGET_HIT: { bg: "rgba(0,224,150,0.12)", color: "#00e096", label: "Target Hit" },
-  STOP_HIT: { bg: "rgba(255,71,87,0.12)", color: "#ff4757", label: "Stop Hit" },
-  ACTIVE: { bg: "rgba(0,212,255,0.1)", color: "#00d4ff", label: "Awaiting Entry" },
-  RUNNING: { bg: "rgba(0,224,150,0.1)", color: "#00e096", label: "In Progress" },
-  EXPIRED: { bg: "rgba(58,74,107,0.3)", color: "#8899bb", label: "Expired" },
-  ARCHIVED: { bg: "rgba(58,74,107,0.2)", color: "#6677aa", label: "Archived" },
-  CLOSED: { bg: "rgba(245,158,11,0.12)", color: "#f59e0b", label: "Closed" },
-};
+function Chips({ options, value, onChange, fmt }: {
+  options: string[]; value: string; onChange: (v: string) => void; fmt?: (s: string) => string;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {options.map((o) => (
+        <button key={o} onClick={() => onChange(o)} style={{
+          fontSize: "0.68rem", padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+          background: value === o ? "rgba(0,212,255,0.15)" : "transparent",
+          border: `1px solid ${value === o ? "rgba(0,212,255,0.4)" : "rgba(255,255,255,0.08)"}`,
+          color: value === o ? "#00d4ff" : "var(--text-secondary)",
+        }}>{fmt ? fmt(o) : label(o)}</button>
+      ))}
+    </div>
+  );
+}
 
 export default function TrackRecordPage() {
-  const [picks, setPicks] = useState<TrackRecordPick[]>([]);
+  const [portfolio, setPortfolio] = useState("ALL");
+  const [status, setStatus] = useState("ALL");
+  const [execution, setExecution] = useState("ALL");
+  const [engine, setEngine] = useState("ALL");
+  const [month, setMonth] = useState(0);
+  const [year, setYear] = useState<number | "">("");
+  const [minConfidence, setMinConfidence] = useState("");
+  const [outcome, setOutcome] = useState("ALL");
+  const [page, setPage] = useState(0);
+
+  const [rows, setRows] = useState<LifecycleTrade[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<LifecycleStats | null>(null);
+  const [facets, setFacets] = useState<LifecycleFacets | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "swing" | "longterm">("all");
-  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [detail, setDetail] = useState<LifecycleTimeline | null>(null);
 
-  useEffect(() => {
+  // Filters are serialised once and shared by both calls, so the cards and the
+  // table can never describe different populations.
+  const filters = useMemo(() => ({
+    portfolio, status, execution, engine,
+    month: month || undefined,
+    year: year || undefined,
+    min_confidence: minConfidence || undefined,
+    outcome,
+  }), [portfolio, status, execution, engine, month, year, minConfidence, outcome]);
+
+  useEffect(() => { api.lifecycleFacets().then(setFacets).catch(() => {}); }, []);
+  useEffect(() => { setPage(0); }, [filters]);
+
+  const load = useCallback(() => {
     setLoading(true);
-    api.trackRecord(filter, 200)
-      .then((res) => {
-        setPicks(res.picks);
-      })
-      .catch(() => {})
+    Promise.all([
+      api.lifecycleTrades({ ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+      api.lifecycleStats(filters),
+    ]).then(([t, s]) => {
+      setRows(t.items ?? []);
+      setTotal(t.total ?? 0);
+      setStats(s);
+    }).catch(() => { setRows([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [filter]);
+  }, [filters, page]);
 
-  const filtered = useMemo(() => {
-    if (statusFilter === "ALL") return picks;
-    return picks.filter((p) => p.status === statusFilter);
-  }, [picks, statusFilter]);
+  useEffect(() => { load(); }, [load]);
+  // Keep in step with live book changes without a manual refresh.
+  useEffect(() => {
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, [load]);
 
-  // KPIs are computed over the FULL horizon dataset — never over the status
-  // filter.
-  //
-  // These used to recompute on `filtered`, so selecting the "Target Hit" tab
-  // made the denominator the target hits themselves and the Hit Rate tile
-  // published "100% · 10W / 0L". A win rate over the winners is not a win rate,
-  // and this page is public. The status filter now narrows the TABLE only; the
-  // headline always describes every signal in the selected horizon.
-  const derived = useMemo(() => {
-    const rows = picks;
-    const resolvedRows = rows.filter((p) => p.status === "TARGET_HIT" || p.status === "STOP_HIT");
-    const targetHit = rows.filter((p) => p.status === "TARGET_HIT").length;
-    const stopHit = rows.filter((p) => p.status === "STOP_HIT").length;
-    const resolved = resolvedRows.length;
-    const resolvedPnls = resolvedRows.map((p) => p.pnl_pct).filter((v): v is number => v !== null);
-    const allPnls = rows.map((p) => p.pnl_pct).filter((v): v is number => v !== null);
-    const round = (n: number, d = 1) => Math.round(n * 10 ** d) / 10 ** d;
-    return {
-      total_picks: rows.length,
-      resolved,
-      target_hit: targetHit,
-      stop_hit: stopHit,
-      hit_rate_pct: resolved > 0 ? round((targetHit / resolved) * 100) : 0,
-      avg_pnl_pct: resolvedPnls.length ? round(resolvedPnls.reduce((a, b) => a + b, 0) / resolvedPnls.length, 2) : 0,
-      best_pnl_pct: allPnls.length ? round(Math.max(...allPnls), 2) : 0,
-      worst_pnl_pct: allPnls.length ? round(Math.min(...allPnls), 2) : 0,
-      has_pnl: allPnls.length > 0,
-    };
-  }, [picks]);
+  const pages = Math.ceil(total / PAGE_SIZE);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Header */}
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <Link href="/research" style={{ display: "flex", alignItems: "center", gap: 6, color: "#5b9cf6", textDecoration: "none", fontSize: "0.82rem" }}>
           <ArrowLeft size={16} /> Research
         </Link>
         <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.1)" }} />
-        <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700 }}>Signal Track Record</h1>
-        <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(240,192,96,0.12)", color: "#f0c060" }}>
-          Research signals — not the Portfolio
+        <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700 }}>Track Record</h1>
+        <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(0,212,255,0.12)", color: "#00d4ff" }}>
+          Full lifecycle ledger
         </span>
       </div>
 
-      {/* Honesty banner. The two datasets barely overlap — 148 symbols here were
-          never portfolio positions, and 29 portfolio trades (SCANSTL's +51%
-          among them) never appear here — so the distinction has to be stated
-          outright, not left for the reader to infer from a mismatch. */}
       <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 8, alignItems: "flex-start", borderLeft: "3px solid #f0c060" }}>
         <ShieldAlert size={15} color="#f0c060" style={{ flexShrink: 0, marginTop: 2 }} />
         <p style={{ margin: 0, fontSize: "0.72rem", lineHeight: 1.5, color: "var(--text-secondary)" }}>
-          <strong>This page is every signal the research engine published — it is not the Portfolio.</strong>{" "}
-          A signal appears here whether or not it was ever taken into a book, and most expire without triggering.
-          Positions actually held, and their realised win rate and book return, live on the{" "}
-          <Link href="/research" style={{ color: "#5b9cf6" }}>Portfolio</Link>. The two lists are different
-          populations measured different ways, so their numbers are not meant to match.
-          <br />
-          Prices here are <strong>hypothetical</strong> and assume entry/exit at the levels shown.
-          Hit rate and average P&amp;L cover only <strong>resolved</strong> signals (a small sample) and will move as more resolve.
-          Past performance does not guarantee future results. For educational purposes only — not investment advice.
+          Every signal across Swing, Long-Term, Momentum and Research, tracked from idea to outcome.
+          An idea that never reached its entry is shown as <strong>Never Executed</strong> and carries no P&amp;L —
+          only positions actually held contribute to win rate and returns.
+          Past performance does not guarantee future results. Educational purposes only — not investment advice.
         </p>
       </div>
 
-      {/* PR3 — survivorship-free headline from the immutable ledger (counts every idea, incl. expired) */}
-      <LedgerSummary horizon={filter} />
-
-      {/* Summary Cards — ALWAYS over every signal in the horizon, never the
-          status filter. Labels say "All signals" so the basis is on the tile
-          itself and a filtered table can never be read as the headline. */}
-      {!loading && (
-        <>
-        <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label="Total Signals" value={String(derived.total_picks)} sub="all signals in this horizon" color="var(--text-primary)" />
-          <StatCard label="Resolved" value={String(derived.resolved)} sub={`of ${derived.total_picks} · rest still open`} color="var(--text-primary)" />
-          <StatCard label="Hit Rate" value={derived.resolved > 0 ? `${derived.hit_rate_pct}%` : "—"} sub={`${derived.target_hit}W / ${derived.stop_hit}L of ${derived.resolved} resolved`} color={derived.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Avg P&L" value={derived.resolved > 0 ? `${derived.avg_pnl_pct > 0 ? "+" : ""}${derived.avg_pnl_pct}%` : "—"} sub={`on ${derived.resolved} resolved`} color={derived.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Best" value={derived.has_pnl ? `${derived.best_pnl_pct > 0 ? "+" : ""}${derived.best_pnl_pct}%` : "—"} color="#00e096" />
-          <StatCard label="Worst" value={derived.has_pnl ? `${derived.worst_pnl_pct}%` : "—"} color="#ff4757" />
+      {stats && (
+        <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
+          <StatCard label="Signals Generated" value={String(stats.signals_generated)} />
+          <StatCard label="Entries Triggered" value={String(stats.entries_triggered)} sub={`${stats.execution_rate_pct}% execution rate`} />
+          <StatCard label="Win Rate" value={stats.closed_trades ? `${stats.win_rate_pct}%` : "—"} sub={`${stats.wins}/${stats.closed_trades} closed`} color={stats.win_rate_pct >= 50 ? "#00e096" : "#f0c060"} />
+          <StatCard label="Target Hit Rate" value={stats.closed_trades ? `${stats.target_hit_rate_pct}%` : "—"} sub={`${stats.target_hits} target`} color="#00e096" />
+          <StatCard label="SL Rate" value={stats.closed_trades ? `${stats.sl_rate_pct}%` : "—"} sub={`${stats.stop_hits} stopped`} color="#ff4757" />
+          <StatCard label="Avg Return" value={stats.closed_trades ? `${stats.avg_return_pct > 0 ? "+" : ""}${stats.avg_return_pct}%` : "—"} sub="per closed trade" color={stats.avg_return_pct >= 0 ? "#00e096" : "#ff4757"} />
+          <StatCard label="Avg RR" value={stats.avg_rr != null ? `${stats.avg_rr}R` : "—"} />
+          <StatCard label="Avg Holding" value={stats.avg_holding_days ? `${stats.avg_holding_days}d` : "—"} />
+          <StatCard label="Open Trades" value={String(stats.open_trades)} color="#00d4ff" />
+          <StatCard label="Pending Entries" value={String(stats.pending_entries)} color="#f0c060" />
+          <StatCard label="Expired" value={String(stats.expired_signals)} />
+          <StatCard label="Never Executed" value={String(stats.never_executed)} />
         </div>
-        {statusFilter !== "ALL" && (
-          <div style={{ fontSize: "0.7rem", color: "#f0c060", display: "flex", alignItems: "center", gap: 6 }}>
-            <ShieldAlert size={13} />
-            Showing <strong>{filtered.length}</strong> “{statusFilter.replace(/_/g, " ").toLowerCase()}” signal(s) below.
-            The figures above still cover all {derived.total_picks} signals — a filtered subset is never reported as the headline rate.
-          </div>
-        )}
-        </>
       )}
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        {(["all", "swing", "longterm"] as const).map((h) => (
-          <button
-            key={h}
-            onClick={() => setFilter(h)}
-            style={{
-              padding: "5px 14px", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600,
-              cursor: "pointer", border: "1px solid",
-              background: filter === h ? "rgba(0,212,255,0.15)" : "transparent",
-              borderColor: filter === h ? "rgba(0,212,255,0.4)" : "rgba(255,255,255,0.08)",
-              color: filter === h ? "#00d4ff" : "var(--text-secondary)",
-            }}
-          >
-            {h === "all" ? "All" : h === "swing" ? "Swing" : "Long-Term"}
-          </button>
-        ))}
-        <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.08)", margin: "0 4px" }} />
-        {["ALL", "TARGET_HIT", "STOP_HIT", "ACTIVE", "EXPIRED"].map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
-            style={{
-              padding: "4px 10px", borderRadius: 5, fontSize: "0.68rem", fontWeight: 600,
-              cursor: "pointer", border: "1px solid",
-              background: statusFilter === s ? (STATUS_CONFIG[s]?.bg || "rgba(0,212,255,0.1)") : "transparent",
-              borderColor: statusFilter === s ? (STATUS_CONFIG[s]?.color || "#00d4ff") + "55" : "rgba(255,255,255,0.06)",
-              color: statusFilter === s ? (STATUS_CONFIG[s]?.color || "#00d4ff") : "var(--text-dim)",
-            }}
-          >
-            {s === "ALL" ? "All" : STATUS_CONFIG[s]?.label || s}
-          </button>
-        ))}
+      <div className="glass" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>PORTFOLIO</div>
+          <Chips options={PORTFOLIOS} value={portfolio} onChange={setPortfolio} /></div>
+        <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>STATUS</div>
+          <Chips options={STATUSES} value={status} onChange={setStatus} /></div>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>EXECUTION</div>
+            <Chips options={EXECUTION} value={execution} onChange={setExecution} /></div>
+          <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>ENGINE</div>
+            <Chips options={ENGINES} value={engine} onChange={setEngine} /></div>
+          <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>OUTCOME</div>
+            <Chips options={OUTCOMES} value={outcome} onChange={setOutcome} /></div>
+          <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>CONFIDENCE</div>
+            <Chips options={CONFIDENCE.map((c) => c.v)} value={minConfidence} onChange={setMinConfidence}
+                   fmt={(v) => CONFIDENCE.find((c) => c.v === v)?.l ?? v} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>MONTH</div>
+            <Chips options={MONTHS.map((_, i) => String(i))} value={String(month)}
+                   onChange={(v) => setMonth(Number(v))} fmt={(v) => MONTHS[Number(v)]} /></div>
+          {facets && facets.years.length > 0 && (
+            <div><div style={{ fontSize: "0.62rem", color: "var(--text-secondary)", marginBottom: 4 }}>YEAR</div>
+              <Chips options={["", ...facets.years.map(String)]} value={String(year)}
+                     onChange={(v) => setYear(v ? Number(v) : "")} fmt={(v) => v || "All"} /></div>
+          )}
+        </div>
       </div>
 
-      {/* Table */}
-      {loading ? (
-        <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>Loading track record...</div>
-      ) : filtered.length === 0 ? (
-        <div className="glass" style={{ padding: 20, textAlign: "center", color: "var(--text-secondary)" }}>No matching results for current filters — try widening the criteria or check back after the next scan.</div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="data-table data-table--freeze" style={{ minWidth: 900 }}>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Type</th>
-                <th>Setup</th>
-                <th>Entry</th>
-                <th>SL</th>
-                <th>Target</th>
-                <th>Exit</th>
-                <th>P&L %</th>
-                <th>Days</th>
-                <th>Conf.</th>
-                <th>Status</th>
-                <th>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((pick) => {
-                const sc = STATUS_CONFIG[pick.status] || STATUS_CONFIG.ACTIVE;
-                const pnl = pick.pnl_pct;
-                const targets = pick.targets || [];
-                // ACTIVE = signal fired but price hasn't reached entry yet, so
-                // exit/P&L/days are genuinely N/A. Tell the visitor why rather
-                // than leaving a bare dash that reads as "broken".
-                const awaiting = pick.status === "ACTIVE";
-                const naTitle = awaiting ? "Awaiting entry trigger — not filled yet" : undefined;
-                return (
-                  <tr key={pick.id}>
-                    <td>
-                      <a
-                        href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(pick.symbol.replace("NSE:", ""))}`}
-                        target="_blank" rel="noopener noreferrer"
-                        style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 600, fontSize: "0.82rem" }}
-                      >
-                        {pick.symbol.replace("NSE:", "")}
-                      </a>
-                    </td>
-                    <td style={{ fontSize: "0.72rem" }}>
-                      <span style={{
-                        padding: "2px 6px", borderRadius: 4, fontSize: "0.65rem", fontWeight: 600,
-                        background: pick.agent_type === "SWING" ? "rgba(91,156,246,0.12)" : "rgba(240,192,96,0.12)",
-                        color: pick.agent_type === "SWING" ? "#5b9cf6" : "#f0c060",
-                      }}>
-                        {pick.agent_type}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{pick.setup || "—"}</td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem" }}>₹{pick.entry_price.toFixed(2)}</td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#ff4757" }}>
-                      {pick.stop_loss ? `₹${pick.stop_loss.toFixed(2)}` : "—"}
-                    </td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#00e096" }}>
-                      {targets.length > 0 ? `₹${Number(targets[0]).toFixed(2)}` : "—"}
-                    </td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.78rem" }} title={naTitle}>
-                      {pick.exit_price ? `₹${pick.exit_price.toFixed(2)}` : pick.current_price ? `₹${pick.current_price.toFixed(2)}` : awaiting ? "Awaiting" : "—"}
-                    </td>
-                    <td title={naTitle} style={{
-                      fontWeight: 700, fontSize: "0.82rem",
-                      color: pnl === null ? "var(--text-dim)" : pnl >= 0 ? "#00e096" : "#ff4757",
-                    }}>
-                      {pnl !== null ? `${pnl > 0 ? "+" : ""}${pnl}%` : "—"}
-                    </td>
-                    <td style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }} title={naTitle}>
-                      {pick.days_held !== null ? `${pick.days_held}d` : "—"}
-                    </td>
-                    <td>
-                      <div style={{
-                        width: 32, height: 32, borderRadius: "50%", display: "grid", placeItems: "center",
-                        fontSize: "0.65rem", fontWeight: 700,
-                        background: `conic-gradient(${pick.confidence_score >= 70 ? "#00e096" : pick.confidence_score >= 50 ? "#f59e0b" : "#ff4757"} ${pick.confidence_score * 3.6}deg, rgba(255,255,255,0.05) 0deg)`,
-                        color: "var(--text-primary)",
-                      }}>
-                        {pick.confidence_score.toFixed(0)}
-                      </div>
-                    </td>
-                    <td>
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", gap: 4,
-                        padding: "2px 8px", borderRadius: 4, fontSize: "0.65rem", fontWeight: 600,
-                        background: sc.bg, color: sc.color,
-                      }}>
-                        {pick.status === "TARGET_HIT" && <Target size={10} />}
-                        {pick.status === "STOP_HIT" && <ShieldAlert size={10} />}
-                        {(pick.status === "ACTIVE" || pick.status === "RUNNING") && <TrendingUp size={10} />}
-                        {pick.status === "EXPIRED" && <Clock size={10} />}
-                        {sc.label}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: "0.72rem", color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-                      {pick.created_at ? new Date(pick.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+        {loading ? "Loading…" : `${total} record(s) · page ${page + 1} of ${Math.max(pages, 1)}`}
+        {status !== "ALL" && !loading && (
+          <span style={{ color: "#f0c060" }}> · cards above always cover the full filtered set, never just this status</span>
+        )}
+      </div>
+
+      <div className="glass" style={{ padding: 0, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.75rem" }}>
+          <thead>
+            <tr style={{ background: "rgba(255,255,255,0.03)", textAlign: "left" }}>
+              {["SYMBOL", "BOOK", "SETUP", "ENTRY", "SL", "TARGET", "EXIT", "P&L %", "DAYS", "CONF.", "STATUS", "DATE"].map((h) => (
+                <th key={h} style={{ padding: "9px 12px", fontSize: "0.62rem", color: "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const st = statusStyle(r.status);
+              return (
+                <tr key={r.uuid} onClick={() => api.lifecycleTimeline(r.uuid).then(setDetail).catch(() => {})}
+                    style={{ borderTop: "1px solid rgba(255,255,255,0.05)", cursor: "pointer" }}>
+                  <td style={{ padding: "9px 12px", color: "#5b9cf6", fontWeight: 600, whiteSpace: "nowrap" }}>{r.symbol.replace("NSE:", "")}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <span style={{ fontSize: "0.6rem", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
+                      {r.portfolio ?? r.source}
+                    </span>
+                  </td>
+                  <td style={{ padding: "9px 12px", color: "var(--text-secondary)", fontSize: "0.68rem", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.setup ?? "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.entry_price != null ? `₹${r.entry_price}` : "—"}</td>
+                  <td style={{ padding: "9px 12px", color: "#ff4757" }}>{r.stop_loss != null ? `₹${r.stop_loss}` : "—"}</td>
+                  <td style={{ padding: "9px 12px", color: "#00e096" }}>{r.target_1 != null ? `₹${r.target_1}` : "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.exit_price != null ? `₹${r.exit_price}` : (r.executed ? "Open" : "—")}</td>
+                  <td style={{ padding: "9px 12px", fontWeight: 700, color: r.pnl_pct == null ? "var(--text-secondary)" : r.pnl_pct >= 0 ? "#00e096" : "#ff4757" }}>
+                    {r.pnl_pct == null ? "—" : `${r.pnl_pct > 0 ? "+" : ""}${r.pnl_pct}%`}
+                  </td>
+                  <td style={{ padding: "9px 12px", color: "var(--text-secondary)" }}>{r.holding_days != null ? `${r.holding_days}d` : "—"}</td>
+                  <td style={{ padding: "9px 12px", color: "var(--text-secondary)" }}>{r.confidence != null ? Math.round(r.confidence) : "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <span style={{ fontSize: "0.62rem", padding: "3px 8px", borderRadius: 999, background: st.bg, color: st.fg, whiteSpace: "nowrap" }}>
+                      {label(r.status)}
+                    </span>
+                  </td>
+                  <td style={{ padding: "9px 12px", color: "var(--text-secondary)", fontSize: "0.68rem", whiteSpace: "nowrap" }}>
+                    {(r.exit_at ?? r.created_at ?? "").slice(0, 10)}
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && rows.length === 0 && (
+              <tr><td colSpan={12} style={{ padding: 26, textAlign: "center", color: "var(--text-secondary)" }}>No records match these filters.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {pages > 1 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
+          <button disabled={page === 0} onClick={() => setPage((p) => p - 1)}
+                  style={{ padding: "5px 12px", fontSize: "0.72rem", borderRadius: 6, cursor: page === 0 ? "default" : "pointer", opacity: page === 0 ? 0.4 : 1, background: "transparent", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-primary)" }}>Previous</button>
+          <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>{page + 1} / {pages}</span>
+          <button disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}
+                  style={{ padding: "5px 12px", fontSize: "0.72rem", borderRadius: 6, cursor: page + 1 >= pages ? "default" : "pointer", opacity: page + 1 >= pages ? 0.4 : 1, background: "transparent", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-primary)" }}>Next</button>
+        </div>
+      )}
+
+      {detail?.found && detail.trade && (
+        <div onClick={() => setDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div className="glass" onClick={(e) => e.stopPropagation()} style={{ padding: 20, maxWidth: 620, width: "100%", maxHeight: "84vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: "1rem" }}>
+                {detail.trade.symbol.replace("NSE:", "")}
+                <span style={{ marginLeft: 8, fontSize: "0.66rem", padding: "2px 8px", borderRadius: 999, ...statusStyle(detail.trade.status) as object, background: statusStyle(detail.trade.status).bg, color: statusStyle(detail.trade.status).fg }}>
+                  {label(detail.trade.status)}
+                </span>
+              </h2>
+              <button onClick={() => setDetail(null)} style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}><X size={18} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 10, fontSize: "0.72rem", marginBottom: 14 }}>
+              {[["Book", detail.trade.portfolio ?? detail.trade.source],
+                ["Engine", detail.trade.engine ?? "—"],
+                ["Entry", detail.trade.entry_price != null ? `₹${detail.trade.entry_price}` : "—"],
+                ["Stop", detail.trade.stop_loss != null ? `₹${detail.trade.stop_loss}` : "—"],
+                ["Target", detail.trade.target_1 != null ? `₹${detail.trade.target_1}` : "—"],
+                ["Exit", detail.trade.exit_price != null ? `₹${detail.trade.exit_price}` : "—"],
+                ["P&L", detail.trade.pnl_pct != null ? `${detail.trade.pnl_pct}%` : "—"],
+                ["RR", detail.trade.rr_realized != null ? `${detail.trade.rr_realized}R` : "—"],
+                ["Held", detail.trade.holding_days != null ? `${detail.trade.holding_days}d` : "—"]].map(([k, v]) => (
+                <div key={String(k)}>
+                  <div style={{ color: "var(--text-secondary)", fontSize: "0.62rem" }}>{k}</div>
+                  <div style={{ fontWeight: 600 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {detail.trade.setup && (
+              <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: 12 }}>
+                <strong>Setup:</strong> {detail.trade.setup}
+              </div>
+            )}
+            <h3 style={{ fontSize: "0.78rem", margin: "0 0 8px" }}>Lifecycle</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {(detail.events ?? []).map((e, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, fontSize: "0.7rem", borderLeft: "2px solid rgba(0,212,255,0.35)", paddingLeft: 10 }}>
+                  <span style={{ color: "var(--text-secondary)", minWidth: 132 }}>{(e.occurred_at ?? "").slice(0, 19).replace("T", " ")}</span>
+                  <span>
+                    <strong>{label(e.event)}</strong>
+                    {e.from_status && e.to_status && e.from_status !== e.to_status &&
+                      ` · ${label(e.from_status)} → ${label(e.to_status)}`}
+                    {!e.from_status && e.to_status && ` · ${label(e.to_status)}`}
+                    {e.price != null && ` · ₹${e.price}`}
+                  </span>
+                </div>
+              ))}
+              {(detail.events ?? []).length === 0 && (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>No events recorded.</div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

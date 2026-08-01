@@ -1693,6 +1693,13 @@ export const api = {
   /** Survivorship-free track record from the immutable ledger (PR3). */
   trackRecordLedger: (horizon: "swing" | "longterm" | "all" = "all", limit = 200) =>
     get<TrackRecordLedgerResponse>(`/api/research/track-record/ledger?horizon=${horizon}&limit=${limit}`),
+  // ── Canonical trade-lifecycle ledger (Track Record source of truth) ───────
+  lifecycleTrades: (q: Record<string, string | number | undefined>) =>
+    get<LifecycleTradesResponse>(`/api/lifecycle/trades?${lifecycleQS(q)}`),
+  lifecycleStats: (q: Record<string, string | number | undefined>) =>
+    get<LifecycleStats>(`/api/lifecycle/stats?${lifecycleQS(q)}`),
+  lifecycleFacets: () => get<LifecycleFacets>("/api/lifecycle/facets"),
+  lifecycleTimeline: (id: string) => get<LifecycleTimeline>(`/api/lifecycle/trade/${id}`),
   submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
   scanStatus: () => get<ScanStatusResponse>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
@@ -1895,3 +1902,86 @@ export const api = {
   screener: (name: string, timeframe: string, authToken?: string | null) =>
     get<ScreenerResult>(`/api/screeners/${encodeURIComponent(name)}/${encodeURIComponent(timeframe)}`, authToken, 20_000),
 };
+
+// ── Trade lifecycle ledger ──────────────────────────────────────────────────
+/** Serialise only the filters that are set, so defaults don't bloat the URL. */
+export function lifecycleQS(q: Record<string, string | number | undefined>): string {
+  const p = new URLSearchParams();
+  Object.entries(q).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "" && v !== "ALL") p.set(k, String(v));
+  });
+  return p.toString();
+}
+
+export interface LifecycleTrade {
+  uuid: string;
+  source: string;
+  portfolio: string | null;
+  engine: string | null;
+  setup: string | null;
+  symbol: string;
+  direction: string;
+  confidence: number | null;
+  entry_price: number | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  idea_at: string | null;
+  entry_trigger_at: string | null;
+  entry_fill_at: string | null;
+  exit_at: string | null;
+  exit_price: number | null;
+  exit_reason: string | null;
+  status: string;
+  executed: number;
+  pnl_pct: number | null;
+  rr_realized: number | null;
+  holding_days: number | null;
+  created_at: string;
+}
+
+export interface LifecycleTradesResponse {
+  items: LifecycleTrade[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export interface LifecycleStats {
+  signals_generated: number;
+  entries_triggered: number;
+  execution_rate_pct: number;
+  closed_trades: number;
+  target_hits: number;
+  stop_hits: number;
+  target_hit_rate_pct: number;
+  sl_rate_pct: number;
+  wins: number;
+  win_rate_pct: number;
+  avg_return_pct: number;
+  sum_return_pct: number;
+  avg_rr: number | null;
+  avg_holding_days: number;
+  open_trades: number;
+  pending_entries: number;
+  expired_signals: number;
+  never_executed: number;
+  partial_exits: number;
+  basis?: string;
+}
+
+export interface LifecycleFacets {
+  portfolios: string[];
+  sources: string[];
+  statuses: string[];
+  engines: string[];
+  years: number[];
+}
+
+export interface LifecycleTimeline {
+  found: boolean;
+  trade?: LifecycleTrade;
+  events?: { event: string; from_status: string | null; to_status: string | null;
+             price: number | null; note: string | null; occurred_at: string }[];
+}

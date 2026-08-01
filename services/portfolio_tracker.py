@@ -272,6 +272,20 @@ def _portfolio_tracker_loop() -> None:
                 log.info("[WatchlistTrigger] %s", res)
         except Exception:
             log.exception("Portfolio tracker: watchlist-trigger error")
+        try:
+            # 4) Re-sync the canonical lifecycle ledger that Track Record reads.
+            #
+            # Driven from this loop rather than wired into every call site: the
+            # backfill upserts on deterministic UUIDs, so it is idempotent and
+            # picks up state changes from EVERY source (swing, long-term,
+            # momentum, research) in one pass. That keeps Track Record current
+            # without each module having to remember to write, which is exactly
+            # the kind of "one writer forgot" gap that let the books and the
+            # published record drift apart in the first place.
+            from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lc_backfill
+            _lc_backfill()
+        except Exception:
+            log.exception("Portfolio tracker: lifecycle ledger sync error")
         interval = _current_interval()
         time.sleep(interval)
 
