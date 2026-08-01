@@ -2078,6 +2078,8 @@ export interface LifecycleDetail {
              price: number | null; note: string | null; occurred_at: string }[];
   recommendation?: Record<string, unknown> | null;
   context?: Record<string, unknown> | null;
+  chart_entry?: OhlcWindow | null;
+  chart_exit?: OhlcWindow | null;
   chain?: { chain_id: string; stages: LifecycleTrade[];
             engines_that_traded_it: string[]; converted: boolean };
   alerts?: { kind: string; message: string; sent_at: string }[];
@@ -2085,4 +2087,13 @@ export interface LifecycleDetail {
                  points?: { label: string; price: number; pct: number | null; at?: string }[];
                  stop_loss?: number | null; target_1?: number | null; target_2?: number | null };
   analysis?: { verdict: string; notes: string[]; giveback_pct: number | null; basis?: string };
+}
+
+export interface OhlcWindow {
+  symbol: string;
+  interval: string;
+  anchor: string;
+  anchor_index: number;
+  bars: { d: string; o: number; h: number; l: number; c: number; v: number }[];
+  captured_at: string;
 }

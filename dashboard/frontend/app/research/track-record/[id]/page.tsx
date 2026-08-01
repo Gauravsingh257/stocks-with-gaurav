@@ -88,6 +88,51 @@ function PricePath({ d }: { d: NonNullable<LifecycleDetail["price_path"]> }) {
   );
 }
 
+
+/** Candle chart from the captured OHLC window. Entry/exit bar is highlighted. */
+function Candles({ data, levels }: {
+  data: { bars: { d: string; o: number; h: number; l: number; c: number }[]; anchor: string };
+  levels?: { stop?: number | null; target?: number | null; entry?: number | null };
+}) {
+  const bars = data?.bars ?? [];
+  if (!bars.length) return null;
+  const H = 170;
+  const lo = Math.min(...bars.map((b) => b.l), ...(levels ? [levels.stop, levels.target, levels.entry].filter((n): n is number => typeof n === "number") : []));
+  const hi = Math.max(...bars.map((b) => b.h), ...(levels ? [levels.stop, levels.target, levels.entry].filter((n): n is number => typeof n === "number") : []));
+  const span = hi - lo || 1;
+  const y = (v: number) => H - ((v - lo) / span) * H;
+  const w = 100 / bars.length;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H }}>
+        {levels?.stop != null && <line x1="0" x2="100" y1={y(levels.stop)} y2={y(levels.stop)} stroke="#ff4757" strokeWidth="0.5" strokeDasharray="2 2" />}
+        {levels?.target != null && <line x1="0" x2="100" y1={y(levels.target)} y2={y(levels.target)} stroke="#00e096" strokeWidth="0.5" strokeDasharray="2 2" />}
+        {levels?.entry != null && <line x1="0" x2="100" y1={y(levels.entry)} y2={y(levels.entry)} stroke="#b9b9c6" strokeWidth="0.5" strokeDasharray="1 3" />}
+        {bars.map((b, i) => {
+          const x = i * w + w / 2;
+          const up = b.c >= b.o;
+          const col = b.d === data.anchor ? "#00d4ff" : up ? "#00e096" : "#ff4757";
+          return (
+            <g key={b.d}>
+              <line x1={x} x2={x} y1={y(b.h)} y2={y(b.l)} stroke={col} strokeWidth="0.35" />
+              <rect x={x - w * 0.3} width={w * 0.6}
+                    y={y(Math.max(b.o, b.c))}
+                    height={Math.max(Math.abs(y(b.o) - y(b.c)), 0.8)}
+                    fill={col} opacity={b.d === data.anchor ? 1 : 0.75} />
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.58rem", color: "var(--text-secondary)", marginTop: 4 }}>
+        <span>{bars[0].d}</span>
+        <span style={{ color: "#00d4ff" }}>{data.anchor}</span>
+        <span>{bars[bars.length - 1].d}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function TradeDetailPage() {
   const params = useParams();
   const id = String(params?.id ?? "");
@@ -151,6 +196,27 @@ export default function TradeDetailPage() {
       <Section icon={<Activity size={15} color="#00d4ff" />} title="Price path">
         <PricePath d={d.price_path ?? { available: false }} />
       </Section>
+
+      {(d.chart_entry || d.chart_exit) && (
+        <Section icon={<Activity size={15} color="#00d4ff" />} title="Chart at entry / exit">
+          <div style={{ display: "grid", gridTemplateColumns: d.chart_exit ? "1fr 1fr" : "1fr", gap: 16 }}>
+            {d.chart_entry && (
+              <div>
+                <div style={{ fontSize: "0.66rem", color: "var(--text-secondary)", marginBottom: 6 }}>At entry</div>
+                <Candles data={d.chart_entry as never}
+                         levels={{ stop: t.stop_loss, target: t.target_1, entry: t.entry_price }} />
+              </div>
+            )}
+            {d.chart_exit && (
+              <div>
+                <div style={{ fontSize: "0.66rem", color: "var(--text-secondary)", marginBottom: 6 }}>At exit</div>
+                <Candles data={d.chart_exit as never}
+                         levels={{ stop: t.stop_loss, target: t.target_1, entry: t.entry_price }} />
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
 
       {d.analysis && (
         <Section icon={<Brain size={15} color="#c084fc" />} title="Post-trade analysis">

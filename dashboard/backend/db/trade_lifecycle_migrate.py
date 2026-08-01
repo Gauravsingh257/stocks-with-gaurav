@@ -299,6 +299,13 @@ def backfill(dry_run: bool = False) -> dict:
 
         if not dry_run:
             conn.commit()
+            # Stamp the config fingerprint so "which rules produced this trade?"
+            # is answerable even when a version label was never bumped.
+            try:
+                from .lifecycle_capture import backfill_algorithm_hash
+                c["algorithm_hash_stamped"] = backfill_algorithm_hash().get("stamped", 0)
+            except Exception:
+                pass
         c["ledger_rows"] = conn.execute("SELECT COUNT(*) n FROM trade_lifecycle").fetchone()["n"]
         logger.info("[Lifecycle] backfill: %s", c)
         return {"ok": True, "dry_run": dry_run, **c}
