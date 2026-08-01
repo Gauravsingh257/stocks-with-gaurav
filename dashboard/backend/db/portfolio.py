@@ -344,34 +344,36 @@ def migrate_journal_duplicate_flag() -> None:
 def mark_journal_duplicates(dry_run: bool = False) -> dict:
     """Flag re-seed artifacts in portfolio_journal. Idempotent; safe to re-run.
 
-    ONE rule: same (symbol, horizon, entry 2dp) closed within
-    JOURNAL_DUPE_WINDOW_MIN minutes of each other. A position cannot genuinely
-    be entered and exited twice at an identical price inside that window, so
-    every such cluster is one holding; the rest are re-close artifacts.
+    TWO rules, because duplicates arrive through two different doors and the
+    correct row to KEEP differs between them.
 
-    This catches BOTH doors that have produced duplicates:
-      * the seed loop — one still-open engine trade re-created and re-closed
-        every tracker cycle (CIPLA x11 inside 51 minutes);
-      * the phantom re-fill — a position exits, the symbol is re-armed at the
-        SAME stale entry, the arm fills instantly because price is already
-        through it, and it re-hits target minutes later (NAZARA journaled twice
-        as TARGET_HIT at 290.95, 2m41s apart, both counted, +8.63% of pure
-        fiction).
+    RULE A — SAME LINEAGE. Key = (symbol, horizon, entry 2dp, created_at), with
+    NO time bound. One position that the seed loop kept re-creating and
+    re-closing produces many journal rows that all share the origin timestamp.
+    The proof they are one holding is `days_held`: it is measured from the fixed
+    origin, so it COUNTS UP across the rows (APTUS: 7,7,7,7,8,9,12,12,13,23,45
+    over 38 days at entry 272.70) instead of resetting toward zero as it would
+    for genuine separate entries. KEEP THE LAST by closed_at — the terminal
+    outcome of that holding (CIPLA's final STOP_HIT after 10 TREND_BREAKs).
 
-    DELIBERATELY NOT keyed on `created_at`. An earlier version treated any rows
-    sharing an origin timestamp as duplicates with no time bound, which looked
-    tighter but was quietly flattering: APTUS had 11 same-origin rows spanning
-    38 DAYS, and collapsing them hid 11 positions that each genuinely occupied a
-    slot, entered and exited. On the real book that removed net-negative trades
-    and lifted the swing win rate 41.7% -> 46.9% and the book return +3.52% ->
-    +4.26%. Those trades were produced by a bug, but they happened, so they are
-    counted. Only rows that cannot both be real — same price, minutes apart —
-    are excluded.
+    RULE B — PHANTOM RE-FILL. Key = (symbol, horizon, entry 2dp) closed within
+    JOURNAL_DUPE_WINDOW_MIN minutes, IGNORING created_at. After a position
+    exits, the symbol could be re-armed at the SAME stale entry from a *new*
+    origin and fill instantly because price was already through it, re-hitting
+    target minutes later. KEEP THE FIRST by closed_at — the earlier row is the
+    genuine exit; anything landing minutes later at an identical entry is the
+    re-fill artifact. NAZARA: the real close was +8.58% (lineage from 2026-06-16,
+    45 days held); the +8.63% two minutes later came from a 2026-07-16 arm that
+    filled at 290.95 while price was 314.85.
 
-    The row kept as canonical is the LAST by closed_at: it is the terminal
-    outcome of that holding (e.g. CIPLA's final STOP_HIT), which is what actually
-    happened. Nothing is deleted — the journal stays immutable; duplicates are
-    only marked so statistics can exclude them.
+    A previous revision dropped Rule A on the reasoning that APTUS's 11
+    same-origin rows each "occupied a slot so they happened". The days_held
+    evidence disproves that — they are one position observed repeatedly — and
+    counting them buried 10 phantom losses in the swing book, understating the
+    win rate.
+
+    Nothing is deleted — the journal stays immutable; duplicates are only marked
+    so statistics can exclude them.
     """
     conn = get_connection()
     try:
@@ -384,14 +386,44 @@ def mark_journal_duplicates(dry_run: bool = False) -> dict:
             "FROM portfolio_journal ORDER BY datetime(closed_at) ASC, id ASC"
         ).fetchall()
 
+        # ── RULE A: same lineage (shared origin) → keep the LAST (terminal) ──
         groups: dict[tuple, list] = {}
-
-        # Cluster by (symbol, horizon, entry) then split on time gaps larger
-        # than the window. Each resulting cluster is one real holding.
-        by_entry: dict[tuple, list] = {}
         for r in rows:
-            k = (str(r["symbol"]).strip().upper(), str(r["horizon"]).strip().upper(),
-                 round(float(r["entry_price"] or 0), 2))
+            key = ("~lineage",
+                   str(r["symbol"]).strip().upper(),
+                   str(r["horizon"]).strip().upper(),
+                   round(float(r["entry_price"] or 0), 2),
+                   str(r["created_at"] or ""))
+            groups.setdefault(key, []).append(r)
+
+        dupe_ids: list[int] = []
+        detail: list[dict] = []
+
+        def _record(grp, keeper, losers, rule, key):
+            dupe_ids.extend(int(r["id"]) for r in losers)
+            detail.append({
+                "symbol": key[1], "horizon": key[2], "entry_price": key[3],
+                "rule": rule, "rows": len(grp), "marked": len(losers),
+                "pnl_pct_removed": round(sum(float(r["profit_loss_pct"] or 0) for r in losers), 2),
+                "kept_row_pnl_pct": round(float(keeper["profit_loss_pct"] or 0), 2),
+            })
+
+        # PASS 1 — collapse each lineage to its terminal (last) close.
+        survivors = []
+        for key, grp in groups.items():
+            if len(grp) > 1:
+                _record(grp, grp[-1], grp[:-1], "same-lineage", key)
+            survivors.append(grp[-1])
+        survivors.sort(key=lambda r: (str(r["closed_at"]), int(r["id"])))
+
+        # PASS 2 — RULE B applies only ACROSS lineages, to what PASS 1 left.
+        # Running both passes over the raw rows would conflict: lineage keeps the
+        # LAST row while the window keeps the FIRST, so their union would flag
+        # every row in a group that satisfies both.
+        by_entry: dict[tuple, list] = {}
+        for r in survivors:
+            k = ("~window", str(r["symbol"]).strip().upper(),
+                 str(r["horizon"]).strip().upper(), round(float(r["entry_price"] or 0), 2))
             by_entry.setdefault(k, []).append(r)
         for k, seq in by_entry.items():
             if len(seq) < 2:
@@ -403,29 +435,11 @@ def mark_journal_duplicates(dry_run: bool = False) -> dict:
                     cluster.append(cur)
                 else:
                     if len(cluster) > 1:
-                        groups.setdefault(("~window", *k, cluster[0]["id"]), cluster)
+                        _record(cluster, cluster[0], cluster[1:], "phantom-refill-within-window", k)
                     cluster = [cur]
             if len(cluster) > 1:
-                groups.setdefault(("~window", *k, cluster[0]["id"]), cluster)
+                _record(cluster, cluster[0], cluster[1:], "phantom-refill-within-window", k)
 
-        dupe_ids: list[int] = []
-        detail: list[dict] = []
-        for key, grp in groups.items():
-            if len(grp) < 2:
-                continue
-            sym, hz, entry = key[1], key[2], key[3]
-            # keep the terminal (last-closed) row; everything before it is churn
-            losers = grp[:-1]
-            dupe_ids.extend(int(r["id"]) for r in losers)
-            detail.append({
-                "symbol": sym, "horizon": hz, "entry_price": entry,
-                "rule": "same-entry-within-window",
-                "rows": len(grp), "marked": len(losers),
-                "pnl_pct_removed": round(sum(float(r["profit_loss_pct"] or 0) for r in losers), 2),
-                "kept_row_pnl_pct": round(float(grp[-1]["profit_loss_pct"] or 0), 2),
-            })
-
-        # The two rules can flag the same row; collapse before writing/counting.
         dupe_ids = sorted(set(dupe_ids))
         keep_ids = [int(r["id"]) for r in rows if int(r["id"]) not in set(dupe_ids)]
         if not dry_run:
@@ -796,17 +810,27 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         # a separate holding.
         _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
         _has_dupe_col = "is_duplicate" in _cols
-        prior_ids: list[int] = []
+        prior_ids: list[int] = []       # earlier rows this close supersedes
+        self_is_dupe = False            # this close is itself the artifact
         if _has_dupe_col:
             candidates = conn.execute(
-                "SELECT id, closed_at FROM portfolio_journal "
+                "SELECT id, created_at, closed_at FROM portfolio_journal "
                 "WHERE symbol = ? AND horizon = ? AND ROUND(entry_price, 2) = ROUND(?, 2)",
                 (pos["symbol"], pos["horizon"], entry),
             ).fetchall()
             for c in candidates:
+                same_lineage = str(c["created_at"] or "") == str(pos["created_at"] or "")
                 gap = _minutes_between(c["closed_at"], now_str)
-                if gap is not None and gap <= JOURNAL_DUPE_WINDOW_MIN:
+                in_window = gap is not None and gap <= JOURNAL_DUPE_WINDOW_MIN
+                if same_lineage:
+                    # Same holding re-closed: this row is the newer terminal
+                    # outcome, so it supersedes the earlier one.
                     prior_ids.append(int(c["id"]))
+                elif in_window:
+                    # A different origin closing at an identical entry minutes
+                    # after a genuine exit is a phantom re-fill — THIS row is
+                    # the artifact; the earlier close stands.
+                    self_is_dupe = True
 
         # Journal entry (immutable — never deleted)
         cols = ("position_id, symbol, horizon, direction, entry_price, exit_price, "
@@ -823,7 +847,7 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         ]
         if _has_dupe_col:
             cols += ", is_duplicate"
-            vals.append(0)  # newest close is always the canonical one
+            vals.append(1 if self_is_dupe else 0)
         conn.execute(
             f"INSERT INTO portfolio_journal ({cols}) VALUES ({', '.join('?' * len(vals))})",
             tuple(vals),

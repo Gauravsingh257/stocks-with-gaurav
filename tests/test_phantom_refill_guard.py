@@ -100,19 +100,46 @@ def test_g0_allows_the_same_level_again_once_it_is_no_longer_stale():
 
 # ── Rule 2: two closes at one entry inside the window = one holding ──────────
 
-def test_rule2_flags_the_nazara_double_target_hit():
-    """Both rows have DIFFERENT created_at, so Rule 1 alone missed them."""
+def test_phantom_refill_keeps_the_genuine_earlier_exit():
+    """A re-fill from a NEW origin minutes later is the artifact, not the truth.
+
+    Real NAZARA data: the genuine close was +8.58% (lineage from 2026-06-16,
+    45 days held); +8.63% two minutes later came from a 2026-07-16 arm that
+    filled at 290.95 while price was already 314.85. Keeping the LAST row would
+    publish the fabricated one, so the window rule keeps the FIRST.
+    """
     now = datetime.now(_IST)
     _closed("NSE:NAZARA", 290.95, 315.90, "TARGET_HIT",
             (now - timedelta(minutes=6)).isoformat(), created_at="2026-06-16 07:00:00")
     _closed("NSE:NAZARA", 290.95, 316.05, "TARGET_HIT",
-            (now - timedelta(minutes=3)).isoformat(), created_at="2026-07-31 10:50:00")
+            (now - timedelta(minutes=3)).isoformat(), created_at="2026-07-16 07:00:00")
 
     res = mark_journal_duplicates()
-    assert res["duplicates"] == 1, "the earlier of the two closes must be flagged"
+    assert res["duplicates"] == 1, "the later re-fill must be flagged"
     s = get_journal_stats("SWING")
     assert s["total_trades"] == 1, "one holding, not two"
-    assert s["sum_trade_return_pct"] == pytest.approx(8.63, abs=0.05)
+    assert s["sum_trade_return_pct"] == pytest.approx(8.58, abs=0.05), \
+        "the genuine earlier exit must be the one counted"
+
+
+def test_same_lineage_collapses_regardless_of_time_span():
+    """APTUS: 11 rows over 38 DAYS, one origin, days_held counting up 7 -> 45.
+
+    One position the seed loop kept re-creating and re-closing. days_held is
+    measured from the fixed origin so it grows instead of resetting, which is
+    what proves these are not separate entries. The terminal (last) close wins.
+    """
+    now = datetime.now(_IST)
+    origin = "2026-06-16 07:03:39"
+    for days_ago, exit_px in ((38, 267.8), (30, 264.9), (20, 265.1), (0, 262.9)):
+        _closed("NSE:APTUS", 272.70, exit_px, "STRUCTURE_BREAK",
+                (now - timedelta(days=days_ago)).isoformat(), created_at=origin)
+
+    res = mark_journal_duplicates()
+    assert res["duplicates"] == 3, "all but the terminal close are artifacts"
+    s = get_journal_stats("SWING")
+    assert s["total_trades"] == 1, "one holding across 38 days, not four trades"
+    assert s["sum_trade_return_pct"] == pytest.approx((262.9 - 272.70) / 272.70 * 100, abs=0.05)
 
 
 def test_rule2_leaves_a_genuine_reentry_days_later_intact():
@@ -142,7 +169,7 @@ def test_duplicates_are_marked_never_deleted():
     _closed("NSE:NAZARA", 290.95, 315.90, "TARGET_HIT",
             (now - timedelta(minutes=6)).isoformat(), created_at="2026-06-16 07:00:00")
     _closed("NSE:NAZARA", 290.95, 316.05, "TARGET_HIT",
-            (now - timedelta(minutes=3)).isoformat(), created_at="2026-07-31 10:50:00")
+            (now - timedelta(minutes=3)).isoformat(), created_at="2026-07-16 07:00:00")
     mark_journal_duplicates()
 
     c = get_connection()
@@ -152,7 +179,8 @@ def test_duplicates_are_marked_never_deleted():
     finally:
         c.close()
     assert len(rows) == 2, "both rows must still exist — nothing is ever deleted"
-    assert [r["is_duplicate"] for r in rows] == [1, 0]
+    # Genuine earlier exit kept; the later re-fill flagged.
+    assert [r["is_duplicate"] for r in rows] == [0, 1]
 
 
 def test_insert_time_detection_flags_without_waiting_for_a_sweep():

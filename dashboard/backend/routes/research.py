@@ -1591,7 +1591,16 @@ def get_track_record(
         for row in rows:
             row = dict(row)
             status = row.get("trade_status") or row.get("status") or "ACTIVE"
-            entry = float(row["entry_price"])
+            # entry_price / confidence_score are nullable. Unguarded float(None)
+            # raised TypeError, and since nothing caught it the whole endpoint
+            # 500'd — but ONLY for horizons containing such a row, so
+            # ?horizon=swing died while ?horizon=longterm worked. The UI's error
+            # path left the previous unfiltered list on screen, which is why
+            # selecting "Swing" appeared to show Long-Term rows.
+            try:
+                entry = float(row["entry_price"])
+            except (TypeError, ValueError):
+                continue  # a signal with no entry price is not renderable
             current = float(row["current_price"]) if row.get("current_price") else None
             exit_p = float(row["exit_price"]) if row.get("exit_price") else None
             pnl_pct = float(row["profit_loss_pct"]) if row.get("profit_loss_pct") else None
@@ -1625,7 +1634,7 @@ def get_track_record(
                 "entry_price": entry,
                 "stop_loss": float(row["stop_loss"]) if row.get("stop_loss") else None,
                 "targets": targets,
-                "confidence_score": float(row.get("confidence_score", 0)),
+                "confidence_score": float(row.get("confidence_score") or 0),
                 "current_price": current,
                 "exit_price": exit_p,
                 "exit_date": row.get("exit_date"),
