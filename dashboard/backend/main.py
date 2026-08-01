@@ -51,6 +51,7 @@ from dashboard.backend.routes.user_product import router as user_product_router
 from dashboard.backend.routes.risk_dashboard import router as risk_dashboard_router
 from dashboard.backend.routes.rejection_analysis import router as rejection_analysis_router
 from dashboard.backend.routes.momentum_portfolio import router as momentum_portfolio_router
+from dashboard.backend.routes.lifecycle import router as lifecycle_router
 from dashboard.backend.routes.portfolio_intelligence import router as portfolio_intelligence_router
 from dashboard.backend.routes.product_analytics import router as product_analytics_router
 from dashboard.backend.websocket import ws_endpoint, start_broadcast_loop, stop_broadcast_loop
@@ -169,6 +170,21 @@ async def lifespan(app: FastAPI):
         log.info("Trade price tracker started")
     except Exception as exc:
         log.warning("Trade tracker not started: %s", exc)
+    # ── Canonical trade-lifecycle ledger ─────────────────────────────────────
+    # Track Record reads ONLY this. Backfill is idempotent (deterministic UUIDs)
+    # so running it every boot re-syncs any rows written while this process was
+    # down without ever duplicating one. Non-fatal: a failure here must not stop
+    # the app, it only leaves the ledger stale until the next boot or a manual
+    # POST /api/lifecycle/backfill.
+    try:
+        from dashboard.backend.db.trade_lifecycle import init_lifecycle_db
+        from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lifecycle_backfill
+        init_lifecycle_db()
+        _res = _lifecycle_backfill()
+        logger.info("[Lifecycle] ledger ready: %s", _res)
+    except Exception:
+        logger.exception("[Lifecycle] init/backfill failed (non-fatal)")
+
     # ── Portfolio system ─────────────────────────────────────────────────────
     try:
         from dashboard.backend.db.portfolio import init_portfolio_db, seed_portfolio_from_recommendations
@@ -422,6 +438,7 @@ app.include_router(command_center_router)
 app.include_router(user_product_router)
 app.include_router(rejection_analysis_router)      # Phase-1: discovery→rejected export (read-only)
 app.include_router(momentum_portfolio_router)      # Independent Momentum Portfolio (read-only API)
+app.include_router(lifecycle_router)                # Canonical trade-lifecycle ledger (Track Record source)
 app.include_router(portfolio_intelligence_router)  # Portfolio Intelligence Layer (read-only; gated by PIL_ENABLED)
 app.include_router(product_analytics_router)  # First-party product analytics (validation-phase KPIs/funnel)
 app.include_router(terminal_router)  # Phase 2: /api/trades, /api/discovery-feed
