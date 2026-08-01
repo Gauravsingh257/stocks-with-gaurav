@@ -286,6 +286,10 @@ def _portfolio_tracker_loop() -> None:
             _lc_backfill()
             # Roll up analytics once per cycle so the trend endpoints read a
             # stored row instead of recomputing the whole history per request.
+            # Attach new positions to the research idea that produced them, so
+            # cross-engine conversion stays answerable as the book turns over.
+            from dashboard.backend.db.lifecycle_chain import link_chains as _lc_link
+            _lc_link()
             from dashboard.backend.db.lifecycle_analytics import snapshot_stats as _lc_snap
             _lc_snap(periods=("DAILY",), portfolios=("ALL", "SWING", "LONGTERM", "MOMENTUM"))
         except Exception:

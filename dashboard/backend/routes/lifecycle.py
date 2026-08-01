@@ -226,3 +226,91 @@ def set_record_state(lifecycle_id: str, state: str = Query(..., pattern="^(ACTIV
         return {"ok": bool(cur.rowcount), "uuid": lifecycle_id, "record_state": state.upper()}
     finally:
         conn.close()
+
+
+# ── Visual analytics dashboards ──────────────────────────────────────────────
+
+@router.get("/dashboard/monthly")
+def dashboard_monthly(portfolio: str = Query("ALL"), months: int = Query(24, ge=1, le=120)):
+    """Return, win rate and cumulative curve per calendar month."""
+    from dashboard.backend.db.lifecycle_dashboards import monthly_performance
+    try:
+        return monthly_performance(portfolio=portfolio, months=months)
+    except Exception as exc:
+        log.exception("monthly dashboard failed")
+        return {"points": [], "error": str(exc)}
+
+
+@router.get("/dashboard/engines")
+def dashboard_engines(by_version: bool = Query(False)):
+    """Compare books, or engine VERSIONS, on the same closed population."""
+    from dashboard.backend.db.lifecycle_dashboards import engine_comparison
+    try:
+        return engine_comparison(by_version=by_version)
+    except Exception as exc:
+        log.exception("engine comparison failed")
+        return {"rows": [], "error": str(exc)}
+
+
+@router.get("/dashboard/funnel")
+def dashboard_funnel(portfolio: str = Query("ALL")):
+    """Idea -> entry -> closed -> target, with the drop at each stage."""
+    from dashboard.backend.db.lifecycle_dashboards import conversion_funnel
+    try:
+        return conversion_funnel(portfolio=portfolio)
+    except Exception as exc:
+        log.exception("funnel failed")
+        return {"stages": [], "error": str(exc)}
+
+
+@router.get("/dashboard/exits")
+def dashboard_exits(portfolio: str = Query("ALL")):
+    """Exit-reason attribution — where the money is made and lost."""
+    from dashboard.backend.db.lifecycle_dashboards import exit_attribution
+    try:
+        return exit_attribution(portfolio=portfolio)
+    except Exception as exc:
+        log.exception("exit attribution failed")
+        return {"rows": [], "error": str(exc)}
+
+
+@router.get("/detail/{lifecycle_id}")
+def full_trade_detail(lifecycle_id: str):
+    """Everything the trade-detail page needs in one call: ledger row, event
+    history, chain, alerts, price path and derived post-trade analysis."""
+    from dashboard.backend.db.lifecycle_dashboards import trade_detail
+    try:
+        return trade_detail(lifecycle_id)
+    except Exception as exc:
+        log.exception("trade detail failed")
+        return {"found": False, "error": str(exc)}
+
+
+# ── Cross-engine chain attribution ───────────────────────────────────────────
+
+@router.post("/chain/link")
+def chain_link(dry_run: bool = Query(False)):
+    """Attach POSITION rows to the IDEA that plausibly produced them."""
+    from dashboard.backend.db.lifecycle_chain import link_chains
+    return link_chains(dry_run=dry_run)
+
+
+@router.get("/chain/{chain_id}")
+def chain_view(chain_id: str):
+    """Every stage of one idea's life, across whichever engines picked it up."""
+    from dashboard.backend.db.lifecycle_chain import chain
+    try:
+        return chain(chain_id)
+    except Exception as exc:
+        return {"chain_id": chain_id, "stages": [], "error": str(exc)}
+
+
+@router.get("/chain-attribution")
+def chain_attribution():
+    """How each engine converts published ideas into outcomes."""
+    from dashboard.backend.db.lifecycle_chain import cross_engine_attribution
+    try:
+        return cross_engine_attribution()
+    except Exception as exc:
+        log.exception("chain attribution failed")
+        return {"per_engine": [], "error": str(exc)}

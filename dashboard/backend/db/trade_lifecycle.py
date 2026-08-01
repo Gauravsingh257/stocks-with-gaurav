@@ -230,7 +230,41 @@ CREATE TABLE IF NOT EXISTS lifecycle_stats_snapshots (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lss_key
     ON lifecycle_stats_snapshots(period, period_key, portfolio);
 CREATE INDEX IF NOT EXISTS idx_lss_period ON lifecycle_stats_snapshots(period, period_key DESC);
+
+-- Telegram (and any future channel) alerts, kept so a trade's detail page can
+-- show what was actually communicated at the time rather than a reconstruction.
+CREATE TABLE IF NOT EXISTS lifecycle_alerts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    lifecycle_id  TEXT,
+    symbol        TEXT NOT NULL,
+    kind          TEXT NOT NULL,      -- ENTRY | EXIT | ARMED | TARGET | STOP | INFO
+    channel       TEXT NOT NULL DEFAULT 'TELEGRAM',
+    message       TEXT NOT NULL,
+    sent_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_la_symbol ON lifecycle_alerts(symbol, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_la_lifecycle ON lifecycle_alerts(lifecycle_id);
 """
+
+
+def record_alert(symbol: str, kind: str, message: str, *,
+                 lifecycle_id: str | None = None, channel: str = "TELEGRAM") -> None:
+    """Persist an outgoing alert. Best-effort: alerting must never fail a trade
+    write, so every error here is swallowed."""
+    try:
+        init_lifecycle_db()
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO lifecycle_alerts (lifecycle_id, symbol, kind, channel, message, sent_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (lifecycle_id, str(symbol).upper(), kind.upper(), channel, message, _now()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("[Lifecycle] record_alert failed (non-fatal)", exc_info=True)
 
 
 def init_lifecycle_db() -> None:

@@ -270,6 +270,19 @@ def _send_portfolio_entry_alert(position: dict) -> None:
         }, timeout=10)
     except Exception:
         log.warning("Portfolio entry alert: Telegram post failed (best-effort)")
+    _log_alert(position.get("symbol"), "ENTRY", msg)
+
+
+def _log_alert(symbol, kind: str, message: str) -> None:
+    """Keep a copy of what was actually communicated, so a trade's detail page
+    shows the real alert rather than a reconstruction. Never raises."""
+    try:
+        if not symbol:
+            return
+        from dashboard.backend.db.trade_lifecycle import record_alert
+        record_alert(symbol, kind, message)
+    except Exception:
+        pass
 
 
 def _send_portfolio_armed_alert(position: dict) -> None:
@@ -335,6 +348,7 @@ def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float
                       timeout=10)
     except Exception:
         log.warning("Portfolio triggered alert: Telegram post failed (best-effort)")
+    _log_alert(symbol, "ENTRY_TRIGGERED", "\n".join(lines))
 
 
 def _send_portfolio_exit_alert(result: dict) -> None:
@@ -363,3 +377,4 @@ def _send_portfolio_exit_alert(result: dict) -> None:
         "text": msg,
         "parse_mode": "HTML",
     }, timeout=10)
+    _log_alert(result.get("symbol"), "EXIT", msg)
