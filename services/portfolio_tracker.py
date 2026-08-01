@@ -45,6 +45,13 @@ def _update_portfolio_prices() -> int:
 # away, so the slot is freed for a real candidate.
 _PENDING_MAX_DAYS = int(os.getenv("PORTFOLIO_PENDING_MAX_DAYS", "7"))        # arm validity window (calendar days)
 _PENDING_RUNAWAY_PCT = float(os.getenv("PORTFOLIO_PENDING_RUNAWAY_PCT", "15.0"))  # setup ran away → expire
+# Maximum distance CMP may sit BEYOND the planned entry (in the profitable
+# direction) and still count as a genuine tap. Beyond this the move has already
+# happened: filling at the planned entry would book a gain that was never
+# earned, since the position is recorded at a price that is no longer available.
+# NAZARA filled at ₹290.95 while trading at ₹314.85 (+8.2% beyond) and instantly
+# re-hit target — a phantom +8.63%. Past this threshold the arm is retired.
+_PENDING_MAX_SLIP_PCT = float(os.getenv("PORTFOLIO_PENDING_MAX_SLIP_PCT", "2.0"))
 
 
 def _arm_and_expire_pending() -> int:
@@ -99,6 +106,26 @@ def _arm_and_expire_pending() -> int:
             is_pullback = arm_ref >= entry
             # Genuine tap: price traded through the planned entry in the right dir.
             tapped = (cmp <= entry) if is_pullback else (cmp >= entry)
+
+            # STALE-FILL GUARD. A "tap" only counts while price is still AT the
+            # level. If CMP has already run past the entry in the profitable
+            # direction by more than _PENDING_MAX_SLIP_PCT, the move is over —
+            # filling at the planned entry would fabricate the gap as profit the
+            # instant the row is created, and can immediately register as a
+            # target hit. Retire the arm instead of manufacturing a fill.
+            if tapped and _PENDING_MAX_SLIP_PCT > 0:
+                slip_pct = ((entry - cmp) / entry * 100.0) if is_pullback \
+                    else ((cmp - entry) / entry * 100.0)
+                if slip_pct > _PENDING_MAX_SLIP_PCT:
+                    log.warning(
+                        "[ArmOnTap] %s stale fill refused — CMP %.2f is %.2f%% beyond entry %.2f "
+                        "(max %.2f%%); expiring instead of booking an unearned gap",
+                        p["symbol"], cmp, slip_pct, entry, _PENDING_MAX_SLIP_PCT,
+                    )
+                    if expire_pending_position(pid, "EXPIRED_STALE_FILL"):
+                        expired += 1
+                    continue
+
             if tapped:
                 # Fill at the planned entry (the level just traded through) so P&L
                 # starts at zero — no fabricated gain. Strategy entry unchanged.

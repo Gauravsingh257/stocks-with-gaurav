@@ -49,11 +49,16 @@ export default function TrackRecordPage() {
     return picks.filter((p) => p.status === statusFilter);
   }, [picks, statusFilter]);
 
-  // KPIs recompute over the CURRENTLY-FILTERED rows so they react in real time
-  // to both the horizon (Swing/Long-Term) and the status filter — not just the
-  // server-side horizon summary.
+  // KPIs are computed over the FULL horizon dataset — never over the status
+  // filter.
+  //
+  // These used to recompute on `filtered`, so selecting the "Target Hit" tab
+  // made the denominator the target hits themselves and the Hit Rate tile
+  // published "100% · 10W / 0L". A win rate over the winners is not a win rate,
+  // and this page is public. The status filter now narrows the TABLE only; the
+  // headline always describes every signal in the selected horizon.
   const derived = useMemo(() => {
-    const rows = filtered;
+    const rows = picks;
     const resolvedRows = rows.filter((p) => p.status === "TARGET_HIT" || p.status === "STOP_HIT");
     const targetHit = rows.filter((p) => p.status === "TARGET_HIT").length;
     const stopHit = rows.filter((p) => p.status === "STOP_HIT").length;
@@ -72,7 +77,7 @@ export default function TrackRecordPage() {
       worst_pnl_pct: allPnls.length ? round(Math.min(...allPnls), 2) : 0,
       has_pnl: allPnls.length > 0,
     };
-  }, [filtered]);
+  }, [picks]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -82,18 +87,27 @@ export default function TrackRecordPage() {
           <ArrowLeft size={16} /> Research
         </Link>
         <div style={{ width: 1, height: 20, background: "rgba(255,255,255,0.1)" }} />
-        <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700 }}>Track Record</h1>
+        <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700 }}>Signal Track Record</h1>
         <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 4, background: "rgba(240,192,96,0.12)", color: "#f0c060" }}>
-          Algorithm-Generated Signals
+          Research signals — not the Portfolio
         </span>
       </div>
 
-      {/* Honesty banner — these are hypothetical signals, not executed trades */}
+      {/* Honesty banner. The two datasets barely overlap — 148 symbols here were
+          never portfolio positions, and 29 portfolio trades (SCANSTL's +51%
+          among them) never appear here — so the distinction has to be stated
+          outright, not left for the reader to infer from a mismatch. */}
       <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 8, alignItems: "flex-start", borderLeft: "3px solid #f0c060" }}>
         <ShieldAlert size={15} color="#f0c060" style={{ flexShrink: 0, marginTop: 2 }} />
         <p style={{ margin: 0, fontSize: "0.72rem", lineHeight: 1.5, color: "var(--text-secondary)" }}>
-          These are <strong>algorithm-generated signals, not executed trades</strong>. Prices are hypothetical and assume entry/exit at the levels shown.
-          Hit rate and average P&amp;L are computed only over <strong>resolved</strong> signals (a small sample) and will move as more resolve.
+          <strong>This page is every signal the research engine published — it is not the Portfolio.</strong>{" "}
+          A signal appears here whether or not it was ever taken into a book, and most expire without triggering.
+          Positions actually held, and their realised win rate and book return, live on the{" "}
+          <Link href="/research" style={{ color: "#5b9cf6" }}>Portfolio</Link>. The two lists are different
+          populations measured different ways, so their numbers are not meant to match.
+          <br />
+          Prices here are <strong>hypothetical</strong> and assume entry/exit at the levels shown.
+          Hit rate and average P&amp;L cover only <strong>resolved</strong> signals (a small sample) and will move as more resolve.
           Past performance does not guarantee future results. For educational purposes only — not investment advice.
         </p>
       </div>
@@ -101,16 +115,27 @@ export default function TrackRecordPage() {
       {/* PR3 — survivorship-free headline from the immutable ledger (counts every idea, incl. expired) */}
       <LedgerSummary horizon={filter} />
 
-      {/* Summary Cards — computed live from the applied filters */}
+      {/* Summary Cards — ALWAYS over every signal in the horizon, never the
+          status filter. Labels say "All signals" so the basis is on the tile
+          itself and a filtered table can never be read as the headline. */}
       {!loading && (
+        <>
         <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label={statusFilter === "ALL" ? "Total Signals" : "Matching Signals"} value={String(derived.total_picks)} color="var(--text-primary)" />
+          <StatCard label="Total Signals" value={String(derived.total_picks)} sub="all signals in this horizon" color="var(--text-primary)" />
           <StatCard label="Resolved" value={String(derived.resolved)} sub={`of ${derived.total_picks} · rest still open`} color="var(--text-primary)" />
           <StatCard label="Hit Rate" value={derived.resolved > 0 ? `${derived.hit_rate_pct}%` : "—"} sub={`${derived.target_hit}W / ${derived.stop_hit}L of ${derived.resolved} resolved`} color={derived.hit_rate_pct >= 50 ? "#00e096" : "#ff4757"} />
           <StatCard label="Avg P&L" value={derived.resolved > 0 ? `${derived.avg_pnl_pct > 0 ? "+" : ""}${derived.avg_pnl_pct}%` : "—"} sub={`on ${derived.resolved} resolved`} color={derived.avg_pnl_pct >= 0 ? "#00e096" : "#ff4757"} />
           <StatCard label="Best" value={derived.has_pnl ? `${derived.best_pnl_pct > 0 ? "+" : ""}${derived.best_pnl_pct}%` : "—"} color="#00e096" />
           <StatCard label="Worst" value={derived.has_pnl ? `${derived.worst_pnl_pct}%` : "—"} color="#ff4757" />
         </div>
+        {statusFilter !== "ALL" && (
+          <div style={{ fontSize: "0.7rem", color: "#f0c060", display: "flex", alignItems: "center", gap: 6 }}>
+            <ShieldAlert size={13} />
+            Showing <strong>{filtered.length}</strong> “{statusFilter.replace(/_/g, " ").toLowerCase()}” signal(s) below.
+            The figures above still cover all {derived.total_picks} signals — a filtered subset is never reported as the headline rate.
+          </div>
+        )}
+        </>
       )}
 
       {/* Filters */}
