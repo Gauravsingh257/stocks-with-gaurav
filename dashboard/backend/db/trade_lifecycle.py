@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -267,20 +268,38 @@ def record_alert(symbol: str, kind: str, message: str, *,
         logger.debug("[Lifecycle] record_alert failed (non-fatal)", exc_info=True)
 
 
-def init_lifecycle_db() -> None:
-    conn = get_connection()
-    try:
-        conn.executescript(_DDL)
-        conn.executescript(_STATS_DDL)
-        have = {r[1] for r in conn.execute("PRAGMA table_info(trade_lifecycle)").fetchall()}
-        for name, decl in _EXTRA_COLS:
-            if name not in have:
-                conn.execute(f"ALTER TABLE trade_lifecycle ADD COLUMN {name} {decl}")
-        for idx in _EXTRA_INDEXES:
-            conn.execute(idx)
-        conn.commit()
-    finally:
-        conn.close()
+_initialised = False
+_init_lock = threading.Lock()
+
+
+def init_lifecycle_db(force: bool = False) -> None:
+    """Create/migrate the ledger schema. Cheap after the first successful call.
+
+    Every read path calls this defensively, so without the guard each query
+    re-ran the full DDL script, a PRAGMA and up to 30 ALTER attempts — per
+    request. That is pure overhead on a hot path and it holds a write lock on a
+    database the trackers are also using.
+    """
+    global _initialised
+    if _initialised and not force:
+        return
+    with _init_lock:
+        if _initialised and not force:
+            return
+        conn = get_connection()
+        try:
+            conn.executescript(_DDL)
+            conn.executescript(_STATS_DDL)
+            have = {r[1] for r in conn.execute("PRAGMA table_info(trade_lifecycle)").fetchall()}
+            for name, decl in _EXTRA_COLS:
+                if name not in have:
+                    conn.execute(f"ALTER TABLE trade_lifecycle ADD COLUMN {name} {decl}")
+            for idx in _EXTRA_INDEXES:
+                conn.execute(idx)
+            conn.commit()
+            _initialised = True
+        finally:
+            conn.close()
 
 
 def make_uuid(source: str, source_table: str, source_id) -> str:
