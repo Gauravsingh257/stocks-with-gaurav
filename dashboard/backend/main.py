@@ -182,6 +182,20 @@ async def lifespan(app: FastAPI):
         init_lifecycle_db()
         _res = _lifecycle_backfill()
         logger.info("[Lifecycle] ledger ready: %s", _res)
+        # Bind the serving loop so the trackers (plain threads) can publish
+        # lifecycle events onto the SSE bus without a loop of their own.
+        try:
+            import asyncio as _asyncio
+            from dashboard.backend.lifecycle_bus import bind_loop
+            bind_loop(_asyncio.get_running_loop())
+        except Exception:
+            logger.debug("[Lifecycle] bus loop bind skipped", exc_info=True)
+        # Seed today's analytics rollup so trend views have a point immediately.
+        try:
+            from dashboard.backend.db.lifecycle_analytics import snapshot_stats
+            snapshot_stats()
+        except Exception:
+            logger.debug("[Lifecycle] initial snapshot skipped", exc_info=True)
     except Exception:
         logger.exception("[Lifecycle] init/backfill failed (non-fatal)")
 

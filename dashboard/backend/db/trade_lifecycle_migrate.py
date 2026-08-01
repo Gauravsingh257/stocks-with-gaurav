@@ -28,11 +28,28 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from .schema import get_connection
 from .trade_lifecycle import init_lifecycle_db, upsert, _f
 
 logger = logging.getLogger(__name__)
+
+
+# Engine attribution. Bumping these makes "which engine version performs best?"
+# answerable from the ledger alone, without re-deriving it from git history.
+ENGINE_VERSIONS = {
+    "SMC": os.getenv("SMC_ENGINE_VERSION", "SMC v4.2.1"),
+    "MOMENTUM": os.getenv("MOMENTUM_ENGINE_VERSION", "Momentum v2.1"),
+}
+
+
+def _pct(price, entry):
+    """Excursion as % from entry — the raw high/low is meaningless on its own."""
+    p, e = _f(price), _f(entry)
+    if p is None or not e:
+        return None
+    return round((p - e) / e * 100, 2)
 
 
 def _exit_reason_to_status(reason: str | None) -> str:
@@ -45,8 +62,10 @@ def _exit_reason_to_status(reason: str | None) -> str:
         return "EXPIRED"
     if r in ("CANCELLED", "CANCELED"):
         return "CANCELLED"
-    # STALE_EXIT / STRUCTURE_BREAK / TREND_BREAK / MANUAL / CLOSED — a real
-    # position closed by a rule rather than by target or stop.
+    if r in ("STALE_EXIT", "EXPIRED_TIMEOUT", "TIME_EXIT"):
+        return "TIME_EXIT"          # closed by a time rule, not by price
+    if r in ("STRUCTURE_BREAK", "TREND_BREAK", "FORCED_EXIT") or r.startswith("MANUAL:"):
+        return "FORCED_EXIT"        # risk/structure override closed it
     return "MANUAL_CLOSED"
 
 
@@ -80,7 +99,8 @@ def backfill(dry_run: bool = False) -> dict:
             for r in conn.execute(
                 f"SELECT id, symbol, horizon, direction, entry_price, exit_price, stop_loss, "
                 f"target_1, target_2, profit_loss, profit_loss_pct, days_held, confidence_score, "
-                f"reasoning, exit_reason, created_at, closed_at, {dupe} FROM portfolio_journal"
+                f"reasoning, exit_reason, created_at, closed_at, high_since_entry, "
+                f"low_since_entry, {dupe} FROM portfolio_journal"
             ).fetchall():
                 d = dict(r)
                 sym = str(d["symbol"]).upper()
@@ -101,6 +121,16 @@ def backfill(dry_run: bool = False) -> dict:
                         "pnl_pct": pnl, "pnl_rs": _f(d.get("profit_loss")),
                         "rr_realized": _rr(d["entry_price"], d["stop_loss"], pnl),
                         "holding_days": d.get("days_held"),
+                        "stage": "POSITION",
+                        "engine_version": ENGINE_VERSIONS.get("SMC"),
+                        "mfe_pct": _pct(d.get("high_since_entry"), d.get("entry_price")),
+                        "mae_pct": _pct(d.get("low_since_entry"), d.get("entry_price")),
+                        "high_since_entry": _f(d.get("high_since_entry")),
+                        "low_since_entry": _f(d.get("low_since_entry")),
+                        "context_json": json.dumps({
+                            "reasoning": d.get("reasoning"), "horizon": d.get("horizon"),
+                            "confidence": _f(d.get("confidence_score")),
+                        }, default=str),
                         "source_table": "portfolio_journal", "source_id": str(d["id"]),
                         "is_duplicate": int(d.get("is_duplicate") or 0), "is_legacy": 1,
                         "created_at": d.get("created_at"),
@@ -134,6 +164,7 @@ def backfill(dry_run: bool = False) -> dict:
                         "pnl_pct": _f(d.get("profit_loss_pct")) if status == "ACTIVE" else None,
                         "pnl_rs": _f(d.get("profit_loss")) if status == "ACTIVE" else None,
                         "holding_days": d.get("days_held") if status == "ACTIVE" else None,
+                        "stage": "POSITION", "engine_version": ENGINE_VERSIONS.get("SMC"),
                         "source_table": "portfolio_positions", "source_id": str(d["id"]),
                         "is_legacy": 1, "created_at": d.get("created_at"),
                     }, conn=conn, event="BACKFILL")
@@ -163,6 +194,13 @@ def backfill(dry_run: bool = False) -> dict:
                         "status": _exit_reason_to_status(d.get("exit_reason")),
                         "pnl_pct": _f(d.get("profit_loss_pct")), "pnl_rs": _f(d.get("profit_loss")),
                         "rr_realized": _f(d.get("r_multiple")), "holding_days": d.get("days_held"),
+                        "stage": "POSITION",
+                        "engine_version": ENGINE_VERSIONS.get("MOMENTUM"),
+                        "context_json": json.dumps({
+                            "regime": d.get("regime"), "sector": d.get("sector"),
+                            "entry_model": d.get("entry_model"),
+                            "quality_score": _f(d.get("quality_score")),
+                        }, default=str),
                         "source_table": "momentum_journal", "source_id": str(d["id"]),
                         "is_legacy": 1, "created_at": d.get("created_at"),
                     }, conn=conn, event="BACKFILL")
@@ -193,6 +231,7 @@ def backfill(dry_run: bool = False) -> dict:
                         "status": status,
                         "pnl_pct": _f(d.get("profit_loss_pct")) if status == "ACTIVE" else None,
                         "holding_days": d.get("days_held") if status == "ACTIVE" else None,
+                        "stage": "POSITION", "engine_version": ENGINE_VERSIONS.get("MOMENTUM"),
                         "source_table": "momentum_positions", "source_id": str(d["id"]),
                         "is_legacy": 1, "created_at": d.get("created_at"),
                     }, conn=conn, event="BACKFILL")
@@ -211,10 +250,12 @@ def backfill(dry_run: bool = False) -> dict:
                 d = dict(r)
                 sym = str(d["symbol"]).upper()
                 raw = str(d.get("trade_status") or d.get("status") or "").upper()
-                if sym.replace("NSE:", "") in traded:
-                    # A real position exists — the portfolio row already carries
-                    # the outcome. This idea stays as provenance only.
-                    status = "ENTRY_TRIGGERED" if raw == "RUNNING" else "NEVER_EXECUTED"
+                executed_downstream = sym.replace("NSE:", "") in traded
+                if executed_downstream:
+                    # The idea DID become a trade. It stays as the first stage of
+                    # that chain — not discarded — so "200 ideas -> 55 entries"
+                    # remains answerable. The outcome lives on the position row.
+                    status = "ENTRY_TRIGGERED"
                 elif raw in ("RUNNING", "ACTIVE"):
                     status = "AWAITING_ENTRY"
                 elif raw in ("CANCELLED", "CANCELED"):
@@ -238,6 +279,15 @@ def backfill(dry_run: bool = False) -> dict:
                         "entry_price": _f(d.get("entry_price")), "stop_loss": _f(d.get("stop_loss")),
                         "target_1": tgt, "idea_at": d.get("created_at"),
                         "entry_trigger_at": d.get("entry_triggered_at"), "status": status,
+                        "stage": "IDEA",
+                        "engine_version": ENGINE_VERSIONS.get("SMC"),
+                        "recommendation_json": json.dumps({
+                            "symbol": sym, "agent_type": d.get("agent_type"),
+                            "setup": d.get("setup"), "entry": _f(d.get("entry_price")),
+                            "stop_loss": _f(d.get("stop_loss")), "targets": d.get("targets"),
+                            "confidence": _f(d.get("confidence_score")),
+                            "published_at": d.get("created_at"),
+                        }, default=str),
                         # An unexecuted idea has NO P&L — recording one would put
                         # a hypothetical number beside real trades.
                         "pnl_pct": None, "holding_days": None,

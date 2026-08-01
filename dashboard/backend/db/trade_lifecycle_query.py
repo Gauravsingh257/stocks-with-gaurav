@@ -38,6 +38,8 @@ def _build_where(
     month: int | None = None, year: int | None = None,
     min_confidence: float | None = None, outcome: str | None = None,
     symbol: str | None = None, include_duplicates: bool = False,
+    stage: str | None = None, engine_version: str | None = None,
+    record_state: str = "ACTIVE",
 ) -> tuple[str, list]:
     parts: list[str] = []
     params: list = []
@@ -45,6 +47,20 @@ def _build_where(
     if not include_duplicates:
         # Re-close artifacts stay in the ledger for audit but never in stats.
         parts.append("is_duplicate = 0")
+
+    # Soft delete: nothing is ever removed, only reclassified. The default view
+    # shows ACTIVE records; ARCHIVED / HIDDEN / DUPLICATE stay queryable.
+    if record_state and record_state.upper() != "ALL":
+        parts.append("COALESCE(record_state,'ACTIVE') = ?")
+        params.append(record_state.upper())
+
+    if stage and stage.upper() != "ALL":
+        parts.append("stage = ?")
+        params.append(stage.upper())
+
+    if engine_version:
+        parts.append("engine_version = ?")
+        params.append(engine_version)
 
     if portfolio and portfolio.upper() != "ALL":
         p = portfolio.upper()
@@ -142,6 +158,8 @@ def stats(**filters) -> dict:
             + list(CLOSED_STATUSES)    # wins
             + list(OPEN_STATUSES)      # open_trades
             + list(PENDING_STATUSES)   # pending_entries
+            + list(CLOSED_STATUSES)    # avg_mae
+            + list(CLOSED_STATUSES)    # avg_mfe
             + list(CLOSED_STATUSES)    # avg_return
             + list(CLOSED_STATUSES)    # avg_rr
             + list(CLOSED_STATUSES)    # avg_hold
@@ -161,6 +179,10 @@ def stats(**filters) -> dict:
               SUM(CASE WHEN status = 'EXPIRED' THEN 1 ELSE 0 END)             AS expired,
               SUM(CASE WHEN status = 'NEVER_EXECUTED' THEN 1 ELSE 0 END)      AS never_executed,
               SUM(CASE WHEN partial_exits > 0 THEN 1 ELSE 0 END)              AS partial_exits,
+              SUM(CASE WHEN stage = 'IDEA' THEN 1 ELSE 0 END)                  AS ideas_generated,
+              SUM(CASE WHEN stage = 'POSITION' AND executed = 1 THEN 1 ELSE 0 END) AS positions_taken,
+              AVG(CASE WHEN status IN ({cl}) THEN mae_pct END)                 AS avg_mae,
+              AVG(CASE WHEN status IN ({cl}) THEN mfe_pct END)                 AS avg_mfe,
               AVG(CASE WHEN status IN ({cl}) THEN pnl_pct END)                AS avg_return,
               AVG(CASE WHEN status IN ({cl}) THEN rr_realized END)            AS avg_rr,
               AVG(CASE WHEN status IN ({cl}) THEN holding_days END)           AS avg_hold,
@@ -198,6 +220,14 @@ def stats(**filters) -> dict:
             "expired_signals": d["expired"],
             "never_executed": d["never_executed"],
             "partial_exits": d["partial_exits"],
+            # Funnel — the metric that survives keeping research as stage one:
+            # ideas generated -> positions actually taken -> targets reached.
+            # Reporting only the 55 trades would silently discard the 200 ideas.
+            "ideas_generated": d["ideas_generated"],
+            "positions_taken": d["positions_taken"],
+            "idea_to_entry_pct": pct(d["positions_taken"], d["ideas_generated"]),
+            "avg_mae_pct": round(d["avg_mae"], 2) if d["avg_mae"] else None,
+            "avg_mfe_pct": round(d["avg_mfe"], 2) if d["avg_mfe"] else None,
             "basis": ("win rate and returns cover CLOSED, genuinely-executed positions only; "
                       "ideas that never filled are counted as signals but carry no P&L"),
         }

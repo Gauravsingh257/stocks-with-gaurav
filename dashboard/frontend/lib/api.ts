@@ -1700,6 +1700,13 @@ export const api = {
     get<LifecycleStats>(`/api/lifecycle/stats?${lifecycleQS(q)}`),
   lifecycleFacets: () => get<LifecycleFacets>("/api/lifecycle/facets"),
   lifecycleTimeline: (id: string) => get<LifecycleTimeline>(`/api/lifecycle/trade/${id}`),
+  lifecycleAnalytics: (portfolio = "ALL") =>
+    get<LifecycleAnalytics>(`/api/lifecycle/analytics?portfolio=${portfolio}`),
+  lifecycleHistory: (period = "DAILY", portfolio = "ALL", limit = 180) =>
+    get<{ points: (LifecycleStats & { period_key: string })[] }>(
+      `/api/lifecycle/history?period=${period}&portfolio=${portfolio}&limit=${limit}`),
+  /** SSE endpoint — push updates, no polling. */
+  lifecycleStreamUrl: () => `${API_BASE}/api/lifecycle/stream`,
   submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
   scanStatus: () => get<ScanStatusResponse>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
@@ -1968,6 +1975,33 @@ export interface LifecycleStats {
   expired_signals: number;
   never_executed: number;
   partial_exits: number;
+  ideas_generated?: number;
+  positions_taken?: number;
+  idea_to_entry_pct?: number;
+  avg_mae_pct?: number | null;
+  avg_mfe_pct?: number | null;
+  basis?: string;
+}
+
+export interface LifecycleAnalytics {
+  closed_trades: number;
+  win_rate_pct?: number;
+  avg_win_pct?: number;
+  avg_loss_pct?: number;
+  expectancy_pct?: number;
+  expectancy_r?: number | null;
+  profit_factor?: number | null;
+  payoff_ratio?: number | null;
+  total_return_pct?: number;
+  max_drawdown_pct?: number;
+  recovery_factor?: number | null;
+  sharpe?: number | null;
+  sortino?: number | null;
+  avg_mae_pct?: number | null;
+  avg_mfe_pct?: number | null;
+  avg_holding_days?: number | null;
+  avg_time_to_target_days?: number | null;
+  avg_time_to_stop_days?: number | null;
   basis?: string;
 }
 

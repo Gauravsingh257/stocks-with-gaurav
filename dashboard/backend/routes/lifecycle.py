@@ -10,7 +10,8 @@ trades while real portfolio trades such as SCANSTL were missing entirely.
 """
 
 import logging
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/lifecycle", tags=["lifecycle"])
 log = logging.getLogger("dashboard.lifecycle")
@@ -27,6 +28,9 @@ def list_trades(
     min_confidence: float | None = Query(None, ge=0, le=100),
     outcome: str = Query("ALL"),
     symbol: str | None = Query(None),
+    stage: str = Query("ALL"),
+    engine_version: str | None = Query(None),
+    record_state: str = Query("ACTIVE"),
     include_duplicates: bool = Query(False),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -41,6 +45,7 @@ def list_trades(
             portfolio=portfolio, status=status, execution=execution, engine=engine,
             month=month, year=year, min_confidence=min_confidence, outcome=outcome,
             symbol=symbol, include_duplicates=include_duplicates,
+            stage=stage, engine_version=engine_version, record_state=record_state,
         )
     except Exception as exc:
         log.exception("lifecycle trades query failed")
@@ -59,6 +64,8 @@ def lifecycle_stats(
     min_confidence: float | None = Query(None, ge=0, le=100),
     outcome: str = Query("ALL"),
     symbol: str | None = Query(None),
+    stage: str = Query("ALL"),
+    engine_version: str | None = Query(None),
 ):
     """Summary cards over the FULL filtered set — never one page, never a
     status-filtered subset unless the caller explicitly asked for one."""
@@ -66,7 +73,8 @@ def lifecycle_stats(
     try:
         return stats(portfolio=portfolio, status=status, execution=execution,
                      engine=engine, month=month, year=year,
-                     min_confidence=min_confidence, outcome=outcome, symbol=symbol)
+                     min_confidence=min_confidence, outcome=outcome, symbol=symbol,
+                     stage=stage, engine_version=engine_version)
     except Exception as exc:
         log.exception("lifecycle stats failed")
         return {"error": str(exc), "signals_generated": 0}
@@ -145,5 +153,76 @@ def validate():
     except Exception as exc:
         log.exception("lifecycle validate failed")
         return {"ok": False, "error": str(exc), "checks": out.get("checks", [])}
+    finally:
+        conn.close()
+
+@router.get("/stream")
+async def lifecycle_stream(request: Request):
+    """Server-Sent Events — the push channel that replaces polling.
+
+    Every lifecycle transition is announced here the moment it is written, so
+    Track Record and any other screen stay in step with the books without
+    re-asking on a timer.
+    """
+    from dashboard.backend.lifecycle_bus import event_stream
+    return StreamingResponse(
+        event_stream(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # stop nginx buffering the stream
+        },
+    )
+
+
+@router.get("/analytics")
+def lifecycle_analytics(portfolio: str = Query("ALL"), since: str | None = Query(None)):
+    """MAE/MFE, expectancy, profit factor, Sharpe, Sortino, recovery factor,
+    time-to-target and time-to-stop — over closed, executed positions only."""
+    from dashboard.backend.db.lifecycle_analytics import analytics
+    try:
+        return analytics(portfolio=portfolio, since=since)
+    except Exception as exc:
+        log.exception("lifecycle analytics failed")
+        return {"error": str(exc), "closed_trades": 0}
+
+
+@router.get("/history")
+def lifecycle_history(period: str = Query("DAILY", pattern="^(DAILY|WEEKLY|MONTHLY)$"),
+                      portfolio: str = Query("ALL"),
+                      limit: int = Query(180, ge=1, le=1000)):
+    """Stored period snapshots for trend charts — no recomputation of history."""
+    from dashboard.backend.db.lifecycle_analytics import stats_history
+    try:
+        return stats_history(period=period, portfolio=portfolio, limit=limit)
+    except Exception as exc:
+        log.exception("lifecycle history failed")
+        return {"error": str(exc), "points": []}
+
+
+@router.post("/snapshot")
+def lifecycle_snapshot():
+    """Persist current stats into the daily/weekly/monthly rollups."""
+    from dashboard.backend.db.lifecycle_analytics import snapshot_stats
+    return snapshot_stats()
+
+
+@router.post("/trade/{lifecycle_id}/state")
+def set_record_state(lifecycle_id: str, state: str = Query(..., pattern="^(ACTIVE|ARCHIVED|HIDDEN|DUPLICATE)$")):
+    """Soft delete. A trade is never removed — only reclassified, with the
+    change appended to its event history."""
+    from dashboard.backend.db.schema import get_connection
+    from dashboard.backend.db.trade_lifecycle import record_event
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE trade_lifecycle SET record_state = ?, updated_at = datetime('now') WHERE uuid = ?",
+            (state.upper(), lifecycle_id),
+        )
+        conn.commit()
+        if cur.rowcount:
+            record_event(lifecycle_id, "RECORD_STATE_CHANGED", note=state.upper())
+        return {"ok": bool(cur.rowcount), "uuid": lifecycle_id, "record_state": state.upper()}
     finally:
         conn.close()
