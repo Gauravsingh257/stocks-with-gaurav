@@ -122,9 +122,23 @@ def test_visible_history_matches_the_stats_population():
 
 
 def test_genuine_reentry_at_same_price_is_not_collapsed():
-    """Different origin = a real second trade. Dedupe must not eat it."""
-    _trade("NSE:SAMEPX", 100.0, 95.0, "STOP_HIT", origin="2026-06-01 09:00:00")
-    _trade("NSE:SAMEPX", 100.0, 110.0, "TARGET_HIT", origin="2026-07-01 09:00:00")
+    """Different origin AND far apart in time = a real second trade.
+
+    The time gap is part of what makes it genuine: dedupe Rule 2 treats two
+    closes at an identical entry within a few hours as one holding (the phantom
+    re-fill door), so a fixture that closes both in the same millisecond would
+    describe the bug, not a re-entry. Stamp realistic closed_at values.
+    """
+    pid1 = _trade("NSE:SAMEPX", 100.0, 95.0, "STOP_HIT", origin="2026-06-01 09:00:00")
+    pid2 = _trade("NSE:SAMEPX", 100.0, 110.0, "TARGET_HIT", origin="2026-07-01 09:00:00")
+    c = get_connection()
+    try:
+        c.execute("UPDATE portfolio_journal SET closed_at = '2026-06-10T15:30:00+05:30' WHERE position_id = ?", (pid1,))
+        c.execute("UPDATE portfolio_journal SET closed_at = '2026-07-14T15:30:00+05:30' WHERE position_id = ?", (pid2,))
+        c.commit()
+    finally:
+        c.close()
+    mark_journal_duplicates()
 
     s = get_journal_stats("SWING")
     assert s["total_trades"] == 2, "same symbol+price from different origins are two trades"

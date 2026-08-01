@@ -293,6 +293,26 @@ def migrate_portfolio_risk_columns() -> None:
         conn.close()
 
 
+# Two closes of the SAME symbol at the SAME entry inside this window cannot be
+# two genuine holdings — a position cannot be entered and exited twice at an
+# identical price within minutes. Used by dedupe Rule 2 (phantom re-fill door).
+JOURNAL_DUPE_WINDOW_MIN = int(os.getenv("PORTFOLIO_JOURNAL_DUPE_WINDOW_MIN", "180"))
+
+
+def _minutes_between(a: str | None, b: str | None) -> float | None:
+    """Minutes from timestamp `a` to `b`; None if either is unparseable."""
+    try:
+        da = datetime.fromisoformat(str(a).replace(" ", "T"))
+        db = datetime.fromisoformat(str(b).replace(" ", "T"))
+    except (TypeError, ValueError):
+        return None
+    if da.tzinfo is None:
+        da = da.replace(tzinfo=_IST)
+    if db.tzinfo is None:
+        db = db.replace(tzinfo=_IST)
+    return abs((db - da).total_seconds()) / 60.0
+
+
 def migrate_journal_duplicate_flag() -> None:
     """Add portfolio_journal.is_duplicate (idempotent ADD COLUMN) and backfill it.
 
@@ -324,13 +344,29 @@ def migrate_journal_duplicate_flag() -> None:
 def mark_journal_duplicates(dry_run: bool = False) -> dict:
     """Flag re-seed artifacts in portfolio_journal. Idempotent; safe to re-run.
 
-    Duplicate key = (symbol, horizon, entry_price rounded to 2dp, created_at).
-    `created_at` is the ORIGIN timestamp copied from the source recommendation,
-    so every re-seed of one engine trade carries the identical value while a
-    genuine later re-entry of the same name carries a different one. That makes
-    the key precise: it collapses the churn loop without ever merging two real
-    trades (verified — SAMMAANCAP re-entered at the same price from a different
-    origin stays counted twice).
+    ONE rule: same (symbol, horizon, entry 2dp) closed within
+    JOURNAL_DUPE_WINDOW_MIN minutes of each other. A position cannot genuinely
+    be entered and exited twice at an identical price inside that window, so
+    every such cluster is one holding; the rest are re-close artifacts.
+
+    This catches BOTH doors that have produced duplicates:
+      * the seed loop — one still-open engine trade re-created and re-closed
+        every tracker cycle (CIPLA x11 inside 51 minutes);
+      * the phantom re-fill — a position exits, the symbol is re-armed at the
+        SAME stale entry, the arm fills instantly because price is already
+        through it, and it re-hits target minutes later (NAZARA journaled twice
+        as TARGET_HIT at 290.95, 2m41s apart, both counted, +8.63% of pure
+        fiction).
+
+    DELIBERATELY NOT keyed on `created_at`. An earlier version treated any rows
+    sharing an origin timestamp as duplicates with no time bound, which looked
+    tighter but was quietly flattering: APTUS had 11 same-origin rows spanning
+    38 DAYS, and collapsing them hid 11 positions that each genuinely occupied a
+    slot, entered and exited. On the real book that removed net-negative trades
+    and lifted the swing win rate 41.7% -> 46.9% and the book return +3.52% ->
+    +4.26%. Those trades were produced by a bug, but they happened, so they are
+    counted. Only rows that cannot both be real — same price, minutes apart —
+    are excluded.
 
     The row kept as canonical is the LAST by closed_at: it is the terminal
     outcome of that holding (e.g. CIPLA's final STOP_HIT), which is what actually
@@ -349,30 +385,48 @@ def mark_journal_duplicates(dry_run: bool = False) -> dict:
         ).fetchall()
 
         groups: dict[tuple, list] = {}
+
+        # Cluster by (symbol, horizon, entry) then split on time gaps larger
+        # than the window. Each resulting cluster is one real holding.
+        by_entry: dict[tuple, list] = {}
         for r in rows:
-            key = (
-                str(r["symbol"]).strip().upper(),
-                str(r["horizon"]).strip().upper(),
-                round(float(r["entry_price"] or 0), 2),
-                str(r["created_at"] or ""),
-            )
-            groups.setdefault(key, []).append(r)
+            k = (str(r["symbol"]).strip().upper(), str(r["horizon"]).strip().upper(),
+                 round(float(r["entry_price"] or 0), 2))
+            by_entry.setdefault(k, []).append(r)
+        for k, seq in by_entry.items():
+            if len(seq) < 2:
+                continue
+            cluster = [seq[0]]
+            for prev, cur in zip(seq, seq[1:]):
+                gap_min = _minutes_between(prev["closed_at"], cur["closed_at"])
+                if gap_min is not None and gap_min <= JOURNAL_DUPE_WINDOW_MIN:
+                    cluster.append(cur)
+                else:
+                    if len(cluster) > 1:
+                        groups.setdefault(("~window", *k, cluster[0]["id"]), cluster)
+                    cluster = [cur]
+            if len(cluster) > 1:
+                groups.setdefault(("~window", *k, cluster[0]["id"]), cluster)
 
         dupe_ids: list[int] = []
         detail: list[dict] = []
         for key, grp in groups.items():
             if len(grp) < 2:
                 continue
+            sym, hz, entry = key[1], key[2], key[3]
             # keep the terminal (last-closed) row; everything before it is churn
             losers = grp[:-1]
             dupe_ids.extend(int(r["id"]) for r in losers)
             detail.append({
-                "symbol": key[0], "horizon": key[1], "entry_price": key[2],
+                "symbol": sym, "horizon": hz, "entry_price": entry,
+                "rule": "same-entry-within-window",
                 "rows": len(grp), "marked": len(losers),
                 "pnl_pct_removed": round(sum(float(r["profit_loss_pct"] or 0) for r in losers), 2),
                 "kept_row_pnl_pct": round(float(grp[-1]["profit_loss_pct"] or 0), 2),
             })
 
+        # The two rules can flag the same row; collapse before writing/counting.
+        dupe_ids = sorted(set(dupe_ids))
         keep_ids = [int(r["id"]) for r in rows if int(r["id"]) not in set(dupe_ids)]
         if not dry_run:
             # Full re-assert (both directions) so the flag is always derivable
@@ -462,6 +516,10 @@ MAX_LONGTERM_POSITIONS = int(os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
 REENTRY_GUARD_MODE = os.getenv("PORTFOLIO_REENTRY_GUARD", "on").strip().lower()
 REENTRY_COOLDOWN_DAYS = int(os.getenv("PORTFOLIO_REENTRY_COOLDOWN_DAYS", "10"))
 REENTRY_SAME_ENTRY_PCT = float(os.getenv("PORTFOLIO_REENTRY_SAME_ENTRY_PCT", "3.0"))
+# G0 stale-entry window: re-arming the SAME entry price this soon after exiting
+# it is never a fresh setup. Deliberately generous (1 trading day) — a real
+# re-entry at an unchanged level a day later is not a signal worth taking.
+REENTRY_STALE_ENTRY_MIN = int(os.getenv("PORTFOLIO_REENTRY_STALE_ENTRY_MIN", "1440"))
 _REENTRY_FAIL_REASONS = {"STRUCTURE_BREAK", "STOP_HIT", "STALE_EXIT", "TREND_BREAK"}
 
 
@@ -496,6 +554,30 @@ def _reentry_would_block(symbol: str, horizon: str, entry: float,
 
     last_entry = row["entry_price"]
     last_reason = row["exit_reason"]
+
+    # G0 — STALE-ENTRY GATE. Runs BEFORE G2 and applies to every exit reason,
+    # wins included.
+    #
+    # After a position exits, the slot frees and the same symbol could be
+    # re-armed at the SAME entry price it just left. That is never a fresh
+    # setup — the level is stale by definition, price has already travelled
+    # away from it. On the breakout side it is actively harmful: the arm fills
+    # instantly at a price that no longer trades, booking a gain that was never
+    # earned. NAZARA exited at target ₹315.90, was re-armed at the old ₹290.95
+    # while price sat at ₹314.85, filled immediately, and re-hit "target" 2m41s
+    # later — a second +8.63% that never happened.
+    #
+    # G2 deliberately lets a repeat of a WINNING setup through, which is right
+    # for a genuine fresh breakout at a new level, but it must not be a licence
+    # to re-arm the identical stale price minutes after the exit. Hence a
+    # separate, reason-agnostic gate keyed purely on "same price, just left".
+    if last_entry and last_entry > 0:
+        stale_delta = abs(entry - last_entry) / last_entry * 100.0
+        gap_min = _minutes_between(row["closed_at"], datetime.now(_IST).isoformat())
+        if stale_delta <= REENTRY_SAME_ENTRY_PCT and gap_min is not None \
+                and gap_min <= REENTRY_STALE_ENTRY_MIN:
+            return True, (f"stale-entry-rearm(Δ{stale_delta:.1f}%<={REENTRY_SAME_ENTRY_PCT}%, "
+                          f"{gap_min:.0f}min<={REENTRY_STALE_ENTRY_MIN}min, last={last_reason})")
 
     # G2 — only failures qualify (a prior TARGET_HIT is not a failed setup).
     if last_reason not in _REENTRY_FAIL_REASONS:
@@ -708,17 +790,23 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         # guards upstream. The journal row itself is still written — history is
         # immutable; only its weight in published stats changes. The EARLIER row
         # is demoted so the newest close stays canonical (terminal outcome).
+        # Mirrors mark_journal_duplicates' rule so the flag is correct the
+        # instant the row lands, not only after the next startup sweep: a prior
+        # close of the SAME symbol at the SAME entry inside the window cannot be
+        # a separate holding.
         _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_journal)").fetchall()}
         _has_dupe_col = "is_duplicate" in _cols
         prior_ids: list[int] = []
         if _has_dupe_col:
-            prior_ids = [
-                int(r["id"]) for r in conn.execute(
-                    "SELECT id FROM portfolio_journal WHERE symbol = ? AND horizon = ? "
-                    "AND ROUND(entry_price, 2) = ROUND(?, 2) AND created_at = ?",
-                    (pos["symbol"], pos["horizon"], entry, pos["created_at"]),
-                ).fetchall()
-            ]
+            candidates = conn.execute(
+                "SELECT id, closed_at FROM portfolio_journal "
+                "WHERE symbol = ? AND horizon = ? AND ROUND(entry_price, 2) = ROUND(?, 2)",
+                (pos["symbol"], pos["horizon"], entry),
+            ).fetchall()
+            for c in candidates:
+                gap = _minutes_between(c["closed_at"], now_str)
+                if gap is not None and gap <= JOURNAL_DUPE_WINDOW_MIN:
+                    prior_ids.append(int(c["id"]))
 
         # Journal entry (immutable — never deleted)
         cols = ("position_id, symbol, horizon, direction, entry_price, exit_price, "
