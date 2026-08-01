@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, ShieldAlert, X } from "lucide-react";
 import {
   api, LifecycleTrade, LifecycleStats, LifecycleFacets, LifecycleTimeline,
@@ -90,6 +91,7 @@ function Chips({ options, value, onChange, fmt }: {
 }
 
 export default function TrackRecordPage() {
+  const router = useRouter();
   const [portfolio, setPortfolio] = useState("ALL");
   const [status, setStatus] = useState("ALL");
   const [execution, setExecution] = useState("ALL");
@@ -195,6 +197,10 @@ export default function TrackRecordPage() {
           <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
           {live ? "Live" : "Reconnecting"}
         </span>
+        <Link href="/research/track-record/analytics"
+              style={{ marginLeft: "auto", fontSize: "0.72rem", color: "#5b9cf6", textDecoration: "none" }}>
+          Analytics →
+        </Link>
       </div>
 
       <div className="glass" style={{ padding: "10px 14px", display: "flex", gap: 8, alignItems: "flex-start", borderLeft: "3px solid #f0c060" }}>
@@ -300,7 +306,7 @@ export default function TrackRecordPage() {
             {rows.map((r) => {
               const st = statusStyle(r.status);
               return (
-                <tr key={r.uuid} onClick={() => api.lifecycleTimeline(r.uuid).then(setDetail).catch(() => {})}
+                <tr key={r.uuid} onClick={() => router.push(`/research/track-record/${r.uuid}`)}
                     style={{ borderTop: "1px solid rgba(255,255,255,0.05)", cursor: "pointer" }}>
                   <td style={{ padding: "9px 12px", color: "#5b9cf6", fontWeight: 600, whiteSpace: "nowrap" }}>{r.symbol.replace("NSE:", "")}</td>
                   <td style={{ padding: "9px 12px" }}>

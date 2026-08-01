@@ -1707,6 +1707,16 @@ export const api = {
       `/api/lifecycle/history?period=${period}&portfolio=${portfolio}&limit=${limit}`),
   /** SSE endpoint — push updates, no polling. */
   lifecycleStreamUrl: () => `${API_BASE}/api/lifecycle/stream`,
+  lifecycleDetail: (id: string) => get<LifecycleDetail>(`/api/lifecycle/detail/${id}`),
+  lifecycleMonthly: (portfolio = "ALL", months = 24) =>
+    get<{ points: MonthlyPoint[] }>(`/api/lifecycle/dashboard/monthly?portfolio=${portfolio}&months=${months}`),
+  lifecycleEngines: (byVersion = false) =>
+    get<{ dimension: string; rows: EngineRow[] }>(`/api/lifecycle/dashboard/engines?by_version=${byVersion}`),
+  lifecycleFunnel: (portfolio = "ALL") =>
+    get<FunnelResponse>(`/api/lifecycle/dashboard/funnel?portfolio=${portfolio}`),
+  lifecycleExits: (portfolio = "ALL") =>
+    get<{ rows: ExitRow[] }>(`/api/lifecycle/dashboard/exits?portfolio=${portfolio}`),
+  lifecycleChainAttribution: () => get<ChainAttribution>("/api/lifecycle/chain-attribution"),
   submitResearchEmailLead: (email: string) => post<{ ok: boolean }>("/api/research/lead", { email }),
   scanStatus: () => get<ScanStatusResponse>("/api/research/scan-status"),
   trackerRefresh: () => post<{ ok: boolean; seeded: number; updated: number }>("/api/research/tracker/refresh"),
@@ -1945,6 +1955,13 @@ export interface LifecycleTrade {
   rr_realized: number | null;
   holding_days: number | null;
   created_at: string;
+  stage?: string | null;
+  chain_id?: string | null;
+  parent_id?: string | null;
+  engine_version?: string | null;
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+  record_state?: string | null;
 }
 
 export interface LifecycleTradesResponse {
@@ -2018,4 +2035,54 @@ export interface LifecycleTimeline {
   trade?: LifecycleTrade;
   events?: { event: string; from_status: string | null; to_status: string | null;
              price: number | null; note: string | null; occurred_at: string }[];
+}
+
+export interface MonthlyPoint {
+  period: string; trades: number; wins: number; win_rate_pct: number;
+  sum_pnl_pct: number; avg_pnl_pct: number; target_hits: number;
+  stop_hits: number; cumulative_pnl_pct: number;
+}
+export interface EngineRow {
+  key: string; closed_trades: number; wins: number; win_rate_pct: number;
+  avg_pnl_pct: number; sum_pnl_pct: number; avg_rr: number | null;
+  avg_holding_days: number | null; target_hits: number; stop_hits: number;
+  target_hit_rate_pct: number;
+}
+export interface FunnelResponse {
+  portfolio: string;
+  stages: { stage: string; count: number; of_previous_pct: number }[];
+  still_open: number; awaiting_entry: number; expired: number;
+  never_executed: number; stopped_out: number;
+  leakage: { ideas_that_never_traded: number; entered_but_stopped: number };
+}
+export interface ExitRow {
+  status: string; n: number; wins: number; win_rate_pct: number;
+  sum_pnl: number; avg_pnl: number; avg_mfe: number | null;
+  avg_days: number | null; avg_giveback_pct: number | null;
+}
+export interface ChainAttribution {
+  ideas_with_a_chain: number; ideas_converted_to_a_position: number;
+  conversion_pct: number; ideas_traded_by_more_than_one_engine: number;
+  per_engine: { engine: string; converted: number; closed: number;
+                wins: number; win_rate_pct: number; sum_pnl: number }[];
+  basis?: string;
+}
+export interface LifecycleDetail {
+  found: boolean;
+  trade?: LifecycleTrade & {
+    context_json?: string; recommendation_json?: string;
+    mae_pct?: number | null; mfe_pct?: number | null;
+    engine_version?: string | null; stage?: string;
+  };
+  events?: { event: string; from_status: string | null; to_status: string | null;
+             price: number | null; note: string | null; occurred_at: string }[];
+  recommendation?: Record<string, unknown> | null;
+  context?: Record<string, unknown> | null;
+  chain?: { chain_id: string; stages: LifecycleTrade[];
+            engines_that_traded_it: string[]; converted: boolean };
+  alerts?: { kind: string; message: string; sent_at: string }[];
+  price_path?: { available: boolean;
+                 points?: { label: string; price: number; pct: number | null; at?: string }[];
+                 stop_loss?: number | null; target_1?: number | null; target_2?: number | null };
+  analysis?: { verdict: string; notes: string[]; giveback_pct: number | null; basis?: string };
 }
