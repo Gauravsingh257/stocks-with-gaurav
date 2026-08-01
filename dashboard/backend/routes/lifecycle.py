@@ -12,6 +12,7 @@ trades while real portfolio trades such as SCANSTL were missing entirely.
 import logging
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/lifecycle", tags=["lifecycle"])
 log = logging.getLogger("dashboard.lifecycle")
@@ -314,3 +315,69 @@ def chain_attribution():
     except Exception as exc:
         log.exception("chain attribution failed")
         return {"per_engine": [], "error": str(exc)}
+
+
+# ── Capture: charts, context, algorithm hash, manual/paper writers ───────────
+
+@router.post("/capture/charts")
+def capture_charts(limit: int = Query(25, ge=1, le=200)):
+    """Attach entry/exit OHLC windows to executed rows that lack them.
+
+    Rate-limited because each row costs a broker call.
+    """
+    from dashboard.backend.db.lifecycle_capture import capture_missing_charts
+    return capture_missing_charts(limit=limit)
+
+
+@router.post("/capture/algorithm-hash")
+def capture_algorithm_hash():
+    """Stamp rows that predate the algorithm_hash producer."""
+    from dashboard.backend.db.lifecycle_capture import backfill_algorithm_hash
+    return backfill_algorithm_hash()
+
+
+@router.get("/algorithm-hash")
+def current_algorithm_hash(engine: str = Query("SMC"), version: str | None = Query(None)):
+    """Fingerprint of the parameters currently deciding behaviour."""
+    from dashboard.backend.db.lifecycle_capture import algorithm_hash, _HASH_ENV_KEYS
+    return {"engine": engine, "version": version,
+            "algorithm_hash": algorithm_hash(engine, version),
+            "inputs": list(_HASH_ENV_KEYS)}
+
+
+class ManualTradeRequest(BaseModel):
+    symbol: str
+    entry_price: float
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    target_3: float | None = None
+    exit_price: float | None = None
+    direction: str = "LONG"
+    status: str | None = None
+    setup: str | None = None
+    strategy: str | None = None
+    confidence: float | None = None
+    entry_at: str | None = None
+    exit_at: str | None = None
+    exit_reason: str | None = None
+    entry_reason: str | None = None
+    exit_note: str | None = None
+    holding_days: int | None = None
+    external_id: str | None = None
+
+
+@router.post("/manual")
+def add_manual_trade(req: ManualTradeRequest, source: str = Query("MANUAL", pattern="^(MANUAL|PAPER)$")):
+    """Record a manual or paper trade.
+
+    MANUAL and PAPER were wired into the schema and filters but had no producer,
+    so those filter options always returned nothing. This is that producer.
+    """
+    from dashboard.backend.db.lifecycle_capture import record_manual_trade
+    try:
+        uid = record_manual_trade(req.model_dump(), source=source)
+        return {"ok": True, "uuid": uid, "source": source.upper()}
+    except Exception as exc:
+        log.exception("manual trade write failed")
+        return {"ok": False, "error": str(exc)}

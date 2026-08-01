@@ -292,6 +292,11 @@ def _portfolio_tracker_loop() -> None:
             _lc_link()
             from dashboard.backend.db.lifecycle_analytics import snapshot_stats as _lc_snap
             _lc_snap(periods=("DAILY",), portfolios=("ALL", "SWING", "LONGTERM", "MOMENTUM"))
+            # Attach entry/exit charts to a few rows per cycle. Deliberately
+            # small: each row costs a broker call, and the ledger is complete
+            # without charts — they enrich the detail page, they don't gate it.
+            from dashboard.backend.db.lifecycle_capture import capture_missing_charts as _lc_charts
+            _lc_charts(limit=int(os.getenv("LIFECYCLE_CHART_CAPTURE_PER_CYCLE", "5")))
         except Exception:
             log.exception("Portfolio tracker: lifecycle ledger sync error")
         interval = _current_interval()
