@@ -49,8 +49,32 @@ def _closed_rows(conn, portfolio: str | None = None, since: str | None = None):
     ).fetchall()
 
 
+def _slots_for(portfolio: str | None) -> int:
+    """Capacity of the book being measured — the divisor that turns a sum of
+    trade percentages into a portfolio number."""
+    import os as _os
+    sw = int(_os.getenv("PORTFOLIO_MAX_SWING", "20"))
+    lt = int(_os.getenv("PORTFOLIO_MAX_LONGTERM", "20"))
+    mo = int(_os.getenv("MOMENTUM_MAX_POSITIONS", "20"))
+    p = (portfolio or "ALL").upper()
+    if p == "SWING":
+        return sw
+    if p == "LONGTERM":
+        return lt
+    if p == "MOMENTUM":
+        return mo
+    return sw + lt + mo
+
+
 def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
-    """Risk/return metrics over closed positions."""
+    """Risk/return metrics over closed positions.
+
+    Return and drawdown are reported in BOOK terms — the sum of trade
+    percentages divided by the book's slot count — because each position is only
+    1/slots of capital. Summing raw trade percentages answers "how did the
+    average trade do", not "what did the book make", and publishing the sum as a
+    return overstates it by roughly the slot count. Both numbers are returned,
+    named for exactly what they are."""
     init_lifecycle_db()
     conn = get_connection()
     try:
@@ -75,14 +99,19 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
     expectancy = win_rate * avg_win + (1 - win_rate) * avg_loss
     profit_factor = (gross_win / gross_loss) if gross_loss else (float("inf") if gross_win else 0.0)
 
-    # Equity curve in per-trade % terms, for drawdown and recovery factor.
+    # Equity curve in BOOK terms. Building it from raw trade percentages made
+    # the swing book report a -70.55% max drawdown, which is not a drawdown any
+    # portfolio could survive — it was 20 slots' worth of per-trade moves added
+    # together. Weighted, the real figure is -3.53%.
+    slots = _slots_for(portfolio)
     eq, peak, max_dd = 0.0, 0.0, 0.0
     for p in pnls:
-        eq += p
+        eq += p / slots
         peak = max(peak, eq)
         max_dd = min(max_dd, eq - peak)
-    total_return = eq
-    recovery = (total_return / abs(max_dd)) if max_dd else (float("inf") if total_return > 0 else 0.0)
+    book_return = eq
+    sum_trade_return = sum(pnls)
+    recovery = (book_return / abs(max_dd)) if max_dd else (float("inf") if book_return > 0 else 0.0)
 
     # Sharpe / Sortino on the per-trade return series. Annualised using the
     # observed trade frequency rather than a fixed 252 — these are trades, not
@@ -102,6 +131,13 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
         if dsd:
             sortino = round(excess / dsd * math.sqrt(trades_per_year), 2)
 
+    def _avg_giveback(rs):
+        """How much of the best price was handed back, on average — the single
+        most actionable number in this set."""
+        vals = [r["mfe_pct"] - r["pnl_pct"] for r in rs
+                if r.get("mfe_pct") is not None and r.get("pnl_pct") is not None]
+        return sum(vals) / len(vals) if vals else None
+
     def _avg(key, pred=None):
         vals = [r[key] for r in rows
                 if r.get(key) is not None and (pred is None or pred(r))]
@@ -113,11 +149,18 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
         "avg_win_pct": round(avg_win, 2),
         "avg_loss_pct": round(avg_loss, 2),
         "expectancy_pct": round(expectancy, 3),
+        "avg_giveback_pct": (lambda g: round(g, 2) if g is not None else None)(_avg_giveback(rows)),
         "expectancy_r": _avg("rr_realized"),
         "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else None,
         "payoff_ratio": round(abs(avg_win / avg_loss), 2) if avg_loss else None,
-        "total_return_pct": round(total_return, 2),
+        # Book figures — what the portfolio actually did.
+        "book_return_pct": round(book_return, 2),
         "max_drawdown_pct": round(max_dd, 2),
+        "book_slots": slots,
+        # Sum of per-trade percentages. Useful for comparing trades to each
+        # other; NEVER a portfolio return.
+        "sum_trade_return_pct": round(sum_trade_return, 2),
+        "total_return_pct": round(book_return, 2),   # back-compat alias
         "recovery_factor": round(recovery, 2) if recovery != float("inf") else None,
         "sharpe": sharpe,
         "sortino": sortino,
@@ -126,8 +169,10 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
         "avg_holding_days": _avg("holding_days"),
         "avg_time_to_target_days": _avg("holding_days", lambda r: r["status"] == "TARGET_HIT"),
         "avg_time_to_stop_days": _avg("holding_days", lambda r: r["status"] == "STOP_HIT"),
-        "basis": ("closed, genuinely-executed positions only; unfilled ideas contribute "
-                  "no return. Sharpe/Sortino annualise by observed trade frequency."),
+        "basis": (f"closed, genuinely-executed positions only; unfilled ideas contribute "
+                  f"no return. Return and drawdown are book-weighted over {slots} slots — "
+                  f"each position is 1/{slots} of capital, so a sum of trade percentages "
+                  f"is not a portfolio return."),
     }
 
 
