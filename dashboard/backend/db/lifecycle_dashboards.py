@@ -21,6 +21,14 @@ from .trade_lifecycle import init_lifecycle_db, CLOSED_STATUSES, OPEN_STATUSES
 logger = logging.getLogger(__name__)
 
 _LIVE = "COALESCE(record_state,'ACTIVE') = 'ACTIVE' AND is_duplicate = 0"
+
+
+def _slots(portfolio: str | None) -> int:
+    """Book capacity — the divisor that turns a sum of trade percentages into a
+    portfolio number. Single definition, shared by every panel here so no chart
+    can quietly use a different one."""
+    from .lifecycle_analytics import _slots_for
+    return _slots_for(portfolio)
 _CL = ",".join("?" * len(CLOSED_STATUSES))
 
 
@@ -63,11 +71,18 @@ def monthly_performance(portfolio: str | None = None, months: int = 24) -> dict:
                 "avg_pnl_pct": r["avg_pnl"] or 0.0,
                 "target_hits": r["targets"] or 0, "stop_hits": r["stops"] or 0,
             })
-        # Cumulative curve, so the chart can show the path rather than only bars.
-        run = 0.0
+        # Book-weighted: each position is 1/slots of capital, so a month's
+        # portfolio move is its summed trade returns divided by the slot count.
+        # The raw sum is kept alongside, named for what it is.
+        sl = _slots(portfolio)
+        run = run_book = 0.0
         for p in out:
+            p["book_slots"] = sl
+            p["book_return_pct"] = round(p["sum_pnl_pct"] / sl, 2)
             run = round(run + p["sum_pnl_pct"], 2)
+            run_book = round(run_book + p["book_return_pct"], 2)
             p["cumulative_pnl_pct"] = run
+            p["cumulative_book_return_pct"] = run_book
         return {"points": out, "portfolio": (portfolio or "ALL").upper()}
     finally:
         conn.close()
@@ -108,6 +123,13 @@ def engine_comparison(by_version: bool = False) -> dict:
                 "target_hits": r["targets"] or 0, "stop_hits": r["stops"] or 0,
                 "target_hit_rate_pct": round((r["targets"] or 0) / c * 100, 1) if c else 0.0,
             })
+        for row in out:
+            # By book, the key IS the book. By version, a version can span books,
+            # so fall back to the combined capacity rather than pretending it
+            # belongs to one — the alternative would silently over-weight it.
+            sl = _slots(row["key"]) if not by_version else _slots("ALL")
+            row["book_slots"] = sl
+            row["book_return_pct"] = round(row["sum_pnl_pct"] / sl, 2)
         return {"dimension": "engine_version" if by_version else "book", "rows": out}
     finally:
         conn.close()
@@ -196,8 +218,12 @@ def exit_attribution(portfolio: str | None = None) -> dict:
                 giveback = round(r["avg_mfe"] - r["avg_pnl"], 2)
             out.append({**r, "n": n_,
                         "win_rate_pct": round((r["wins"] or 0) / n_ * 100, 1) if n_ else 0.0,
-                        "avg_giveback_pct": giveback})
-        return {"rows": out, "portfolio": (portfolio or "ALL").upper()}
+                        "avg_giveback_pct": giveback,
+                        # What this exit rule did to the PORTFOLIO, not the sum
+                        # of the trades it closed.
+                        "book_impact_pct": round((r["sum_pnl"] or 0.0) / _slots(portfolio), 2)})
+        return {"rows": out, "portfolio": (portfolio or "ALL").upper(),
+                "book_slots": _slots(portfolio)}
     finally:
         conn.close()
 

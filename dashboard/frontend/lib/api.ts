@@ -2045,12 +2045,18 @@ export interface MonthlyPoint {
   period: string; trades: number; wins: number; win_rate_pct: number;
   sum_pnl_pct: number; avg_pnl_pct: number; target_hits: number;
   stop_hits: number; cumulative_pnl_pct: number;
+  /** Book-weighted — render THIS as the month's return. */
+  book_return_pct: number;
+  cumulative_book_return_pct: number;
+  book_slots: number;
 }
 export interface EngineRow {
   key: string; closed_trades: number; wins: number; win_rate_pct: number;
   avg_pnl_pct: number; sum_pnl_pct: number; avg_rr: number | null;
   avg_holding_days: number | null; target_hits: number; stop_hits: number;
   target_hit_rate_pct: number;
+  book_return_pct?: number;
+  book_slots?: number;
 }
 export interface FunnelResponse {
   portfolio: string;
@@ -2063,6 +2069,7 @@ export interface ExitRow {
   status: string; n: number; wins: number; win_rate_pct: number;
   sum_pnl: number; avg_pnl: number; avg_mfe: number | null;
   avg_days: number | null; avg_giveback_pct: number | null;
+  book_impact_pct?: number;
 }
 export interface ChainAttribution {
   ideas_with_a_chain: number; ideas_converted_to_a_position: number;
