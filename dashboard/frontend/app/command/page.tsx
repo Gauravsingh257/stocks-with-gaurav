@@ -3,23 +3,33 @@
 /**
  * /command — Command Center (redesign).
  *
- * Value-first homepage: leads with the engine's Top Opportunities + a Verified
- * Track Record so a new paid user sees "why this is different" in ~5 seconds.
+ * Value-first homepage: today's highest-scoring setups + the real track record.
  * Adaptive: new users get guided onboarding; returning users get their desk.
  *
+ * Two things this page must not do again:
+ *   1. Call scan output "Top Opportunities". It is a structure-score ranking of
+ *      today's scan, not a ranked list of trades worth taking, and a name can
+ *      appear whether or not the book holds it. The heading and the footnote
+ *      now say exactly that.
+ *   2. Source the track record from research recommendations. That table
+ *      records IDEAS: it reported "8 resolved of 100 tracked" (100 was the API
+ *      page size, not a population) with an average return over hypothetical
+ *      setups, while the books held 81 real closed trades — and it was labelled
+ *      "Verified". It now reads /api/lifecycle/stats, the same ledger the Track
+ *      Record page and the portfolio headers use.
+ *
  * UX/layout/copy only — reuses EXISTING endpoints:
- *   • /api/command-center      → opportunities, watchlist feed, priority lines
- *   • /api/market/daily-brief  → regime + discovery narrative
- *   • /api/analytics/track-record → verified hit-rate / avg return (real)
+ *   • /api/command-center   → today's highest-scoring setups, watchlist feed
+ *   • /api/lifecycle/stats  → track record, from the canonical trade ledger
  *   • live engine snapshot      → regime, daily P&L, signals
  */
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight, ChevronDown,
-  Newspaper, Activity, ShieldCheck, Search, Info,
+  Activity, ShieldCheck, Search, Info,
 } from "lucide-react";
-import { api, type CommandCenterResponse, type DailyBriefResponse, type TrackRecordSummary } from "@/lib/api";
+import { api, type CommandCenterResponse, type LifecycleStats } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { marketPhase } from "@/lib/nba";
@@ -77,11 +87,9 @@ export default function CommandCenterPage() {
   const { user, token } = useAuth();
   const { snapshot } = useEngineSocket();
   const [cc, setCc] = useState<CommandCenterResponse | null>(null);
-  const [brief, setBrief] = useState<DailyBriefResponse | null>(null);
-  const [track, setTrack] = useState<TrackRecordSummary | null>(null);
+  const [ledger, setLedger] = useState<LifecycleStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [showBrief, setShowBrief] = useState(false);
   const [spark, setSpark] = useState<Record<string, number[]>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
 
@@ -95,21 +103,19 @@ export default function CommandCenterPage() {
     let live = true;
     Promise.allSettled([
       api.commandCenter(token ?? undefined),
-      api.dailyBrief(token ?? undefined),
-      api.trackRecord("all", 100),
+      api.lifecycleStats({}),
     ])
-      .then(([c, b, t]) => {
+      .then(([c, t]) => {
         if (!live) return;
         if (c.status === "fulfilled") setCc(c.value);
-        if (b.status === "fulfilled") setBrief(b.value);
-        if (t.status === "fulfilled") setTrack(t.value.summary);
+        if (t.status === "fulfilled") setLedger(t.value);
       })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [token]);
 
   const phase = marketPhase();
-  const regime = cc?.market_regime ?? snapshot?.market_regime ?? brief?.regime;
+  const regime = cc?.market_regime ?? snapshot?.market_regime;
   const rm = regimeMeta(regime as string);
   const pnlR = snapshot?.daily_pnl_r;
   const signalsToday = (cc?.signals_today as number) ?? snapshot?.signals_today ?? 0;
@@ -211,7 +217,7 @@ export default function CommandCenterPage() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Sparkles size={17} color="#34d399" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Today&apos;s Top Opportunities</span>
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Today&apos;s Highest-Scoring Setups</span>
           </div>
           <Link href="/research" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
             All on the radar <ArrowRight size={12} />
@@ -289,7 +295,7 @@ export default function CommandCenterPage() {
           </div>
         )}
         <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
-          Ranked by SMC score. Analysis of live market structure — not buy/sell advice.
+          Ranked by SMC structure score from today&apos;s scan — highest score first. These are <b>scan results, not portfolio positions</b>: a name can appear here whether or not the book holds it, and a high score is a measure of setup quality, not a prediction. Not buy/sell advice.
         </p>
       </div>
 
@@ -298,25 +304,37 @@ export default function CommandCenterPage() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <ShieldCheck size={17} color="var(--accent)" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Verified Track Record</span>
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Track Record</span>
           </div>
           <Link href="/research/track-record" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
             View Performance <ArrowRight size={12} />
           </Link>
         </div>
-        {track && track.resolved > 0 ? (
-          // Proof of activity + transparency first; statistical quality (hit
-          // rate) lives on the dedicated Track Record page (Refinement 1).
+        {/* Sourced from the canonical lifecycle ledger — the same numbers the
+            Track Record page and the portfolio headers report. It previously
+            read the research-recommendations table, which records IDEAS: it
+            showed "8 resolved of 100 tracked" (100 was just the API page size)
+            and an average return over hypothetical setups, while the books had
+            81 real closed trades. Labelling that "Verified" was the strongest
+            possible claim on the weakest data. */}
+        {ledger && ledger.closed_trades > 0 ? (
           <div className="grid grid-cols-3 gap-3">
-            <TrustStat label="Resolved Setups" value={String(track.resolved)} sub={`of ${track.total_picks} tracked`} big />
-            <TrustStat label="Average Return" value={`${track.avg_pnl_pct > 0 ? "+" : ""}${track.avg_pnl_pct}%`} color={track.avg_pnl_pct >= 0 ? "var(--success)" : "var(--danger)"} big />
-            <TrustStat label="Last Updated" value="Today" sub="live, verified" />
+            <TrustStat label="Closed Trades" value={String(ledger.closed_trades)}
+                       sub={`${ledger.entries_triggered} entered of ${ledger.signals_generated} signals`} big />
+            <TrustStat label="Win Rate" value={`${ledger.win_rate_pct}%`}
+                       color={ledger.win_rate_pct >= 50 ? "var(--success)" : "var(--warning)"}
+                       sub={`${ledger.wins} of ${ledger.closed_trades} profitable`} big />
+            <TrustStat label="Avg Return" value={`${ledger.avg_return_pct > 0 ? "+" : ""}${ledger.avg_return_pct}%`}
+                       color={ledger.avg_return_pct >= 0 ? "var(--success)" : "var(--danger)"}
+                       sub="per closed trade" />
           </div>
         ) : (
-          <Empty>Building a verified track record — hit-rate and average return appear as setups resolve. Every number ties to a logged, timestamped call.</Empty>
+          <Empty>Building a track record — win rate and average return appear as positions close. Every number ties to a logged, timestamped trade.</Empty>
         )}
         <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
-          Computed only over <b>resolved</b> algorithmic setups (hypothetical, at the levels shown). Past performance doesn&apos;t guarantee future results.
+          Positions actually held across Swing, Long-Term and Momentum — not published ideas.
+          Average return is per closed trade; each position is a fraction of the book, so it is not a portfolio return.
+          Past performance doesn&apos;t guarantee future results.
         </p>
       </div>
 
@@ -388,29 +406,6 @@ export default function CommandCenterPage() {
               </div>
             )}
           </Panel>
-        </div>
-      )}
-
-      {/* Today's brief — supporting context, collapsible */}
-      {(brief?.sections ?? []).length > 0 && (
-        <div className="glass rounded-xl" style={{ padding: "14px 16px" }}>
-          <button type="button" onClick={() => setShowBrief((s) => !s)} className="w-full flex items-center justify-between" style={{ background: "none", border: "none", cursor: "pointer" }}>
-            <div className="flex items-center gap-2">
-              <Newspaper size={15} color="var(--accent)" />
-              <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)" }}>Today&apos;s brief</span>
-            </div>
-            <ChevronDown size={16} style={{ color: "var(--text-dim)", transform: showBrief ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-          </button>
-          {showBrief && (
-            <div className="flex flex-col gap-2.5 mt-3">
-              {(brief?.sections ?? []).slice(0, 3).map((s, i) => (
-                <div key={i}>
-                  <div style={{ fontSize: "0.66rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--accent)", marginBottom: 2 }}>{s.title}</div>
-                  <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>{humanize(s.body)}</div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
