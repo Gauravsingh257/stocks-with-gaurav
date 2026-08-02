@@ -29,7 +29,7 @@ import {
   TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight, ChevronDown,
   Activity, ShieldCheck, Search, Info,
 } from "lucide-react";
-import { api, type CommandCenterResponse, type LifecycleStats } from "@/lib/api";
+import { api, type CommandCenterResponse, type LifecycleStats, type LifecycleAnalytics } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { marketPhase } from "@/lib/nba";
@@ -88,6 +88,8 @@ export default function CommandCenterPage() {
   const { snapshot } = useEngineSocket();
   const [cc, setCc] = useState<CommandCenterResponse | null>(null);
   const [ledger, setLedger] = useState<LifecycleStats | null>(null);
+  const [adv, setAdv] = useState<LifecycleAnalytics | null>(null);
+  const [books, setBooks] = useState<{ key: string; label: string; ret: number; closed: number; pf: number | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [spark, setSpark] = useState<Record<string, number[]>>({});
@@ -113,6 +115,30 @@ export default function CommandCenterPage() {
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [token]);
+
+  // Per-book performance for the trust panel. Book return (sum / slots) — each
+  // position is only a fraction of capital, so the raw sum is not a return.
+  useEffect(() => {
+    let live = true;
+    const defs = [["SWING", "Swing"], ["LONGTERM", "Long-Term"], ["MOMENTUM", "Momentum"]] as const;
+    Promise.allSettled([
+      api.lifecycleAnalytics("ALL"),
+      ...defs.map(([k]) => api.lifecycleAnalytics(k)),
+    ]).then((res) => {
+      if (!live) return;
+      if (res[0].status === "fulfilled") setAdv(res[0].value);
+      const rows: { key: string; label: string; ret: number; closed: number; pf: number | null }[] = [];
+      defs.forEach(([k, label], i) => {
+        const r = res[i + 1];
+        if (r.status === "fulfilled" && (r.value.closed_trades ?? 0) > 0) {
+          rows.push({ key: k, label, ret: r.value.book_return_pct ?? 0,
+                      closed: r.value.closed_trades, pf: r.value.profit_factor ?? null });
+        }
+      });
+      setBooks(rows);
+    });
+    return () => { live = false; };
+  }, []);
 
   const phase = marketPhase();
   const regime = cc?.market_regime ?? snapshot?.market_regime;
@@ -324,16 +350,33 @@ export default function CommandCenterPage() {
             <TrustStat label="Win Rate" value={`${ledger.win_rate_pct}%`}
                        color={ledger.win_rate_pct >= 50 ? "var(--success)" : "var(--warning)"}
                        sub={`${ledger.wins} of ${ledger.closed_trades} profitable`} big />
-            <TrustStat label="Avg Return" value={`${ledger.avg_return_pct > 0 ? "+" : ""}${ledger.avg_return_pct}%`}
-                       color={ledger.avg_return_pct >= 0 ? "var(--success)" : "var(--danger)"}
-                       sub="per closed trade" />
+            <TrustStat label="Win / Loss Size"
+                       value={adv?.avg_win_pct != null && adv?.avg_loss_pct != null
+                         ? `+${adv.avg_win_pct}% / ${adv.avg_loss_pct}%` : "—"}
+                       color="var(--success)"
+                       sub="average winner vs average loser" />
           </div>
         ) : (
           <Empty>Building a track record — win rate and average return appear as positions close. Every number ties to a logged, timestamped trade.</Empty>
         )}
+        {books.length > 0 && (
+          <div className="grid grid-cols-3 gap-3" style={{ marginTop: 12 }}>
+            {books.map((b) => (
+              <div key={b.key} style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.03)" }}>
+                <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{b.label}</div>
+                <div style={{ fontSize: "1.05rem", fontWeight: 800, color: b.ret >= 0 ? "var(--success)" : "var(--danger)" }}>
+                  {b.ret > 0 ? "+" : ""}{b.ret}%
+                </div>
+                <div style={{ fontSize: "0.58rem", color: "var(--text-dim)" }}>
+                  {b.closed} closed · PF {b.pf ?? "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
           Positions actually held across Swing, Long-Term and Momentum — not published ideas.
-          Average return is per closed trade; each position is a fraction of the book, so it is not a portfolio return.
+          Per-book figures are book returns — each position is 1/20 of that book, so they are what the portfolio made, not the sum of the individual trades.
           Past performance doesn&apos;t guarantee future results.
         </p>
       </div>
