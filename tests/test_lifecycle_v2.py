@@ -278,3 +278,57 @@ def test_timeline_preserves_every_transition():
     assert seq == ["IDEA_GENERATED", "AWAITING_ENTRY", "ENTRY_TRIGGERED", "ACTIVE",
                    "BREAKEVEN", "TARGET1_HIT", "TRAILING_SL", "TARGET_HIT"]
     assert t["trade"]["status"] == "TARGET_HIT"
+
+
+# ── Book-weighted analytics ──────────────────────────────────────────────────
+
+def test_analytics_return_and_drawdown_are_book_weighted():
+    """A sum of trade percentages is not a portfolio return.
+
+    The swing book once reported max_drawdown -70.55% — 20 slots' worth of
+    per-trade moves added together, which no portfolio could survive. Both
+    figures must be divided by the slot count.
+    """
+    from dashboard.backend.db.lifecycle_analytics import analytics
+    from dashboard.backend.db.portfolio import MAX_SWING_POSITIONS as N
+
+    for i in range(4):
+        _trade(f"NSE:BW{i}", 100.0, 120.0 if i < 3 else 90.0,
+               "TARGET_HIT" if i < 3 else "STOP_HIT")
+    backfill()
+
+    a = analytics("SWING")
+    assert a["sum_trade_return_pct"] == pytest.approx(50.0, abs=0.01)
+    assert a["book_slots"] == N
+    assert a["book_return_pct"] == pytest.approx(50.0 / N, abs=0.01)
+    assert a["max_drawdown_pct"] == pytest.approx(-10.0 / N, abs=0.01), \
+        "drawdown must be book-weighted, not a sum of per-trade moves"
+    assert abs(a["book_return_pct"]) < abs(a["sum_trade_return_pct"])
+
+
+def test_analytics_book_return_matches_the_portfolio_header():
+    """Track Record and the portfolio header must not disagree."""
+    from dashboard.backend.db.lifecycle_analytics import analytics
+    from dashboard.backend.db.portfolio import get_journal_stats
+
+    for i in range(5):
+        _trade(f"NSE:AG{i}", 100.0, 112.0 if i % 2 == 0 else 94.0,
+               "TARGET_HIT" if i % 2 == 0 else "STOP_HIT")
+    backfill()
+
+    assert analytics("SWING")["book_return_pct"] == pytest.approx(
+        get_journal_stats("SWING", include_open=False)["realized_book_return_pct"], abs=0.02)
+
+
+def test_avg_giveback_is_reported():
+    from dashboard.backend.db.lifecycle_analytics import analytics
+    _trade("NSE:GBK", 100.0, 95.0, "STOP_HIT")
+    backfill()
+    c = get_connection()
+    try:
+        c.execute("UPDATE trade_lifecycle SET mfe_pct = 8.0 WHERE symbol = 'NSE:GBK'")
+        c.commit()
+    finally:
+        c.close()
+    a = analytics("SWING")
+    assert a["avg_giveback_pct"] == pytest.approx(8.0 - (-5.0), abs=0.05)

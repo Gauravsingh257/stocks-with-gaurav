@@ -225,36 +225,51 @@ export default function TrackRecordPage() {
         </div>
       )}
 
+      {/* KPI set is deliberately small. Every card here changes a decision;
+          the previous 23-card wall mixed near-duplicates (avg return vs
+          expectancy), ratios that are meaningless at this sample size
+          (Sharpe/Sortino on 49 trades) and counters that were always zero.
+          Book Return is the one that was missing and matters most. */}
       {stats && (
         <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label="Signals Generated" value={String(stats.signals_generated)} />
-          <StatCard label="Entries Triggered" value={String(stats.entries_triggered)} sub={`${stats.execution_rate_pct}% execution rate`} />
-          <StatCard label="Win Rate" value={stats.closed_trades ? `${stats.win_rate_pct}%` : "—"} sub={`${stats.wins}/${stats.closed_trades} closed`} color={stats.win_rate_pct >= 50 ? "#00e096" : "#f0c060"} />
-          <StatCard label="Target Hit Rate" value={stats.closed_trades ? `${stats.target_hit_rate_pct}%` : "—"} sub={`${stats.target_hits} target`} color="#00e096" />
-          <StatCard label="SL Rate" value={stats.closed_trades ? `${stats.sl_rate_pct}%` : "—"} sub={`${stats.stop_hits} stopped`} color="#ff4757" />
-          <StatCard label="Avg Return" value={stats.closed_trades ? `${stats.avg_return_pct > 0 ? "+" : ""}${stats.avg_return_pct}%` : "—"} sub="per closed trade" color={stats.avg_return_pct >= 0 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Avg RR" value={stats.avg_rr != null ? `${stats.avg_rr}R` : "—"} />
-          <StatCard label="Avg Holding" value={stats.avg_holding_days ? `${stats.avg_holding_days}d` : "—"} />
-          <StatCard label="Open Trades" value={String(stats.open_trades)} color="#00d4ff" />
-          <StatCard label="Pending Entries" value={String(stats.pending_entries)} color="#f0c060" />
-          <StatCard label="Expired" value={String(stats.expired_signals)} />
-          <StatCard label="Never Executed" value={String(stats.never_executed)} />
-        </div>
-      )}
-
-      {adv && adv.closed_trades > 0 && (
-        <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
-          <StatCard label="Expectancy" value={`${adv.expectancy_pct! > 0 ? "+" : ""}${adv.expectancy_pct}%`} sub="per trade" color={(adv.expectancy_pct ?? 0) >= 0 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Profit Factor" value={adv.profit_factor != null ? String(adv.profit_factor) : "—"} color={(adv.profit_factor ?? 0) >= 1 ? "#00e096" : "#ff4757"} />
-          <StatCard label="Payoff Ratio" value={adv.payoff_ratio != null ? `${adv.payoff_ratio}x` : "—"} />
-          <StatCard label="Sharpe" value={adv.sharpe != null ? String(adv.sharpe) : "—"} />
-          <StatCard label="Sortino" value={adv.sortino != null ? String(adv.sortino) : "—"} />
-          <StatCard label="Max Drawdown" value={adv.max_drawdown_pct != null ? `${adv.max_drawdown_pct}%` : "—"} color="#ff4757" />
-          <StatCard label="Recovery Factor" value={adv.recovery_factor != null ? String(adv.recovery_factor) : "—"} />
-          <StatCard label="Avg MFE" value={adv.avg_mfe_pct != null ? `+${adv.avg_mfe_pct}%` : "—"} sub="best excursion" color="#00e096" />
-          <StatCard label="Avg MAE" value={adv.avg_mae_pct != null ? `${adv.avg_mae_pct}%` : "—"} sub="worst excursion" color="#ff4757" />
-          <StatCard label="Time to Target" value={adv.avg_time_to_target_days != null ? `${adv.avg_time_to_target_days}d` : "—"} />
-          <StatCard label="Time to Stop" value={adv.avg_time_to_stop_days != null ? `${adv.avg_time_to_stop_days}d` : "—"} />
+          <StatCard label="Signals → Entries"
+                    value={`${stats.ideas_generated ?? stats.signals_generated} → ${stats.entries_triggered}`}
+                    sub={`${stats.execution_rate_pct}% executed`} />
+          <StatCard label="Closed Trades" value={String(stats.closed_trades)}
+                    sub={`${stats.open_trades} still open`} />
+          <StatCard label="Win Rate" value={stats.closed_trades ? `${stats.win_rate_pct}%` : "—"}
+                    sub={`${stats.wins}/${stats.closed_trades}`}
+                    color={stats.win_rate_pct >= 50 ? "#00e096" : "#f0c060"} />
+          {adv && adv.closed_trades > 0 && (
+            <StatCard label="Book Return"
+                      value={`${(adv.book_return_pct ?? 0) > 0 ? "+" : ""}${adv.book_return_pct}%`}
+                      sub={`${adv.book_slots ?? 20} slots · sum ${adv.sum_trade_return_pct}%`}
+                      color={(adv.book_return_pct ?? 0) >= 0 ? "#00e096" : "#ff4757"} />
+          )}
+          <StatCard label="Avg Return"
+                    value={stats.closed_trades ? `${stats.avg_return_pct > 0 ? "+" : ""}${stats.avg_return_pct}%` : "—"}
+                    sub="per closed trade"
+                    color={stats.avg_return_pct >= 0 ? "#00e096" : "#ff4757"} />
+          {adv && adv.closed_trades > 0 && (
+            <>
+              <StatCard label="Profit Factor"
+                        value={adv.profit_factor != null ? String(adv.profit_factor) : "—"}
+                        sub="gross win / gross loss"
+                        color={(adv.profit_factor ?? 0) >= 1 ? "#00e096" : "#ff4757"} />
+              <StatCard label="Expectancy"
+                        value={adv.expectancy_r != null ? `${adv.expectancy_r}R` : "—"}
+                        sub="per trade" />
+              <StatCard label="Max Drawdown"
+                        value={adv.max_drawdown_pct != null ? `${adv.max_drawdown_pct}%` : "—"}
+                        sub="book-weighted" color="#ff4757" />
+              <StatCard label="Avg Giveback"
+                        value={adv.avg_giveback_pct != null ? `${adv.avg_giveback_pct}%` : "—"}
+                        sub="best price → exit"
+                        color={(adv.avg_giveback_pct ?? 0) >= 5 ? "#ff4757" : undefined} />
+            </>
+          )}
+          <StatCard label="Avg Holding"
+                    value={stats.avg_holding_days ? `${stats.avg_holding_days}d` : "—"} />
         </div>
       )}
 

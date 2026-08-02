@@ -2010,6 +2010,10 @@ export interface LifecycleAnalytics {
   profit_factor?: number | null;
   payoff_ratio?: number | null;
   total_return_pct?: number;
+  book_return_pct?: number;
+  sum_trade_return_pct?: number;
+  book_slots?: number;
+  avg_giveback_pct?: number | null;
   max_drawdown_pct?: number;
   recovery_factor?: number | null;
   sharpe?: number | null;
