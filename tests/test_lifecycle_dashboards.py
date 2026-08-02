@@ -242,3 +242,69 @@ def test_post_trade_analysis_distinguishes_time_and_forced_exits():
     assert t["verdict"] == "Closed by time rule"
     f = post_trade_analysis({"executed": 1, "status": "FORCED_EXIT", "pnl_pct": -3.0})
     assert f["verdict"] == "Risk/structure exit"
+
+
+# ── One book-return definition across every surface ──────────────────────────
+
+@pytest.mark.parametrize("horizon", ["SWING", "LONGTERM"])
+def test_every_surface_reports_the_same_book_return(horizon):
+    """Header, lifecycle analytics, monthly, engine table and exit table must
+    all divide by the same slot count. A panel that publishes a raw sum reads as
+    a return roughly `slots` times too large — the original -41.37% bug."""
+    from dashboard.backend.db.portfolio import get_journal_stats
+    from dashboard.backend.db.lifecycle_analytics import analytics
+
+    for i in range(6):
+        pid = add_position({"symbol": f"NSE:X{horizon}{i}", "horizon": horizon,
+                            "entry_price": 100.0, "stop_loss": 90.0,
+                            "target_1": 120.0, "status": "ACTIVE"})
+        close_position(pid, 112.0 if i < 4 else 94.0,
+                       "TARGET_HIT" if i < 4 else "STOP_HIT")
+    backfill()
+
+    header = get_journal_stats(horizon, include_open=False)["realized_book_return_pct"]
+    adv = analytics(horizon)["book_return_pct"]
+    monthly = sum(p["book_return_pct"] for p in monthly_performance(horizon)["points"])
+    row = next(r for r in engine_comparison()["rows"] if r["key"] == horizon)
+    exits = sum(r["book_impact_pct"] for r in exit_attribution(horizon)["rows"])
+
+    for name, val in (("analytics", adv), ("monthly", monthly),
+                      ("engine table", row["book_return_pct"]), ("exit table", exits)):
+        assert val == pytest.approx(header, abs=0.05), \
+            f"{name} book return {val} != header {header}"
+
+
+def test_raw_sum_is_kept_but_never_equals_the_book_return():
+    """Both numbers stay available, and they must be distinguishable — the sum
+    is for comparing trades, the book figure is the portfolio."""
+    from dashboard.backend.db.lifecycle_analytics import analytics
+    for i in range(3):
+        pid = add_position({"symbol": f"NSE:RS{i}", "horizon": "SWING", "entry_price": 100.0,
+                            "stop_loss": 90.0, "target_1": 120.0, "status": "ACTIVE"})
+        close_position(pid, 120.0, "TARGET_HIT")
+    backfill()
+
+    a = analytics("SWING")
+    assert a["sum_trade_return_pct"] == pytest.approx(60.0, abs=0.05)
+    assert a["book_return_pct"] == pytest.approx(60.0 / a["book_slots"], abs=0.05)
+    assert a["book_return_pct"] != a["sum_trade_return_pct"]
+
+    row = next(r for r in engine_comparison()["rows"] if r["key"] == "SWING")
+    assert row["sum_pnl_pct"] == pytest.approx(60.0, abs=0.05)
+    assert row["book_return_pct"] == pytest.approx(60.0 / row["book_slots"], abs=0.05)
+
+
+def test_momentum_is_book_weighted_too():
+    """All three books, not just swing."""
+    from dashboard.backend.db.lifecycle_analytics import analytics, _slots_for
+    from dashboard.backend.db.trade_lifecycle import upsert
+
+    upsert({"source": "MOMENTUM", "portfolio": "MOMENTUM", "engine": "MOMENTUM",
+            "stage": "POSITION", "symbol": "NSE:MOMX", "status": "TARGET_HIT",
+            "entry_price": 100.0, "stop_loss": 90.0, "exit_price": 120.0,
+            "pnl_pct": 20.0, "exit_at": "2026-07-15T10:00:00+05:30",
+            "source_table": "momentum_journal", "source_id": "mx1"})
+
+    a = analytics("MOMENTUM")
+    assert a["book_slots"] == _slots_for("MOMENTUM")
+    assert a["book_return_pct"] == pytest.approx(20.0 / a["book_slots"], abs=0.05)

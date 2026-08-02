@@ -39,9 +39,9 @@ function Panel({ icon, title, note, children }: {
 
 function MonthlyChart({ pts }: { pts: MonthlyPoint[] }) {
   if (!pts.length) return <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>No closed trades yet.</div>;
-  const max = Math.max(...pts.map((p) => Math.abs(p.sum_pnl_pct)), 1);
-  const cMin = Math.min(0, ...pts.map((p) => p.cumulative_pnl_pct));
-  const cMax = Math.max(0, ...pts.map((p) => p.cumulative_pnl_pct));
+  const max = Math.max(...pts.map((p) => Math.abs(p.book_return_pct ?? 0)), 0.1);
+  const cMin = Math.min(0, ...pts.map((p) => p.cumulative_book_return_pct ?? 0));
+  const cMax = Math.max(0, ...pts.map((p) => p.cumulative_book_return_pct ?? 0));
   const cSpan = cMax - cMin || 1;
   const H = 150;
   return (
@@ -51,15 +51,15 @@ function MonthlyChart({ pts }: { pts: MonthlyPoint[] }) {
           <polyline
             fill="none" stroke="#00d4ff" strokeWidth="2"
             points={pts.map((p, i) =>
-              `${(i + 0.5) / pts.length * 100}%,${H - ((p.cumulative_pnl_pct - cMin) / cSpan) * H}`).join(" ")}
+              `${(i + 0.5) / pts.length * 100}%,${H - (((p.cumulative_book_return_pct ?? 0) - cMin) / cSpan) * H}`).join(" ")}
           />
         </svg>
         {pts.map((p) => {
-          const h = (Math.abs(p.sum_pnl_pct) / max) * (H * 0.72);
-          const up = p.sum_pnl_pct >= 0;
+          const h = (Math.abs(p.book_return_pct ?? 0) / max) * (H * 0.72);
+          const up = (p.book_return_pct ?? 0) >= 0;
           return (
             <div key={p.period} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}
-                 title={`${p.period}: ${p.trades} trades · ${p.win_rate_pct}% win · sum ${p.sum_pnl_pct}% · cumulative ${p.cumulative_pnl_pct}%`}>
+                 title={`${p.period}: ${p.trades} trades · ${p.win_rate_pct}% win · book ${p.book_return_pct}% (sum of trades ${p.sum_pnl_pct}% over ${p.book_slots} slots) · cumulative ${p.cumulative_book_return_pct}%`}>
               <div style={{ height: Math.max(h, 2), background: up ? "rgba(0,224,150,0.5)" : "rgba(255,71,87,0.5)", borderRadius: "3px 3px 0 0" }} />
             </div>
           );
@@ -73,7 +73,7 @@ function MonthlyChart({ pts }: { pts: MonthlyPoint[] }) {
         ))}
       </div>
       <div style={{ marginTop: 10, fontSize: "0.66rem", color: "var(--text-secondary)" }}>
-        Bars = sum of trade returns that month · Line = cumulative
+        Bars = book return that month · Line = cumulative book return. Each position is 1/{pts[0]?.book_slots ?? 20} of capital, so this is the portfolio move, not the sum of the trades.
       </div>
     </div>
   );
@@ -184,7 +184,7 @@ export default function LifecycleAnalyticsPage() {
       </div>
 
       <Panel icon={<TrendingUp size={15} color="#00e096" />} title="Monthly performance"
-             note="Bars sum the trade returns closed in each month — a month-to-month comparison, not a portfolio return.">
+             note="Book-weighted: what the portfolio actually made each month.">
         <MonthlyChart pts={monthly} />
       </Panel>
 
@@ -197,7 +197,7 @@ export default function LifecycleAnalyticsPage() {
 
       <Panel icon={<Layers size={15} color="#f0c060" />}
              title={byVersion ? "Engine version comparison" : "Book comparison"}
-             note="Same closed population for every row, so the columns are directly comparable.">
+             note="Same closed population for every row. Book return weights each position at 1/slots of capital; the raw sum is shown beside it for reference.">
         <button onClick={() => setByVersion((v) => !v)} style={{
           fontSize: "0.68rem", padding: "4px 10px", borderRadius: 6, marginBottom: 10, cursor: "pointer",
           background: "transparent", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)",
@@ -209,8 +209,9 @@ export default function LifecycleAnalyticsPage() {
             ["CLOSED", (r) => r.closed_trades],
             ["WIN RATE", (r) => <span style={{ color: r.win_rate_pct >= 50 ? "#00e096" : "#f0c060" }}>{r.win_rate_pct}%</span>],
             ["TARGET RATE", (r) => `${r.target_hit_rate_pct}%`],
+            ["BOOK RETURN", (r) => pnl(r.book_return_pct)],
             ["AVG P&L", (r) => pnl(r.avg_pnl_pct)],
-            ["SUM P&L", (r) => pnl(r.sum_pnl_pct)],
+            ["SUM OF TRADES", (r) => <span style={{ color: "var(--text-secondary)" }}>{r.sum_pnl_pct}%</span>],
             ["AVG RR", (r) => (r.avg_rr != null ? `${r.avg_rr}R` : "—")],
             ["AVG DAYS", (r) => (r.avg_holding_days != null ? `${r.avg_holding_days}d` : "—")],
           ]}
@@ -218,15 +219,16 @@ export default function LifecycleAnalyticsPage() {
       </Panel>
 
       <Panel icon={<LogOut size={15} color="#ff4757" />} title="Exit attribution"
-             note="Which exit rule produced which outcome — including how much of the best price was given back.">
+             note="Which exit rule produced which outcome. Book impact is the portfolio move; sum of trades is the raw addition and is not a return.">
         <Table
           rows={exits}
           cols={[
             ["EXIT", (r) => <strong>{label(r.status)}</strong>],
             ["N", (r) => r.n],
             ["WIN RATE", (r) => `${r.win_rate_pct}%`],
+            ["BOOK IMPACT", (r) => pnl(r.book_impact_pct)],
             ["AVG P&L", (r) => pnl(r.avg_pnl)],
-            ["SUM P&L", (r) => pnl(r.sum_pnl)],
+            ["SUM OF TRADES", (r) => <span style={{ color: "var(--text-secondary)" }}>{r.sum_pnl}%</span>],
             ["AVG BEST", (r) => (r.avg_mfe != null ? `+${r.avg_mfe}%` : "—")],
             ["GIVEBACK", (r) => (r.avg_giveback_pct != null
               ? <span style={{ color: r.avg_giveback_pct >= 5 ? "#ff4757" : "var(--text-secondary)" }}>{r.avg_giveback_pct}%</span>
