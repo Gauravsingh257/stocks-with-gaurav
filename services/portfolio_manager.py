@@ -325,15 +325,73 @@ def _send_portfolio_armed_alert(position: dict) -> None:
         log.warning("Portfolio armed alert: Telegram post failed (best-effort)")
 
 
+def _position_exists(symbol: str, horizon: str) -> bool:
+    """Is this symbol genuinely held in that book right now?
+
+    Checks the momentum table too, since that book has its own storage. Fails
+    OPEN on an unexpected error: a database hiccup must not silently swallow a
+    legitimate fill alert — the guard exists to stop phantom alerts, not to
+    become a new way to lose real ones.
+    """
+    try:
+        from dashboard.backend.db.schema import get_connection
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return False
+        hz = str(horizon or "").strip().upper()
+        conn = get_connection()
+        try:
+            if hz == "MOMENTUM":
+                row = conn.execute(
+                    "SELECT 1 FROM momentum_positions WHERE UPPER(symbol) IN (?, ?) "
+                    "AND status = 'ACTIVE' LIMIT 1",
+                    (sym, sym.replace("NSE:", "")),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT 1 FROM portfolio_positions WHERE UPPER(symbol) IN (?, ?) "
+                    "AND horizon = ? AND status = 'ACTIVE' LIMIT 1",
+                    (sym, f"NSE:{sym.replace('NSE:', '')}", hz),
+                ).fetchone()
+            return bool(row)
+        finally:
+            conn.close()
+    except Exception:
+        log.debug("[Alert] position existence check failed — allowing alert", exc_info=True)
+        return True
+
+
 def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float,
                                    trigger_price: float, stop_loss: float,
                                    target_1: float | None = None) -> None:
     """Telegram notification when an armed idea's entry ACTUALLY triggers (the
-    real fill). Called by the price tracker on arm→active. Best-effort."""
+    real fill). Called by the price tracker on arm→active. Best-effort.
+
+    VERIFIES THE POSITION EXISTS FIRST. Both callers are supposed to have just
+    created or activated a row, but PARKHOSPS and NIVABUPA both alerted as
+    "Entry Triggered (LONGTERM)" while existing nowhere — not in the positions
+    table under any status, not in the journal, not in the lifecycle ledger
+    after a forced full resync. Whatever produced that, an alert claiming a
+    position was entered must not be able to outlive the position itself.
+
+    So the guarantee is enforced here rather than assumed of every caller: no
+    row in the book, no alert. A caller that legitimately holds the position
+    passes; one that does not gets a logged warning instead of telling the user
+    about a trade that does not exist.
+    """
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
     if not bot_token or not chat_id:
         return
+
+    if os.getenv("PORTFOLIO_ALERT_REQUIRES_POSITION", "1").strip().lower() in {"1", "true", "yes", "on"}:
+        if not _position_exists(symbol, horizon):
+            log.warning(
+                "[Alert] SUPPRESSED entry alert for %s/%s — no ACTIVE position in the book. "
+                "An alert must never describe a trade the portfolio does not hold.",
+                symbol, horizon,
+            )
+            return
     lines = [
         f"✅ <b>Entry Triggered ({horizon.upper()})</b>",
         "",
