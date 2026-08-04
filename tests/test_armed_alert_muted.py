@@ -86,3 +86,43 @@ def test_genuine_fill_alerts_are_untouched(posted, monkeypatch):
         "NSE:FEDERALBNK", "LONGTERM", 337.48, 338.10, 310.48, 418.48,
     )
     assert len(posted) == 2, "entry-triggered (genuine tap) alert must still send"
+
+
+# ── An entry alert must never describe a position the book doesn't hold ──────
+
+def test_entry_triggered_alert_is_suppressed_without_a_real_position(posted, monkeypatch):
+    """PARKHOSPS / NIVABUPA alerted as entered while existing nowhere.
+
+    Both callers are meant to have just created or activated a row, so the
+    guarantee is enforced at the sender rather than assumed of every caller.
+    """
+    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: False)
+    pm.send_portfolio_triggered_alert("NSE:PARKHOSPS", "LONGTERM", 284.22, 283.95, 264.63, 342.99)
+    assert posted == [], "an alert must not claim a position the portfolio does not hold"
+
+
+def test_entry_triggered_alert_sends_for_a_real_position(posted, monkeypatch):
+    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: True)
+    pm.send_portfolio_triggered_alert("NSE:NELCO", "LONGTERM", 991.86, 991.20, 912.51, 1229.91)
+    assert len(posted) == 1
+    assert "NELCO" in posted[0]["json"]["text"]
+
+
+def test_guard_fails_open_so_a_db_error_never_loses_a_real_alert(posted, monkeypatch):
+    """The guard exists to stop phantom alerts, not to become a new way to lose
+    genuine ones."""
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(pm, "_position_exists", _boom)
+    # _position_exists swallows its own errors and returns True; simulate the
+    # sender calling the real implementation with a broken connection.
+    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: True)
+    pm.send_portfolio_triggered_alert("NSE:REAL", "SWING", 100.0, 100.5, 90.0, 120.0)
+    assert len(posted) == 1
+
+
+def test_guard_can_be_disabled_without_redeploy(posted, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_ALERT_REQUIRES_POSITION", "0")
+    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: False)
+    pm.send_portfolio_triggered_alert("NSE:GHOST", "SWING", 1.0, 1.0, 0.9, 1.2)
+    assert len(posted) == 1, "flag off restores the previous behaviour"
