@@ -23,7 +23,7 @@
  *   • /api/lifecycle/stats  → track record, from the canonical trade ledger
  *   • live engine snapshot      → regime, daily P&L, signals
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight, ChevronDown,
@@ -93,6 +93,7 @@ export default function CommandCenterPage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [dataAt, setDataAt] = useState<number | null>(null);
 
   // Tick the "updated X ago" label without re-fetching.
   useEffect(() => {
@@ -100,33 +101,36 @@ export default function CommandCenterPage() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    let live = true;
-    Promise.allSettled([
+  // Live refresh. "Running Trades" shows unrealised P&L that moves with price,
+  // so a fetch-once-on-mount page goes stale the moment the tracker updates a
+  // position — the numbers looked live but were frozen at page load.
+  //
+  // Two mechanisms, because they cover different things:
+  //   • SSE fires on lifecycle TRANSITIONS (a fill, a close). Instant, but a
+  //     price tick is not a transition, so it alone would not move the P&L.
+  //   • The poll covers price drift, which is what these panels mostly show.
+  const refresh = useCallback((withSpinner = false) => {
+    if (withSpinner) setLoading(true);
+    return Promise.allSettled([
       api.commandCenter(token ?? undefined),
       api.lifecycleStats({}),
       api.topRunningTrades(5),
     ])
       .then(([c, t, r]) => {
-        if (!live) return;
         if (c.status === "fulfilled") setCc(c.value);
         if (t.status === "fulfilled") setLedger(t.value);
         if (r.status === "fulfilled") { setRunning(r.value.items ?? []); setTotalOpen(r.value.total_open ?? null); }
+        setDataAt(Date.now());
       })
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+      .finally(() => { if (withSpinner) setLoading(false); });
   }, [token]);
 
-  // Per-book performance for the trust panel. Book return (sum / slots) — each
-  // position is only a fraction of capital, so the raw sum is not a return.
-  useEffect(() => {
-    let live = true;
+  const refreshBooks = useCallback(() => {
     const defs = [["SWING", "Swing"], ["LONGTERM", "Long-Term"], ["MOMENTUM", "Momentum"]] as const;
-    Promise.allSettled([
+    return Promise.allSettled([
       api.lifecycleAnalytics("ALL"),
       ...defs.map(([k]) => api.lifecycleAnalytics(k)),
     ]).then((res) => {
-      if (!live) return;
       if (res[0].status === "fulfilled") setAdv(res[0].value);
       const rows: { key: string; label: string; ret: number; closed: number; pf: number | null }[] = [];
       defs.forEach(([k, label], i) => {
@@ -138,8 +142,45 @@ export default function CommandCenterPage() {
       });
       setBooks(rows);
     });
-    return () => { live = false; };
   }, []);
+
+  useEffect(() => { refresh(true); }, [refresh]);
+
+  // Price drift: poll while the tab is visible. Pausing when hidden avoids
+  // burning requests on a background tab that nobody is reading.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      refresh();
+      refreshBooks();
+    };
+    const id = setInterval(tick, 45000);
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, [refresh, refreshBooks]);
+
+  // State changes: a fill or a close should land immediately, not on the next poll.
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+    const connect = () => {
+      if (closed) return;
+      try {
+        es = new EventSource(api.lifecycleStreamUrl());
+        es.onmessage = (m) => {
+          try {
+            if (JSON.parse(m.data).event === "LIFECYCLE_UPDATED") { refresh(); refreshBooks(); }
+          } catch { /* keepalive frames are not JSON */ }
+        };
+        es.onerror = () => { es?.close(); if (!closed) retry = setTimeout(connect, 8000); };
+      } catch { /* SSE unavailable — the poll above still refreshes */ }
+    };
+    connect();
+    return () => { closed = true; es?.close(); if (retry) clearTimeout(retry); };
+  }, [refresh, refreshBooks]);
+
 
   const phase = marketPhase();
   const regime = cc?.market_regime ?? snapshot?.market_regime;
@@ -207,9 +248,11 @@ export default function CommandCenterPage() {
           </div>
           {(updatedLabel || engineVer) && (
             <div style={{ fontSize: "0.6rem", color: "var(--text-dim)" }}>
-              {updatedLabel && <>Updated {updatedLabel}</>}
+              {dataAt ? <>Data {relTime(new Date(dataAt).toISOString(), nowTick) || "just now"}</> : null}
+              {dataAt && (updatedLabel || engineVer) ? " · " : ""}
+              {updatedLabel && <>Engine {updatedLabel}</>}
               {updatedLabel && engineVer ? " · " : ""}
-              {engineVer ? `Engine v${engineVer}` : ""}
+              {engineVer ? `v${engineVer}` : ""}
             </div>
           )}
         </div>
