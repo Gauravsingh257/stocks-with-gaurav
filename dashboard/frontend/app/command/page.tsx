@@ -27,15 +27,14 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   TrendingUp, TrendingDown, Minus, Eye, Sparkles, ArrowRight, ChevronDown,
-  Activity, ShieldCheck, Search, Info,
+  Activity, ShieldCheck, Search,
 } from "lucide-react";
-import { api, type CommandCenterResponse, type LifecycleStats, type LifecycleAnalytics } from "@/lib/api";
+import { api, type CommandCenterResponse, type LifecycleStats, type LifecycleAnalytics, type RunningTrade } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { marketPhase } from "@/lib/nba";
 import { humanize, regimeContext } from "@/lib/humanize";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
-import Sparkline from "@/components/Sparkline";
 import { ExposureRegimePanel } from "./ExposureRegimePanel";
 
 // Freshness — relative "updated X ago" (Refinement 3).
@@ -67,15 +66,6 @@ function scoreTier(score: number): { stars: number; label: string; color: string
   return { stars: 1, label: "Building", color: "#fbbf24" };
 }
 
-// What the SMC score blends — shown in the "What builds this score?" explainer.
-const SCORE_FACTORS = [
-  "Market structure (BOS / CHoCH)",
-  "Order blocks (demand / supply)",
-  "Fair value gaps (FVG)",
-  "Liquidity sweeps",
-  "Volume expansion",
-  "Trend alignment",
-];
 
 function sym(s?: string | null) {
   return String(s || "").replace("NSE:", "").trim().toUpperCase();
@@ -83,16 +73,25 @@ function sym(s?: string | null) {
 
 const FAMILIAR = ["RELIANCE", "TCS", "HDFCBANK", "INFY"];
 
+function bookLabel(b?: string | null) {
+  const v = String(b || "").toUpperCase();
+  if (v === "LONGTERM") return "Long-Term";
+  if (v === "SWING") return "Swing";
+  if (v === "MOMENTUM") return "Momentum";
+  return v || "—";
+}
+
 export default function CommandCenterPage() {
   const { user, token } = useAuth();
   const { snapshot } = useEngineSocket();
   const [cc, setCc] = useState<CommandCenterResponse | null>(null);
   const [ledger, setLedger] = useState<LifecycleStats | null>(null);
+  const [running, setRunning] = useState<RunningTrade[]>([]);
+  const [totalOpen, setTotalOpen] = useState<number | null>(null);
   const [adv, setAdv] = useState<LifecycleAnalytics | null>(null);
   const [books, setBooks] = useState<{ key: string; label: string; ret: number; closed: number; pf: number | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [spark, setSpark] = useState<Record<string, number[]>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   // Tick the "updated X ago" label without re-fetching.
@@ -106,11 +105,13 @@ export default function CommandCenterPage() {
     Promise.allSettled([
       api.commandCenter(token ?? undefined),
       api.lifecycleStats({}),
+      api.topRunningTrades(5),
     ])
-      .then(([c, t]) => {
+      .then(([c, t, r]) => {
         if (!live) return;
         if (c.status === "fulfilled") setCc(c.value);
         if (t.status === "fulfilled") setLedger(t.value);
+        if (r.status === "fulfilled") { setRunning(r.value.items ?? []); setTotalOpen(r.value.total_open ?? null); }
       })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
@@ -162,29 +163,8 @@ export default function CommandCenterPage() {
     }
     return list.sort((a, b) => b.score - a.score);
   }, [cc]);
-  const top3 = opportunities.slice(0, 3);
   const more = opportunities.slice(3, 8);
-  const top3Key = top3.map((o) => o.symbol).join(",");
 
-  // Lightweight sparklines for the top-3 only — backgrounded after the main
-  // render so it never delays the hero. Reuses the existing chart-data endpoint.
-  useEffect(() => {
-    const syms = top3Key ? top3Key.split(",") : [];
-    if (syms.length === 0) return;
-    let live = true;
-    Promise.allSettled(syms.map((s) => api.researchChartData(s, "SWING"))).then((results) => {
-      if (!live) return;
-      const next: Record<string, number[]> = {};
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled" && Array.isArray(r.value.candles)) {
-          const closes = r.value.candles.map((c) => c.close).filter((n): n is number => typeof n === "number");
-          if (closes.length >= 2) next[syms[i]] = closes.slice(-30);
-        }
-      });
-      setSpark(next);
-    });
-    return () => { live = false; };
-  }, [top3Key]);
 
   // Freshness (Refinement 3)
   const engineVer = snapshot?._global_state_version ?? cc?._global_state_version;
@@ -238,26 +218,31 @@ export default function CommandCenterPage() {
       {/* Market regime + exposure — first thing users see (PR2) */}
       <ExposureRegimePanel ideaCount={opportunities.length} />
 
-      {/* ★ HERO — Today's Top Opportunities (top 3, expandable) */}
+      {/* ★ HERO — Top Performing Running Trades.
+          Positions the books ACTUALLY hold, ranked by live unrealised P&L,
+          across Swing / Long-Term / Momentum. This replaced a scan-score
+          ranking that had no connection to the portfolio — it could show a name
+          at 85/100 that had already been closed days earlier. */}
       <div className="glass rounded-xl" style={{ padding: "16px 18px", border: "1px solid rgba(16,185,129,0.3)", boxShadow: "0 18px 44px rgba(16,185,129,0.10)" }}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Sparkles size={17} color="#34d399" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Today&apos;s Highest-Scoring Setups</span>
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>Top Performing Running Trades</span>
           </div>
           <Link href="/research" className="inline-flex items-center gap-1" style={{ fontSize: "0.7rem", color: "var(--accent)", textDecoration: "none" }}>
-            All on the radar <ArrowRight size={12} />
+            All positions <ArrowRight size={12} />
           </Link>
         </div>
-        {top3.length === 0 ? (
-          <Empty>No A-grade setups in the current scan. The engine is still monitoring structure — check Research for names approaching confirmation.</Empty>
+        {running.length === 0 ? (
+          <Empty>No open positions right now. Live trades appear here the moment an entry triggers.</Empty>
         ) : (
           <div className="flex flex-col gap-2">
-            {top3.map((o, i) => {
-              const tier = scoreTier(o.score);
+            {running.map((o, i) => {
+              const up = o.profit_loss_pct >= 0;
+              const col = up ? "#34d399" : "#f87171";
               const open = expanded === o.symbol;
               return (
-                <div key={o.symbol} style={{ borderRadius: 11, border: `1px solid ${open ? tier.color : "rgba(255,255,255,0.06)"}`, background: "rgba(255,255,255,0.02)", overflow: "hidden" }}>
+                <div key={`${o.book}-${o.symbol}`} style={{ borderRadius: 11, border: `1px solid ${open ? col : "rgba(255,255,255,0.06)"}`, background: "rgba(255,255,255,0.02)", overflow: "hidden" }}>
                   <button
                     type="button"
                     onClick={() => setExpanded(open ? null : o.symbol)}
@@ -266,43 +251,43 @@ export default function CommandCenterPage() {
                   >
                     <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-dim)", width: 18 }}>{i + 1}</span>
                     <span style={{ fontSize: "0.98rem", fontWeight: 800, color: "var(--text-primary)", minWidth: 96 }}>{o.symbol}</span>
-                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                      <span style={{ fontSize: "1.05rem", fontWeight: 800, color: tier.color, fontVariantNumeric: "tabular-nums" }}>{o.score.toFixed(0)}</span>
-                      <span style={{ fontSize: "0.62rem", color: "var(--text-dim)" }}>/100</span>
+                    <span style={{ fontSize: "0.58rem", padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "var(--text-dim)", whiteSpace: "nowrap" }}>
+                      {bookLabel(o.book)}
                     </span>
-                    <span className="hidden sm:flex items-center gap-1.5">
-                      <Stars n={tier.stars} color={tier.color} />
-                      <span style={{ fontSize: "0.72rem", color: tier.color, fontWeight: 700 }}>{tier.label}</span>
+                    <span style={{ fontSize: "1.05rem", fontWeight: 800, color: col, fontVariantNumeric: "tabular-nums" }}>
+                      {up ? "+" : ""}{o.profit_loss_pct.toFixed(2)}%
                     </span>
-                    {spark[o.symbol] && spark[o.symbol].length >= 2 && (
-                      <span style={{ marginLeft: "auto" }}>
-                        <Sparkline data={spark[o.symbol]} positive={spark[o.symbol][spark[o.symbol].length - 1] >= spark[o.symbol][0]} />
+                    {o.days_held != null && (
+                      <span className="hidden sm:inline" style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>{o.days_held}d held</span>
+                    )}
+                    {o.target_progress_pct != null && (
+                      <span className="hidden md:flex items-center gap-2" style={{ marginLeft: "auto", minWidth: 120 }}>
+                        <span style={{ flex: 1, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
+                          <span style={{ display: "block", width: `${o.target_progress_pct}%`, height: "100%", background: col }} />
+                        </span>
+                        <span style={{ fontSize: "0.6rem", color: "var(--text-dim)", whiteSpace: "nowrap" }}>{o.target_progress_pct}% to target</span>
                       </span>
                     )}
-                    <ChevronDown size={16} style={{ marginLeft: spark[o.symbol] ? 8 : "auto", color: "var(--text-dim)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+                    <ChevronDown size={16} style={{ marginLeft: o.target_progress_pct != null ? 8 : "auto", color: "var(--text-dim)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
                   </button>
 
                   {open && (
                     <div style={{ padding: "0 14px 14px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                      <div className="flex sm:hidden items-center gap-1.5 mt-3">
-                        <Stars n={tier.stars} color={tier.color} />
-                        <span style={{ fontSize: "0.72rem", color: tier.color, fontWeight: 700 }}>{tier.label}</span>
-                      </div>
-                      <div style={{ marginTop: 12 }}>
-                        <div className="flex items-center gap-1.5" style={{ fontSize: "0.66rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)", marginBottom: 6 }}>
-                          <Info size={12} /> What builds this score?
-                        </div>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                          {SCORE_FACTORS.map((f) => (
-                            <div key={f} className="flex items-center gap-1.5" style={{ fontSize: "0.74rem", color: "var(--text-secondary)" }}>
-                              <span style={{ color: tier.color }}>✓</span> {f}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" style={{ marginTop: 12 }}>
+                        {[["Entry", o.entry_price], ["Current", o.current_price],
+                          ["Stop", o.stop_loss], ["Target", o.target_2 ?? o.target_1]].map(([k, v]) => (
+                          <div key={String(k)}>
+                            <div style={{ fontSize: "0.6rem", color: "var(--text-dim)" }}>{k}</div>
+                            <div style={{ fontSize: "0.86rem", fontWeight: 700,
+                                          color: k === "Stop" ? "#f87171" : k === "Target" ? "#34d399" : "var(--text-primary)" }}>
+                              {v == null ? "—" : `₹${Number(v).toFixed(2)}`}
                             </div>
-                          ))}
-                        </div>
-                        <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "8px 0 0" }}>
-                          {humanize(o.note || "")} The SMC score (0–100) blends the confluence factors above — higher = more aligned.
-                        </p>
+                          </div>
+                        ))}
                       </div>
+                      <p style={{ fontSize: "0.7rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
+                        Open position in the {bookLabel(o.book)} book. P&amp;L is unrealised and moves with price — it is not booked until the position closes.
+                      </p>
                       <div className="flex flex-wrap items-center gap-2 mt-3">
                         <Link
                           href={`/research/chart?symbol=${encodeURIComponent(o.symbol)}&horizon=SWING`}
@@ -321,7 +306,9 @@ export default function CommandCenterPage() {
           </div>
         )}
         <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>
-          Ranked by SMC structure score from today&apos;s scan — highest score first. These are <b>scan results, not portfolio positions</b>: a name can appear here whether or not the book holds it, and a high score is a measure of setup quality, not a prediction. Not buy/sell advice.
+          The {running.length} best-performing <b>open positions</b> across Swing, Long-Term and Momentum, ranked by current unrealised P&amp;L
+          {typeof totalOpen === "number" && totalOpen > running.length ? ` (of ${totalOpen} open)` : ""}.
+          These are live holdings, not scan results. Unrealised P&amp;L moves with price and is not banked until the position closes.
         </p>
       </div>
 

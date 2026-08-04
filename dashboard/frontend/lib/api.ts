@@ -1726,6 +1726,9 @@ export const api = {
   momentumSummary: () => get<MomentumSummary>("/api/momentum-portfolio/summary"),
   portfolioSwing: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/swing?limit=${limit}`),
   portfolioLongterm: (limit = 10) => get<{ items: PortfolioPosition[]; count: number; max: number; horizon: string }>(`/api/portfolio/longterm?limit=${limit}`),
+  /** Best-performing OPEN positions across every book, by live unrealised P&L. */
+  topRunningTrades: (limit = 5) =>
+    get<{ items: RunningTrade[]; total_open: number }>(`/api/portfolio/top-running?limit=${limit}`),
   portfolioCounts: () => get<{ swing: number; swing_max: number; longterm: number; longterm_max: number }>("/api/portfolio/counts"),
   portfolioJournal: (horizon?: string, limit = 50) => {
     const q = new URLSearchParams();
@@ -2107,4 +2110,18 @@ export interface OhlcWindow {
   anchor_index: number;
   bars: { d: string; o: number; h: number; l: number; c: number; v: number }[];
   captured_at: string;
+}
+
+export interface RunningTrade {
+  symbol: string;
+  book: string;
+  entry_price: number | null;
+  current_price: number | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  profit_loss_pct: number;
+  days_held: number | null;
+  entered_at: string | null;
+  target_progress_pct: number | null;
 }
