@@ -126,6 +126,61 @@ def close_position(position_id: int, req: ClosePositionRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# NOTE: every STATIC path below must be declared BEFORE the dynamic
+# "/{position_id}" route. FastAPI matches in definition order, so a static path
+# declared after it is swallowed by the path param — "/top-running" was being
+# parsed as a position id and returned 422.
+@router.get("/top-running")
+def top_running_trades(limit: int = Query(5, ge=1, le=20)):
+    """Best-performing OPEN positions across every book, by live unrealised P&L.
+
+    Reads the position tables directly rather than the lifecycle ledger: the
+    ledger resyncs on a cycle, so its P&L can lag by a few minutes, and a panel
+    titled "top performing running trades" has to reflect the current price.
+
+    ACTIVE only — an armed PENDING idea has not been entered and has no P&L, so
+    it cannot be "performing".
+    """
+    from dashboard.backend.db.schema import get_connection
+
+    rows: list[dict] = []
+    conn = get_connection()
+    try:
+        for r in conn.execute(
+            "SELECT symbol, horizon AS book, entry_price, current_price, stop_loss, "
+            "target_1, target_2, profit_loss_pct, days_held, entered_at "
+            "FROM portfolio_positions WHERE status = 'ACTIVE'"
+        ).fetchall():
+            rows.append(dict(r))
+        try:
+            for r in conn.execute(
+                "SELECT symbol, 'MOMENTUM' AS book, entry_price, current_price, stop_loss, "
+                "target_1, NULL AS target_2, profit_loss_pct, days_held, entered_at "
+                "FROM momentum_positions WHERE status = 'ACTIVE'"
+            ).fetchall():
+                rows.append(dict(r))
+        except Exception:
+            # Momentum tables may not exist in every environment; the panel still
+            # works from the other two books.
+            log.debug("momentum positions unavailable for top-running", exc_info=True)
+    finally:
+        conn.close()
+
+    for r in rows:
+        r["symbol"] = str(r.get("symbol") or "").replace("NSE:", "").upper()
+        r["profit_loss_pct"] = float(r.get("profit_loss_pct") or 0.0)
+        e, t = r.get("entry_price"), (r.get("target_2") or r.get("target_1"))
+        cur = r.get("current_price")
+        # How far this trade has travelled from entry toward its target — lets
+        # the UI show progress rather than only a percentage.
+        r["target_progress_pct"] = (
+            round(max(0.0, min(100.0, (float(cur) - float(e)) / (float(t) - float(e)) * 100)), 1)
+            if e and t and cur and float(t) > float(e) else None
+        )
+
+    rows.sort(key=lambda x: -x["profit_loss_pct"])
+    return {"items": rows[:limit], "total_open": len(rows)}
+
 @router.get("/{position_id}")
 def get_position(position_id: int):
     """Get a single position by ID."""
@@ -388,55 +443,3 @@ def portfolio_risk():
     """Portfolio risk summary — sector exposure, drawdown, alerts."""
     from services.portfolio_risk import get_risk_summary
     return get_risk_summary()
-
-
-@router.get("/top-running")
-def top_running_trades(limit: int = Query(5, ge=1, le=20)):
-    """Best-performing OPEN positions across every book, by live unrealised P&L.
-
-    Reads the position tables directly rather than the lifecycle ledger: the
-    ledger resyncs on a cycle, so its P&L can lag by a few minutes, and a panel
-    titled "top performing running trades" has to reflect the current price.
-
-    ACTIVE only — an armed PENDING idea has not been entered and has no P&L, so
-    it cannot be "performing".
-    """
-    from dashboard.backend.db.schema import get_connection
-
-    rows: list[dict] = []
-    conn = get_connection()
-    try:
-        for r in conn.execute(
-            "SELECT symbol, horizon AS book, entry_price, current_price, stop_loss, "
-            "target_1, target_2, profit_loss_pct, days_held, entered_at "
-            "FROM portfolio_positions WHERE status = 'ACTIVE'"
-        ).fetchall():
-            rows.append(dict(r))
-        try:
-            for r in conn.execute(
-                "SELECT symbol, 'MOMENTUM' AS book, entry_price, current_price, stop_loss, "
-                "target_1, NULL AS target_2, profit_loss_pct, days_held, entered_at "
-                "FROM momentum_positions WHERE status = 'ACTIVE'"
-            ).fetchall():
-                rows.append(dict(r))
-        except Exception:
-            # Momentum tables may not exist in every environment; the panel still
-            # works from the other two books.
-            log.debug("momentum positions unavailable for top-running", exc_info=True)
-    finally:
-        conn.close()
-
-    for r in rows:
-        r["symbol"] = str(r.get("symbol") or "").replace("NSE:", "").upper()
-        r["profit_loss_pct"] = float(r.get("profit_loss_pct") or 0.0)
-        e, t = r.get("entry_price"), (r.get("target_2") or r.get("target_1"))
-        cur = r.get("current_price")
-        # How far this trade has travelled from entry toward its target — lets
-        # the UI show progress rather than only a percentage.
-        r["target_progress_pct"] = (
-            round(max(0.0, min(100.0, (float(cur) - float(e)) / (float(t) - float(e)) * 100)), 1)
-            if e and t and cur and float(t) > float(e) else None
-        )
-
-    rows.sort(key=lambda x: -x["profit_loss_pct"])
-    return {"items": rows[:limit], "total_open": len(rows)}
