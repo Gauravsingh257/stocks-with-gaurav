@@ -111,6 +111,36 @@ def run_backfill(dry_run: bool = Query(False)):
     return backfill(dry_run=dry_run)
 
 
+@router.get("/orphans")
+def orphan_positions():
+    """Positions in a TERMINAL status that have no journal row.
+
+    close_position() writes both, so a terminal position without a journal entry
+    means something closed it outside that path. Such rows are invisible
+    everywhere: the summary endpoint returns ACTIVE/PENDING only, and the ledger
+    backfill reads ACTIVE/PENDING/EXPIRED plus the journal — so the position is
+    real, was alerted on, and appears nowhere.
+    """
+    from dashboard.backend.db.schema import get_connection
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT p.id, p.symbol, p.horizon, p.status, p.entry_price, p.exit_price, "
+            "p.exit_reason, p.profit_loss_pct, p.created_at, p.entered_at, p.closed_at "
+            "FROM portfolio_positions p "
+            "LEFT JOIN portfolio_journal j ON j.position_id = p.id "
+            "WHERE p.status NOT IN ('ACTIVE','PENDING','EXPIRED') AND j.id IS NULL "
+            "ORDER BY datetime(COALESCE(p.closed_at, p.created_at)) DESC"
+        ).fetchall()
+        by_status: dict = {}
+        for r in rows:
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        return {"orphan_count": len(rows), "by_status": by_status,
+                "items": [dict(r) for r in rows[:100]]}
+    finally:
+        conn.close()
+
+
 @router.get("/validate")
 def validate():
     """Prove the ledger agrees with the books it was built from.
