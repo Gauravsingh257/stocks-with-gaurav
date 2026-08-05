@@ -386,10 +386,21 @@ def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float
 
     if os.getenv("PORTFOLIO_ALERT_REQUIRES_POSITION", "1").strip().lower() in {"1", "true", "yes", "on"}:
         if not _position_exists(symbol, horizon):
-            log.warning(
+            # Name the caller. The suppression alone stops the user-visible
+            # symptom, but four symbols (PARKHOSPS, NIVABUPA, APOLLOHOSP,
+            # ARVIND) have now alerted while existing in no table, and the
+            # mechanism is still unidentified. Recording which call site fired
+            # is what will finally pin it down.
+            try:
+                import traceback
+                caller = "".join(traceback.format_stack()[-4:-1]).strip()
+            except Exception:
+                caller = "<stack unavailable>"
+            log.error(
                 "[Alert] SUPPRESSED entry alert for %s/%s — no ACTIVE position in the book. "
-                "An alert must never describe a trade the portfolio does not hold.",
-                symbol, horizon,
+                "An alert must never describe a trade the portfolio does not hold. "
+                "Originating call site:\n%s",
+                symbol, horizon, caller,
             )
             return
     lines = [
