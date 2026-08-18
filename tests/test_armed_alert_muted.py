@@ -20,6 +20,7 @@ os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="armed_alert_test_")
 import pytest  # noqa: E402
 
 import services.portfolio_manager as pm  # noqa: E402
+import services.entry_gate as eg  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +83,17 @@ def test_genuine_fill_alerts_are_untouched(posted, monkeypatch):
     pm._send_portfolio_entry_alert({**_ARMED, "horizon": "SWING"})
     assert len(posted) == 1, "live/manual entry alert must still send"
 
+    # The fill alert is gated by PORTFOLIO_ALERT_REQUIRES_POSITION, so the book
+    # must genuinely hold this position for the alert to be legitimate. Create
+    # it explicitly: this test previously relied on _position_exists failing
+    # OPEN because the portfolio table did not exist in the temp DB, which made
+    # it pass for the wrong reason and depend on test-module import order.
+    from dashboard.backend.db.portfolio import init_portfolio_db, add_position
+    init_portfolio_db()
+    add_position({"symbol": "NSE:FEDERALBNK", "horizon": "LONGTERM",
+                  "entry_price": 337.48, "stop_loss": 310.48,
+                  "target_1": 418.48, "status": "ACTIVE"})
+
     pm.send_portfolio_triggered_alert(
         "NSE:FEDERALBNK", "LONGTERM", 337.48, 338.10, 310.48, 418.48,
     )
@@ -96,33 +108,36 @@ def test_entry_triggered_alert_is_suppressed_without_a_real_position(posted, mon
     Both callers are meant to have just created or activated a row, so the
     guarantee is enforced at the sender rather than assumed of every caller.
     """
-    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: False)
+    monkeypatch.setattr(eg, "can_monitor_entry", lambda *a, **k: False)
     pm.send_portfolio_triggered_alert("NSE:PARKHOSPS", "LONGTERM", 284.22, 283.95, 264.63, 342.99)
     assert posted == [], "an alert must not claim a position the portfolio does not hold"
 
 
 def test_entry_triggered_alert_sends_for_a_real_position(posted, monkeypatch):
-    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: True)
+    monkeypatch.setattr(eg, "can_monitor_entry", lambda *a, **k: True)
     pm.send_portfolio_triggered_alert("NSE:NELCO", "LONGTERM", 991.86, 991.20, 912.51, 1229.91)
     assert len(posted) == 1
     assert "NELCO" in posted[0]["json"]["text"]
 
 
-def test_guard_fails_open_so_a_db_error_never_loses_a_real_alert(posted, monkeypatch):
-    """The guard exists to stop phantom alerts, not to become a new way to lose
-    genuine ones."""
-    def _boom(*a, **k):
+def test_alert_fails_CLOSED_when_admission_cannot_be_established(posted, monkeypatch):
+    """DELIBERATE CONTRACT CHANGE.
+
+    The old private guard returned True on a database error, so a lookup
+    failure could still emit a phantom alert. The shared entry gate fails
+    CLOSED: an unsent alert is a minor loss; an alert describing a trade the
+    book never held is a correctness failure the user cannot audit.
+    """
+    import dashboard.backend.db.schema as sch
+    def _boom():
         raise RuntimeError("db down")
-    monkeypatch.setattr(pm, "_position_exists", _boom)
-    # _position_exists swallows its own errors and returns True; simulate the
-    # sender calling the real implementation with a broken connection.
-    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: True)
+    monkeypatch.setattr(sch, "get_connection", _boom)
     pm.send_portfolio_triggered_alert("NSE:REAL", "SWING", 100.0, 100.5, 90.0, 120.0)
-    assert len(posted) == 1
+    assert posted == [], "a failed admission lookup must not be read as permission"
 
 
 def test_guard_can_be_disabled_without_redeploy(posted, monkeypatch):
     monkeypatch.setenv("PORTFOLIO_ALERT_REQUIRES_POSITION", "0")
-    monkeypatch.setattr(pm, "_position_exists", lambda *a, **k: False)
+    monkeypatch.setattr(eg, "can_monitor_entry", lambda *a, **k: False)
     pm.send_portfolio_triggered_alert("NSE:GHOST", "SWING", 1.0, 1.0, 0.9, 1.2)
     assert len(posted) == 1, "flag off restores the previous behaviour"

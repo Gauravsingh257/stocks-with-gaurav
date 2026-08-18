@@ -88,8 +88,19 @@ def _arm_and_expire_pending() -> int:
         prices = _fetch_cmp_batch(list({p["symbol"] for p in pend})) or {}
         triggered = expired = 0
 
+        from services.entry_gate import can_monitor_entry
+
         for p in pend:
             pid = int(p["id"])
+            # THE GATE. get_pending_positions() should only ever return real
+            # Portfolio rows, but the phantom alerts proved entry monitoring
+            # cannot trust what it is handed — rejected signals_log candidates
+            # reached this lifecycle and alerted on positions the book never
+            # held. Re-verify against the Portfolio itself before arming,
+            # monitoring or triggering anything.
+            if not can_monitor_entry(p.get("symbol"), p.get("horizon"),
+                                     source="portfolio_tracker._arm_and_expire_pending"):
+                continue
             entry = float(p["entry_price"])
             arm_ref = float(p.get("arm_ref_price") or p.get("current_price") or entry)
             cmp = prices.get(p["symbol"])
@@ -228,8 +239,17 @@ def _sync_engine_trades() -> int:
         from dashboard.backend.db.portfolio import seed_portfolio_from_recommendations
         from services.portfolio_manager import send_portfolio_triggered_alert
 
+        from services.entry_gate import can_monitor_entry
+
         new_rows = seed_portfolio_from_recommendations()
         for r in new_rows:
+            # THE GATE. The seed returns dicts it believes it inserted; an alert
+            # built from that belief can outlive the row (insert rolled back,
+            # constraint rejected, capacity race). Ask the Portfolio directly so
+            # engine output stays candidate information until the book admits it.
+            if not can_monitor_entry(r.get("symbol"), r.get("horizon"),
+                                     source="portfolio_tracker._sync_engine_trades"):
+                continue
             try:
                 send_portfolio_triggered_alert(
                     r["symbol"], r["horizon"], float(r["entry_price"]),
