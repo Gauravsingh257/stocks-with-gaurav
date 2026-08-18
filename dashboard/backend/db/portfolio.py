@@ -699,6 +699,32 @@ def add_position(payload: dict) -> int:
             "AND status IN ('ACTIVE','PENDING')",
             (horizon,),
         ).fetchone()["cnt"]
+        # ── ADMISSION GATE (door 1) — SHADOW ONLY ────────────────────────
+        # Evaluated here, before the capacity raise below, so the shadow report
+        # also sees candidates that the EXISTING logic rejects (capacity /
+        # duplicate). Recording-only: evaluate_safe never raises and its verdict
+        # is deliberately NOT consulted, so behaviour is byte-identical.
+        # `source_door` is supplied by promote_to_portfolio; a caller that omits
+        # it is logged as "unattributed", which is how a future bypass of the
+        # promotion path becomes visible in the report instead of silent.
+        try:
+            from services.admission_gate import evaluate_safe, sector_counts_from_conn
+
+            evaluate_safe(
+                symbol, horizon,
+                payload.get("entry_price"), payload.get("stop_loss"),
+                source_door=payload.get("source_door") or "add_position:unattributed",
+                direction=payload.get("direction", "LONG"),
+                price=payload.get("current_price"),
+                turnover_cr=payload.get("turnover_cr"),
+                atr_pct=payload.get("atr_pct"),
+                position_size=payload.get("position_size"),
+                sector_counts=sector_counts_from_conn(conn, horizon),
+                book_used=count, book_max=max_pos,
+            )
+        except Exception:
+            logger.debug("[AdmissionGate] shadow eval skipped", exc_info=True)
+
         if count >= max_pos:
             raise ValueError(f"{horizon} portfolio full ({count}/{max_pos})")
 
@@ -1374,6 +1400,31 @@ def seed_portfolio_from_recommendations() -> list[dict]:
             entered_at = (row_d.get("entry_triggered_at") or row_d.get("created_at")
                           or datetime.now(_IST).isoformat())
             arm_ref = row_d.get("current_price") or row_d["entry_price"]
+
+            # ── ADMISSION GATE (door 2) — SHADOW ONLY ────────────────────
+            # This raw INSERT is the door that applies NO risk policy: no stop
+            # cap, no sizing, no liquidity check (see the 2026-08 audit S6.5 —
+            # GARUDA entered here with position_size=None). The gate records
+            # what policy WOULD have said. Recording-only: the verdict is not
+            # consulted, so the seed behaves exactly as before.
+            try:
+                from services.admission_gate import evaluate_safe, sector_counts_from_conn
+
+                evaluate_safe(
+                    symbol, horizon,
+                    row_d.get("entry_price"), row_d.get("stop_loss"),
+                    source_door="seed_from_recommendations",
+                    direction="LONG",
+                    price=row_d.get("current_price"),
+                    turnover_cr=row_d.get("turnover_cr"),
+                    atr_pct=row_d.get("atr_pct"),
+                    position_size=row_d.get("position_size"),
+                    sector_counts=sector_counts_from_conn(conn, horizon),
+                    book_used=active_counts.get(horizon, 0), book_max=cap,
+                )
+            except Exception:
+                logger.debug("[AdmissionGate] shadow eval skipped (seed)", exc_info=True)
+
             conn.execute(
                 """
                 INSERT INTO portfolio_positions

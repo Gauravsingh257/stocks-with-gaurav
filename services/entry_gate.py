@@ -16,6 +16,16 @@ book never held.
 That is an architecture defect, not a formatting bug: entry monitoring was
 trusting whatever its caller handed it rather than the Portfolio.
 
+RELATED BUT DISTINCT: services/admission_gate.py
+------------------------------------------------
+`admission_gate` decides whether a candidate MAY BE ADMITTED to the book (a
+policy judgement on price / turnover / ATR / stop width, applied before the
+portfolio row is created, currently shadow-only). This module decides whether a
+symbol IS ALREADY ADMITTED (a fact about the database, applied after the row
+exists, enforcing). Upstream vs downstream — they cannot disagree, because this
+gate only ever runs once admission_gate's decision has already been written as a
+row or not written at all.
+
 THE INVARIANT
 -------------
     Nothing may be armed, monitored for entry, or alerted on unless a REAL row
