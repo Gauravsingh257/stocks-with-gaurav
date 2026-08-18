@@ -306,19 +306,16 @@ def _signals_log_row_to_decision_card(row: dict) -> dict:
     # Exceptionalism verdict is persisted inside layer_details JSON (no top-level
     # signals_log column), so read it there. Fall back to a top-level key for
     # forward-compat. Best-effort — never break the card.
-    import json as _json_exc
+    # NaN-tolerant parse: older signals_log rows carry the bare `NaN` token
+    # inside layer_details, which json.loads turns into float('nan') and the
+    # response serializer then rejects. _loads_safe maps it to None.
+    from dashboard.backend.db.schema import _loads_safe as _json_loads_safe
     _ld = row.get("layer_details") or {}
     if isinstance(_ld, str):
-        try:
-            _ld = _json_exc.loads(_ld)
-        except Exception:
-            _ld = {}
+        _ld = _json_loads_safe(_ld, {})
     _exc = (_ld.get("exceptionalism") if isinstance(_ld, dict) else None) or row.get("exceptionalism") or {}
     if isinstance(_exc, str):
-        try:
-            _exc = _json_exc.loads(_exc)
-        except Exception:
-            _exc = {}
+        _exc = _json_loads_safe(_exc, {})
     if not isinstance(_exc, dict):
         _exc = {}
     # EP3 — per-recommendation "why surfaced" decision trace (additive, best-effort).
