@@ -87,12 +87,19 @@ def promote_to_portfolio(
             "atr_pct": decision.atr_pct,
             "turnover_cr": decision.turnover_cr,
         }
+        # NOTE: _rsize already carries atr_pct/turnover_cr into the add_position
+        # payload, and the admission gate (evaluated inside add_position) reads
+        # them from there — one measurement, one source, no extra network call.
     except ValueError:
         raise
     except Exception:
         log.exception("risk engine promotion eval failed for %s — proceeding unsized", symbol)
 
     position_id = add_position({
+        # Identifies this door to the admission gate's shadow report. A creation
+        # path that omits it is recorded as "unattributed" — that is the bypass
+        # tripwire, so do not remove it.
+        "source_door": "promote_to_portfolio",
         "symbol": symbol,
         "horizon": horizon,
         "entry_price": entry_price,
@@ -384,8 +391,13 @@ def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float
     if not bot_token or not chat_id:
         return
 
+    # Last line of defence, delegating to the SHARED gate so there is one
+    # definition of "admitted" rather than a private copy here. Fails CLOSED:
+    # the old private check returned True on a database error, which meant a
+    # lookup failure could still emit a phantom alert.
+    from services.entry_gate import can_monitor_entry
     if os.getenv("PORTFOLIO_ALERT_REQUIRES_POSITION", "1").strip().lower() in {"1", "true", "yes", "on"}:
-        if not _position_exists(symbol, horizon):
+        if not can_monitor_entry(symbol, horizon, source="send_portfolio_triggered_alert"):
             # Name the caller. The suppression alone stops the user-visible
             # symptom, but four symbols (PARKHOSPS, NIVABUPA, APOLLOHOSP,
             # ARVIND) have now alerted while existing in no table, and the

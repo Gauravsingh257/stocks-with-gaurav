@@ -12,7 +12,16 @@ import dashboard.backend.db.portfolio as dbp
 import services.portfolio_manager as pm
 
 
+def _no_gate(monkeypatch):
+    """These tests are DB-free and monkeypatch the seed, so no real Portfolio
+    row exists. They verify the tracker's FAN-OUT contract (one alert per new
+    row, isolation on failure), not admission — admission has its own suite in
+    tests/test_entry_gate.py. Disable the gate so each test checks one thing."""
+    monkeypatch.setenv("ENTRY_GATE_ENFORCE", "0")
+
+
 def _patch(monkeypatch, new_rows, sink):
+    _no_gate(monkeypatch)
     monkeypatch.setattr(dbp, "seed_portfolio_from_recommendations", lambda: new_rows)
     monkeypatch.setattr(pm, "send_portfolio_triggered_alert",
                         lambda *a, **k: sink.append(a))
@@ -66,6 +75,7 @@ def test_one_bad_alert_does_not_abort_rest(monkeypatch):
         {"symbol": "NSE:BBB", "horizon": "SWING", "entry_price": 20.0,
          "current_price": 20.0, "stop_loss": 18.0, "target_1": None},
     ]
+    _no_gate(monkeypatch)
     monkeypatch.setattr(dbp, "seed_portfolio_from_recommendations", lambda: rows)
 
     def _alert(symbol, *a, **k):
