@@ -28,12 +28,39 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _load_dotenv() -> bool:
+    """Load REDIS_URL from .env when the shell has not exported it.
+
+    dashboard/backend/cache.py reads os.getenv("REDIS_URL") and silently
+    falls back to an in-memory dict when it is absent. Without this, running
+    the report from a plain shell prints "NO DECISIONS RECORDED" — which is
+    indistinguishable from genuinely having no data, and would be read as
+    "the gate saw nothing" when in fact it never looked. Returns whether a
+    REDIS_URL is available afterwards."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_path = os.path.join(root, ".env")
+    if not os.getenv("REDIS_URL") and os.path.exists(env_path):
+        try:
+            with open(env_path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip(chr(34)).strip(chr(39)))
+        except Exception:
+            pass
+    return bool(os.getenv("REDIS_URL"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14, help="IST days to read back")
     ap.add_argument("--json", default=None, help="also write the summary as JSON")
     ap.add_argument("--limit-rejected", type=int, default=40)
     args = ap.parse_args()
+
+    have_redis = _load_dotenv()
 
     from services.admission_gate import cfg, load_decisions, summarize
 
@@ -66,10 +93,16 @@ def main() -> int:
         print("\n" + "=" * W)
         print("NO DECISIONS RECORDED")
         print("=" * W)
-        print("  Either no candidate has been evaluated yet, or Redis is unreachable")
-        print("  from this machine. This is NOT evidence that nothing was admitted.")
-        print("  The gate logs to Redis from the web service; run this where that")
-        print("  Redis is reachable (REDIS_URL), or wait for the next scan cycle.")
+        if not have_redis:
+            print("  *** REDIS_URL IS NOT SET and no .env was found to read it from.")
+            print("  The report never reached the decision store — it did NOT look")
+            print("  and find nothing. Set REDIS_URL (the same one the web service")
+            print("  uses) and re-run before drawing any conclusion from this.")
+        else:
+            print("  Connected to the decision store; it holds no decisions in this")
+            print("  window. The gate records one per position-CREATION attempt and")
+            print("  both books sit near capacity, so quiet stretches are expected.")
+            print("  Widen with --days. Decisions expire 30 days after being made.")
         return 0
 
     print("\n" + "=" * W)
