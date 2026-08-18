@@ -12,6 +12,7 @@ import logging
 import threading
 import time
 import json
+import math
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -1703,6 +1704,42 @@ def log_ranking_run(
         conn.close()
 
 
+# --- NaN-safe JSON for the signals_log payload columns --------------------
+# json.dumps defaults to allow_nan=True, so a NaN float is written into the
+# TEXT column as the bare token `NaN`. json.loads reads it straight back as
+# float('nan'), and FastAPI's strict serializer then refuses the ENTIRE
+# response -- which is how /api/research/layer-report came to return 500
+# ("Out of range float values are not JSON compliant") on every request once
+# a single scanned symbol had a NaN price or momentum figure.
+#
+# Sanitise on write so new scans can never reintroduce it, and tolerate on
+# read so the rows already on disk stop breaking the endpoint.
+
+
+def _json_safe(value):
+    """Recursively replace NaN/Infinity floats with None."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _dumps_safe(value) -> str:
+    """json.dumps that can never emit the non-standard NaN/Infinity tokens."""
+    return json.dumps(_json_safe(value), allow_nan=False)
+
+
+def _loads_safe(raw, fallback):
+    """json.loads that maps any NaN/Infinity token already on disk to None."""
+    try:
+        return json.loads(raw or "", parse_constant=lambda _c: None)
+    except Exception:
+        return fallback
+
+
 def log_signals_scan(records: list[dict]) -> int:
     """Persist one complete validation scan into signals_log.
 
@@ -1735,9 +1772,9 @@ def log_signals_scan(records: list[dict]) -> int:
                     1 if record.get("layer2_pass") else 0,
                     1 if record.get("layer3_pass") else 0,
                     1 if record.get("final_selected") else 0,
-                    json.dumps(record.get("rejection_reason") or record.get("rejection_reasons") or []),
-                    json.dumps(record.get("layer_details") or {}),
-                    json.dumps(record.get("coverage_report") or {}),
+                    _dumps_safe(record.get("rejection_reason") or record.get("rejection_reasons") or []),
+                    _dumps_safe(record.get("layer_details") or {}),
+                    _dumps_safe(record.get("coverage_report") or {}),
                 )
             )
         conn.executemany(
@@ -1795,18 +1832,9 @@ def get_latest_signals_scan_report(horizon: str | None = None, limit: int = 100)
         coverage_report: dict = {}
         for row in rows:
             item = dict(row)
-            try:
-                item["rejection_reason"] = json.loads(item.get("rejection_reason") or "[]")
-            except Exception:
-                item["rejection_reason"] = []
-            try:
-                item["layer_details"] = json.loads(item.get("layer_details") or "{}")
-            except Exception:
-                item["layer_details"] = {}
-            try:
-                item["coverage_report"] = json.loads(item.get("coverage_report") or "{}")
-            except Exception:
-                item["coverage_report"] = {}
+            item["rejection_reason"] = _loads_safe(item.get("rejection_reason"), [])
+            item["layer_details"] = _loads_safe(item.get("layer_details"), {})
+            item["coverage_report"] = _loads_safe(item.get("coverage_report"), {})
             if item["coverage_report"]:
                 coverage_report = item["coverage_report"]
             for reason in item["rejection_reason"]:
