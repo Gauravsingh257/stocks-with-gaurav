@@ -849,6 +849,29 @@ body {
   border-radius: 12px;
 }
 
+/* Containment layer for the ambient orbs (see components/FuturisticElements).
+   The orbs are absolutely positioned, bleed past the viewport edge
+   (`right: -5%`), and run an infinite animation that BOTH translates and
+   rotates them. A transformed box contributes its transformed border box to
+   its ancestor's scrollable overflow, so while this wrapper was statically
+   positioned the orbs' containing block was <body> and
+   `document.scrollWidth` oscillated ~30px on EVERY FRAME, forever
+   (measured 1058<->1088 at a 1024px viewport with the page stationary).
+   Android Chrome re-derives layout-viewport / top-controls sizing from that
+   geometry, which produced the slow vertical drift reported on tablets.
+
+   `position: fixed` keeps the layer out of the document's scrollable overflow
+   entirely; `overflow: hidden` clips the orbs' own excursions; `contain: paint`
+   guarantees nothing inside this layer can invalidate anything outside it. */
+.orb-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: paint;
+}
+
 .orb {
   position: absolute;
   border-radius: 50%;

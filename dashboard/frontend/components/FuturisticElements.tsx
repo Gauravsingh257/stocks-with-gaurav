@@ -20,7 +20,11 @@ export function CyberGridOverlay() {
 /* ── Floating Orbs (ambient light blobs) ───────────────────────────────────── */
 export function FloatingOrbs() {
   return (
-    <div className="hidden md:block">
+    // `orb-layer` (see globals.css) pins this to the viewport and clips it.
+    // Without it the orbs are positioned against <body> and their infinite
+    // transform animation changes document.scrollWidth every frame, which
+    // destabilises scrolling on Android.
+    <div className="orb-layer hidden md:block" aria-hidden="true">
       <div className="orb" style={{ width: 300, height: 300, top: "10%", right: "-5%", background: "var(--accent)" }} />
       <div className="orb" style={{ width: 200, height: 200, bottom: "20%", left: "5%", background: "var(--success)", animationDelay: "-4s" }} />
       <div className="orb" style={{ width: 150, height: 150, top: "50%", right: "30%", background: "#7c3aed", animationDelay: "-8s" }} />
