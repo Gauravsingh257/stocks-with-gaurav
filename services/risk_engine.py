@@ -32,6 +32,8 @@ from dataclasses import dataclass, asdict, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from services.market_data_validation import finite_ohlc_frame, finite_or_none
+
 log = logging.getLogger("services.risk_engine")
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -161,7 +163,8 @@ def liquidity_metrics(symbol: str) -> tuple[float | None, float | None]:
     try:
         import yfinance as yf
         sym = symbol.replace("NSE:", "").strip().upper()
-        df = yf.Ticker(f"{sym}.NS").history(period="2mo")
+        df = finite_ohlc_frame(yf.Ticker(f"{sym}.NS").history(period="2mo"),
+                               symbol=sym, context="risk_engine.liquidity")
         if df is not None and not df.empty and len(df) >= 15:
             h, l, c, v = df["High"], df["Low"], df["Close"], df["Volume"]
             import numpy as np
@@ -170,7 +173,9 @@ def liquidity_metrics(symbol: str) -> tuple[float | None, float | None]:
             last = float(c.iloc[-1])
             atr_pct = atr / last * 100 if last > 0 else None
             turnover_cr = float((c.tail(20) * v.tail(20)).mean()) / 1e7  # ₹Cr/day
-            out = (atr_pct, turnover_cr)
+            # Never hand a non-finite metric to sizing: None means "no penalty"
+            # (the documented fail-safe), NaN would silently compare False.
+            out = (finite_or_none(atr_pct), finite_or_none(turnover_cr))
     except Exception as exc:
         log.debug("liquidity_metrics failed %s: %s", symbol, exc)
     _liq_cache[symbol] = (today, out)
@@ -291,13 +296,15 @@ def _rs_vs_nifty(symbol: str, lookback: int) -> float | None:
     try:
         import yfinance as yf
         sym = symbol.replace("NSE:", "").strip().upper()
-        sdf = yf.Ticker(f"{sym}.NS").history(period="3mo")
-        ndf = yf.Ticker("^NSEI").history(period="3mo")
+        sdf = finite_ohlc_frame(yf.Ticker(f"{sym}.NS").history(period="3mo"),
+                                symbol=sym, context="risk_engine.rs")
+        ndf = finite_ohlc_frame(yf.Ticker("^NSEI").history(period="3mo"),
+                                symbol="^NSEI", context="risk_engine.rs")
         if sdf is not None and not sdf.empty and len(sdf) > lookback and ndf is not None and len(ndf) > lookback:
             sc, nc = sdf["Close"], ndf["Close"]
             sr = (sc.iloc[-1] / sc.iloc[-1 - lookback] - 1) * 100
             nr = (nc.iloc[-1] / nc.iloc[-1 - lookback] - 1) * 100
-            rs = float(sr - nr)
+            rs = finite_or_none(sr - nr)
     except Exception as exc:
         log.debug("_rs_vs_nifty failed %s: %s", symbol, exc)
     _rs_cache[symbol] = (today, rs)

@@ -25,6 +25,8 @@ import os
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Iterable
 
+from services.market_data_validation import finite_or_none
+
 log = logging.getLogger("services.price_resolver")
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -139,8 +141,10 @@ def _read_yfinance(symbols: list[str]) -> dict[str, tuple[float, int]]:
             if not ticker_sym.endswith(".NS"):
                 ticker_sym = f"{ticker_sym}.NS"
             t = yf.Ticker(ticker_sym)
-            price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
-            if price and price > 0:
+            raw = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
+            # Explicit finite check: `if raw` alone is true for NaN.
+            price = finite_or_none(raw)
+            if price is not None and price > 0:
                 # During market hours yf is ~15 min delayed; otherwise EOD-ish.
                 age = 900 if _is_market_hours() else 3600
                 out[sym] = (float(price), age)
@@ -348,14 +352,13 @@ def fetch_daily_ohlc(
             continue
         bar = bars[-1]  # last bar of the requested day
         try:
-            out[sym] = {
-                "open": float(bar.get("open", 0) or 0),
-                "high": float(bar.get("high", 0) or 0),
-                "low": float(bar.get("low", 0) or 0),
-                "close": float(bar.get("close", 0) or 0),
-            }
+            ohlc = {k: finite_or_none(bar.get(k)) for k in ("open", "high", "low", "close")}
         except (TypeError, ValueError):
             continue
+        if any(v is None for v in ohlc.values()):
+            log.warning("Rejected non-finite daily OHLC for %s: %r", sym, bar)
+            continue
+        out[sym] = ohlc
     return out
 
 

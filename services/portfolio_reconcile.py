@@ -25,6 +25,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from services.market_data_validation import finite_or_none
+
 log = logging.getLogger("services.portfolio_reconcile")
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -72,7 +74,14 @@ def _fetch_daily_ohlc_yf(symbol: str, start_date: str) -> list[dict] | None:
             return None
         out: list[dict] = []
         for idx, r in df.iterrows():
-            out.append({"date": str(idx)[:10], "low": float(r["Low"]), "high": float(r["High"])})
+            low, high = finite_or_none(r["Low"]), finite_or_none(r["High"])
+            if low is None or high is None:
+                # A malformed bar must not silently read as "price never traded
+                # there" — that would reclassify a genuine entry as phantom.
+                log.warning("reconcile: rejecting non-finite bar %s for %s",
+                            str(idx)[:10], symbol)
+                continue
+            out.append({"date": str(idx)[:10], "low": low, "high": high})
         return out
     except Exception as exc:
         log.debug("reconcile OHLC fetch failed %s: %s", symbol, exc)

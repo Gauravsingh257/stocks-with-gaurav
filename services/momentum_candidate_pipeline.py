@@ -22,6 +22,8 @@ import re
 from collections import Counter
 from datetime import date
 
+from services.market_data_validation import finite_or_none, sanitize_candles
+
 log = logging.getLogger("services.momentum_candidate_pipeline")
 
 # Benchmark tickers tried in order. The index symbol is preferred; the NIFTY ETF
@@ -33,21 +35,34 @@ _BENCHMARK_TICKERS = ("^NSEI", "NIFTYBEES.NS")
 _nifty_cache: tuple[str, list[dict]] | None = None
 
 
-def _to_candles(df) -> list[dict]:
+def _to_candles(df, *, symbol: str = "?", timeframe: str = "1d") -> list[dict]:
+    """Normalise a provider DataFrame into candle dicts, rejecting bad bars.
+
+    `float(nan)` is a valid float, so a malformed provider bar would otherwise
+    travel silently into scoring and portfolio maths. Invalid bars are dropped
+    here (and logged) rather than repaired, so the series keeps its timeframe and
+    simply ends at the last bar the provider actually delivered.
+    """
     if df is None or df.empty:
         return []
-    return [{"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]),
-             "close": float(r["Close"]), "volume": float(r.get("Volume") or 0), "date": str(i)[:10]}
-            for i, r in df.iterrows()]
+    raw = [{"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]),
+            "close": float(r["Close"]), "volume": float(r.get("Volume") or 0), "date": str(i)[:10]}
+           for i, r in df.iterrows()]
+    return sanitize_candles(raw, symbol=symbol, timeframe=timeframe,
+                            context="momentum_candidate_pipeline")
 
 
 def default_data_provider(symbol: str) -> tuple[float | None, list[dict]]:
-    """(cmp, daily candles) via yfinance — works for equities on Railway."""
+    """(cmp, daily candles) via yfinance — works for equities on Railway.
+
+    `cmp` is the last VALID close. It is never NaN/inf: a caller acting on a
+    non-finite price is exactly how a bad Yahoo bar crashed the Momentum cycle.
+    """
     try:
         import yfinance as yf
         sym = symbol.replace("NSE:", "").strip().upper()
-        candles = _to_candles(yf.Ticker(f"{sym}.NS").history(period="1y"))
-        return (candles[-1]["close"] if candles else None), candles
+        candles = _to_candles(yf.Ticker(f"{sym}.NS").history(period="1y"), symbol=symbol)
+        return (finite_or_none(candles[-1]["close"]) if candles else None), candles
     except Exception as exc:
         log.debug("data provider failed %s: %s", symbol, exc)
         return None, []
@@ -70,7 +85,7 @@ def default_nifty_provider() -> list[dict]:
         import yfinance as yf
         for tkr in _BENCHMARK_TICKERS:
             try:
-                candles = _to_candles(yf.Ticker(tkr).history(period="1y"))
+                candles = _to_candles(yf.Ticker(tkr).history(period="1y"), symbol=tkr)
             except Exception as exc:
                 log.debug("benchmark %s failed: %s", tkr, exc)
                 continue

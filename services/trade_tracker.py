@@ -21,6 +21,8 @@ import threading
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
 
+from services.market_data_validation import finite_or_none
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 log = logging.getLogger("services.trade_tracker")
@@ -105,7 +107,12 @@ def _fetch_cmp(symbol: str) -> float | None:
         import yfinance as yf  # noqa: PLC0415
         t = yf.Ticker(_yf_symbol(symbol))
         price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
-        return float(price) if price else None
+        # `if price` is NOT a validity test: bool(float('nan')) is True, so a
+        # malformed quote would pass straight through into position maths.
+        cmp = finite_or_none(price)
+        if cmp is None and price is not None:
+            log.warning("Rejected non-finite CMP for %s: %r", symbol, price)
+        return cmp
     except Exception as exc:
         log.debug("CMP fetch failed for %s: %s", symbol, exc)
         return None

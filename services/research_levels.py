@@ -22,6 +22,7 @@ import os
 from typing import Any
 
 import pandas as pd
+from services.market_data_validation import sanitize_candles
 
 from engine.indicators import calculate_atr
 from engine.swing import detect_weekly_trend, score_swing_candidate, score_longterm_candidate
@@ -71,7 +72,7 @@ def df_to_candles(df: pd.DataFrame | None) -> list[dict[str, Any]]:
                 "volume": float(row["volume"]) if "volume" in frame.columns and pd.notna(row.get("volume")) else 0.0,
             }
         )
-    return out
+    return sanitize_candles(out, context="research_levels")
 
 
 def daily_candles_to_weekly(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -21,6 +21,8 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
+from services.market_data_validation import sanitize_candles
+
 from . import candidate_feed, eligibility, entry_models, ranking, router
 from .config import cfg
 from .metrics import compute_metrics
@@ -164,9 +166,10 @@ def _default_data_provider(symbol: str) -> tuple[list[dict], list[dict] | None]:
         df = yf.Ticker(f"{sym}.NS").history(period="1y")
         if df is None or df.empty:
             return []
-        return [{"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]),
-                 "close": float(r["Close"]), "volume": float(r["Volume"]), "date": str(i)[:10]}
-                for i, r in df.iterrows()]
+        raw = [{"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]),
+                "close": float(r["Close"]), "volume": float(r["Volume"]), "date": str(i)[:10]}
+               for i, r in df.iterrows()]
+        return sanitize_candles(raw, symbol=sym, context="momentum_engine")
 
     candles = _bars(symbol)
     nifty = _default_data_provider._nifty_cache  # type: ignore[attr-defined]
@@ -174,10 +177,13 @@ def _default_data_provider(symbol: str) -> tuple[list[dict], list[dict] | None]:
         try:
             import yfinance as _yf
             ndf = _yf.Ticker("^NSEI").history(period="1y")
-            nifty = [{"close": float(r["Close"]), "high": float(r["High"]),
-                      "low": float(r["Low"]), "open": float(r["Open"]),
-                      "volume": float(r["Volume"]), "date": str(i)[:10]}
-                     for i, r in ndf.iterrows()] if ndf is not None and not ndf.empty else None
+            nifty = sanitize_candles(
+                [{"close": float(r["Close"]), "high": float(r["High"]),
+                  "low": float(r["Low"]), "open": float(r["Open"]),
+                  "volume": float(r["Volume"]), "date": str(i)[:10]}
+                 for i, r in ndf.iterrows()],
+                symbol="^NSEI", context="momentum_engine.benchmark",
+            ) if ndf is not None and not ndf.empty else None
         except Exception:
             nifty = None
         _default_data_provider._nifty_cache = nifty  # type: ignore[attr-defined]
