@@ -20,6 +20,8 @@ from datetime import datetime, timezone, timedelta
 
 from .schema import get_connection
 
+from services.market_data_validation import finite_fields, is_finite_number
+
 logger = logging.getLogger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -244,6 +246,12 @@ def update_position(position_id: int, **fields) -> None:
                "high_since_entry", "low_since_entry", "mfe_r", "mae_r", "days_held",
                "stop_loss", "status", "quality_score", "rank"}
     upd = {k: v for k, v in fields.items() if k in allowed}
+    # Last line of defence before the database. SQLite has no NaN: binding one
+    # to a REAL column stores NULL, so a non-finite value reaching here raises
+    # `NOT NULL constraint failed` and takes down the caller's whole cycle.
+    # Drop such fields (a partial update is always safe) rather than write junk.
+    upd = finite_fields(upd, symbol=f"momentum_position:{position_id}",
+                        context="update_position")
     if not upd:
         return
     upd["updated_at"] = datetime.now(_IST).isoformat()
@@ -268,6 +276,9 @@ def activate_pending(position_id: int, trigger_price: float) -> bool:
         ).fetchone()
         if not row:
             return False
+        if not is_finite_number(trigger_price):
+            raise ValueError(
+                f"activate_pending({position_id}): non-finite trigger_price {trigger_price!r}")
         entry = float(row["entry_price"]); pl = round(trigger_price - entry, 2)
         pl_pct = round((trigger_price - entry) / entry * 100, 2) if entry else 0.0
         conn.execute(
@@ -307,6 +318,12 @@ def close_position(position_id: int, exit_price: float, exit_reason: str) -> dic
         ).fetchone()
         if not row:
             raise ValueError(f"Momentum position {position_id} not found/active")
+        # A close writes REQUIRED numeric columns, so there is no safe partial
+        # write here — reject a non-finite exit price loudly and specifically
+        # rather than let SQLite turn it into an opaque NOT NULL failure.
+        if not is_finite_number(exit_price):
+            raise ValueError(
+                f"close_position({position_id}): non-finite exit_price {exit_price!r}")
         pos = dict(row)
         entry = float(pos["entry_price"]); sl = float(pos["stop_loss"])
         sl_init = float(pos.get("initial_stop") or sl)   # R measured from the ENTRY stop

@@ -20,6 +20,8 @@ from typing import Any, Callable
 from services.momentum_engine.config import cfg
 from services.momentum_engine.research import trailing
 
+from services.market_data_validation import is_finite_number
+
 log = logging.getLogger("services.momentum_portfolio_manager")
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -179,76 +181,94 @@ def process_active(data_provider: Callable[[str], tuple[float | None, list[dict]
     c = cfg()
     active = [p for p in db.get_portfolio(include_pending=False) if p["status"] == "ACTIVE"]
     if not active:
-        return {"exited": 0, "updated": 0}
+        return {"exited": 0, "updated": 0, "failed": 0}
     today = datetime.now(_IST).date()
-    exited = updated = 0
+    exited = updated = failed = 0
 
     for p in active:
         try:
             cmp, candles = data_provider(p["symbol"])
         except Exception:
+            log.exception("[MomentumPortfolio] data provider failed for %s", p["symbol"])
             continue
-        if cmp is None:
+        # `cmp is None` is not sufficient: a malformed provider bar yields NaN,
+        # which is not None, propagates through every arithmetic operation, and
+        # finally hits SQLite — where NaN binds as NULL and a NOT NULL column
+        # raises IntegrityError, aborting the entire cycle.
+        if not is_finite_number(cmp):
+            if cmp is not None:
+                log.warning("[MomentumPortfolio] skipping %s — non-finite cmp %r",
+                            p["symbol"], cmp)
             continue
-        entry = float(p["entry_price"])
-        init_stop = float(p.get("initial_stop") or p["stop_loss"])
-        live_stop = float(p["stop_loss"])
-        risk = entry - init_stop
-        if risk <= 0:
-            continue
-
-        high_since = max(float(p.get("high_since_entry") or cmp), cmp)
-        low_since = min(float(p.get("low_since_entry") or cmp), cmp)
-        pl_pct = round((cmp - entry) / entry * 100, 2)
-        mfe_r = round((high_since - entry) / risk, 3)
-        mae_r = round((low_since - entry) / risk, 3)
+        # One bad holding must never abort the rest of the book: the cycle
+        # used to die entirely on the first symbol that raised.
         try:
-            ent = datetime.fromisoformat(str(p.get("entered_at") or p["created_at"]).replace(" ", "T")).date()
-            days_held = (today - ent).days
+            entry = float(p["entry_price"])
+            init_stop = float(p.get("initial_stop") or p["stop_loss"])
+            live_stop = float(p["stop_loss"])
+            risk = entry - init_stop
+            if risk <= 0:
+                continue
+
+            high_since = max(float(p.get("high_since_entry") or cmp), cmp)
+            low_since = min(float(p.get("low_since_entry") or cmp), cmp)
+            pl_pct = round((cmp - entry) / entry * 100, 2)
+            mfe_r = round((high_since - entry) / risk, 3)
+            mae_r = round((low_since - entry) / risk, 3)
+            try:
+                ent = datetime.fromisoformat(str(p.get("entered_at") or p["created_at"]).replace(" ", "T")).date()
+                days_held = (today - ent).days
+            except Exception:
+                days_held = p.get("days_held", 0)
+            target = p.get("target_2") or p.get("target_1")
+
+            exit_reason = exit_px = None
+            if target and cmp >= float(target):
+                exit_reason, exit_px = "TARGET_HIT", cmp
+            elif cmp <= live_stop:
+                exit_reason = "STOP_HIT" if abs(live_stop - init_stop) < 1e-9 else "TRAIL_STOP"
+                exit_px = live_stop
+            elif pl_pct <= -c["MOMENTUM_MAX_LOSS_PCT"]:
+                exit_reason, exit_px = "MAX_LOSS", cmp
+            elif days_held >= c["MOMENTUM_TIME_EXIT_DAYS"]:
+                exit_reason, exit_px = "TIME_EXIT", cmp
+
+            if exit_reason:
+                db.update_position(p["id"], current_price=cmp, profit_loss_pct=pl_pct,
+                                   high_since_entry=high_since, low_since_entry=low_since,
+                                   mfe_r=mfe_r, mae_r=mae_r, days_held=days_held)
+                db.close_position(p["id"], exit_px, exit_reason)
+                exited += 1
+                continue
+
+            # Not exiting → advance the trailing stop (only ever raises it).
+            new_stop = live_stop
+            if mfe_r >= c["MOMENTUM_BREAKEVEN_R"]:
+                new_stop = max(new_stop, entry)
+            tp = {"k": c["MOMENTUM_TRAIL_K"], "n": c["MOMENTUM_TRAIL_EMA_N"],
+                  "lookback": c["MOMENTUM_TRAIL_STRUCT_LOOKBACK"]}
+            atr = _atr(candles)
+            proposed = trailing.trail_stop(c["MOMENTUM_TRAIL_METHOD"], candles, atr, tp) if candles else None
+            if proposed is not None:
+                new_stop = max(new_stop, min(proposed, cmp * 0.999))
+
+            db.update_position(
+                p["id"], current_price=cmp, profit_loss_pct=pl_pct,
+                drawdown_pct=round(min(pl_pct, 0.0), 2), high_since_entry=high_since,
+                low_since_entry=low_since, mfe_r=mfe_r, mae_r=mae_r, days_held=days_held,
+                stop_loss=round(new_stop, 2) if new_stop > live_stop else live_stop)
+            updated += 1
         except Exception:
-            days_held = p.get("days_held", 0)
-        target = p.get("target_2") or p.get("target_1")
-
-        exit_reason = exit_px = None
-        if target and cmp >= float(target):
-            exit_reason, exit_px = "TARGET_HIT", cmp
-        elif cmp <= live_stop:
-            exit_reason = "STOP_HIT" if abs(live_stop - init_stop) < 1e-9 else "TRAIL_STOP"
-            exit_px = live_stop
-        elif pl_pct <= -c["MOMENTUM_MAX_LOSS_PCT"]:
-            exit_reason, exit_px = "MAX_LOSS", cmp
-        elif days_held >= c["MOMENTUM_TIME_EXIT_DAYS"]:
-            exit_reason, exit_px = "TIME_EXIT", cmp
-
-        if exit_reason:
-            db.update_position(p["id"], current_price=cmp, profit_loss_pct=pl_pct,
-                               high_since_entry=high_since, low_since_entry=low_since,
-                               mfe_r=mfe_r, mae_r=mae_r, days_held=days_held)
-            db.close_position(p["id"], exit_px, exit_reason)
-            exited += 1
+            failed += 1
+            log.exception("[MomentumPortfolio] holding %s (id=%s) failed — "
+                          "continuing with the remaining positions",
+                          p.get("symbol"), p.get("id"))
             continue
 
-        # Not exiting → advance the trailing stop (only ever raises it).
-        new_stop = live_stop
-        if mfe_r >= c["MOMENTUM_BREAKEVEN_R"]:
-            new_stop = max(new_stop, entry)
-        tp = {"k": c["MOMENTUM_TRAIL_K"], "n": c["MOMENTUM_TRAIL_EMA_N"],
-              "lookback": c["MOMENTUM_TRAIL_STRUCT_LOOKBACK"]}
-        atr = _atr(candles)
-        proposed = trailing.trail_stop(c["MOMENTUM_TRAIL_METHOD"], candles, atr, tp) if candles else None
-        if proposed is not None:
-            new_stop = max(new_stop, min(proposed, cmp * 0.999))
-
-        db.update_position(
-            p["id"], current_price=cmp, profit_loss_pct=pl_pct,
-            drawdown_pct=round(min(pl_pct, 0.0), 2), high_since_entry=high_since,
-            low_since_entry=low_since, mfe_r=mfe_r, mae_r=mae_r, days_held=days_held,
-            stop_loss=round(new_stop, 2) if new_stop > live_stop else live_stop)
-        updated += 1
-
-    if exited:
-        log.info("[MomentumPortfolio] exit engine: %d exited, %d updated", exited, updated)
-    return {"exited": exited, "updated": updated}
+    if exited or failed:
+        log.info("[MomentumPortfolio] exit engine: %d exited, %d updated, %d failed",
+                 exited, updated, failed)
+    return {"exited": exited, "updated": updated, "failed": failed}
 
 
 def _atr(candles: list[dict], n: int = 14) -> float:
