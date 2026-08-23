@@ -292,6 +292,11 @@ def _fetch_snapshot(symbol: str) -> "FundamentalSnapshot":
         "raw_debt_equity": snap.raw_debt_equity, "raw_promoter_pct": snap.raw_promoter_pct,
         "raw_institutional_pct": snap.raw_institutional_pct,
         "raw_market_cap_cr": snap.raw_market_cap_cr, "data_source": snap.data_source,
+        # Persisted so services.sector_classification can use the sector yfinance
+        # already gave us as a tier-2 lookup WITHOUT making its own network call.
+        # These were previously dropped on write, which is why the cached snapshot
+        # could never answer "what sector is this".
+        "sector": snap.sector, "industry": snap.industry,
     })
     return snap
 
@@ -354,6 +359,11 @@ class FundamentalSnapshot:
 _FETCH_CONCURRENCY = int(os.getenv("FUND_FETCH_CONCURRENCY", "8"))
 
 
+def _synthetic_disabled() -> bool:
+    """PHASE 0 flag — never fall back to sha256(ticker) fundamentals."""
+    return os.getenv("PHASE0_NO_SYNTHETIC", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def analyze_fundamentals(symbols: list[str]) -> dict[str, FundamentalSnapshot]:
     """
     Fetch real fundamentals from yfinance for each symbol in parallel.
@@ -361,6 +371,32 @@ async def analyze_fundamentals(symbols: list[str]) -> dict[str, FundamentalSnaps
     FUND_USE_HASH_ONLY=1 is set (useful for CI/testing).
     Results are disk-cached for FUNDAMENTALS_CACHE_TTL_H hours (default 24h).
     """
+    if _synthetic_disabled():
+        # PHASE 0: real yfinance fundamentals only. Symbols yfinance has no data
+        # for are OMITTED from the map — "unavailable" is the honest answer, and
+        # the teardown measured 66% of the universe (and 65% of final long-term
+        # picks) being scored on sha256(ticker) growth/ROCE/ownership numbers.
+        sem = asyncio.Semaphore(_FETCH_CONCURRENCY)
+        loop = asyncio.get_running_loop()
+
+        async def _fetch_real(sym: str) -> tuple[str, FundamentalSnapshot | None]:
+            async with sem:
+                snap = await loop.run_in_executor(None, _fetch_snapshot, sym)
+                return sym, (None if snap.data_source == "hash" else snap)
+
+        results = await asyncio.gather(*[_fetch_real(s) for s in symbols], return_exceptions=True)
+        real: dict[str, FundamentalSnapshot] = {}
+        for r in results:
+            if isinstance(r, Exception):
+                log.warning("fundamentals gather error: %s", r)
+                continue
+            sym, snap = r
+            if snap is not None:
+                real[sym] = snap
+        log.info("[Phase0] fundamentals: %d/%d symbols have REAL data (synthetic disabled)",
+                 len(real), len(symbols))
+        return real
+
     if os.getenv("FUND_USE_HASH_ONLY", "0") == "1":
         return {s: _hash_snapshot(s) for s in symbols}
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -39,16 +40,37 @@ def _weighted_score(parts: list[tuple[float, float]]) -> float:
     return sum(v * w for v, w in parts) / total_w
 
 
+def synthetic_disabled() -> bool:
+    """PHASE 0 flag. When set, no synthetic sentiment is produced at all.
+
+    The teardown established these hash values are not "neutral placeholders":
+    `_stable_unit` returns a different number per ticker, so every symbol gets a
+    different sentiment score derived from nothing but the spelling of its name —
+    and that score carries 0.16 of the SWING rank weight. Neutral would be
+    identical for everyone; this is noise with a rank ordering.
+    """
+    return os.getenv("PHASE0_NO_SYNTHETIC", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def analyze_news_sentiment(symbols: list[str]) -> dict[str, SentimentSnapshot]:
     """
-    Sentiment provider — currently generates baseline scores from symbol hashes.
-    These are NOT real news/sentiment scores. They are used only as neutral
-    placeholders for cross-sectional ranking (ensuring sentiment doesn't unfairly
-    boost or penalise any symbol). Real sentiment integration (FinBERT/news APIs)
-    is planned.
+    Sentiment provider.
+
+    PHASE 0: with `PHASE0_NO_SYNTHETIC=1` this returns an EMPTY map — sentiment is
+    genuinely unavailable (no news API is wired), and callers renormalize it away
+    rather than being handed fabricated numbers. Default OFF keeps the historical
+    hash baseline so behaviour is byte-identical until the flag is flipped.
 
     IMPORTANT: Signal explainer must label these as "baseline estimate" not "analysis".
     """
+    if synthetic_disabled():
+        log.info(
+            "Sentiment analysis: DISABLED for %d symbols (PHASE0_NO_SYNTHETIC=1) — "
+            "no news provider is wired, so sentiment is reported as unavailable",
+            len(symbols),
+        )
+        return {}
+
     log.info("Sentiment analysis: using synthetic baseline for %d symbols (no live news API)", len(symbols))
     output: dict[str, SentimentSnapshot] = {}
     for symbol in symbols:

@@ -224,14 +224,68 @@ def _use_hash_for_universe_ranking() -> bool:
     return True
 
 
+def _synthetic_disabled() -> bool:
+    """PHASE 0 flag — never emit sha256(ticker) technicals."""
+    return os.getenv("PHASE0_NO_SYNTHETIC", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _scan_from_universe_snapshot(symbols: list[str]) -> dict[str, TechnicalSnapshot]:
+    """Real OHLC technicals for the whole universe from the published snapshot.
+
+    This is what makes removing the hash affordable. The reason hash scores
+    existed at all is in `_use_hash_for_universe_ranking`: fetching bars for
+    every symbol is too slow behind a web request. The scanner worker has now
+    already paid that cost once, so computing genuine technicals here is pure
+    local arithmetic over cached bars — no network, no per-symbol fetch.
+
+    Symbols absent from the snapshot are simply ABSENT from the result. A missing
+    technical is reported as missing; it is never replaced with a fabricated one.
+    """
+    import pandas as pd  # noqa: PLC0415
+
+    from services.universe_ohlc import load_universe_ohlc  # noqa: PLC0415
+
+    bars = load_universe_ohlc(symbols)
+    if not bars:
+        return {}
+    out: dict[str, TechnicalSnapshot] = {}
+    for symbol in symbols:
+        key = str(symbol).replace("NSE:", "").replace(".NS", "").strip().upper()
+        candles = bars.get(key)
+        if not candles:
+            continue
+        snap = _snapshot_from_ohlc(symbol, pd.DataFrame(candles))
+        if snap is not None:
+            out[symbol] = snap
+    log.info("[Phase0] technicals from universe snapshot: %d/%d symbols (real OHLC)",
+             len(out), len(symbols))
+    return out
+
+
 async def scan_technical(symbols: list[str]) -> dict[str, TechnicalSnapshot]:
     """
     Cross-sectional technical scores for ranking.
 
-    Default uses deterministic hash scores (fast). Real entry/SL/targets still come from OHLC in
-    research_levels for the finalist pool. Enable RESEARCH_TECH_OHLC_FULL_UNIVERSE=1 for per-symbol
-    OHLC technicals (slow; not recommended behind a web request).
+    PHASE 0: with `PHASE0_NO_SYNTHETIC=1` the sha256(ticker) path is disabled
+    entirely. Scores come from the published universe OHLC snapshot where it
+    exists; symbols without real bars are OMITTED from the returned map so
+    callers can renormalize rather than rank on noise.
+
+    Default OFF keeps the historical hash behaviour byte-identical. Real
+    entry/SL/targets still come from OHLC in research_levels for the finalist
+    pool. RESEARCH_TECH_OHLC_FULL_UNIVERSE=1 forces per-symbol OHLC (slow).
     """
+    if _synthetic_disabled():
+        snapshot_scores = _scan_from_universe_snapshot(symbols)
+        if snapshot_scores:
+            return snapshot_scores
+        log.warning(
+            "[Phase0] PHASE0_NO_SYNTHETIC=1 but no universe OHLC snapshot is available — "
+            "returning NO technical scores rather than hash noise (%d symbols affected)",
+            len(symbols),
+        )
+        return {}
+
     if _use_hash_for_universe_ranking():
         return {s: _snapshot_hash(s) for s in symbols}
 

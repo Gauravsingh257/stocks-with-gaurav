@@ -56,6 +56,37 @@ def _load_env() -> None:
         log.warning("could not load .env: %s", exc)
 
 
+def refresh_universe_ohlc_once() -> dict:
+    """PHASE 0 — publish the full-universe daily OHLC snapshot the research
+    engines read.
+
+    This worker is the right home for it: it already owns the throttled Kite
+    fetcher, and a 2,200-symbol crawl is ~12 minutes at Kite's 3 req/sec cap —
+    which must never sit on the web service's request path or inside its
+    scheduler. Flag-gated (`PHASE0_KITE_OHLC`); a failure here is logged and
+    swallowed so the scanner's own snapshots are unaffected.
+    """
+    try:
+        from services.universe_ohlc import kite_ohlc_enabled, refresh_universe_ohlc
+    except Exception as exc:
+        log.warning("universe OHLC module unavailable: %s", exc)
+        return {"skipped": True, "reason": "import_failed"}
+
+    if not kite_ohlc_enabled():
+        log.info("universe OHLC refresh skipped (PHASE0_KITE_OHLC is off)")
+        return {"skipped": True, "reason": "flag_off"}
+
+    t0 = time.time()
+    log.info("=== universe OHLC refresh START ===")
+    try:
+        result = refresh_universe_ohlc()
+        log.info("=== universe OHLC refresh DONE in %.1fs: %s ===", time.time() - t0, result)
+        return result
+    except Exception:
+        log.exception("universe OHLC refresh FAILED (previous snapshot preserved)")
+        return {"error": True}
+
+
 def run_once(mode: str | None = None) -> dict:
     from services.scanners.runner import run_all
 
@@ -69,10 +100,14 @@ def run_once(mode: str | None = None) -> dict:
             time.time() - t0,
             ", ".join(f"{s['name']}/{s['timeframe']}={s['hits']}" for s in summary.get("scanners", [])),
         )
-        return summary
     except Exception:
         log.exception("scanner run FAILED (snapshots preserved by LKG)")
-        return {"error": True}
+        summary = {"error": True}
+
+    # Runs after the scanners so a slow universe crawl can never delay the
+    # scanner snapshots the website serves.
+    summary["universe_ohlc"] = refresh_universe_ohlc_once()
+    return summary
 
 
 def _is_market_hours(now: datetime) -> bool:

@@ -215,17 +215,40 @@ def _percentile(values: list[float]) -> list[float]:
     return out
 
 
+def _percentile_opt(values: list[float | None]) -> list[float | None]:
+    """Percentile-rank only the rows that actually have this factor.
+
+    A None stays None so `_score_candidates` can drop that term and renormalize,
+    instead of the alternative failure modes: treating a data gap as a zero
+    (which silently ranks a stock last for something nobody measured) or
+    back-filling it with a hash (which is what Phase 0 exists to remove).
+    """
+    present = [(v, i) for i, v in enumerate(values) if v is not None]
+    out: list[float | None] = [None] * len(values)
+    if not present:
+        return out
+    present.sort(key=lambda pair: pair[0])
+    n = max(len(present) - 1, 1)
+    for rank, (_, i) in enumerate(present):
+        out[i] = rank / n
+    return out
+
+
 def _score_candidates(rows: list[FactorRow], horizon: Horizon) -> list[tuple[FactorRow, float]]:
     if not rows:
         return []
 
+    # PHASE 0: a FactorRow may be partial (sentiment/fundamentals genuinely
+    # unavailable rather than hash-filled). Missing inputs percentile to None and
+    # their weight is renormalized away per row below, so a stock is never ranked
+    # against a fabricated number and never penalised for a data gap either.
     tech = _percentile([r.technical_score for r in rows])
-    fund = _percentile([r.fundamental_score for r in rows])
-    sent = _percentile([r.sentiment_score for r in rows])
+    fund = _percentile_opt([r.fundamental_score for r in rows])
+    sent = _percentile_opt([r.sentiment_score for r in rows])
     liq = _percentile([r.liquidity_score for r in rows])
-    trend = _percentile([r.factors["trend"] for r in rows])
-    growth = _percentile([r.factors["growth"] for r in rows])
-    quality = _percentile([r.factors["quality"] for r in rows])
+    trend = _percentile([r.factors.get("trend", 0.0) for r in rows])
+    growth = _percentile_opt([r.factors.get("growth") for r in rows])
+    quality = _percentile_opt([r.factors.get("quality") for r in rows])
 
     # PR2 — sector-leadership multiplicative scoring (flag-gated). When enabled,
     # final_score = base_score * sector_multiplier so leaders float up and
@@ -246,23 +269,21 @@ def _score_candidates(rows: list[FactorRow], horizon: Horizon) -> list[tuple[Fac
     scored: list[tuple[FactorRow, float]] = []
     for idx, row in enumerate(rows):
         if horizon == "SWING":
-            score = (
-                (0.30 * tech[idx])
-                + (0.16 * trend[idx])
-                + (0.16 * sent[idx])
-                + (0.14 * liq[idx])
-                + (0.12 * fund[idx])
-                + (0.12 * growth[idx])
+            terms = (
+                (0.30, tech[idx]), (0.16, trend[idx]), (0.16, sent[idx]),
+                (0.14, liq[idx]), (0.12, fund[idx]), (0.12, growth[idx]),
             )
         else:
-            score = (
-                (0.30 * fund[idx])
-                + (0.20 * growth[idx])
-                + (0.18 * quality[idx])
-                + (0.14 * tech[idx])
-                + (0.10 * sent[idx])
-                + (0.08 * liq[idx])
+            terms = (
+                (0.30, fund[idx]), (0.20, growth[idx]), (0.18, quality[idx]),
+                (0.14, tech[idx]), (0.10, sent[idx]), (0.08, liq[idx]),
             )
+        # Renormalize over the terms this row actually has. With every factor
+        # present the weights already sum to 1.0, so this is arithmetically
+        # identical to the previous fixed-weight expression.
+        present = [(w, v) for w, v in terms if v is not None]
+        total_weight = sum(w for w, _ in present)
+        score = (sum(w * v for w, v in present) / total_weight) if total_weight > 0 else 0.0
         if _sector_scoring:
             score *= sector_multiplier(getattr(row, "symbol", ""), _strength)
         scored.append((row, score))
@@ -311,6 +332,20 @@ def _passes_liquidity_filter(daily_df, symbol: str) -> bool:
 
 
 async def _fetch_daily_df(ingestion: DataIngestion, symbol: str) -> object:
+    # PHASE 0: serve from the scanner worker's full-universe Kite snapshot when
+    # it exists, so the finalist pool is materialised on the same bars the
+    # cross-sectional ranking was computed from. Falls through to the per-symbol
+    # provider for anything the snapshot missed.
+    try:
+        from services.universe_ohlc import kite_ohlc_enabled, load_universe_frames
+
+        if kite_ohlc_enabled():
+            frame = load_universe_frames([symbol]).get(symbol)
+            if frame is not None:
+                return frame
+    except Exception as exc:
+        log.debug("[Phase0] snapshot lookup failed for %s: %s", symbol, exc)
+
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
@@ -898,22 +933,29 @@ async def generate_rankings(horizon: Horizon, top_k: int = 25, target_universe: 
     rejections: list[RejectionRecord] = []
 
     for symbol in symbols:
-        q = evaluate_symbol_quality(symbol, tech[symbol], fund[symbol], sent[symbol])
+        # PHASE 0: these maps can be PARTIAL when synthetic providers are off —
+        # a symbol with no real data is simply absent, not hash-filled.
+        t_snap, f_snap, s_snap = tech.get(symbol), fund.get(symbol), sent.get(symbol)
+        if t_snap is None:
+            rejections.append(RejectionRecord(symbol, "quality", "technical_data_unavailable"))
+            continue
+
+        q = evaluate_symbol_quality(symbol, t_snap, f_snap, s_snap)
         if not q.passed:
             reason_str = q.reasons[0] if q.reasons else "quality_gate"
             rejections.append(RejectionRecord(symbol, "quality", reason_str))
             continue
         quality_passed += 1
 
-        row = build_factor_row(symbol, tech[symbol], fund[symbol], sent[symbol])
+        row = build_factor_row(symbol, t_snap, f_snap, s_snap)
         candidate_rows.append(row)
         authenticity_map[symbol] = q.data_authenticity
 
         if horizon == "SWING":
-            evidence = extract_swing_signals(symbol, tech[symbol], fund[symbol], sent[symbol])
+            evidence = extract_swing_signals(symbol, t_snap, f_snap, s_snap)
             setup = "WEEKLY_CROSS_SECTIONAL_SWING"
         else:
-            evidence = extract_longterm_signals(symbol, tech[symbol], fund[symbol], sent[symbol])
+            evidence = extract_longterm_signals(symbol, t_snap, f_snap, s_snap)
             setup = "WEEKLY_CROSS_SECTIONAL_LONGTERM"
 
         reasoning, factors_used = generate_evidence_reasoning(
