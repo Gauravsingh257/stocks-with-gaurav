@@ -311,3 +311,34 @@ def test_roce_uses_capital_employed_not_equity_only():
     assert _roce(100.0, 300.0, 700.0) == 10.0
     assert _roce(100.0, None, None) is None
     assert _roce(None, 300.0, 700.0) is None
+
+
+# ── the caller guard must not void the whole layer when a provider is absent ──
+
+def test_quality_layer_survives_absent_sentiment_provider(monkeypatch):
+    """PHASE0_NO_SYNTHETIC makes analyze_news_sentiment return {} because no news
+    API is wired. run_validation_scan must still evaluate the quality gate from
+    the providers it DOES have — the original guard required all three non-None,
+    which silently failed Layer 2 for every symbol (measured: 395 -> 0 on a
+    400-symbol production sample) and, with the strict funnel, emptied the feed.
+    """
+    result = evaluate_symbol_quality("TEST", _snapshot_hash("TEST"), _hash_snapshot("TEST"), None)
+    assert result.passed is True
+    assert result.score > 0
+
+    # ...and with fundamentals absent too, technicals alone still grade.
+    only_tech = evaluate_symbol_quality("TEST", _snapshot_hash("TEST"), None, None)
+    assert only_tech.passed is True
+
+
+def test_validation_engine_guard_requires_only_technicals():
+    """Guards against a regression to `tech and fund and sent`."""
+    import inspect
+
+    import services.validation_engine as ve
+
+    src = inspect.getsource(ve.run_validation_scan)
+    assert "if tech is not None and fund is not None and sent is not None:" not in src, (
+        "the quality-gate caller must not require all three providers"
+    )
+    assert "if tech is not None:" in src
