@@ -11,19 +11,42 @@ type SortKey =
 
 const COLUMNS: { key: SortKey; label: string; hint: string; numeric: boolean }[] = [
   { key: "symbol", label: "Symbol", hint: "NSE ticker", numeric: false },
-  { key: "market_cap_cr", label: "MCap ₹Cr", hint: "Market capitalisation", numeric: true },
-  { key: "turnover_cr", label: "₹Cr/day", hint: "20-day average traded value", numeric: true },
+  { key: "market_cap_cr", label: "MCap", hint: "Market capitalisation", numeric: true },
+  { key: "turnover_cr", label: "Traded/day", hint: "20-day average traded value", numeric: true },
   { key: "pe", label: "P/E", hint: "Price to earnings — what you pay per ₹1 of profit", numeric: true },
   { key: "roe_pct", label: "ROE %", hint: "Return on equity — how well profit is generated from shareholder capital", numeric: true },
   { key: "debt_to_equity", label: "D/E", hint: "Debt to equity — leverage. Lower is safer", numeric: true },
   { key: "net_margin_pct", label: "Margin %", hint: "Net profit margin", numeric: true },
   { key: "revenue_growth_pct", label: "Rev Gr %", hint: "Revenue growth", numeric: true },
   { key: "ret_1y_pct", label: "1Y %", hint: "One-year price return", numeric: true },
-  { key: "pct_from_52w_high", label: "off 52wH", hint: "How far below the 52-week high", numeric: true },
+  { key: "pct_from_52w_high", label: "Off 52w High", hint: "How far below the 52-week high", numeric: true },
 ];
+
+const OPTION_STYLE: React.CSSProperties = { background: "#0f1620", color: "#e6edf3" };
 
 function num(v: number | null | undefined, digits = 1): string {
   return v === null || v === undefined || Number.isNaN(v) ? "—" : v.toFixed(digits);
+}
+
+/** Money on the Indian scale. 1120303 -> "11.2L Cr", 62332 -> "62.3K Cr".
+ *  A seven-digit run of raw crores is unreadable at a glance and it is the
+ *  column people scan first. */
+function money(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const a = Math.abs(v);
+  if (a >= 1e5) return `${(v / 1e5).toFixed(2)}L Cr`;
+  if (a >= 1e3) return `${(v / 1e3).toFixed(2)}K Cr`;
+  if (a >= 100) return `${v.toFixed(0)} Cr`;
+  // Below Rs100Cr the decimal carries real meaning — this column is how you
+  // judge whether a name is liquid enough to trade, and 12.5 vs 13 is the
+  // difference between passing and failing a liquidity screen.
+  if (a >= 1) return `${v.toFixed(1)} Cr`;
+  return `${v.toFixed(2)} Cr`;
+}
+
+/** A percentage, with the sign carried on the number itself. */
+function pct(v: number | null | undefined, digits = 1): string {
+  return v === null || v === undefined || Number.isNaN(v) ? "—" : `${v.toFixed(digits)}%`;
 }
 
 /** Colour only where the sign genuinely means better/worse. */
@@ -132,13 +155,18 @@ export function StockUniverse() {
           aria-label="Filter by sector"
           style={{
             padding: "8px 10px", fontSize: "0.82rem", borderRadius: 8,
-            border: "1px solid var(--border)", background: "var(--bg-input, transparent)",
+            border: "1px solid var(--border)", background: "#0f1620",
             color: "var(--text-primary)",
           }}
         >
-          <option value="">All sectors ({data.equities})</option>
+          {/* The native popup is painted by the OS, which defaults to a white
+              sheet — light grey option text on white was unreadable. Options
+              carry their own explicit dark colours rather than inheriting. */}
+          <option value="" style={OPTION_STYLE}>All sectors ({data.equities})</option>
           {(data.sectors ?? []).map((s) => (
-            <option key={s.sector} value={s.sector}>{s.sector} ({s.count})</option>
+            <option key={s.sector} value={s.sector} style={OPTION_STYLE}>
+              {s.sector} ({s.count})
+            </option>
           ))}
         </select>
       </div>
@@ -189,7 +217,11 @@ export function StockUniverse() {
                     borderBottom: "1px solid var(--border-soft, var(--border))",
                     color: tone(c.key, r[c.key] as number | null),
                   }}>
-                    {num(r[c.key] as number | null, c.key === "market_cap_cr" ? 0 : 1)}
+                    {c.key === "market_cap_cr" || c.key === "turnover_cr"
+                      ? money(r[c.key] as number | null)
+                      : c.key === "pe" || c.key === "debt_to_equity"
+                        ? num(r[c.key] as number | null, c.key === "debt_to_equity" ? 2 : 1)
+                        : pct(r[c.key] as number | null)}
                   </td>
                 ))}
                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-soft, var(--border))" }}>
