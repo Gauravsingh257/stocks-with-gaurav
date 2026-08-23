@@ -64,7 +64,25 @@ SECTOR_MAP = {
 
 
 def get_sector(symbol: str) -> str:
+    """Sector for a symbol.
+
+    PHASE 0: when `PHASE0_REAL_SECTORS=1` this delegates to the single
+    authoritative classifier (NSE official industry -> yfinance -> this map),
+    which lifts coverage from these 96 hardcoded names to the whole investable
+    universe. Default OFF -> the legacy dict below, byte-identical to before.
+
+    This is the ONE place the swing/validation/governor/PIL stack asks the
+    question (services.sector_strength.classify_symbol calls it), so widening it
+    here widens it everywhere without a second competing map.
+    """
     clean = symbol.replace("NSE:", "").replace(" ", "")
+    try:
+        from services.sector_classification import real_sectors_enabled, resolve_sector
+
+        if real_sectors_enabled():
+            return resolve_sector(clean)
+    except Exception:
+        pass  # never let classification break a scan — fall through to legacy
     return SECTOR_MAP.get(clean, "Others")
 
 

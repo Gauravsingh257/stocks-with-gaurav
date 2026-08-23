@@ -350,6 +350,91 @@ CREATE TABLE IF NOT EXISTS equity_sm_state (
     PRIMARY KEY (symbol, horizon)
 );
 CREATE INDEX IF NOT EXISTS idx_equity_sm_phase ON equity_sm_state(phase, horizon);
+
+-- ─────────────────────────────────────────
+-- TABLE 15: forward_returns — PHASE 0 outcome labels for the signals_log corpus
+-- What each scanned (symbol, date) actually DID next: forward return, MFE, MAE
+-- at +5/+10/+20/+60 TRADING days, time-to-+10%, and the benchmark's move over
+-- the same window. This is the evidence base every later calibration reads.
+--
+-- Keyed on (symbol, date) and NOT on signals_log.id ON PURPOSE. A forward return
+-- is a property of the stock and the day; nothing about a scan changes it. The
+-- corpus holds ~903k rows but only ~185k distinct (symbol, date) pairs, because
+-- every scan of a day and both horizons repeat the same symbol. Labelling per
+-- row would store the same number ~6x over and force a rewrite of the biggest
+-- table on a volume that has already hit 84% once. Consumers JOIN instead.
+--
+-- Every window is independently NULLABLE: the corpus is younger than the 60-day
+-- window, so a +60d label simply does not exist for recent scans. `bars_available`
+-- records how much forward data backed the row, so a NULL is never ambiguous.
+-- Written only by scripts/backfill_forward_returns.py (out-of-band worker) —
+-- NEVER from a FastAPI startup handler, which is how the 2026-08-02 healthcheck
+-- outage happened.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS forward_returns (
+    symbol             TEXT NOT NULL,
+    date               TEXT NOT NULL,
+    base_close         REAL NOT NULL,
+    bars_available     INTEGER NOT NULL DEFAULT 0,
+    days_to_target     INTEGER,
+    fwd_5d_pct         REAL,
+    mfe_5d_pct         REAL,
+    mae_5d_pct         REAL,
+    bench_fwd_5d_pct   REAL,
+    excess_5d_pct      REAL,
+    fwd_10d_pct        REAL,
+    mfe_10d_pct        REAL,
+    mae_10d_pct        REAL,
+    bench_fwd_10d_pct  REAL,
+    excess_10d_pct     REAL,
+    fwd_20d_pct        REAL,
+    mfe_20d_pct        REAL,
+    mae_20d_pct        REAL,
+    bench_fwd_20d_pct  REAL,
+    excess_20d_pct     REAL,
+    fwd_60d_pct        REAL,
+    mfe_60d_pct        REAL,
+    mae_60d_pct        REAL,
+    bench_fwd_60d_pct  REAL,
+    excess_60d_pct     REAL,
+    computed_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS idx_forward_returns_date ON forward_returns(date);
+
+-- ─────────────────────────────────────────
+-- TABLE 16: fundamentals_quarterly — PHASE 0 real fundamental history
+-- One row per (symbol, period_end) from the company's own quarterly filings, so
+-- the Long-Term book can finally score growth, ACCELERATION and margin TREND
+-- instead of a single point-in-time snapshot (and instead of sha256(ticker),
+-- which is what 66% of the universe was scored on).
+--
+-- Deliberately NOT stored here because no wired-in source provides them:
+--   * cash flow      — yfinance quarterly_cashflow returns empty for NSE names
+--   * promoter %, FII/DII, pledge — nseindia.com/api/* returns 403 without a
+--     cookie handshake, and worse from a datacenter IP
+-- Those columns are absent rather than present-and-null-forever, so nothing can
+-- accidentally score on a field that will never be populated. See docs.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fundamentals_quarterly (
+    symbol            TEXT NOT NULL,
+    period_end        TEXT NOT NULL,
+    revenue           REAL,
+    ebitda            REAL,
+    ebit              REAL,
+    net_income        REAL,
+    gross_profit      REAL,
+    total_debt        REAL,
+    total_equity      REAL,
+    ebitda_margin_pct REAL,
+    ebit_margin_pct   REAL,
+    net_margin_pct    REAL,
+    roce_pct          REAL,
+    source            TEXT NOT NULL DEFAULT 'yfinance',
+    fetched_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (symbol, period_end)
+);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_quarterly_symbol ON fundamentals_quarterly(symbol, period_end DESC);
 """
 
 

@@ -151,9 +151,13 @@ def _build_fundamental_signals_longterm(fundamental: "FundamentalSnapshot") -> d
 def extract_swing_signals(
     symbol: str,
     technical: TechnicalSnapshot,
-    fundamental: FundamentalSnapshot,
-    sentiment: SentimentSnapshot,
+    fundamental: FundamentalSnapshot | None,
+    sentiment: SentimentSnapshot | None,
 ) -> SignalEvidence:
+    """PHASE 0: `fundamental` / `sentiment` may be None when that data is
+    genuinely unavailable. The corresponding signal block is then OMITTED rather
+    than narrated from fabricated numbers — an explanation of a hash is worse
+    than no explanation, because the reader cannot tell the difference."""
     rsi = _clip_rsi(technical.rsi_momentum)
     relative_strength = round((technical.mtf_alignment - 0.5) * 20, 1)
     resistance_days = 20 if technical.trend_structure >= 0.68 else 30
@@ -172,11 +176,11 @@ def extract_swing_signals(
         "relative_strength": f"{'Outperforming' if relative_strength > 5 else 'Inline with' if relative_strength > -2 else 'Underperforming'} NIFTY by {relative_strength:+.1f}%{_t_src}",
     }
 
-    fundamental_signals = _build_fundamental_signals_swing(fundamental)
+    fundamental_signals = _build_fundamental_signals_swing(fundamental) if fundamental else {}
 
     # Sentiment signals are synthetic — label clearly
     _s_note = " (est. — no live feed)" if getattr(sentiment, "data_source", "synthetic") == "synthetic" else ""
-    sentiment_signals = {
+    sentiment_signals = {} if sentiment is None else {
         "news_sentiment": f"News sentiment: {'bullish' if sentiment.financial_news >= 0.7 else 'neutral' if sentiment.financial_news >= 0.4 else 'bearish'}{_s_note}",
         "earnings_event": f"Earnings outlook: {'positive catalyst expected' if sentiment.earnings_event_bias >= 0.7 else 'neutral' if sentiment.earnings_event_bias >= 0.4 else 'risk of miss'}{_s_note}",
         "sector_rotation": f"Sector flows: {'inflows' if sentiment.sector_rotation >= 0.65 else 'stable' if sentiment.sector_rotation >= 0.4 else 'rotation away'}{_s_note}",
@@ -194,9 +198,11 @@ def extract_swing_signals(
 def extract_longterm_signals(
     symbol: str,
     technical: TechnicalSnapshot,
-    fundamental: FundamentalSnapshot,
-    sentiment: SentimentSnapshot,
+    fundamental: FundamentalSnapshot | None,
+    sentiment: SentimentSnapshot | None,
 ) -> SignalEvidence:
+    """PHASE 0: see extract_swing_signals — missing data yields fewer signals,
+    never invented ones."""
     long_term_acc = round((technical.order_block_quality * 100), 1)
     rs = round((technical.mtf_alignment - 0.5) * 16, 1)
     _t_src = "" if getattr(technical, "data_source", "hash") != "hash" else " (est.)"
@@ -205,10 +211,14 @@ def extract_longterm_signals(
         "breakout_structure": f"Higher-TF structure: {'bullish breakout' if technical.trend_structure >= 0.7 else 'consolidation' if technical.trend_structure >= 0.5 else 'no clear pattern'}{_t_src}",
         "relative_strength": f"{'Outperforming' if rs > 5 else 'Inline with' if rs > -2 else 'Underperforming'} index by {rs:+.1f}%{_t_src}",
     }
-    fundamental_signals = _build_fundamental_signals_longterm(fundamental)
+    fundamental_signals = _build_fundamental_signals_longterm(fundamental) if fundamental else {}
     _s_note = " (est.)" if getattr(sentiment, "data_source", "synthetic") == "synthetic" else ""
-    sentiment_signals = {
-        "industry_tailwinds": f"Industry tailwinds: {'strong' if (fundamental.sector_strength + sentiment.sector_rotation) / 2 >= 0.65 else 'moderate' if (fundamental.sector_strength + sentiment.sector_rotation) / 2 >= 0.4 else 'weak'}{_s_note}",
+    _tailwind = (
+        (fundamental.sector_strength + sentiment.sector_rotation) / 2
+        if (fundamental is not None and sentiment is not None) else None
+    )
+    sentiment_signals = {} if sentiment is None else {
+        **({"industry_tailwinds": f"Industry tailwinds: {'strong' if _tailwind >= 0.65 else 'moderate' if _tailwind >= 0.4 else 'weak'}{_s_note}"} if _tailwind is not None else {}),
         "policy_impact": f"Policy sensitivity: {'favorable' if sentiment.macro_sentiment >= 0.65 else 'neutral' if sentiment.macro_sentiment >= 0.4 else 'adverse'}{_s_note}",
         "macro_sentiment": f"Macro context: {'supportive' if sentiment.macro_sentiment >= 0.65 else 'neutral' if sentiment.macro_sentiment >= 0.4 else 'challenging'}{_s_note}",
         "news_sentiment": f"News: {'positive flow' if sentiment.financial_news >= 0.65 else 'mixed signals' if sentiment.financial_news >= 0.4 else 'negative tone'}{_s_note}",

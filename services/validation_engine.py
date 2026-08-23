@@ -567,6 +567,32 @@ def ensure_minimum_discovery_outputs(
 
 
 async def _fetch_frames(symbols: list[str], source: str, days: int, as_of: str | date | datetime | None) -> dict[str, pd.DataFrame | None]:
+    # PHASE 0: prefer the full-universe Kite snapshot published by the scanner
+    # worker. It is the whole point of the flag — every symbol in one scan is
+    # then compared on bars from the SAME provider fetched at the SAME moment,
+    # instead of whichever random 52-90% of the universe yfinance answered for
+    # today. Symbols missing from the snapshot still fall through to the
+    # per-symbol path below, so coverage can only improve, never regress.
+    prefetched: dict[str, pd.DataFrame | None] = {}
+    try:
+        from services.universe_ohlc import kite_ohlc_enabled, load_universe_frames
+
+        if kite_ohlc_enabled():
+            prefetched = {
+                symbol: _slice_to_date(frame, as_of)  # type: ignore[arg-type]
+                for symbol, frame in load_universe_frames(symbols).items()
+            }
+            if prefetched:
+                log.info("[Phase0] universe snapshot supplied %d/%d symbols",
+                         len(prefetched), len(symbols))
+    except Exception as exc:
+        log.warning("[Phase0] universe snapshot unavailable (%s) — per-symbol fetch", exc)
+        prefetched = {}
+
+    remaining = [s for s in symbols if s not in prefetched]
+    if not remaining:
+        return prefetched
+
     ingestion = DataIngestion(source=source)
     concurrency = max(1, int(os.getenv("VALIDATION_FETCH_CONCURRENCY", "8")))
     sem = asyncio.Semaphore(concurrency)
@@ -584,8 +610,8 @@ async def _fetch_frames(symbols: list[str], source: str, days: int, as_of: str |
                 log.debug("validation fetch failed for %s: %s", symbol, exc)
                 return symbol, None
 
-    pairs = await asyncio.gather(*(_one(symbol) for symbol in symbols))
-    return dict(pairs)
+    pairs = await asyncio.gather(*(_one(symbol) for symbol in remaining))
+    return {**prefetched, **dict(pairs)}
 
 
 def apply_exceptionalism_final_gate(records, soft_ceiling: int = 20):

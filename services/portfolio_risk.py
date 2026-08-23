@@ -91,8 +91,28 @@ _SECTOR_MAP: dict[str, str] = {
 
 
 def get_sector(symbol: str) -> str:
-    """Lookup sector for a symbol. Returns 'OTHER' if not mapped."""
-    return _SECTOR_MAP.get(symbol.strip().upper(), "OTHER")
+    """Lookup sector for a symbol. Returns 'OTHER' if not mapped.
+
+    PHASE 0: with `PHASE0_REAL_SECTORS=1` this defers to the single authoritative
+    classifier so the pre-promotion sector-concentration check stops seeing ~96%
+    of candidates as an uncapped 'OTHER'. Default OFF -> the legacy map below.
+    """
+    clean = symbol.replace("NSE:", "").strip().upper()
+    try:
+        from services.sector_classification import (
+            UNKNOWN,
+            real_sectors_enabled,
+            resolve_sector,
+        )
+
+        if real_sectors_enabled():
+            resolved = resolve_sector(clean)
+            # `check_sector_limit` treats "OTHER" as uncapped; keep that contract
+            # for genuinely unknown names rather than inventing a bucket.
+            return "OTHER" if resolved == UNKNOWN else resolved
+    except Exception:
+        pass
+    return _SECTOR_MAP.get(clean, "OTHER")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
