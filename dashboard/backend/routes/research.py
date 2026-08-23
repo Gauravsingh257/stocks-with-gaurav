@@ -2178,6 +2178,38 @@ def get_fvg_tap_signals(limit: int = Query(50, ge=1, le=200)):
              "signals": [], "count": 0})
 
 
+@router.get("/api/research/universe")
+@router.get("/research/universe")
+def get_stock_universe(
+    search: str = Query("", max_length=48, description="symbol or company name"),
+    sector: str = Query("", max_length=48),
+    include_non_equity: bool = Query(False, description="include ETFs / bonds / stale tickers"),
+    limit: int = Query(3000, ge=1, le=5000),
+):
+    """The full researchable NSE universe: company, sector and headline ratios.
+
+    Served from the `stock_universe` snapshot refreshed weekly on Saturday, so
+    this is a fast table read — no provider calls on the request path. The
+    response carries `refreshed_at` so the UI can show how old the data is
+    rather than implying it is live.
+    """
+    try:
+        from dashboard.backend.db.universe import get_universe
+
+        return _safe_json_response(get_universe(
+            search=search or None,
+            sector=sector or None,
+            equity_only=not include_non_equity,
+            limit=limit,
+        ))
+    except Exception:
+        log.exception("stock universe read failed")
+        return _safe_json_response({
+            "available": False, "items": [], "sectors": [], "count": 0,
+            "error": "universe_unavailable",
+        })
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(

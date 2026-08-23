@@ -1573,6 +1573,41 @@ export interface MarketStateResponse {
   as_of?: string;
 }
 
+
+/** One row of the researchable NSE universe (stock_universe snapshot). */
+export interface StockUniverseRow {
+  symbol: string;
+  company_name: string | null;
+  sector: string;
+  sector_source: string | null;
+  instrument: string;
+  price: number | null;
+  market_cap_cr: number | null;
+  turnover_cr: number | null;
+  pe: number | null;
+  pb: number | null;
+  roe_pct: number | null;
+  roe_source: string | null;
+  debt_to_equity: number | null;
+  revenue_growth_pct: number | null;
+  net_margin_pct: number | null;
+  promoter_pct: number | null;
+  pct_from_52w_high: number | null;
+  ret_1y_pct: number | null;
+  refreshed_at: string | null;
+}
+
+export interface StockUniverseResponse {
+  available: boolean;
+  items: StockUniverseRow[];
+  count: number;
+  total: number;
+  equities: number;
+  with_fundamentals: number;
+  refreshed_at: string | null;
+  sectors: { sector: string; count: number }[];
+}
+
 export const api = {
   /** Regime-governor exposure block — market state, suggested exposure/cash %, leading sectors. */
   marketState: () => get<MarketStateResponse>("/api/market/state"),
@@ -1670,6 +1705,15 @@ export const api = {
   runningTradesResearch: (limit = 40) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades?limit=${limit}`),
   liveSignals: (limit = 40) => get<{ items: Array<{ signal_id?: string; symbol?: string; direction?: string; strategy_name?: string; entry?: number | null; stop_loss?: number | null; target1?: number | null; target2?: number | null; score?: number | null; confidence?: number | null; timestamp?: string; signal_kind?: string }>; count: number; source?: string }>(`/api/research/live-signals?limit=${limit}`),
   runningTradesHistory: (limit = 100) => get<{ items: RunningTradeMonitorItem[]; count: number }>(`/api/research/running-trades/history?limit=${limit}`),
+  /** Full researchable NSE universe with sector + headline ratios (weekly snapshot). */
+  stockUniverse: (opts?: { search?: string; sector?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.search) q.set("search", opts.search);
+    if (opts?.sector) q.set("sector", opts.sector);
+    if (opts?.limit) q.set("limit", String(opts.limit));
+    const qs = q.toString();
+    return get<StockUniverseResponse>(`/api/research/universe${qs ? `?${qs}` : ""}`);
+  },
   researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchValidation: (horizon: "SWING" | "LONGTERM" = "SWING", topK = 10, targetUniverse = 2200) =>
     get<ResearchValidationResponse>(`/api/research/validation?horizon=${horizon}&top_k=${topK}&target_universe=${targetUniverse}`),

@@ -32,6 +32,7 @@ import { DiscoveryFeed } from "./DiscoveryFeed";
 import { FinalTrades } from "./FinalTrades";
 import { MarketStateBanner } from "./MarketStateBanner";
 import { Watchlist } from "./Watchlist";
+import { StockUniverse } from "./StockUniverse";
 import AnchorShadowChip from "./AnchorShadowChip";
 import AnchorShadowHeaderBadge from "./AnchorShadowHeaderBadge";
 
@@ -791,6 +792,13 @@ export default function ResearchPage() {
 
       <StaggerItem>
         <DiscoveryFeed items={filteredDiscovery} />
+      </StaggerItem>
+
+      {/* Full researchable universe — every NSE stock with sector + fundamentals.
+          Sits with the exploration tools: the scan says what to trade, this says
+          what exists. Weekly snapshot, so it never fetches on the request path. */}
+      <StaggerItem>
+        <StockUniverse />
       </StaggerItem>
 
       {/* â”€â”€ ONBOARDING CARD (shown when everything is empty) â”€â”€â”€â”€ */}

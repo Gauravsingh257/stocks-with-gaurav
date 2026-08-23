@@ -1,0 +1,639 @@
+symbol,sector,company_name,owner_label,turnover_cr
+RATNAVEER,Auto,Ratnaveer Precision Engineering Limited,Automobile & Auto Components,291.38
+SHADOWFAX,IT,Shadowfax Technologies Limited,Information Technology,275.11
+MOREPENLAB,Pharma,Morepen Laboratories Limited,Pharmaceuticals & Healthcare,260.32
+TFCILTD,Finance,Tourism Finance Corporation of India Limited,Banking & Financial Services,226.72
+OMNI,Auto,Omnitech Engineering Limited,Automobile & Auto Components,154.79
+KWIL,FMCG,Kwality Wall's (India) Limited,FMCG & Food,137.54
+ROLEXRINGS,Auto,Rolex Rings Limited,Automobile & Auto Components,125.41
+KERNEX,IT,Kernex Microsystems (India) Limited,Information Technology,111.63
+MOTISONS,Consumer Services,Motisons Jewellers Limited,Retail & Consumer,101.06
+MANINDS,Capital Goods,Man Industries (India) Limited,Capital Goods & Industrial Manufacturing,68.26
+NELCO,Telecom,NELCO Limited,Telecom & Communication,66.31
+SHREEJISPG,Services,Shreeji Shipping Global Limited,Logistics & Transportation,63.33
+PANAMAPET,Energy,Panama Petrochem Limited,"Oil, Gas & Energy",58.57
+SEDEMAC,Capital Goods,SEDEMAC Mechatronics Limited,Capital Goods & Industrial Manufacturing,53.21
+TBZ,Consumer Services,Tribhovandas Bhimji Zaveri Limited,Retail & Consumer,52.64
+RAMCOIND,Capital Goods,Ramco Industries Limited,Capital Goods & Industrial Manufacturing,51.25
+MUNJALAU,Auto,Munjal Auto Industries Limited,Automobile & Auto Components,50.7
+SOTL,IT,Savita Oil Technologies Limited,Information Technology,49.84
+RPTECH,IT,Rashi Peripherals Limited,Information Technology,49.39
+SJS,Auto,S.J.S. Enterprises Limited,Automobile & Auto Components,47.67
+PNGSREVA,Consumer Services,PNGS Reva Diamond Jewellery Limited,Retail & Consumer,45.96
+MARINE,Energy,Marine Electricals (India) Limited,"Oil, Gas & Energy",44.92
+RHETAN,Metal,Rhetan TMT Limited,Metals & Mining,44.8
+STYLEBAAZA,Consumer Services,Baazar Style Retail Limited,Retail & Consumer,44.62
+UNIVCABLES,Telecom,Universal Cables Limited,Telecom & Communication,43.88
+KOLTEPATIL,Infra,Kolte - Patil Developers Limited,Construction & Infrastructure,42.83
+ORIENTHOT,Consumer Services,Oriental Hotels Limited,"Hotels, Travel & Leisure",41.76
+KSHINTL,Capital Goods,KSH International Limited,Capital Goods & Industrial Manufacturing,41.51
+MOSCHIP,IT,Moschip Technologies Limited,Information Technology,40.86
+MOBIKWIK,IT,One Mobikwik Systems Limited,Information Technology,40.61
+RICOAUTO,Auto,Rico Auto Industries Limited,Automobile & Auto Components,40.46
+VINCOFE,FMCG,Vintage Coffee And Beverages Limited,FMCG & Food,40.42
+SBC,Services,SBC Exports Limited,Logistics & Transportation,40.19
+SENORES,Pharma,Senores Pharmaceuticals Limited,Pharmaceuticals & Healthcare,39.9
+UFLEX,Forest Materials,UFLEX Limited,Packaging & Paper,38.81
+ROSSTECH,Capital Goods,Rossell Techsys Limited,Capital Goods & Industrial Manufacturing,37.74
+UNIMECH,Capital Goods,Unimech Aerospace and Manufacturing Limited,Capital Goods & Industrial Manufacturing,36.41
+PRECWIRE,Capital Goods,Precision Wires India Limited,Capital Goods & Industrial Manufacturing,36.22
+RAYMOND,Textiles,Raymond Limited,Textiles,35.19
+KIRIINDUS,Capital Goods,Kiri Industries Limited,Capital Goods & Industrial Manufacturing,34.31
+NILKAMAL,Consumer Durables,Nilkamal Limited,Consumer Durables & Appliances,33.8
+KMEW,Auto,Knowledge Marine & Engineering Works Limited,Automobile & Auto Components,32.91
+SOLARA,Pharma,Solara Active Pharma Sciences Limited,Pharmaceuticals & Healthcare,32.65
+TVSSRICHAK,Auto,TVS Srichakra Limited,Automobile & Auto Components,31.79
+VADILALIND,Capital Goods,Vadilal Industries Limited,Capital Goods & Industrial Manufacturing,31.64
+TARSONS,Pharma,Tarsons Products Limited,Pharmaceuticals & Healthcare,30.31
+SUVEN,Pharma,Suven Life Sciences Limited,Pharmaceuticals & Healthcare,29.21
+ORISSAMINE,Metal,The Orissa Minerals Development Company Limited,Metals & Mining,29.02
+NRBBEARING,Auto,NRB Bearing Limited,Automobile & Auto Components,28.59
+STOVEKRAFT,Consumer Durables,Stove Kraft Limited,Consumer Durables & Appliances,28.38
+KDDL,Consumer Durables,KDDL Limited,Consumer Durables & Appliances,28.36
+VERANDA,IT,Veranda Learning Solutions Limited,Information Technology,28.1
+YATRA,Consumer Services,Yatra Online Limited,"Hotels, Travel & Leisure",28.05
+SANGHVIMOV,Services,Sanghvi Movers Limited,Logistics & Transportation,27.8
+POCL,Chemicals,Pondy Oxides & Chemicals Limited,Chemicals,26.96
+KPL,Pharma,Kwality Pharmaceuticals Limited,Pharmaceuticals & Healthcare,26.87
+SAMBHV,Metal,Sambhv Steel Tubes Limited,Metals & Mining,25.74
+SHK,Chemicals,S H Kelkar and Company Limited,Chemicals,25.67
+SGMART,Services,SG Mart Limited,Trading & Distribution,25.16
+OMAXE,Realty,Omaxe Limited,Real Estate,24.82
+MARSONS,Capital Goods,Marsons Limited,Capital Goods & Industrial Manufacturing,24.75
+SPORTKING,Services,Sportking India Limited,Logistics & Transportation,24.69
+KRISHANA,Chemicals,Krishana Phoschem Limited,Chemicals,24.4
+KABRAEXTRU,Capital Goods,Kabra Extrusion Technik Limited,Capital Goods & Industrial Manufacturing,24.38
+RISHABH,Capital Goods,Rishabh Instruments Limited,Capital Goods & Industrial Manufacturing,24.09
+SURYODAY,Finance,Suryoday Small Finance Bank Limited,Banking & Financial Services,24.05
+VINDHYATEL,Telecom,Vindhya Telelinks Limited,Telecom & Communication,23.89
+TIIL,Capital Goods,Technocraft Industries (India) Limited,Capital Goods & Industrial Manufacturing,23.78
+WEL,Energy,Wonder Electricals Limited,"Oil, Gas & Energy",23.76
+SSWL,Auto,Steel Strips Wheels Limited,Automobile & Auto Components,22.99
+SIRCA,Chemicals,Sirca Paints India Limited,Chemicals,22.91
+VRLLOG,Services,VRL Logistics Limited,Logistics & Transportation,21.64
+RAYMONDREL,Realty,Raymond Realty Limited,Real Estate,21.46
+WSTCSTPAPR,Textiles,West Coast Paper Mills Limited,Textiles,20.97
+SEAMECLTD,Services,Seamec Limited,Logistics & Transportation,20.82
+SETL,Auto,Standard Engineering Technology Limited,Automobile & Auto Components,20.73
+SIGMAADV,IT,SIGMA ADVANCED SYSTEMS LIMITED,Information Technology,20.69
+NORTHARC,Finance,Northern Arc Capital Limited,Banking & Financial Services,20.66
+TRUALT,Energy,TruAlt Bioenergy Limited,"Oil, Gas & Energy",20.47
+RAMCOSYS,IT,Ramco Systems Limited,Information Technology,20.16
+TEMBO,Capital Goods,Tembo Global Industries Limited,Capital Goods & Industrial Manufacturing,19.78
+WINDLAS,Pharma,Windlas Biotech Limited,Pharmaceuticals & Healthcare,19.58
+TIMEX,Consumer Durables,Timex Group India Limited,Consumer Durables & Appliances,19.08
+SGFIN,Finance,SG Finserve Limited,Banking & Financial Services,19.07
+NOCIL,Chemicals,NOCIL Limited,Chemicals,18.9
+MANGLMCEM,Metal,Mangalam Cement Limited,Metals & Mining,18.75
+UNIPARTS,Auto,Uniparts India Limited,Automobile & Auto Components,18.7
+NITINSPIN,Textiles,Nitin Spinners Limited,Textiles,18.62
+PIXTRANS,Auto,Pix Transmissions Limited,Automobile & Auto Components,18.53
+PREMEXPLN,Capital Goods,Premier Explosives Limited,Capital Goods & Industrial Manufacturing,18.5
+STYLAMIND,Capital Goods,Stylam Industries Limited,Capital Goods & Industrial Manufacturing,18.27
+MUFIN,Finance,Mufin Green Finance Limited,Banking & Financial Services,18.24
+SKMEGGPROD,FMCG,SKM Egg Products Export (India) Limited,FMCG & Food,18.24
+TASTYBITE,FMCG,Tasty Bite Eatables Limited,FMCG & Food,18.01
+MBAPL,FMCG,Madhya Bharat Agro Products Limited,FMCG & Food,18.0
+MONARCH,Finance,Monarch Networth Capital Limited,Banking & Financial Services,17.55
+ARTEMISMED,Pharma,Artemis Medicare Services Limited,Pharmaceuticals & Healthcare,17.33
+TCPLPACK,Forest Materials,TCPL Packaging Limited,Packaging & Paper,17.06
+ORIENTTECH,IT,Orient Technologies Limited,Information Technology,16.25
+SHILCTECH,IT,Shilchar Technologies Limited,Information Technology,15.68
+WALCHANNAG,Capital Goods,Walchandnagar Industries Limited,Capital Goods & Industrial Manufacturing,15.53
+UNICHEMLAB,Pharma,Unichem Laboratories Limited,Pharmaceuticals & Healthcare,15.22
+MMFL,Auto,MM Forgings Limited,Automobile & Auto Components,15.16
+POLYPLEX,Forest Materials,Polyplex Corporation Limited,Packaging & Paper,15.11
+TATVA,Pharma,Tatva Chintan Pharma Chem Limited,Pharmaceuticals & Healthcare,14.57
+LUMAXIND,Auto,Lumax Industries Limited,Automobile & Auto Components,14.53
+KRISHNADEF,Capital Goods,Krishna Defence And Allied Industries Limited,Capital Goods & Industrial Manufacturing,14.49
+MPSLTD,IT,MPS Limited,Information Technology,14.49
+VENKEYS,FMCG,Venky's (India) Limited,FMCG & Food,14.32
+KINGFA,IT,Kingfa Science & Technology (India) Limited,Information Technology,14.13
+MCLOUD,IT,Magellanic Cloud Limited,Information Technology,13.85
+LMW,Capital Goods,LMW Limited,Capital Goods & Industrial Manufacturing,13.76
+XPROINDIA,Forest Materials,Xpro India Limited,Packaging & Paper,13.65
+RPEL,Capital Goods,Raghav Productivity Enhancers Limited,Capital Goods & Industrial Manufacturing,13.39
+WANBURY,Pharma,Wanbury Limited,Pharmaceuticals & Healthcare,13.29
+PRABHA,Energy,Prabha Energy Limited,"Oil, Gas & Energy",13.21
+RSL,Metal,Rajputana Stainless Limited,Metals & Mining,12.97
+KIOCL,Metal,KIOCL Limited,Metals & Mining,12.74
+VISAKAIND,Capital Goods,Visaka Industries Limited,Capital Goods & Industrial Manufacturing,12.71
+SATIN,Finance,Satin Creditcare Network Limited,Banking & Financial Services,12.7
+ORIENTELEC,Energy,Orient Electric Limited,"Oil, Gas & Energy",12.37
+RADHIKAJWE,Consumer Services,Radhika Jeweltech Limited,Retail & Consumer,12.16
+MACPOWER,Energy,Macpower CNC Machines Limited,"Oil, Gas & Energy",12.04
+NIBE,Capital Goods,NIBE Limited,Capital Goods & Industrial Manufacturing,12.04
+PITTIENG,Auto,Pitti Engineering Limited,Automobile & Auto Components,11.87
+LAOPALA,Consumer Durables,La Opala RG Limited,Consumer Durables & Appliances,11.82
+KPEL,Energy,K.P. Energy Limited,"Oil, Gas & Energy",11.76
+PGHL,Pharma,Procter & Gamble Health Limited,Pharmaceuticals & Healthcare,11.55
+SULA,FMCG,Sula Vineyards Limited,FMCG & Food,11.43
+PAUSHAKLTD,Chemicals,Paushak Limited,Chemicals,11.42
+NACLIND,Capital Goods,NACL Industries Limited,Capital Goods & Industrial Manufacturing,11.06
+PARACABLES,Telecom,Paramount Communications Limited,Telecom & Communication,11.04
+NEPHROPLUS,Pharma,Nephrocare Health Services Limited,Pharmaceuticals & Healthcare,10.99
+SAKAR,Pharma,Sakar Healthcare Limited,Pharmaceuticals & Healthcare,10.91
+TIRUMALCHM,Chemicals,Thirumalai Chemicals Limited,Chemicals,10.83
+MANALIPETC,Energy,Manali Petrochemicals Limited,"Oil, Gas & Energy",10.49
+SUMEETINDS,Capital Goods,Sumeet Industries Limited,Capital Goods & Industrial Manufacturing,10.39
+ZOTA,Pharma,Zota Health Care LImited,Pharmaceuticals & Healthcare,10.31
+PATELENG,Auto,Patel Engineering Limited,Automobile & Auto Components,10.3
+SAKSOFT,IT,Saksoft Limited,Information Technology,10.3
+WONDERLA,Consumer Services,Wonderla Holidays Limited,"Hotels, Travel & Leisure",10.25
+POKARNA,Metal,Pokarna Limited,Metals & Mining,10.15
+SURAKSHA,Pharma,Suraksha Diagnostic Limited,Pharmaceuticals & Healthcare,10.1
+SUBEXLTD,IT,Subex Limited,Information Technology,10.02
+PSPPROJECT,Infra,PSP Projects Limited,Construction & Infrastructure,10.0
+MAYURUNIQ,Textiles,Mayur Uniquoters Ltd,Textiles,9.81
+PVP,Finance,PVP Ventures Limited,Banking & Financial Services,9.77
+MAHLOG,Services,Mahindra Logistics Limited,Logistics & Transportation,9.56
+SYNCOMF,Pharma,Syncom Formulations (India) Limited,Pharmaceuticals & Healthcare,9.46
+TALBROAUTO,Auto,Talbros Automotive Components Limited,Automobile & Auto Components,9.46
+SPAL,Consumer Services,S. P. Apparels Limited,Retail & Consumer,9.29
+MANCREDIT,Finance,Mangal Credit and Fincorp Limited,Banking & Financial Services,9.25
+SEPC,Infra,SEPC Limited,Construction & Infrastructure,9.25
+TINNARUBR,Chemicals,Tinna Rubber and Infrastructure Limited,Chemicals,8.88
+SUPRAJIT,Auto,Suprajit Engineering Limited,Automobile & Auto Components,8.87
+KROSS,Auto,Kross Limited,Automobile & Auto Components,8.86
+SANOFI,Pharma,Sanofi India Limited,Pharmaceuticals & Healthcare,8.85
+VINATIORGA,Chemicals,Vinati Organics Limited,Chemicals,8.8
+RSYSTEMS,IT,R Systems International Limited,Information Technology,8.72
+SUNFLAG,Metal,Sunflag Iron And Steel Company Limited,Metals & Mining,8.6
+VSSL,Metal,Vardhman Special Steels Limited,Metals & Mining,8.51
+RAJRATAN,Metal,Rajratan Global Wire Limited,Metals & Mining,8.48
+WINDMACHIN,Energy,Windsor Machines Limited,"Oil, Gas & Energy",8.4
+TVSHLTD,Auto,TVS Holdings Limited,Automobile & Auto Components,8.25
+ORCHPHARMA,Pharma,Orchid Pharma Limited,Pharmaceuticals & Healthcare,7.87
+RACLGEAR,Auto,RACL Geartech Limited,Automobile & Auto Components,7.87
+PRAKASH,Capital Goods,Prakash Industries Limited,Capital Goods & Industrial Manufacturing,7.71
+JUBLCPL,FMCG,Jubilant Agri and Consumer Products Limited,FMCG & Food,7.55
+ONEPOINT,IT,One Point One Solutions Limited,Information Technology,7.47
+UDS,Services,Updater Services Limited,Business Services,7.4
+PRINCEPIPE,Capital Goods,Prince Pipes And Fittings Limited,Capital Goods & Industrial Manufacturing,7.31
+KIRLFER,Capital Goods,Kirloskar Ferrous Industries Limited,Capital Goods & Industrial Manufacturing,7.19
+TCIEXP,Services,TCI Express Limited,Logistics & Transportation,7.17
+SAIPARENT,Pharma,Sai Parenterals Limited,Pharmaceuticals & Healthcare,7.14
+JUNIPER,Consumer Services,Juniper Hotels Limited,"Hotels, Travel & Leisure",7.12
+PANACEABIO,Pharma,Panacea Biotec Limited,Pharmaceuticals & Healthcare,7.01
+RML,Auto,Rane (Madras) Limited,Automobile & Auto Components,7.01
+VISHNU,Chemicals,Vishnu Chemicals Limited,Chemicals,6.94
+PYRAMID,Forest Materials,Pyramid Technoplast Limited,Packaging & Paper,6.8
+SOLARWORLD,IT,Solarworld Energy Solutions Limited,Information Technology,6.76
+MAXESTATES,Infra,Max Estates Limited,Construction & Infrastructure,6.61
+NPST,IT,Network People Services Technologies Limited,Information Technology,6.61
+SYMPHONY,Consumer Durables,Symphony Limited,Consumer Durables & Appliances,6.46
+MANAKCOAT,Metal,Manaksia Coated Metals & Industries Limited,Metals & Mining,6.44
+WENDT,Capital Goods,Wendt (India) Limited,Capital Goods & Industrial Manufacturing,6.38
+PREMIERPOL,Forest Materials,Premier Polyfilm Limited,Packaging & Paper,6.26
+MWL,Metal,Mangalam Worldwide Limited,Metals & Mining,6.25
+NITCO,Capital Goods,Nitco Limited,Capital Goods & Industrial Manufacturing,6.25
+PENIND,Capital Goods,Pennar Industries Limited,Capital Goods & Industrial Manufacturing,6.18
+ZEEMEDIA,Media,Zee Media Corporation Limited,Media & Entertainment,6.17
+KECL,Energy,Kirloskar Electric Company Limited,"Oil, Gas & Energy",6.1
+SIGACHI,Capital Goods,Sigachi Industries Limited,Capital Goods & Industrial Manufacturing,6.02
+MATRIMONY,IT,Matrimony.Com Limited,Information Technology,5.96
+ULTRAMAR,Chemicals,Ultramarine & Pigments Limited,Chemicals,5.9
+SHANTIGEAR,Auto,Shanthi Gears Limited,Automobile & Auto Components,5.88
+RITCO,Services,Ritco Logistics Limited,Logistics & Transportation,5.81
+SERVOTECH,Energy,Servotech Renewable Power System Limited,"Oil, Gas & Energy",5.76
+SMCGLOBAL,Finance,SMC Global Securities Limited,Banking & Financial Services,5.49
+UGROCAP,Finance,Ugro Capital Limited,Banking & Financial Services,5.48
+VSTTILLERS,Auto,V.S.T Tillers Tractors Limited,Automobile & Auto Components,5.47
+UTKARSHBNK,Finance,Utkarsh Small Finance Bank Limited,Banking & Financial Services,5.43
+SDBL,Auto,Som Distilleries & Breweries Limited,Automobile & Auto Components,5.4
+METROBRAND,Consumer Services,Metro Brands Limited,Retail & Consumer,5.26
+INDOSTAR,Finance,IndoStar Capital Finance Limited,Banking & Financial Services,5.22
+VSTIND,Capital Goods,VST Industries Limited,Capital Goods & Industrial Manufacturing,5.2
+SASKEN,IT,Sasken Technologies Limited,Information Technology,5.19
+SPANDANA,Finance,Spandana Sphoorty Financial Limited,Banking & Financial Services,5.19
+SEIL,Consumer Services,Shanti Educational Initiatives Limited,Education & Training,5.17
+LINCOLN,Pharma,Lincoln Pharmaceuticals Limited,Pharmaceuticals & Healthcare,5.12
+STEELCAS,Metal,Steelcast Limited,Metals & Mining,5.06
+MASFIN,Finance,MAS Financial Services Limited,Banking & Financial Services,4.99
+KAPSTON,Services,Kapston Services Limited,Business Services,4.77
+THOMASCOTT,Consumer Services,Thomas Scott (India) Limited,Retail & Consumer,4.7
+MAGADSUGAR,Energy,Magadh Sugar & Energy Limited,"Oil, Gas & Energy",4.68
+MMP,Capital Goods,MMP Industries Limited,Capital Goods & Industrial Manufacturing,4.66
+RPGLIFE,Pharma,RPG Life Sciences Limited,Pharmaceuticals & Healthcare,4.63
+PROSTARM,IT,Prostarm Info Systems Limited,Information Technology,4.61
+PDSL,Textiles,PDS Limited,Textiles,4.59
+SRM,Infra,SRM Contractors Limited,Construction & Infrastructure,4.54
+ROSSARI,Pharma,Rossari Biotech Limited,Pharmaceuticals & Healthcare,4.45
+RANEHOLDIN,Auto,Rane Holdings Limited,Automobile & Auto Components,4.37
+UGARSUGAR,FMCG,The Ugar Sugar Works Limited,FMCG & Food,4.36
+SALSTEEL,Metal,S.A.L. Steel Limited,Metals & Mining,4.35
+KSL,Metal,Kalyani Steels Limited,Metals & Mining,4.27
+UNIECOM,IT,Unicommerce Esolutions Limited,Information Technology,4.26
+TTKHLTCARE,Pharma,TTK Healthcare Limited,Pharmaceuticals & Healthcare,4.24
+RMC,Auto,RMC Switchgears Limited,Automobile & Auto Components,4.21
+REPCOHOME,Finance,Repco Home Finance Limited,Banking & Financial Services,4.2
+SIYSIL,Textiles,Siyaram Silk Mills Limited,Textiles,4.1
+TEAMLEASE,FMCG,Teamlease Services Limited,Agriculture & Seeds,4.1
+TAJGVK,Consumer Services,Taj GVK Hotels & Resorts Limited,"Hotels, Travel & Leisure",4.06
+WAAREEINDO,Energy,Indosolar Limited,"Oil, Gas & Energy",4.01
+SHRIRAMPPS,Realty,Shriram Properties Limited,Real Estate,3.92
+SAURASHCEM,Metal,Saurashtra Cement Limited,Metals & Mining,3.84
+SIGMA,IT,Sigma Solve Limited,Information Technology,3.82
+JTEKTINDIA,Auto,Jtekt India Limited,Automobile & Auto Components,3.8
+SALZERELEC,Capital Goods,Salzer Electronics Limited,Capital Goods & Industrial Manufacturing,3.79
+KIRLOSIND,Capital Goods,Kirloskar Industries Limited,Capital Goods & Industrial Manufacturing,3.75
+WELSPLSOL,IT,Welspun Specialty Solutions Limited,Information Technology,3.73
+KKCL,Consumer Services,Kewal Kiran Clothing Limited,Retail & Consumer,3.71
+MANBA,Finance,Manba Finance Limited,Banking & Financial Services,3.67
+KCP,Capital Goods,KCP Limited,Capital Goods & Industrial Manufacturing,3.64
+TNPL,Forest Materials,Tamil Nadu Newsprint & Papers Limited,Packaging & Paper,3.64
+MAITHANALL,Metal,Maithan Alloys Limited,Metals & Mining,3.61
+MAMATA,Capital Goods,Mamata Machinery Limited,Capital Goods & Industrial Manufacturing,3.57
+NIITMTS,IT,NIIT Learning Systems Limited,Information Technology,3.55
+REGAAL,FMCG,Regaal Resources Limited,FMCG & Food,3.55
+TCI,Services,Transport Corporation of India Limited,Logistics & Transportation,3.52
+RELTD,Energy,Ravindra Energy Limited,"Oil, Gas & Energy",3.45
+ROTO,Capital Goods,Roto Pumps Limited,Capital Goods & Industrial Manufacturing,3.45
+KOVAI,Pharma,Kovai Medical Center & Hospital Limited,Pharmaceuticals & Healthcare,3.42
+NAVNETEDUL,Consumer Services,Navneet Education Limited,Education & Training,3.41
+NIITLTD,IT,NIIT Limited,Information Technology,3.38
+TAALTECH,IT,Taal Tech Limited,Information Technology,3.36
+PONNIERODE,FMCG,Ponni Sugars (Erode) Limited,FMCG & Food,3.33
+SPMLINFRA,Infra,SPML Infra Limited,Construction & Infrastructure,3.32
+SHANKARA,Infra,Shankara Building Products Limited,Construction & Infrastructure,3.3
+SOLEX,Energy,Solex Energy Limited,"Oil, Gas & Energy",3.28
+MODIS,Realty,Modis Navnirman Limited,Real Estate,3.13
+MSPL,Energy,MSP Steel & Power Limited,"Oil, Gas & Energy",3.13
+SANATHAN,Textiles,Sanathan Textiles Limited,Textiles,3.1
+NELCAST,Auto,Nelcast Limited,Automobile & Auto Components,3.07
+VPRPL,Infra,Vishnu Prakash R Punglia Limited,Construction & Infrastructure,3.05
+MARATHON,Realty,Marathon Nextgen Realty Limited,Real Estate,2.99
+LAXMIDENTL,Pharma,Laxmi Dental Limited,Pharmaceuticals & Healthcare,2.95
+RPSGVENT,Diversified,RPSG VENTURES LIMITED,Diversified,2.93
+SIKA,IT,Sika Interplant Systems Limited,Information Technology,2.93
+NAVKARCORP,Services,Navkar Corporation Limited,Business Services,2.86
+SIGNPOST,Media,Signpost India Limited,Media & Entertainment,2.86
+THEJO,Auto,Thejo Engineering Limited,Automobile & Auto Components,2.86
+NOVARTIND,Pharma,Novartis India Limited,Pharmaceuticals & Healthcare,2.84
+TVSELECT,IT,TVS Electronics Limited,Information Technology,2.82
+VEEDOL,Chemicals,Veedol Corporation Limited,Chemicals,2.81
+VESUVIUS,Capital Goods,Vesuvius India Limited,Capital Goods & Industrial Manufacturing,2.79
+MARKOLINES,IT,Markolines Pavement Technologies Limited,Information Technology,2.67
+PRAVEG,Consumer Services,Praveg Limited,"Hotels, Travel & Leisure",2.64
+STUDDS,Auto,Studds Accessories Limited,Automobile & Auto Components,2.64
+PAKKA,Forest Materials,PAKKA LIMITED,Packaging & Paper,2.61
+SHAH,Metal,Shah Metacorp Limited,Metals & Mining,2.6
+MANOMAY,Textiles,Manomay Tex India Limited,Textiles,2.55
+MEDICO,Pharma,Medico Remedies Limited,Pharmaceuticals & Healthcare,2.54
+SINGERIND,Consumer Durables,Singer India Limited,Consumer Durables & Appliances,2.52
+PUNJABCHEM,Chemicals,Punjab Chemicals & Crop Protection Limited,Chemicals,2.48
+TAKE,IT,TAKE Limited,Information Technology,2.47
+VIDHIING,FMCG,Vidhi Specialty Food Ingredients Limited,FMCG & Food,2.46
+KANPRPLA,Forest Materials,Kanpur Plastipack Limited,Packaging & Paper,2.44
+WPIL,Capital Goods,WPIL Limited,Capital Goods & Industrial Manufacturing,2.44
+STLNETWORK,Telecom,STL Networks Limited,Telecom & Communication,2.43
+SIMPLEXINF,Infra,Simplex Infrastructures Limited,Construction & Infrastructure,2.36
+SWARAJENG,Auto,Swaraj Engines Limited,Automobile & Auto Components,2.33
+LAXMIINDIA,Finance,Laxmi India Finance Limited,Banking & Financial Services,2.32
+SURAJEST,Realty,Suraj Estate Developers Limited,Real Estate,2.26
+MIDWESTLTD,Metal,Midwest Limited,Metals & Mining,2.25
+MAXIND,Finance,Max India Limited,Banking & Financial Services,2.24
+GANGAFORGE,Auto,Ganga Forging Limited,Automobile & Auto Components,2.16
+SHOPERSTOP,Consumer Services,Shoppers Stop Limited,Retail & Consumer,2.06
+OMAXAUTO,Auto,Omax Autos Limited,Automobile & Auto Components,2.02
+PNBGILTS,Finance,PNB Gilts Limited,Banking & Financial Services,2.02
+RPPINFRA,Infra,R.P.P. Infra Projects Limited,Construction & Infrastructure,2.02
+NAHARSPING,Textiles,Nahar Spinning Mills Limited,Textiles,1.98
+ONWARDTEC,IT,Onward Technologies Limited,Information Technology,1.98
+KAYA,Pharma,Kaya Limited,Pharmaceuticals & Healthcare,1.97
+KELLTONTEC,IT,Kellton Tech Solutions Limited,Information Technology,1.96
+SHINDL,Capital Goods,Sharat Industries Limited,Capital Goods & Industrial Manufacturing,1.96
+SUNDROP,Consumer Services,Sundrop Brands Limited,Retail & Consumer,1.95
+PDMJEPAPER,Forest Materials,Pudumjee Paper Products Limited,Packaging & Paper,1.94
+KOTHARIPET,Energy,Kothari Petrochemicals Limited,"Oil, Gas & Energy",1.92
+SWELECTES,IT,Swelect Energy Systems Limited,Information Technology,1.91
+STEELXIND,Metal,STEEL EXCHANGE INDIA LIMITED,Metals & Mining,1.88
+STANLEY,Consumer Services,Stanley Lifestyles Limited,Retail & Consumer,1.84
+OMPOWER,Auto,Om Power Transmission Limited,Automobile & Auto Components,1.82
+RESPONIND,Capital Goods,Responsive Industries Limited,Capital Goods & Industrial Manufacturing,1.8
+RUSHIL,Forest Materials,Rushil Decor Limited,Packaging & Paper,1.79
+PRECAM,Auto,Precision Camshafts Limited,Automobile & Auto Components,1.76
+SPIC,Energy,Southern Petrochemicals Industries Corporation  Limited,"Oil, Gas & Energy",1.71
+MUKKA,FMCG,Mukka Proteins Limited,FMCG & Food,1.69
+PLATIND,Capital Goods,Platinum Industries Limited,Capital Goods & Industrial Manufacturing,1.69
+ZUARIIND,Capital Goods,ZUARI INDUSTRIES LIMITED,Capital Goods & Industrial Manufacturing,1.68
+SUNCLAY,Auto,Sundaram Clayton Limited,Automobile & Auto Components,1.67
+KHAICHEM,Chemicals,Khaitan Chemicals & Fertilizers Limited,Chemicals,1.65
+KRISHIVAL,FMCG,Krishival Foods Limited,FMCG & Food,1.64
+PFS,Finance,PTC India Financial Services Limited,Banking & Financial Services,1.63
+ELPROINTL,Realty,Elpro International Limited,Real Estate,1.58
+SINDHUTRAD,Services,Sindhu Trade Links Limited,Business Services,1.52
+NITTAGELA,Chemicals,Nitta Gelatin India Limited,Chemicals,1.49
+TEXINFRA,Infra,Texmaco Infrastructure & Holdings Limited,Construction & Infrastructure,1.47
+KUANTUM,Forest Materials,Kuantum Papers Limited,Packaging & Paper,1.44
+KMSUGAR,FMCG,K.M.Sugar Mills Limited,FMCG & Food,1.4
+OMINFRAL,Infra,OM INFRA LIMITED,Construction & Infrastructure,1.4
+RAMKY,Infra,Ramky Infrastructure Limited,Construction & Infrastructure,1.4
+SANGAMIND,Textiles,Sangam (India) Limited,Textiles,1.4
+VENTIVE,Consumer Services,Ventive Hospitality Limited,"Hotels, Travel & Leisure",1.4
+PARKHOTELS,Consumer Services,Apeejay Surrendra Park Hotels Limited,"Hotels, Travel & Leisure",1.38
+SAHYADRI,Capital Goods,Sahyadri Industries Limited,Capital Goods & Industrial Manufacturing,1.37
+VASCONEQ,Auto,Vascon Engineers Limited,Automobile & Auto Components,1.37
+KAMAHOLD,Chemicals,Kama Holdings Limited,Chemicals,1.35
+SUPREMEINF,Infra,Supreme Infrastructure India Limited,Construction & Infrastructure,1.28
+PRIMESECU,Finance,Prime Securities Limited,Banking & Financial Services,1.27
+SICAGEN,Services,Sicagen India Limited,Trading & Distribution,1.27
+SILGO,Consumer Services,Silgo Retail Limited,Retail & Consumer,1.27
+MCLEODRUSS,FMCG,Mcleod Russel India Limited,FMCG & Food,1.26
+TCC,Realty,TCC Concept Limited,Real Estate,1.26
+SNOWMAN,Services,Snowman Logistics Limited,Logistics & Transportation,1.25
+NILE,Metal,Nile Limited,Metals & Mining,1.18
+RBZJEWEL,Consumer Services,RBZ Jewellers Limited,Retail & Consumer,1.15
+NRAIL,Capital Goods,N R Agarwal Industries Limited,Capital Goods & Industrial Manufacturing,1.11
+TERASOFT,IT,Tera Software Limited,Information Technology,1.1
+THEMISMED,Pharma,Themis Medicare Limited,Pharmaceuticals & Healthcare,1.09
+KOHINOOR,FMCG,Kohinoor Foods Limited,FMCG & Food,1.07
+SHALBY,Pharma,Shalby Limited,Pharmaceuticals & Healthcare,1.06
+OAL,Chemicals,Oriental Aromatics Limited,Chemicals,1.05
+TPLPLASTEH,Forest Materials,TPL Plastech Limited,Packaging & Paper,1.05
+TIPSFILMS,Media,Tips Films Limited,Media & Entertainment,1.04
+MEIL,Energy,Mangal Electrical Industries Limited,"Oil, Gas & Energy",1.03
+PILANIINVS,Finance,Pilani Investment and Industries Corporation Limited,Banking & Financial Services,1.03
+LIKHITHA,Infra,Likhitha Infrastructure Limited,Construction & Infrastructure,1.02
+REPRO,Media,Repro India Limited,Media & Entertainment,1.02
+TARACHAND,IT,Tara Chand InfraLogistic Solutions Limited,Information Technology,0.98
+NILASPACES,Realty,Nila Spaces Limited,Real Estate,0.96
+MANAKSTEEL,Metal,Manaksia Steels Limited,Metals & Mining,0.95
+REMSONSIND,Auto,Remsons Industries Limited,Automobile & Auto Components,0.93
+KSOLVES,IT,Ksolves India Limited,Information Technology,0.92
+MAANALU,Metal,Maan Aluminium Limited,Metals & Mining,0.92
+ORIENTBELL,Capital Goods,Orient Bell Limited,Capital Goods & Industrial Manufacturing,0.9
+PASHUPATI,Textiles,Pashupati Cotspin Limited,Textiles,0.89
+SANDESH,Media,The Sandesh Limited,Media & Entertainment,0.89
+URJA,Energy,Urja Global Limited,"Oil, Gas & Energy",0.89
+SCILAL,Services,Shipping Corporation of India Land and Assets Limited,Logistics & Transportation,0.88
+TIGERLOGS,Services,Tiger Logistics (India) Limited,Logistics & Transportation,0.88
+RANASUG,FMCG,Rana Sugars Limited,FMCG & Food,0.87
+SUDARCOLOR,Chemicals,Sudarshan Colorants India Limited,Chemicals,0.87
+UEL,Energy,Ujaas Energy Limited,"Oil, Gas & Energy",0.87
+PIGL,Energy,Power & Instrumentation (Gujarat) Limited,"Oil, Gas & Energy",0.86
+PRECOT,Textiles,Precot Limited,Textiles,0.85
+ROHLTD,Consumer Services,Royal Orchid Hotels Limited,"Hotels, Travel & Leisure",0.84
+VALIANTLAB,Pharma,Valiant Laboratories Limited,Pharmaceuticals & Healthcare,0.83
+SAGCEM,Metal,Sagar Cements Limited,Metals & Mining,0.82
+MANAKALUCO,Metal,Manaksia Aluminium Company Limited,Metals & Mining,0.81
+MINDTECK,IT,Mindteck (India) Limited,Information Technology,0.8
+RELIABLE,Services,Reliable Data Services Limited,Business Services,0.8
+XCHANGING,IT,Xchanging Solutions Limited,Information Technology,0.8
+KICL,Finance,Kalyani Investment Company Limited,Banking & Financial Services,0.79
+NATIONSTD,Metal,National Standard (India) Limited,Metals & Mining,0.79
+NCLIND,Metal,NCL Industries Limited,Metals & Mining,0.79
+TREJHARA,IT,TREJHARA SOLUTIONS LIMITED,Information Technology,0.78
+SGIL,Capital Goods,Synergy Green Industries Limited,Capital Goods & Industrial Manufacturing,0.77
+PVSL,Auto,Popular Vehicles and Services Limited,Automobile & Auto Components,0.76
+SONAMLTD,Consumer Durables,SONAM LIMITED,Consumer Durables & Appliances,0.76
+DISAQ,Capital Goods,Disa India Limited,Capital Goods & Industrial Manufacturing,0.71
+RUDRA,Infra,Rudra Global Infra Products Limited,Construction & Infrastructure,0.7
+PRIMO,Chemicals,Primo Chemicals Limited,Chemicals,0.69
+SUMMITSEC,Finance,Summit Securities Limited,Banking & Financial Services,0.67
+SEJALLTD,Capital Goods,Sejal Glass Limited,Capital Goods & Industrial Manufacturing,0.65
+NDTV,Media,New Delhi Television Limited,Media & Entertainment,0.63
+MANORG,Chemicals,Mangalam Organics Limited,Chemicals,0.62
+LANCORHOL,Realty,Lancor Holdings Limited,Real Estate,0.61
+MAFATIND,Capital Goods,Mafatlal Industries Limited,Capital Goods & Industrial Manufacturing,0.61
+OSWALGREEN,Chemicals,Oswal Greentech Limited,Chemicals,0.61
+RKSWAMY,Media,R K Swamy Limited,Media & Entertainment,0.61
+ZIMLAB,Pharma,Zim Laboratories Limited,Pharmaceuticals & Healthcare,0.61
+KOTARISUG,Chemicals,Kothari Sugars And Chemicals Limited,Chemicals,0.6
+SARLAPOLY,Textiles,Sarla Performance Fibers Limited,Textiles,0.6
+MIRZAINT,Consumer Services,Mirza International Limited,Retail & Consumer,0.59
+ORICONENT,Forest Materials,Oricon Enterprises Limited,Packaging & Paper,0.59
+TECHNVISN,IT,TechNVision Ventures Limited,Information Technology,0.59
+MUTHOOTCAP,Finance,Muthoot Capital Services Limited,Banking & Financial Services,0.57
+ZODIAC,Energy,Zodiac Energy Limited,"Oil, Gas & Energy",0.57
+SSDL,Consumer Services,Saraswati Saree Depot Limited,Retail & Consumer,0.56
+SOMICONVEY,Capital Goods,Somi Conveyor Beltings Limited,Capital Goods & Industrial Manufacturing,0.55
+STCINDIA,Services,The State Trading Corporation of India Limited,Trading & Distribution,0.55
+VAKRANGEE,IT,Vakrangee Limited,Information Technology,0.55
+ESSENTIA,Services,Integra Essentia Limited,Trading & Distribution,0.54
+ORIENTPPR,Capital Goods,Orient Paper & Industries Limited,Capital Goods & Industrial Manufacturing,0.54
+NIRLON,Realty,Nirlon Limited,Real Estate,0.53
+SCHAND,Media,S Chand And Company Limited,Media & Entertainment,0.52
+SHREDIGCEM,Metal,Shree Digvijay Cement Co.Ltd,Metals & Mining,0.52
+RADIANTCMS,Services,Radiant Cash Management Services Limited,Business Services,0.48
+WORTHPERI,Services,Worth Peripherals Limited,Trading & Distribution,0.48
+WSI,Capital Goods,W S Industries (I) Limited,Capital Goods & Industrial Manufacturing,0.48
+KOKUYOCMLN,Capital Goods,Kokuyo Camlin Limited,Capital Goods & Industrial Manufacturing,0.47
+RAMAPHO,Chemicals,Rama Phosphates Limited,Chemicals,0.46
+SREEL,Consumer Services,Sreeleathers Limited,Retail & Consumer,0.46
+KALYANIFRG,Auto,Kalyani Forge Limited,Automobile & Auto Components,0.44
+FILATFASH,Consumer Services,Filatex Fashions Limited,Retail & Consumer,0.43
+KNAGRI,FMCG,KN Agri Resources Limited,FMCG & Food,0.43
+MEDICAMEQ,Pharma,Medicamen Biotech Limited,Pharmaceuticals & Healthcare,0.43
+RUCHIRA,Forest Materials,Ruchira Papers Limited,Packaging & Paper,0.43
+TARMAT,Infra,Tarmat Limited,Construction & Infrastructure,0.43
+VMSTMT,Metal,VMS TMT Limited,Metals & Mining,0.43
+KSHITIJPOL,Forest Materials,Kshitij Polyline Limited,Packaging & Paper,0.42
+LGHL,Realty,Laxmi Goldorna House Limited,Real Estate,0.41
+LORDSCHLO,Chemicals,Lords Chloro Alkali Limited,Chemicals,0.41
+RAJSREESUG,Chemicals,Rajshree Sugars & Chemicals Limited,Chemicals,0.41
+SARVESHWAR,FMCG,Sarveshwar Foods Limited,FMCG & Food,0.41
+OSWALSEEDS,Chemicals,ShreeOswal Seeds And Chemicals Limited,Chemicals,0.4
+SUKHJITS,Chemicals,Sukhjit Starch & Chemicals Limited,Chemicals,0.4
+MCL,Metal,M TEK COPPER LIMITED,Metals & Mining,0.39
+TOLINS,Auto,Tolins Tyres Limited,Automobile & Auto Components,0.39
+TVTODAY,Telecom,TV Today Network Limited,Telecom & Communication,0.39
+VLSFINANCE,Finance,VLS Finance Limited,Banking & Financial Services,0.39
+ZFSTEERING,Auto,ZF Steering Gear (India) Limited,Automobile & Auto Components,0.38
+SHAHALLOYS,Metal,Shah Alloys Limited,Metals & Mining,0.37
+TREL,Realty,Transindia Real Estate Limited,Real Estate,0.37
+ORIENTCER,Capital Goods,ORIENT CERATECH LIMITED,Capital Goods & Industrial Manufacturing,0.35
+VHL,Textiles,Vardhman Holdings Limited,Textiles,0.35
+NATHBIOGEN,FMCG,Nath Bio-Genes (India) Limited,FMCG & Food,0.33
+PLAZACABLE,Capital Goods,Plaza Wires Limited,Capital Goods & Industrial Manufacturing,0.33
+TRACXN,IT,Tracxn Technologies Limited,Information Technology,0.33
+NAGREEKEXP,Services,Nagreeka Exports Limited,Logistics & Transportation,0.32
+STEELCITY,Finance,Steel City Securities Limited,Banking & Financial Services,0.32
+SADBHAV,Auto,Sadbhav Engineering Limited,Automobile & Auto Components,0.3
+SURANASOL,Energy,Surana Solar Limited,"Oil, Gas & Energy",0.3
+VINEETLAB,Pharma,Vineet Laboratories Limited,Pharmaceuticals & Healthcare,0.3
+MADRASFERT,Chemicals,Madras Fertilizers Limited,Chemicals,0.29
+MAHEPC,Infra,Mahindra EPC Irrigation Limited,Construction & Infrastructure,0.28
+PANSARI,Infra,Pansari Developers Limited,Construction & Infrastructure,0.28
+TOTAL,IT,Total Transport Systems Limited,Information Technology,0.28
+NDL,Textiles,Nandan Denim Limited,Textiles,0.27
+UNITEDPOLY,Textiles,United Polyfab Gujarat Limited,Textiles,0.27
+ZSARACOM,Finance,Saraswati Commercial India Limited,Banking & Financial Services,0.27
+LINC,Capital Goods,Linc Limited,Capital Goods & Industrial Manufacturing,0.26
+SPCENET,IT,Spacenet Enterprises India Limited,Information Technology,0.26
+UFO,Media,UFO Moviez India Limited,Media & Entertainment,0.26
+VIKASLIFE,Chemicals,Vikas Lifecare Limited,Chemicals,0.26
+VISHWARAJ,Capital Goods,Vishwaraj Sugar Industries Limited,Capital Goods & Industrial Manufacturing,0.26
+KRITINUT,FMCG,Kriti Nutrients Limited,FMCG & Food,0.25
+NIMBSPROJ,Infra,Nimbus Projects Limited,Construction & Infrastructure,0.25
+VRAJ,Metal,Vraj Iron and Steel Limited,Metals & Mining,0.25
+NBIFIN,Finance,N. B. I. Industrial Finance Company Limited,Banking & Financial Services,0.24
+OSWALAGRO,FMCG,Oswal Agro Mills Limited,FMCG & Food,0.23
+SRGHFL,Finance,SRG Housing Finance Limited,Banking & Financial Services,0.23
+NAHARCAP,Finance,Nahar Capital and Financial Services Limited,Banking & Financial Services,0.22
+MOHITIND,Capital Goods,Mohit Industries Limited,Capital Goods & Industrial Manufacturing,0.21
+RNBDENIMS,Textiles,R&B Denims Limited,Textiles,0.2
+STARTECK,Finance,Starteck Finance Limited,Banking & Financial Services,0.2
+WEALTH,Finance,Wealth First Portfolio Managers Limited,Banking & Financial Services,0.2
+ELCIDIN,Finance,EL CID Investments Limited,Banking & Financial Services,0.19
+KRITI,Capital Goods,Kriti Industries (India) Limited,Capital Goods & Industrial Manufacturing,0.19
+LATTEYS,Capital Goods,Latteys Industries Limited,Capital Goods & Industrial Manufacturing,0.19
+PAVNAIND,Capital Goods,Pavna Industries Limited,Capital Goods & Industrial Manufacturing,0.19
+SINCLAIR,Consumer Services,Sinclairs Hotels Limited,"Hotels, Travel & Leisure",0.19
+STEL,Finance,Stel Holdings Limited,Banking & Financial Services,0.19
+NIRAJ,Metal,Niraj Cement Structurals Limited,Metals & Mining,0.18
+SOFTTECH,Auto,Softtech Engineers Limited,Automobile & Auto Components,0.18
+VARDMNPOLY,Textiles,Vardhman Polytex Limited,Textiles,0.18
+STARPAPER,Textiles,Star Paper Mills Limited,Textiles,0.17
+VASWANI,Capital Goods,Vaswani Industries Limited,Capital Goods & Industrial Manufacturing,0.17
+KOTIC,Capital Goods,Kothari Industrial Corporation Limited,Capital Goods & Industrial Manufacturing,0.16
+LAL,Consumer Services,Lorenzini Apparels Limited,Retail & Consumer,0.16
+LOTUSEYE,Pharma,Lotus Eye Hospital and Institute Limited,Pharmaceuticals & Healthcare,0.16
+SPENCERS,Consumer Services,Spencer's Retail Limited,Retail & Consumer,0.16
+SUPREME,Consumer Services,Supreme Holdings & Hospitality (India) Limited,"Hotels, Travel & Leisure",0.16
+VSTL,Metal,Vibhor Steel Tubes Limited,Metals & Mining,0.16
+SRD,Chemicals,Shankar Lal Rampal Dye-Chem Limited,Chemicals,0.15
+TEAMGTY,FMCG,Team India Guaranty Limited,Agriculture & Seeds,0.15
+VAISHALI,Pharma,Vaishali Pharma Limited,Pharmaceuticals & Healthcare,0.15
+NILAINFRA,Infra,Nila Infrastructures Limited,Construction & Infrastructure,0.14
+PODDARMENT,Chemicals,Poddar Pigments Limited,Chemicals,0.14
+SURANAT&P,Telecom,Surana Telecom and Power Limited,Telecom & Communication,0.14
+MEGASTAR,FMCG,Megastar Foods Limited,FMCG & Food,0.13
+PRAXIS,Consumer Services,Praxis Home Retail Limited,Retail & Consumer,0.13
+RAJPALAYAM,Textiles,Rajapalayam Mills Limited,Textiles,0.12
+SILINV,Finance,SIL Investments Limited,Banking & Financial Services,0.12
+SURYALA,Textiles,Suryalata Spinning Mills Limited,Textiles,0.12
+NIBL,Auto,NRB Industrial Bearings Limited,Automobile & Auto Components,0.11
+PAR,Pharma,Par Drugs And Chemicals Limited,Pharmaceuticals & Healthcare,0.11
+REGENCERAM,Metal,Regency Ceramics Limited,Metals & Mining,0.11
+SAHLIBHFI,Finance,Shalibhadra Finance Limited,Banking & Financial Services,0.11
+SOMATEX,Capital Goods,Soma Textiles & Industries Limited,Capital Goods & Industrial Manufacturing,0.11
+MADHAVIPL,Infra,Madhav Infra Projects Limited,Construction & Infrastructure,0.1
+MMWL,Media,Media Matrix Worldwide Limited,Media & Entertainment,0.1
+MONEYBOXX,Finance,Moneyboxx Finance Limited,Banking & Financial Services,0.1
+PKTEA,FMCG,The Peria Karamalai Tea & Produce Company Limited,Agriculture & Seeds,0.1
+RKEC,Infra,RKEC Projects Limited,Construction & Infrastructure,0.1
+SUPERHOUSE,Consumer Services,Superhouse Limited,Retail & Consumer,0.1
+TARAPUR,Energy,Tarapur Transformers Limited,"Oil, Gas & Energy",0.1
+UNITEDTEA,Infra,The United Nilgiri Tea Estates Company Limited,Construction & Infrastructure,0.1
+VIPCLOTHNG,Consumer Services,VIP Clothing Limited,Retail & Consumer,0.1
+NDGL,FMCG,Naga Dhunseri Group Limited,FMCG & Food,0.09
+PARASPETRO,Energy,Paras Petrofils Limited,"Oil, Gas & Energy",0.09
+PRAENG,Auto,Prajay Engineers Syndicate Limited,Automobile & Auto Components,0.09
+MALUPAPER,Textiles,Malu Paper Mills Limited,Textiles,0.08
+MOKSH,Consumer Services,Moksh Ornaments Limited,Retail & Consumer,0.08
+SHIVATEX,Textiles,Shiva Texyarn Limited,Textiles,0.08
+SHRADHA,Realty,Shradha Realty Limited,Real Estate,0.08
+SHREYANIND,Capital Goods,Shreyans Industries Limited,Capital Goods & Industrial Manufacturing,0.08
+VIRINCHI,IT,Virinchi Limited,Information Technology,0.08
+XELPMOC,IT,Xelpmoc Design And Tech Limited,Information Technology,0.08
+KOTHARIPRO,Services,Kothari Products Limited,Trading & Distribution,0.07
+MAGNUM,Forest Materials,Magnum Ventures Limited,Packaging & Paper,0.07
+NITIRAJ,Auto,Nitiraj Engineers Limited,Automobile & Auto Components,0.07
+RAJMET,Metal,Rajnandini Metal Limited,Metals & Mining,0.07
+RAJTV,Telecom,Raj Television Network Limited,Telecom & Communication,0.07
+RSSOFTWARE,IT,R. S. Software (India) Limited,Information Technology,0.07
+RVTH,Capital Goods,Revathi Equipment India Limited,Capital Goods & Industrial Manufacturing,0.07
+SURAJLTD,Metal,Suraj Limited,Metals & Mining,0.07
+MANGALAM,Pharma,Mangalam Drugs And Organics Limited,Pharmaceuticals & Healthcare,0.06
+MBLINFRA,Infra,MBL Infrastructure Limited,Construction & Infrastructure,0.06
+MODIRUBBER,Chemicals,Modi Rubber Limited,Chemicals,0.06
+ORCHASP,IT,Orchasp Limited,Information Technology,0.06
+PIONEEREMB,Textiles,Pioneer Embroideries Limited,Textiles,0.06
+RELCHEMQ,Chemicals,Reliance Chemotex Industries Limited,Chemicals,0.06
+RHL,Consumer Services,Robust Hotels Limited,"Hotels, Travel & Leisure",0.06
+SHBAJRG,Metal,Shri Bajrang Alliance Limited,Metals & Mining,0.06
+THEINVEST,Finance,The Investment Trust Of India Limited,Banking & Financial Services,0.06
+UNIENTER,Chemicals,Uniphos Enterprises Limited,Chemicals,0.06
+GAYAHWS,Infra,Gayatri Highways Limited,Construction & Infrastructure,0.05
+KANCHI,Chemicals,Kanchi Karpooram Limited,Chemicals,0.05
+KSR,Consumer Services,KSR Footwear Limited,Retail & Consumer,0.05
+LAXMICOT,Textiles,Laxmi Cotspin Limited,Textiles,0.05
+MURUDCERA,Metal,Murudeshwar Ceramics Limited,Metals & Mining,0.05
+PILITA,Consumer Services,PIL ITALICA LIFESTYLE LIMITED,Retail & Consumer,0.05
+RADIOCITY,Media,Music Broadcast Limited,Media & Entertainment,0.05
+SMLT,Metal,Sarthak Metals Limited,Metals & Mining,0.05
+TGBHOTELS,Consumer Services,TGB Banquets And Hotels Limited,"Hotels, Travel & Leisure",0.05
+USK,Infra,Udayshivakumar Infra Limited,Construction & Infrastructure,0.05
+KAKATCEM,Metal,Kakatiya Cement Sugar & Industries Limited,Metals & Mining,0.04
+KEYFINSERV,Finance,Keynote Financial Services Limited,Banking & Financial Services,0.04
+LFIC,Finance,Lakshmi Finance & Industrial Corporation Limited,Banking & Financial Services,0.04
+MITTAL,Consumer Services,Mittal Life Style Limited,Retail & Consumer,0.04
+MKPL,FMCG,M K Proteins Limited,FMCG & Food,0.04
+PRAKASHSTL,Metal,Prakash Steelage Limited,Metals & Mining,0.04
+RRIL,Services,RRIL Limited,Business Services,0.04
+RVHL,Realty,Ravinder Heights Limited,Real Estate,0.04
+SAMPANN,FMCG,Sampann Utpadan India Limited,FMCG & Food,0.04
+SAPPL,Forest Materials,Shree Ajit Pulp & Paper Limited,Packaging & Paper,0.04
+SBGLP,Realty,Suratwwala Business Group Limited,Real Estate,0.04
+TECILCHEM,Energy,TECIL Chemicals and Hydro Power Limited,"Oil, Gas & Energy",0.04
+WIPL,Forest Materials,The Western India Plywoods Limited,Packaging & Paper,0.04
+ZENITHSTL,Metal,Zenith Steel Pipes & Industries Limited,Metals & Mining,0.04
+AGRITECH,FMCG,Agri-Tech (India) Limited,FMCG & Food,0.03
+GRANDOAK,Auto,Grand Oak Canyons Distillery Limited,Automobile & Auto Components,0.03
+KARMAENG,Energy,Karma Energy Limited,"Oil, Gas & Energy",0.03
+KIRANVYPAR,Finance,Kiran Vyapar Limited,Banking & Financial Services,0.03
+KREBSBIO,Chemicals,Krebs Biochemicals and Industries Limited,Chemicals,0.03
+LAHOTIOV,Services,Lahoti Overseas Limited,Trading & Distribution,0.03
+LCCINFOTEC,IT,LCC Infotech Limited,Information Technology,0.03
+LIBAS,FMCG,Libas Consumer Products Limited,FMCG & Food,0.03
+LOYALTEX,Textiles,Loyal Textile Mills Limited,Textiles,0.03
+ORIENTALTL,Metal,Oriental Trimex Limited,Metals & Mining,0.03
+ORTINGLOBE,IT,ORTIN GLOBAL LIMITED,Information Technology,0.03
+QUINT,IT,Quint Digital Limited,Information Technology,0.03
+SECMARK,IT,SecMark Consultancy Limited,Information Technology,0.03
+SECURKLOUD,IT,SECUREKLOUD TECHNOLOGIES LIMITED,Information Technology,0.03
+SHANTI,FMCG,Shanti Overseas (India) Limited,FMCG & Food,0.03
+SILLYMONKS,Media,Silly Monks Entertainment Limited,Media & Entertainment,0.03
+ZODIACLOTH,Consumer Services,Zodiac Clothing Company Limited,Retail & Consumer,0.03
+3PLAND,Realty,3P Land Holdings Limited,Real Estate,0.02
+BOHRAIND,Capital Goods,Bohra Industries Limited,Capital Goods & Industrial Manufacturing,0.02
+GUJRAFFIA,Capital Goods,Gujarat Raffia Industries Limited,Capital Goods & Industrial Manufacturing,0.02
+HBESD,Realty,HB Estate Developers Limited,Real Estate,0.02
+HEADSUP,IT,Heads UP Ventures Limited,Information Technology,0.02
+KANANIIND,Capital Goods,Kanani Industries Limited,Capital Goods & Industrial Manufacturing,0.02
+LEXUS,Capital Goods,Lexus Granito (India) Limited,Capital Goods & Industrial Manufacturing,0.02
+MCCHRLS-B,Consumer Services,Mac Charles India Limited,"Hotels, Travel & Leisure",0.02
+NEAGI,Capital Goods,Neelamalai Agro Industries Limited,Capital Goods & Industrial Manufacturing,0.02
+ODIGMA,IT,Odigma Consultancy Solutions Limited,Information Technology,0.02
+PALASHSECU,Finance,Palash Securities Limited,Banking & Financial Services,0.02
+PML,Services,Paul Merchants Limited,Trading & Distribution,0.02
+PNC,Telecom,Pritish Nandy Communications Limited,Telecom & Communication,0.02
+RADAAN,Media,Radaan Mediaworks India Limited,Media & Entertainment,0.02
+RKDL,Auto,Ravi Kumar Distilleries Limited,Automobile & Auto Components,0.02
+RUCHINFRA,Infra,Ruchi Infrastructure Limited,Construction & Infrastructure,0.02
+SAGARDEEP,Metal,Sagardeep Alloys Limited,Metals & Mining,0.02
+SAMBHAAV,Media,Sambhaav Media Limited,Media & Entertainment,0.02
+SEMAC,Infra,Semac Construction Limited,Construction & Infrastructure,0.02
+SHIVAMILLS,Textiles,Shiva Mills Limited,Textiles,0.02
+SPLIL,Capital Goods,SPL Industries Limited,Capital Goods & Industrial Manufacturing,0.02
+TNTELE,Telecom,Tamilnadu Telecommunication Limited,Telecom & Communication,0.02
+UMESLTD,IT,Usha Martin Education & Solutions Limited,Information Technology,0.02
+ASTAR,Consumer Services,Asian Star Company Limited,Retail & Consumer,0.01
+CREATIVEYE,Media,Creative Eye Limited,Media & Entertainment,0.01
+DCMFINSERV,Finance,DCM Financial Services Limited,Banking & Financial Services,0.01
+GRAVISSHO,Consumer Services,Graviss Hospitality Limited,"Hotels, Travel & Leisure",0.01
+INFOMEDIA,Media,Infomedia Press Limited,Media & Entertainment,0.01
+KEEPLEARN,Consumer Services,DSJ Keep Learning Limited,Education & Training,0.01
+MADHAV,Metal,Madhav Marbles and Granites Limited,Metals & Mining,0.01
+MERCANTILE,Realty,Mercantile Ventures Limited,Real Estate,0.01
+MFML,Textiles,Mahalaxmi Fabric Mills Limited,Textiles,0.01
+NAGREEKCAP,Finance,Nagreeka Capital & Infrastructure Limited,Banking & Financial Services,0.01
+NORBTEAEXP,Services,Norben Tea & Exports Limited,Logistics & Transportation,0.01
+PEARLPOLY,Chemicals,Pearl Polymers Limited,Chemicals,0.01
+ROML,Energy,Raj Oil Mills Limited,"Oil, Gas & Energy",0.01
+SAYAJIHOTL,Consumer Services,Sayaji Hotels Limited,"Hotels, Travel & Leisure",0.01
+SHYAMTEL,Telecom,Shyam Telecom Limited,Telecom & Communication,0.01
+SVPGLOB,Textiles,SVP GLOBAL TEXTILES LIMITED,Textiles,0.01
+TFL,Finance,Transwarranty Finance Limited,Banking & Financial Services,0.01
+TOKYOPLAST,Forest Materials,Tokyo Plast International Limited,Packaging & Paper,0.01
+VIVIDHA,Textiles,Visagar Polytex Limited,Textiles,0.01
+WILLAMAGOR,FMCG,Williamson Magor & Company Limited,Agriculture & Seeds,0.01
+BLUECHIP,Finance,Blue Chip India Limited,Banking & Financial Services,0.0
+KHANDSE,Finance,Khandwala Securities Limited,Banking & Financial Services,0.0
+MASKINVEST,Finance,Mask Investments Limited,Banking & Financial Services,0.0
+NEXTMEDIA,Media,Next Mediaworks Limited,Media & Entertainment,0.0
+NIRAJISPAT,Capital Goods,Niraj Ispat Industries Limited,Capital Goods & Industrial Manufacturing,0.0
+SHRIKRISH,Realty,Shri Krishna Devcon Limited,Real Estate,0.0
+UNIINFO,Telecom,Uniinfo Telecom Services Limited,Telecom & Communication,0.0
+AARNAV,Textiles,,Textiles,
