@@ -822,7 +822,20 @@ async def run_validation_scan(
         tech = technical_map.get(symbol)
         fund = fundamental_map.get(symbol)
         sent = sentiment_map.get(symbol)
-        if tech is not None and fund is not None and sent is not None:
+        # PHASE 0 FIX: only TECHNICALS are mandatory here.
+        #
+        # This guard used to require all three snapshots. `evaluate_symbol_quality`
+        # was made None-tolerant in Phase 0 (missing components redistribute their
+        # weight) but this caller was not updated — so with PHASE0_NO_SYNTHETIC=1,
+        # where `analyze_news_sentiment` correctly returns {} because no news API
+        # is wired, `sent` was None for EVERY symbol, the quality gate was never
+        # evaluated at all, and layer2_pass stayed False universally.
+        #
+        # Measured on a 400-symbol production sample: L2 collapsed 395 → 0 and,
+        # with the strict funnel on, final_selected went 6 → 0 on both books.
+        # A genuinely absent provider must degrade the score, not silently void
+        # the entire layer.
+        if tech is not None:
             quality = evaluate_symbol_quality(symbol, tech, fund, sent)
             record.layer2_pass = quality.passed
             record.quality = {
@@ -830,8 +843,14 @@ async def run_validation_scan(
                 "reasons": quality.reasons,
                 "data_authenticity": quality.data_authenticity,
                 "technical_score": round(float(getattr(tech, "technical_score", 0)) * 100, 2),
-                "fundamental_score": round(float(getattr(fund, "fundamental_score", 0)) * 100, 2),
-                "sentiment_score": round(float(getattr(sent, "sentiment_score", 0)) * 100, 2),
+                "fundamental_score": (
+                    round(float(getattr(fund, "fundamental_score", 0)) * 100, 2)
+                    if fund is not None else None
+                ),
+                "sentiment_score": (
+                    round(float(getattr(sent, "sentiment_score", 0)) * 100, 2)
+                    if sent is not None else None
+                ),
             }
             if not quality.passed:
                 for reason in _quality_reasons(quality.reasons):
