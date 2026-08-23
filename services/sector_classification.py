@@ -132,6 +132,43 @@ def _bare(symbol: str) -> str:
     return str(symbol or "").replace("NSE:", "").replace(".NS", "").strip().upper()
 
 
+_OVERRIDE_PATH = Path(
+    os.getenv("SECTOR_OVERRIDES_PATH", str(_ROOT / "data" / "sector_overrides.csv"))
+)
+_overrides: dict[str, str] | None = None
+
+
+def load_overrides(*, refresh: bool = False) -> dict[str, str]:
+    """Hand-assigned sectors — the highest-priority tier.
+
+    A two-column CSV (`symbol,sector`) maintained by the owner. It exists because
+    reference-data coverage is a limitation of our sources, not a property of the
+    company: a stock outside the NIFTY Total Market list is often exactly the
+    small/micro cap worth finding. Rather than let a missing row decide what the
+    engine may consider, anything identifiable can be assigned by hand here.
+
+    Unknown/blank rows are ignored, so a partially-filled sheet is safe to ship.
+    """
+    global _overrides
+    if _overrides is not None and not refresh:
+        return _overrides
+    out: dict[str, str] = {}
+    if _OVERRIDE_PATH.exists():
+        try:
+            with _OVERRIDE_PATH.open(encoding="utf-8-sig", newline="") as fh:
+                for row in csv.DictReader(fh):
+                    sym = _bare(row.get("symbol") or row.get("SYMBOL") or "")
+                    sec = str(row.get("sector") or row.get("SECTOR") or "").strip()
+                    if sym and sec and sec.lower() not in ("unknown", "unassigned", "na", "-"):
+                        out[sym] = sec
+        except Exception as exc:
+            log.warning("sector overrides unreadable (%s): %s", _OVERRIDE_PATH, exc)
+    if out:
+        log.info("sector overrides: %d hand-assigned symbols", len(out))
+    _overrides = out
+    return out
+
+
 # ── tier 1: NSE official industry ─────────────────────────────────────────────
 
 def _cache_is_fresh(path: Path, max_age_days: int = 7) -> bool:
@@ -282,6 +319,10 @@ def resolve_sector(symbol: str) -> str:
             nse = {}
         _memo = {sym: _NSE_TO_LEGACY.get(ind, ind) for sym, ind in nse.items()}
 
+    hand = load_overrides().get(key)
+    if hand:
+        return hand
+
     hit = _memo.get(key)
     if hit:
         return hit
@@ -299,14 +340,18 @@ def coverage_report(symbols: list[str]) -> dict:
     """How much of a universe we can actually classify, by tier. Used by the
     Phase-0 validation check — a coverage number nobody measures is a coverage
     number nobody can trust."""
-    tiers = {"nse_official": 0, "yfinance": 0, "legacy": 0, "unknown": 0}
+    tiers = {"manual": 0, "nse_official": 0, "yfinance": 0, "legacy": 0, "unknown": 0}
     sectors: dict[str, int] = {}
     if _memo is None:
         resolve_sector("RELIANCE")  # prime the memo
     memo = _memo or {}
+    hand = load_overrides()
     for symbol in symbols:
         key = _bare(symbol)
-        if key in memo:
+        if key in hand:
+            tiers["manual"] += 1
+            sector = hand[key]
+        elif key in memo:
             tiers["nse_official"] += 1
             sector = memo[key]
         elif _yfinance_sector(key):
