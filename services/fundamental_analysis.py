@@ -103,8 +103,28 @@ def _weighted_score(parts: list[tuple[float, float]]) -> float:
     return sum(v * w for v, w in parts) / total_w
 
 
+def _num(v) -> float | None:
+    """Coerce a provider value to a finite float, or None.
+
+    yfinance occasionally returns a STRING (or NaN) where a number is expected.
+    Every `_norm_*` helper below then did `value <= 0` and raised
+    `'<=' not supported between instances of 'str' and 'int'`, which
+    `analyze_fundamentals` swallowed as a gather error — silently dropping the
+    whole symbol. That cost both fundamentals AND sector coverage, since the
+    sector tier-2 lookup reads the same cached snapshot.
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
 def _norm_pe(pe: float | None) -> float:
     """High PE = lower value score (growth already priced in)."""
+    pe = _num(pe)
     if pe is None or pe <= 0:
         return 0.50
     # PE 8 → 0.85, PE 25 → 0.55, PE 60+ → 0.20
@@ -112,6 +132,7 @@ def _norm_pe(pe: float | None) -> float:
 
 
 def _norm_pb(pb: float | None) -> float:
+    pb = _num(pb)
     if pb is None or pb <= 0:
         return 0.50
     # PB 1 → 0.90, PB 5 → 0.55, PB 15 → 0.20
@@ -120,6 +141,7 @@ def _norm_pb(pb: float | None) -> float:
 
 def _norm_roe(roe_pct: float | None) -> float:
     """ROE: 25%+ = great, <8% = weak."""
+    roe_pct = _num(roe_pct)
     if roe_pct is None:
         return 0.50
     return _clamp01((roe_pct - 5.0) / 30.0)
@@ -127,6 +149,7 @@ def _norm_roe(roe_pct: float | None) -> float:
 
 def _norm_revenue_growth(g: float | None) -> float:
     """yfinance revenueGrowth is a ratio (0.12 = 12%). 30%+ = great."""
+    g = _num(g)
     if g is None:
         return 0.50
     pct = g * 100
@@ -134,6 +157,7 @@ def _norm_revenue_growth(g: float | None) -> float:
 
 
 def _norm_earnings_growth(g: float | None) -> float:
+    g = _num(g)
     if g is None:
         return 0.50
     pct = g * 100
@@ -142,6 +166,7 @@ def _norm_earnings_growth(g: float | None) -> float:
 
 def _norm_debt_equity(de: float | None) -> float:
     """Lower D/E = better quality debt. 0 = 1.0, 2.0 = 0.5, 4+ = 0.0."""
+    de = _num(de)
     if de is None:
         return 0.55
     return _clamp01(1.0 - (de / 4.0))
@@ -149,6 +174,7 @@ def _norm_debt_equity(de: float | None) -> float:
 
 def _norm_promoter(pct: float | None) -> float:
     """50%+ is high promoter; 25% is low."""
+    pct = _num(pct)
     if pct is None:
         return 0.55
     return _clamp01(pct / 75.0)
@@ -156,6 +182,7 @@ def _norm_promoter(pct: float | None) -> float:
 
 def _norm_institutional(pct: float | None) -> float:
     """20%+ institutional = strong accumulation signal."""
+    pct = _num(pct)
     if pct is None:
         return 0.50
     return _clamp01(pct / 40.0)
@@ -187,22 +214,22 @@ def _fetch_yf_info(symbol: str) -> dict:
 
 def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
     """Map yfinance info dict → FundamentalSnapshot with normalised 0-1 scores."""
-    pe = info.get("trailingPE") or info.get("forwardPE")
-    pb = info.get("priceToBook")
-    roe_raw = info.get("returnOnEquity")  # ratio, e.g. 0.22 = 22%
+    pe = _num(info.get("trailingPE")) or _num(info.get("forwardPE"))
+    pb = _num(info.get("priceToBook"))
+    roe_raw = _num(info.get("returnOnEquity"))  # ratio, e.g. 0.22 = 22%
     roe_pct = (roe_raw * 100) if roe_raw is not None else None
     roce_pct = roe_pct  # yfinance doesn't expose ROCE; use ROE as proxy
 
-    rev_g = info.get("revenueGrowth")
-    earn_g = info.get("earningsGrowth")
-    de = info.get("debtToEquity")  # can be in %, e.g. 45.3 means 0.453
+    rev_g = _num(info.get("revenueGrowth"))
+    earn_g = _num(info.get("earningsGrowth"))
+    de = _num(info.get("debtToEquity"))  # can be in %, e.g. 45.3 means 0.453
     # yfinance sometimes gives debtToEquity as 45.3 (%) instead of 0.453
     if de is not None and de > 10:
         de = de / 100.0
 
-    promoter_pct = (info.get("heldPercentInsiders") or 0.0) * 100
-    inst_pct = (info.get("heldPercentInstitutions") or 0.0) * 100
-    mktcap = info.get("marketCap")
+    promoter_pct = (_num(info.get("heldPercentInsiders")) or 0.0) * 100
+    inst_pct = (_num(info.get("heldPercentInstitutions")) or 0.0) * 100
+    mktcap = _num(info.get("marketCap"))
     mktcap_cr = round(mktcap / 1e7, 1) if mktcap else None  # INR → crores
 
     earnings = _norm_earnings_growth(earn_g)

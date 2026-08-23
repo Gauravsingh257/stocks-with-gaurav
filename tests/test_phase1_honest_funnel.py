@@ -83,8 +83,19 @@ def test_unknown_passes_not_lagging_by_default(monkeypatch):
     assert _sector_allows("unknown", SECTOR_NOT_LAGGING) is True
 
 
-def test_unknown_blocked_under_strict_flag(monkeypatch):
+def test_unassigned_is_admissible_by_default(monkeypatch):
+    """PRODUCT DECISION: an unclassifiable stock must NOT be skipped. Coverage is
+    a limit of our reference data, not a property of the company — and the names
+    outside the NIFTY Total Market list are exactly the small/micro caps where
+    the outsized moves happen. Unassigned competes normally; only the
+    diversification cap constrains it."""
     monkeypatch.setenv("PHASE1_SECTOR_UNKNOWN_STRICT", "1")
+    monkeypatch.delenv("SECTOR_UNASSIGNED_BLOCKS", raising=False)
+    assert _sector_allows("unknown", SECTOR_NOT_LAGGING) is True
+
+
+def test_unassigned_can_be_blocked_by_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("SECTOR_UNASSIGNED_BLOCKS", "1")
     assert _sector_allows("unknown", SECTOR_NOT_LAGGING) is False
     # A known-good band must be untouched by the fix.
     assert _sector_allows("leading", SECTOR_NOT_LAGGING) is True
@@ -125,7 +136,7 @@ def test_unknown_capped_as_one_bucket_under_flag(monkeypatch):
     kept, diag = _diversify(monkeypatch, "Unknown", 6)
     assert len(kept) == 2
     assert diag["dropped"] == 4
-    assert diag["per_sector"] == {"Unknown": 2}
+    assert diag["per_sector"] == {"Unassigned": 2}
 
 
 def test_known_sector_cap_identical_under_both_flag_states(monkeypatch):
@@ -281,3 +292,39 @@ def test_exceptionalism_ceiling_still_applies_under_strict(monkeypatch):
     selected, n = apply_exceptionalism_final_gate(recs, soft_ceiling=2)
     assert len(selected) == 2 and n == 5
     assert [r.symbol for r in selected] == ["S4", "S3"]   # highest score first
+
+
+def test_unassigned_still_capped_for_concentration(monkeypatch):
+    """Admissible is not the same as unlimited — six unclassified names must not
+    all survive a max-2-per-sector cap."""
+    monkeypatch.setenv("PHASE1_SECTOR_UNKNOWN_STRICT", "1")
+    monkeypatch.setenv("MAX_PER_SECTOR", "2")
+    kept, diag = _diversify(monkeypatch, "Unknown", 6)
+    assert len(kept) == 2 and diag["dropped"] == 4
+
+
+def test_provider_type_errors_do_not_drop_a_symbol():
+    """yfinance sometimes returns a STRING where a number belongs. That raised
+    `'<=' not supported between str and int` inside _norm_*, which
+    analyze_fundamentals swallowed as a gather error — silently dropping the
+    symbol from BOTH fundamentals and sector coverage."""
+    from services.fundamental_analysis import _build_snapshot_from_info, _num
+
+    assert _num("12.5") == 12.5
+    assert _num("n/a") is None
+    assert _num(None) is None
+    assert _num(float("nan")) is None
+    assert _num(True) is None
+
+    hostile = {
+        "trailingPE": "18.4", "priceToBook": "not-a-number",
+        "returnOnEquity": "0.21", "revenueGrowth": float("nan"),
+        "earningsGrowth": "", "debtToEquity": "45.3",
+        "heldPercentInsiders": "0.55", "marketCap": "1234567890",
+        "sector": "Basic Materials", "industry": "Specialty Chemicals",
+    }
+    snap = _build_snapshot_from_info("NSE:TEST", hostile)   # must not raise
+    assert snap.data_source == "yfinance"
+    assert snap.sector == "Basic Materials"
+    assert snap.raw_pe == 18.4
+    assert snap.raw_pb is None
