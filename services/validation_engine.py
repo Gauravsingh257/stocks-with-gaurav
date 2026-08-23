@@ -18,6 +18,7 @@ from services.decision_engine import build_decision_output
 from services.discovery_engine import DiscoveryCandidate, _compute_features, synthesize_swing_levels
 from services.fundamental_analysis import analyze_fundamentals
 from services.news_analysis import analyze_news_sentiment
+from services.phase2_ranking import smc_as_score_enabled
 from services.research_levels import (
     NIFTY_DAILY_SYMBOL,
     build_longterm_trade_levels,
@@ -661,12 +662,19 @@ def apply_exceptionalism_final_gate(records, soft_ceiling: int = 20):
     # readmits a stock the funnel rejected. With the strict funnel off this is a
     # no-op and the gate behaves exactly as before.
     _strict = strict_funnel_enabled()
+    # PHASE 2: when SMC is a score, the ranked+budgeted set has ALREADY been
+    # written to final_selected by the caller. Intersecting with it here keeps
+    # this gate from re-admitting a stock the ranking left out — the same way it
+    # would otherwise silently void PHASE1_STRICT_FUNNEL.
+    _phase2 = smc_as_score_enabled()
     qualified = [
         r for r in records
         if getattr(r, "entry", None) is not None
         and (getattr(r, "exceptionalism", None) or {}).get("qualifies")
+        and (not _phase2 or r.final_selected)
         and (
             not _strict
+            or _phase2
             or (r.layer1_pass and r.layer2_pass and r.layer3_pass)
         )
     ]
@@ -947,7 +955,24 @@ async def run_validation_scan(
         #
         # After: a stock must clear all three. A tradable plan is still required,
         # because a pick with no entry is not actionable.
-        if strict_funnel_enabled():
+        if smc_as_score_enabled():
+            # PHASE 2: Layer 3 stops rejecting and starts ordering. Eligibility is
+            # L1 AND L2 plus a tradable plan; the SMC band is folded into the
+            # ranking score below and no longer decides admission on its own.
+            # The final set is trimmed to the SAME count the L3 gate would have
+            # produced (see the budget trim after this loop), so this changes
+            # WHICH stocks are chosen and never HOW MANY.
+            record.final_selected = bool(
+                record.layer1_pass and record.layer2_pass and record.entry is not None
+            )
+            if not record.final_selected:
+                if not record.layer1_pass:
+                    _append_unique(record.rejection_reason, "failed_layer1_discovery")
+                if not record.layer2_pass:
+                    _append_unique(record.rejection_reason, "failed_layer2_quality")
+                if record.entry is None:
+                    _append_unique(record.rejection_reason, "no_tradable_entry")
+        elif strict_funnel_enabled():
             record.final_selected = bool(
                 record.layer1_pass and record.layer2_pass and record.layer3_pass
             )
@@ -990,6 +1015,56 @@ async def run_validation_scan(
             except Exception as exc:
                 log.debug("exceptionalism compute failed for %s: %s", symbol, exc)
         records.append(record)
+
+    # PHASE 2 — rank the eligible pool and trim to the gate's own budget.
+    #
+    # The count is taken from what L1+L2+L3 would have selected on THIS scan, so
+    # the switch is a pure substitution: same number of ideas, chosen by score
+    # instead of by an SMC pass/fail. Everything downstream (governor caps,
+    # promotion room, the served feed) sees an unchanged shape.
+    #
+    # Scored within the scan, never against a fixed threshold — an absolute cut
+    # would drift with the market and quietly become a gate again.
+    phase2_selected: set[int] = set()
+    if smc_as_score_enabled():
+        try:
+            from services.phase2_ranking import select_top
+
+            gate_budget = sum(
+                1 for r in records
+                if r.layer1_pass and r.layer2_pass and r.layer3_pass and r.entry is not None
+            )
+            eligible = [r for r in records if r.final_selected]
+            ranked = select_top(
+                [{
+                    "key": id(r),
+                    "momentum20": (r.discovery or {}).get("momentum_20d_pct"),
+                    "momentum50": (r.discovery or {}).get("momentum_50d_pct"),
+                    "smc": _smc_score(r.smc, horizon),
+                    "quality": (r.quality or {}).get("score"),
+                } for r in eligible],
+                gate_budget,
+            )
+            phase2_selected = {row["key"] for row in ranked}
+            by_key = {row["key"]: row for row in ranked}
+            for r in records:
+                keep = id(r) in phase2_selected
+                if r.final_selected and not keep:
+                    _append_unique(r.rejection_reason, "below_rank_budget")
+                r.final_selected = keep
+                if keep:
+                    r.rejection_reason = []
+                    if r.smc is not None:
+                        row = by_key[id(r)]
+                        r.smc["phase2_score"] = row["score"]
+                        r.smc["phase2_components"] = row["components"]
+            log.info(
+                "[%s][PHASE2] SMC as score: %d eligible (L1+L2+entry) → %d selected "
+                "(budget from L1+L2+L3 = %d)",
+                horizon, len(eligible), len(phase2_selected), gate_budget,
+            )
+        except Exception as exc:
+            log.warning("[%s][PHASE2] ranking failed (%s) — leaving funnel result", horizon, exc)
 
     # PR1 — Regime Governor. When enabled, the graduated exposure gate replaces
     # the "always show >=5" force-fill: quantity becomes an output of quality
