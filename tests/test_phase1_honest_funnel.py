@@ -223,3 +223,61 @@ def test_outcomes_hit_rate_includes_expiries():
 def test_outcomes_expiry_share_is_reported():
     resolved, expired = 71, 61
     assert round(expired / resolved * 100, 2) == 85.92
+
+
+# ── exceptionalism must not readmit what the funnel rejected ──────────────────
+
+class _Rec:
+    """Minimal stand-in for LayerValidationRecord."""
+
+    def __init__(self, sym, l1, l2, l3, exc, entry=100.0):
+        self.symbol = sym
+        self.layer1_pass, self.layer2_pass, self.layer3_pass = l1, l2, l3
+        self.entry = entry
+        self.exceptionalism = {"qualifies": True, "exceptionalism": exc}
+        self.final_selected = False
+        self.rejection_reason = []
+
+
+def _records():
+    return [
+        _Rec("CLEAN", True, True, True, 95.0),      # passes the funnel
+        _Rec("NO_L1", False, True, True, 99.0),     # highest score, fails Layer 1
+        _Rec("NO_L2", True, False, True, 98.0),     # fails Layer 2
+    ]
+
+
+def test_exceptionalism_readmits_layer1_failures_by_default(monkeypatch):
+    """Documents the pre-existing behaviour that ships unchanged: the gate runs
+    last and rewrites final_selected using only `qualifies` + a tradable entry."""
+    from services.validation_engine import apply_exceptionalism_final_gate
+
+    monkeypatch.delenv("PHASE1_STRICT_FUNNEL", raising=False)
+    selected, n = apply_exceptionalism_final_gate(_records(), soft_ceiling=20)
+    assert {r.symbol for r in selected} == {"CLEAN", "NO_L1", "NO_L2"}
+    assert n == 3
+
+
+def test_exceptionalism_respects_strict_funnel(monkeypatch):
+    """With the strict funnel on, a stock the funnel rejected must NOT be
+    readmitted by scoring well — otherwise the flag is a no-op in production,
+    where EXCEPTIONALISM_ENABLED is set."""
+    from services.validation_engine import apply_exceptionalism_final_gate
+
+    monkeypatch.setenv("PHASE1_STRICT_FUNNEL", "1")
+    recs = _records()
+    selected, n = apply_exceptionalism_final_gate(recs, soft_ceiling=20)
+    assert {r.symbol for r in selected} == {"CLEAN"}
+    assert n == 1
+    # and the rejected ones must be marked rejected, not left stale
+    assert {r.symbol for r in recs if r.final_selected} == {"CLEAN"}
+
+
+def test_exceptionalism_ceiling_still_applies_under_strict(monkeypatch):
+    from services.validation_engine import apply_exceptionalism_final_gate
+
+    monkeypatch.setenv("PHASE1_STRICT_FUNNEL", "1")
+    recs = [_Rec(f"S{i}", True, True, True, 90.0 + i) for i in range(5)]
+    selected, n = apply_exceptionalism_final_gate(recs, soft_ceiling=2)
+    assert len(selected) == 2 and n == 5
+    assert [r.symbol for r in selected] == ["S4", "S3"]   # highest score first

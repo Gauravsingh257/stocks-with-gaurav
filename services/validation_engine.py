@@ -650,10 +650,25 @@ def apply_exceptionalism_final_gate(records, soft_ceiling: int = 20):
     record in place; returns (selected, n_qualified). Only called when
     EXCEPTIONALISM_ENABLED — when off, `final_selected` stays SMC-based.
     """
+    # PHASE 1: this gate runs LAST and rewrites `final_selected` on every record,
+    # so without this intersection it silently discards the funnel decision made
+    # earlier in the scan — PHASE1_STRICT_FUNNEL would be a no-op wherever
+    # EXCEPTIONALISM_ENABLED is set (which is the case in production). Measured
+    # on the logged corpus: 17.6% of SWING and 22.2% of LONGTERM final_selected
+    # rows had FAILED Layer 1 and survived exactly this way.
+    #
+    # Exceptionalism still decides ranking and the ceiling; it just no longer
+    # readmits a stock the funnel rejected. With the strict funnel off this is a
+    # no-op and the gate behaves exactly as before.
+    _strict = strict_funnel_enabled()
     qualified = [
         r for r in records
         if getattr(r, "entry", None) is not None
         and (getattr(r, "exceptionalism", None) or {}).get("qualifies")
+        and (
+            not _strict
+            or (r.layer1_pass and r.layer2_pass and r.layer3_pass)
+        )
     ]
     qualified.sort(
         key=lambda r: float((getattr(r, "exceptionalism", None) or {}).get("exceptionalism") or 0.0),
