@@ -291,10 +291,34 @@ def _sector_band(symbol: str, strength: dict | None) -> str:
         return "unknown"
 
 
+def sector_unknown_strict() -> bool:
+    """PHASE 1 / F-10 — stop treating an unclassifiable sector as a free pass.
+
+    Default OFF. Two behaviours change together when this is on:
+
+      * `require_not_lagging` is no longer satisfied by band "unknown". We cannot
+        assert a sector is NOT lagging when we do not know the sector.
+      * the diversification cap stops exempting Unknown/Others; they are capped
+        as a single bucket.
+
+    IMPORTANT INTERACTION: enable this together with `PHASE0_REAL_SECTORS`.
+    With real sectors OFF, ~96% of the universe resolves to "Others", so turning
+    this on alone would block nearly every candidate in a defensive regime. With
+    real sectors ON the unclassified share falls to roughly 1% and this becomes
+    the narrow correctness fix it is meant to be.
+
+    Note this does NOT guess a sector for anything — an unknown symbol stays
+    unknown, it simply stops being privileged for being unknown.
+    """
+    return _truthy(os.getenv("PHASE1_SECTOR_UNKNOWN_STRICT", "0"))
+
+
 def _sector_allows(band: str, requirement: str) -> bool:
     if requirement == SECTOR_LEADING:
         return band == "leading"
     if requirement == SECTOR_NOT_LAGGING:
+        if band == "unknown" and sector_unknown_strict():
+            return False
         return band != "lagging"
     return True  # SECTOR_NONE
 
@@ -480,12 +504,19 @@ def enforce_sector_diversification(items: list, symbol_of, strength: dict | None
     kept: list = []
     per_sector: dict[str, int] = {}
     dropped: list[dict] = []
+    strict = sector_unknown_strict()
     for it in items:
         sym = str(symbol_of(it) or "")
         sector = _sector_of(sym, strength)
         if sector in ("Unknown", "Others", ""):
-            kept.append(it)
-            continue
+            if not strict:
+                kept.append(it)
+                continue
+            # PHASE 1 / F-10: cap them as ONE bucket instead of waving them
+            # through. Before this, six unclassified names all survived a
+            # max_per_sector=2 cap while six Banking names were cut to two —
+            # so the cap bound on ~4% of candidates and was inert for the rest.
+            sector = "Unknown"
         used = per_sector.get(sector, 0)
         if used >= cap:
             dropped.append({"symbol": sym, "sector": sector})

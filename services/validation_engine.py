@@ -42,6 +42,33 @@ Horizon = Literal["SWING", "LONGTERM"]
 # to a fillable level. Default 30 reproduces the prior behaviour exactly.
 ENTRY_ANCHOR_MAX_GAP_PCT = float(os.getenv("ENTRY_ANCHOR_MAX_GAP_PCT", "30")) / 100.0
 
+# ── Phase 1 flags (all default OFF ⟹ behaviour identical to Phase 0) ─────────
+
+def strict_funnel_enabled() -> bool:
+    """`final_selected = L1 AND L2 AND L3`, and Layer 2 can no longer be forced
+    to pass by a downstream SMC score. Default OFF."""
+    return os.getenv("PHASE1_STRICT_FUNNEL", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def tight_entry_gap_enabled() -> bool:
+    """Anchor planned entries within a fillable distance of price. Default OFF."""
+    return os.getenv("PHASE1_TIGHT_ENTRY_GAP", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def entry_anchor_max_gap() -> float:
+    """Max |entry − CMP| / CMP before the entry is pulled toward price.
+
+    The historical 30% let a LIMIT entry sit a third of the way below a stock
+    already running — an order that cannot fill. Measured on 1,016 selected
+    symbols from one scan: only 51.6% were within ±5% of the plan and 10.1% were
+    more than 15% past it. `PHASE1_ENTRY_GAP_PCT` (default 8) is the fillability
+    target; it applies only when PHASE1_TIGHT_ENTRY_GAP is on, so the effect can
+    be measured against the unchanged baseline.
+    """
+    if tight_entry_gap_enabled():
+        return float(os.getenv("PHASE1_ENTRY_GAP_PCT", "8")) / 100.0
+    return ENTRY_ANCHOR_MAX_GAP_PCT
+
 # When enabled, cap the far target at the nearest prior swing-high resistance
 # above entry (floored at 1.5R, so a clean breakout with no overhead supply
 # keeps the full measured-move target). Default off → fixed 3.0R (LT 3.5R), so
@@ -395,7 +422,7 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     else:
         entry = round(close, 2)
         entry_type = "MARKET"
-    if abs(entry - close) / close > ENTRY_ANCHOR_MAX_GAP_PCT:
+    if abs(entry - close) / close > entry_anchor_max_gap():
         entry = round(close - atr * 0.5, 2)
     recent_low = min(float(c["low"]) for c in candles[-20:])
     base_risk = max(atr * (2.0 if horizon == "LONGTERM" else 1.3), entry * 0.03)
@@ -851,7 +878,11 @@ async def run_validation_scan(
         record.near_setup = 4.0 <= smc_band_score < 5.0
         if record.smc is not None:
             record.smc["near_setup"] = record.near_setup
-        if smc_band_score >= 3.5:
+        # PHASE 1: the SMC score used to retroactively force Layer 2 to "pass",
+        # which is why 2,192 of 2,200 symbols showed as clearing the quality gate.
+        # A downstream layer cannot vouch for an upstream one — that is what made
+        # the funnel report impossible numbers (L3 passing 336 while L1 passed 137).
+        if not strict_funnel_enabled() and smc_band_score >= 3.5:
             record.layer2_pass = True
         if not record.layer3_pass:
             for reason in (record.smc or {}).get("missing", []) or _smc_failure_reasons(df):
@@ -871,7 +902,30 @@ async def run_validation_scan(
             candles = df_to_candles(df)
             if candles:
                 record.cmp = float(candles[-1]["close"])
-        record.final_selected = record.layer3_pass
+        # PHASE 1: the funnel is now actually a funnel.
+        #
+        # Before: `final_selected = layer3_pass` — Layer 1 (discovery: momentum /
+        # volume / liquidity) and Layer 2 (quality: market cap / PE / trend) were
+        # computed, displayed and logged, but never consulted. Across the 84-day
+        # corpus that let 72.2% of "final trade ideas" through having FAILED the
+        # discovery layer — the one layer measured to carry predictive value
+        # (+1.9pp median forward return).
+        #
+        # After: a stock must clear all three. A tradable plan is still required,
+        # because a pick with no entry is not actionable.
+        if strict_funnel_enabled():
+            record.final_selected = bool(
+                record.layer1_pass and record.layer2_pass and record.layer3_pass
+            )
+            if not record.final_selected and record.layer3_pass:
+                # Structure was fine; say which upstream layer actually rejected it
+                # so the funnel report attributes the loss instead of hiding it.
+                if not record.layer1_pass:
+                    _append_unique(record.rejection_reason, "failed_layer1_discovery")
+                if not record.layer2_pass:
+                    _append_unique(record.rejection_reason, "failed_layer2_quality")
+        else:
+            record.final_selected = record.layer3_pass
         if record.final_selected:
             record.rejection_reason = []
 

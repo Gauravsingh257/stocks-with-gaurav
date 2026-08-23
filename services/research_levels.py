@@ -99,10 +99,28 @@ def daily_candles_to_weekly(candles: list[dict[str, Any]]) -> list[dict[str, Any
     return df_to_candles(w)
 
 
+def _max_entry_gap() -> float:
+    """Fillability tolerance between the planned entry and current price.
+
+    PHASE 1: `PHASE1_TIGHT_ENTRY_GAP` swaps the historical 35% for a defensible
+    ~8%. Shares one flag with services.validation_engine so the strict SMC path
+    and the scored-SMC fallback cannot disagree about what "fillable" means.
+    Default OFF ⟹ 35%, exactly as before.
+    """
+    try:
+        from services.validation_engine import tight_entry_gap_enabled
+
+        if tight_entry_gap_enabled():
+            return float(os.getenv("PHASE1_ENTRY_GAP_PCT", "8")) / 100.0
+    except Exception:
+        pass
+    return RESEARCH_MAX_ENTRY_VS_CLOSE_PCT
+
+
 def entry_vs_close_sane(entry: float, close: float) -> bool:
     if close <= 0:
         return False
-    return abs(entry - close) / close <= RESEARCH_MAX_ENTRY_VS_CLOSE_PCT
+    return abs(entry - close) / close <= _max_entry_gap()
 
 
 def _split_targets(direction: str, entry: float, target: float) -> tuple[float, float]:
@@ -379,7 +397,7 @@ def build_longterm_trade_levels(
             entry_zone = [round(entry - atr, 2), round(entry + atr * 0.5, 2)]
 
         # Sanity: entry must relate to close
-        if close > 0 and abs(entry - close) / close > 0.30:
+        if close > 0 and abs(entry - close) / close > _max_entry_gap():
             entry = round(close - 2 * atr, 2)
 
         wt = lt.get("weekly_trend", "?")
@@ -428,7 +446,7 @@ def build_longterm_trade_levels(
         stop = round(close - 3 * atr, 2)
         long_target = round(close * 1.20, 2)
         entry_zone = [round(close - atr, 2), round(close, 2)]
-    if close > 0 and abs(entry - close) / close > 0.30:
+    if close > 0 and abs(entry - close) / close > _max_entry_gap():
         entry = round(close - 2 * atr, 2)
     setup_note = f"LONGTERM_{wt}_52W({round((close-lo52)/lo52*100,0):.0f}%aboveLow)"
     return entry, stop, [long_target], long_target, entry_zone, setup_note, None
@@ -478,7 +496,7 @@ def build_longterm_watchlist_fallback(
         stop = round(close - 3 * atr, 2)
         long_target = round(close * 1.20, 2)
         entry_zone = [round(close - atr, 2), round(close, 2)]
-    if close > 0 and abs(entry - close) / close > 0.30:
+    if close > 0 and abs(entry - close) / close > _max_entry_gap():
         entry = round(close - 2 * atr, 2)
     setup_note = (
         f"WATCHLIST_LONGTERM_{wt}_52W({round((close-lo52)/lo52*100,0):.0f}%aboveLow"
