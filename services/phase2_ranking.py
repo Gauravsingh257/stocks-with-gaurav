@@ -52,9 +52,28 @@ _ENV = {
 }
 
 
-def smc_as_score_enabled() -> bool:
-    """Master flag. OFF (default) ⟹ Layer 3 stays a hard gate, byte-identical."""
-    return os.getenv("PHASE2_SMC_AS_SCORE", "0").strip().lower() in ("1", "true", "yes", "on")
+def smc_as_score_enabled(horizon: str | None = None) -> bool:
+    """Master flag, scoped to the horizons it was actually validated on.
+
+    OFF (default) ⟹ Layer 3 stays a hard gate, byte-identical.
+
+    HORIZON SCOPE. The Phase 2 research measured SWING only, and the phase brief
+    was explicit that Long-Term must not change. The first cut of this flag read
+    the env var with no horizon condition, inside a function that runs for BOTH
+    horizons — so switching it on would also have re-ranked Long-Term, where
+    ~9.2% of picks would change and the agent auto-promotes into the live book
+    on the strength of them. Unvalidated, and on real positions.
+
+    `PHASE2_HORIZONS` (default "SWING") lists the horizons the ranking applies
+    to. Passing horizon=None keeps the bare flag reading for callers that only
+    need to know whether the feature is configured at all.
+    """
+    if os.getenv("PHASE2_SMC_AS_SCORE", "0").strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    if horizon is None:
+        return True
+    allowed = {h.strip().upper() for h in os.getenv("PHASE2_HORIZONS", "SWING").split(",") if h.strip()}
+    return str(horizon).strip().upper() in allowed
 
 
 def weights() -> dict[str, float]:

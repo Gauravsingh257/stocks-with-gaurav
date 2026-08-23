@@ -666,7 +666,12 @@ def apply_exceptionalism_final_gate(records, soft_ceiling: int = 20):
     # written to final_selected by the caller. Intersecting with it here keeps
     # this gate from re-admitting a stock the ranking left out — the same way it
     # would otherwise silently void PHASE1_STRICT_FUNNEL.
-    _phase2 = smc_as_score_enabled()
+    # A scan carries one horizon, so read it off the records rather than
+    # re-checking the bare flag — otherwise this intersection would apply on
+    # LONGTERM even though the ranking above deliberately skipped it, and every
+    # long-term pick would be dropped.
+    _horizon = next((getattr(r, "horizon", None) for r in records if getattr(r, "horizon", None)), None)
+    _phase2 = smc_as_score_enabled(_horizon)
     qualified = [
         r for r in records
         if getattr(r, "entry", None) is not None
@@ -955,7 +960,7 @@ async def run_validation_scan(
         #
         # After: a stock must clear all three. A tradable plan is still required,
         # because a pick with no entry is not actionable.
-        if smc_as_score_enabled():
+        if smc_as_score_enabled(horizon):
             # PHASE 2: Layer 3 stops rejecting and starts ordering. Eligibility is
             # L1 AND L2 plus a tradable plan; the SMC band is folded into the
             # ranking score below and no longer decides admission on its own.
@@ -1026,7 +1031,7 @@ async def run_validation_scan(
     # Scored within the scan, never against a fixed threshold — an absolute cut
     # would drift with the market and quietly become a gate again.
     phase2_selected: set[int] = set()
-    if smc_as_score_enabled():
+    if smc_as_score_enabled(horizon):
         try:
             from services.phase2_ranking import select_top
 
