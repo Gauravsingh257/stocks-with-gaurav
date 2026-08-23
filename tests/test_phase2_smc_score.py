@@ -249,3 +249,47 @@ def test_shipped_override_file_is_loadable_and_has_priority_entries():
     assert all(r["sector"].strip() for r in rows), "an override row has no sector"
     assert not any(r["sector"].strip().lower() in ("unknown", "unassigned") for r in rows), \
         "Unassigned must not be written as an override — it is the fallback, not an assignment"
+
+
+# ── horizon scope: validated on SWING, must not silently change Long-Term ────
+
+def test_flag_applies_only_to_swing_by_default(monkeypatch):
+    """The research measured SWING only and the phase brief said Long-Term must
+    not change — but Long-Term auto-promotes into the live book, so an
+    unscoped flag would move real positions on unvalidated evidence."""
+    monkeypatch.setenv("PHASE2_SMC_AS_SCORE", "1")
+    monkeypatch.delenv("PHASE2_HORIZONS", raising=False)
+    assert smc_as_score_enabled("SWING") is True
+    assert smc_as_score_enabled("LONGTERM") is False
+    assert smc_as_score_enabled(None) is True          # "is it configured at all"
+
+
+def test_horizon_scope_is_widenable_when_evidence_arrives(monkeypatch):
+    monkeypatch.setenv("PHASE2_SMC_AS_SCORE", "1")
+    monkeypatch.setenv("PHASE2_HORIZONS", "SWING,LONGTERM")
+    assert smc_as_score_enabled("SWING") is True
+    assert smc_as_score_enabled("LONGTERM") is True
+
+
+def test_scope_is_irrelevant_while_the_master_flag_is_off(monkeypatch):
+    monkeypatch.delenv("PHASE2_SMC_AS_SCORE", raising=False)
+    monkeypatch.setenv("PHASE2_HORIZONS", "SWING,LONGTERM")
+    for h in ("SWING", "LONGTERM", None):
+        assert smc_as_score_enabled(h) is False
+
+
+def test_longterm_exceptionalism_not_gutted_by_swing_only_scope(monkeypatch):
+    """With the ranking skipped on LONGTERM, the exceptionalism gate must NOT
+    intersect with final_selected — doing so would drop every long-term pick."""
+    from services.validation_engine import apply_exceptionalism_final_gate
+
+    monkeypatch.setenv("PHASE2_SMC_AS_SCORE", "1")
+    monkeypatch.delenv("PHASE2_HORIZONS", raising=False)
+    monkeypatch.delenv("PHASE1_STRICT_FUNNEL", raising=False)
+
+    recs = [_Rec("A", False, exc=80.0), _Rec("B", False, exc=99.0)]
+    for r in recs:
+        r.horizon = "LONGTERM"
+    selected, n = apply_exceptionalism_final_gate(recs, soft_ceiling=20)
+    assert {r.symbol for r in selected} == {"A", "B"}
+    assert n == 2
