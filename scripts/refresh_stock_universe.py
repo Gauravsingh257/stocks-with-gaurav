@@ -96,8 +96,12 @@ def fetch_one(symbol: str) -> dict:
     price = _num(info.get("currentPrice")) or _num(info.get("previousClose"))
     mcap = _num(info.get("marketCap"))
     hi52 = _num(info.get("fiftyTwoWeekHigh"))
+    # The provider reports debtToEquity as a PERCENT for NSE names, always:
+    # INFY 9.541 = 0.095x (debt-free), TCS 10.211 = 0.10x, TITAN 195.0 = 1.95x.
+    # An earlier "divide only when > 10" rule left INFY reading as 9.5x leverage
+    # — a debt-free company shown as one of the most indebted on the page.
     de = _num(info.get("debtToEquity"))
-    if de is not None and de > 10:          # provider sometimes reports % not ratio
+    if de is not None:
         de = de / 100.0
     roe = _num(info.get("returnOnEquity"))
     rev = _num(info.get("revenueGrowth"))
@@ -137,8 +141,20 @@ def main() -> int:
     import csv
 
     from dashboard.backend.db.universe import upsert_universe
+    from services.industry_map import canon_from_provider
     from services.instrument_type import EQUITY, classify
     from services.universe_manager import load_nse_universe
+
+    # Provider sector/industry already cached on disk, used by the live fallback.
+    provider_all: dict[str, dict] = {}
+    for cache in ("data/_unassigned_yf.json", "data/_provider_sectors.json"):
+        if os.path.exists(cache):
+            try:
+                for k, v in json.load(open(cache, encoding="utf-8")).items():
+                    provider_all.setdefault(k.upper(),
+                                            v if isinstance(v, dict) else {"sector": v})
+            except Exception:
+                pass
 
     # Sector map is authoritative; rebuild it first if it is missing.
     smap = {}
@@ -197,11 +213,35 @@ def main() -> int:
     except Exception as exc:
         log.info("no OHLC snapshot (%s) — turnover/1y left null", exc)
 
+    # The CSV map is a convenience cache built from one snapshot of the universe;
+    # the classifier is the source of truth. Falling back to it means a symbol the
+    # map has not seen yet (the universe drifts week to week — 190 names differed
+    # between the map and the live list) resolves properly instead of silently
+    # becoming "Unassigned".
+    _live_cache: dict[str, str] = {}
+
+    def _resolve_live(sym: str) -> str:
+        if sym in _live_cache:
+            return _live_cache[sym]
+        try:
+            from services.sector_classification import resolve_sector
+            out = resolve_sector(sym) or "Unassigned"
+        except Exception:
+            out = "Unassigned"
+        if out == "Unassigned":
+            live_f = fetched.get(sym) or {}
+            out = canon_from_provider(live_f.get("industry_raw"), live_f.get("sector_raw")) or "Unassigned"
+        if out == "Unassigned":
+            p = (provider_all.get(sym) or {})
+            out = canon_from_provider(p.get("industry"), p.get("sector")) or "Unassigned"
+        _live_cache[sym] = out
+        return out
+
     rows = []
     for sym in symbols:
         f = fetched.get(sym, {})
         m = smap.get(sym, {})
-        sector = m.get("sector") or "Unassigned"
+        sector = m.get("sector") or _resolve_live(sym)
         kind = classify(sym, m.get("company_name"))
         if sector in {"Sovereign Gold Bond", "Government Security", "Corporate Bond / NCD",
                       "SME Board", "SME Trading", "Trade-to-Trade", "Rights Entitlement",

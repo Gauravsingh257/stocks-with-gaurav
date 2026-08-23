@@ -176,3 +176,27 @@ def test_empty_provider_reply_is_retried(monkeypatch):
     out = r.fetch_one("TEST")
     assert calls["n"] >= 3
     assert out["pe"] == 20.0
+
+
+def test_debt_to_equity_is_always_a_percent():
+    """The provider reports debtToEquity as a PERCENT for NSE names, always.
+    An earlier 'divide only when > 10' rule left INFY at 9.541 — reading as 9.5x
+    leverage for a debt-free company, one of the most indebted rows on the page.
+    """
+    from scripts.refresh_stock_universe import _num
+
+    for raw, expected in ((9.541, 0.095), (10.211, 0.102), (36.653, 0.367),
+                          (195.001, 1.95), (3.016, 0.03)):
+        assert round(_num(raw) / 100.0, 3) == expected
+
+
+def test_sector_falls_back_to_the_live_classifier(monkeypatch, tmp_path):
+    """The CSV map is a cache built from one snapshot; the universe drifts. A
+    symbol the map has not seen must resolve through the classifier rather than
+    silently becoming Unassigned — 190 live symbols were missing from the map."""
+    import services.sector_classification as sc
+
+    monkeypatch.setattr(sc, "_memo", {"NEWCO": "Pharma"})
+    monkeypatch.setattr(sc, "_overrides", {})
+    monkeypatch.setattr(sc, "_OVERRIDE_PATH", tmp_path / "none.csv")
+    assert sc.resolve_sector("NEWCO") == "Pharma"
