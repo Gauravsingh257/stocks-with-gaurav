@@ -143,9 +143,9 @@ export function StockUniverse() {
             placeholder="Search symbol or company…"
             aria-label="Search symbol or company"
             style={{
-              width: "100%", padding: "8px 10px 8px 28px", fontSize: "0.82rem",
-              borderRadius: 8, border: "1px solid var(--border)",
-              background: "var(--bg-input, transparent)", color: "var(--text-primary)",
+              width: "100%", padding: "9px 10px 9px 30px", fontSize: "0.82rem",
+              borderRadius: 8, border: "1px solid var(--border-interactive)",
+              background: "var(--bg-field)", color: "var(--text-primary)",
             }}
           />
         </div>
@@ -154,8 +154,8 @@ export function StockUniverse() {
           onChange={(e) => setSector(e.target.value)}
           aria-label="Filter by sector"
           style={{
-            padding: "8px 10px", fontSize: "0.82rem", borderRadius: 8,
-            border: "1px solid var(--border)", background: "#0f1620",
+            padding: "9px 10px", fontSize: "0.82rem", borderRadius: 8,
+            border: "1px solid var(--border-interactive)", background: "var(--bg-field)",
             color: "var(--text-primary)",
           }}
         >
@@ -183,12 +183,23 @@ export function StockUniverse() {
               {COLUMNS.map((c) => (
                 <th
                   key={c.key}
-                  title={c.hint}
+                  title={`${c.hint} — click to sort`}
+                  data-sortable=""
+                  scope="col"
+                  aria-sort={sortKey === c.key ? (asc ? "ascending" : "descending") : "none"}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (sortKey === c.key) setAsc(!asc); else { setSortKey(c.key); setAsc(false); }
+                    }
+                  }}
                   onClick={() => { if (sortKey === c.key) setAsc(!asc); else { setSortKey(c.key); setAsc(false); } }}
                   style={{
                     textAlign: c.numeric && c.key !== "symbol" ? "right" : "left",
                     padding: "8px 10px", whiteSpace: "nowrap", cursor: "pointer",
-                    borderBottom: "1px solid var(--border)", color: "var(--text-dim)",
+                    borderBottom: "1px solid var(--border)",
+                    color: sortKey === c.key ? "var(--accent)" : "var(--text-dim)",
                     fontWeight: 600, fontSize: "0.7rem", letterSpacing: "0.03em",
                     textTransform: "uppercase", userSelect: "none",
                   }}
@@ -201,7 +212,7 @@ export function StockUniverse() {
           </thead>
           <tbody>
             {rows.slice(0, shown).map((r: StockUniverseRow) => (
-              <tr key={r.symbol}>
+              <tr key={r.symbol} className="row-clickable">
                 <td style={{ padding: "7px 10px", borderBottom: "1px solid var(--border-soft, var(--border))", whiteSpace: "nowrap" }}>
                   <div style={{ fontWeight: 600 }}>{r.symbol}</div>
                   {r.company_name && (
@@ -236,11 +247,8 @@ export function StockUniverse() {
       {rows.length > shown && (
         <button
           onClick={() => setShown(shown + 200)}
-          style={{
-            marginTop: 10, padding: "7px 14px", fontSize: "0.78rem", borderRadius: 8,
-            border: "1px solid var(--border)", background: "transparent",
-            color: "var(--text-primary)", cursor: "pointer",
-          }}
+          className="btn-accent"
+          style={{ marginTop: 10, fontSize: "0.78rem" }}
         >
           Show more ({(rows.length - shown).toLocaleString()} remaining)
         </button>

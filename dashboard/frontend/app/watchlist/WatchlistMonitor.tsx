@@ -232,7 +232,7 @@ function Inp({ label, v, on, num }: { label: string; v: string; on: (v: string) 
     <label style={{ display: "grid", gap: 3, fontSize: "0.7rem", color: "var(--text-secondary)" }}>
       {label}
       <input value={v} inputMode={num ? "decimal" : "text"} onChange={(e) => on(e.target.value)}
-        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "rgba(0,0,0,0.25)", color: "var(--text-primary)", fontSize: "0.82rem" }} />
+        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border-interactive)", background: "rgba(0,0,0,0.25)", color: "var(--text-primary)", fontSize: "0.82rem" }} />
     </label>
   );
 }

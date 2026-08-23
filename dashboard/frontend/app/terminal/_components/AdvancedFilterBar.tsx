@@ -86,7 +86,7 @@ export default function AdvancedFilterBar({ value, onChange, total, visible }: P
         style={{
           padding: "7px 10px",
           background: "rgba(255,255,255,0.04)",
-          border: "1px solid var(--border)",
+          border: "1px solid var(--border-interactive)",
           borderRadius: 8,
           color: "var(--text-primary)",
           fontSize: "0.74rem",
