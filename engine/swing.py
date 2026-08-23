@@ -63,6 +63,64 @@ SECTOR_MAP = {
 }
 
 
+def structural_targets_enabled() -> bool:
+    """PHASE 1 flag — derive the far target from real overhead structure instead
+    of a hardcoded R multiple. Default OFF."""
+    return os.getenv("PHASE1_STRUCTURAL_TARGETS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _pivot_highs_above(candles, level: float, left: int = 3, right: int = 3,
+                       lookback: int = 180) -> list[float]:
+    """Prior swing-high pivots strictly above `level`, oldest first.
+
+    Standard fixed-window fractal pivot — the same construction already used by
+    services.validation_engine._nearest_resistance_above. Duplicated here rather
+    than imported because engine.swing sits BELOW validation_engine in the import
+    graph and importing upward would be circular.
+    """
+    highs = [float(c["high"]) for c in candles[-lookback:]]
+    out: list[float] = []
+    for i in range(left, len(highs) - right):
+        h = highs[i]
+        if h > level and h == max(highs[i - left: i + right + 1]):
+            out.append(h)
+    return out
+
+
+def structural_target(candles, entry: float, risk: float, *, default_r: float,
+                      min_r: float = 1.5, max_r: float = 8.0) -> tuple[float, str]:
+    """Far target for a LONG, from structure when available.
+
+    Returns (target, basis).
+
+    WHY THIS EXISTS. Both books' targets were `entry + 3 * risk` with risk capped
+    at a fixed 5% (swing) / 8% (long-term). Upside was therefore pinned at
+    3 x 5% = 15% and 3 x 8% = 24% — which is why 119 of 168 long-term picks
+    carried a target of EXACTLY +24.00% and none exceeded +24.01%. That ceiling
+    was an arithmetic accident of two unrelated constants, not a decision.
+
+    With structure available the target becomes the nearest real overhead supply
+    above a `min_r` floor: it EXTENDS past the old ceiling when the next pivot is
+    further away, and pulls in when supply sits close. `max_r` keeps a runaway
+    pivot from producing an untradeable number. No new exit system is introduced
+    — only where the single existing target is placed.
+    """
+    if risk <= 0:
+        return round(entry + risk * default_r, 2), "fixed_r"
+    floor = entry + risk * min_r
+    pivots = [p for p in _pivot_highs_above(candles, floor) if p > floor]
+    if not pivots:
+        # Nothing overhead (e.g. an all-time-high breakout). There is no
+        # structural level to read, so keep the configured multiple rather than
+        # inventing a projection.
+        return round(entry + risk * default_r, 2), "fixed_r_no_overhead"
+    target = min(pivots)
+    ceiling = entry + risk * max_r
+    if target > ceiling:
+        return round(ceiling, 2), "structural_capped_at_max_r"
+    return round(target, 2), "structural"
+
+
 def get_sector(symbol: str) -> str:
     """Sector for a symbol.
 
@@ -380,7 +438,17 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
         sl_floor = round(entry * (1 - max_swing_sl_pct), 2)
         if sl < sl_floor:
             sl = sl_floor
-        target = round(entry + (entry - sl) * 3, 2)
+        # PHASE 1: the R multiple is config, not a magic number. Default 3.0
+        # reproduces the historical target exactly; combined with the 5% stop cap
+        # above it is what pinned swing upside at exactly 15%.
+        swing_target_r = float(os.getenv("SWING_TARGET_R", "3.0"))
+        if structural_targets_enabled():
+            target, target_basis = structural_target(
+                daily_data, entry, entry - sl, default_r=swing_target_r
+            )
+        else:
+            target = round(entry + (entry - sl) * swing_target_r, 2)
+            target_basis = "fixed_r"
     else:
         # SHORT entry: FVG midpoint > OB low > CHoCH level > CMP
         if fvg:
@@ -412,12 +480,23 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
         sl_ceil = round(entry * (1 + max_swing_sl_pct), 2)
         if sl > sl_ceil:
             sl = sl_ceil
-        target = round(entry - (sl - entry) * 3, 2)
+        # Research swing is long-only, so the SHORT branch never reaches the
+        # served feed; the multiple is shared for symmetry.
+        target = round(entry - (sl - entry) * float(os.getenv("SWING_TARGET_R", "3.0")), 2)
+        target_basis = "fixed_r"
 
     risk = abs(entry - sl)
     reward = abs(target - entry)
     rr = round(reward / risk, 2) if risk > 0 else 0
     potential_pct = round(reward / entry * 100, 1)
+    # PHASE 1 — the RR tautology.
+    # With the legacy fixed-3R target, `rr` is ALWAYS exactly 3.0 by
+    # construction. This point was therefore awarded to every single candidate
+    # (a constant offset masquerading as a quality signal) and the `rr < 2.5`
+    # clause in the gate below could never fire. Neither was removed, because
+    # with PHASE1_STRUCTURAL_TARGETS on `rr` genuinely varies and both start
+    # doing real work. With the flag off behaviour is unchanged — the point is
+    # still constant, which is now stated rather than hidden.
     if rr >= 3.0:
         score += 1; breakdown["rr"] = 1; reasons.append(f"RR: 1:{rr}")
     else:
@@ -447,6 +526,7 @@ def score_swing_candidate(symbol, daily_data, weekly_data, nifty_daily):
         "symbol": symbol, "direction": direction, "score": score,
         "entry": round(entry, 2), "sl": round(sl, 2), "target": round(target, 2),
         "entry_type": entry_type, "cmp": round(price, 2),
+        "target_basis": target_basis,
         "rr": rr, "potential_pct": potential_pct,
         "sector": get_sector(symbol), "weekly_trend": wt,
         "daily_structure": ds, "rs": rs, "volume": vs,
@@ -894,9 +974,19 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
     if sl < sl_floor:
         sl = sl_floor
 
-    # Target: 3R from weekly structure
+    # PHASE 1: default 3.0 x the 8% stop cap is exactly what pinned long-term
+    # upside at +24.00% on 119 of 168 picks — a book that could not express a
+    # multibagger even in principle. The multiple is now config, and with
+    # PHASE1_STRUCTURAL_TARGETS the target follows real overhead supply instead.
     risk = abs(entry - sl)
-    target = round(entry + risk * 3, 2)
+    lt_target_r = float(os.getenv("LONGTERM_TARGET_R", "3.0"))
+    if structural_targets_enabled():
+        target, target_basis = structural_target(
+            daily_data, entry, risk, default_r=lt_target_r
+        )
+    else:
+        target = round(entry + risk * lt_target_r, 2)
+        target_basis = "fixed_r"
 
     rr = round((target - entry) / max(risk, 0.01), 2)
     potential_pct = round((target - entry) / entry * 100, 1) if entry > 0 else 0
@@ -943,4 +1033,5 @@ def score_longterm_candidate(symbol, daily_data, weekly_data, nifty_daily):
         "pct_from_low": round(pct_from_low, 1),
         "chg_1m": chg_1m, "chg_3m": chg_3m,
         "entry_type": entry_type, "cmp": round(price, 2),
+        "target_basis": target_basis,
     }

@@ -572,8 +572,70 @@ def _sm_alert_active() -> bool:
     return os.getenv("EQUITY_STATE_MACHINE", "").strip().lower() == "alert"
 
 
+def unified_feed_enabled() -> bool:
+    """PHASE 1 — serve ONE authoritative final selection.
+
+    Default OFF. When on, the Swing/Long-Term research endpoints stop reading
+    `stock_recommendations` (written by services.ranking_engine) and read the
+    SAME `signals_log` final selection that services.idea_selector promotes into
+    the portfolio (via get_latest_signals_scan_report).
+
+    The teardown found these are two different engines producing two different
+    rankings on the same universe minutes apart — 3 long-term ideas from the
+    ranking run at 04:40 versus 20 from the validation scan at 04:42 — so the
+    list a user reads is not the list the book trades. This does not add a
+    selector; it removes one from the serving path.
+    """
+    return os.getenv("PHASE1_UNIFIED_FEED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _authoritative_rows(horizon: str, limit: int) -> list[dict] | None:
+    """Final-selected rows from the latest validation scan, shaped like
+    `get_stock_recommendations` so every downstream transform is untouched.
+
+    Returns None on any failure or when the scan has no final selections, so the
+    caller falls back to the legacy source rather than serving an empty page.
+    """
+    try:
+        from dashboard.backend.db import get_latest_signals_scan_report
+
+        report = get_latest_signals_scan_report(horizon=horizon.upper(), limit=max(limit * 6, 120))
+        if not report.get("available"):
+            return None
+        rows: list[dict] = []
+        for r in report.get("sample") or []:
+            if not r.get("final_selected") or not r.get("symbol") or not r.get("entry"):
+                continue
+            target = r.get("target")
+            rows.append({
+                "id": r.get("id"),
+                "symbol": r["symbol"],
+                "entry_price": float(r["entry"]),
+                "stop_loss": float(r["stop_loss"]) if r.get("stop_loss") is not None else None,
+                "targets": [float(target)] if target else [],
+                "long_term_target": float(target) if (target and horizon.upper() == "LONGTERM") else None,
+                "scan_cmp": float(r["cmp"]) if r.get("cmp") is not None else None,
+                "confidence_score": float(r.get("confidence") or 0),
+                "setup": r.get("setup"),
+                "entry_type": ((r.get("layer_details") or {}).get("smc") or {}).get("entry_type", "MARKET"),
+                "created_at": r.get("date"),
+                "expected_holding_period": "1-8 weeks" if horizon.upper() == "SWING" else "6-24 months",
+                "smc_evidence": (r.get("layer_details") or {}).get("smc"),
+                "target_source": "validation_scan",
+            })
+        rows.sort(key=lambda x: x["confidence_score"], reverse=True)
+        return rows[:limit] or None
+    except Exception as exc:
+        log.warning("[Phase1] unified feed unavailable (%s) — legacy source", exc)
+        return None
+
+
 def _swing_payload(limit: int) -> dict:
-    rows = get_stock_recommendations("SWING", limit=limit)
+    rows = None
+    if unified_feed_enabled():
+        rows = _authoritative_rows("SWING", limit)
+    if rows is None:
+        rows = get_stock_recommendations("SWING", limit=limit)
 
     # G2-6 Rung B: in =alert mode, surface the ISOLATED SWING_SM
     # planned-execution signals on the SAME swing page. They run through
@@ -719,7 +781,11 @@ def _swing_payload(limit: int) -> dict:
 
 
 def _longterm_payload(limit: int) -> dict:
-    rows = get_stock_recommendations("LONGTERM", limit=limit)
+    rows = None
+    if unified_feed_enabled():
+        rows = _authoritative_rows("LONGTERM", limit)
+    if rows is None:
+        rows = get_stock_recommendations("LONGTERM", limit=limit)
     runs = get_ranking_runs(horizon="LONGTERM", limit=1)
     last_scan = runs[0]["run_time"] if runs else None
 
@@ -2463,29 +2529,50 @@ def get_research_outcomes(
             elif pr < 0:
                 losses_r += abs(pr)
 
+    # PHASE 1 — expiries are outcomes, not omissions.
+    #
+    # `hit_rate_pct` counted only TARGET_HIT / (TARGET_HIT + STOP_HIT). For the
+    # long-term book 61 of 71 resolved picks (86%) expired without touching
+    # either level, so the headline was computed on the 14% that resolved
+    # decisively — reporting 66.7% while the recommendation ledger's all-in
+    # number over the same population was 26.8%.
+    #
+    # Nothing about the underlying rows changes here. The denominator is stated,
+    # the decisive-only figure is kept under an explicit name so the old
+    # behaviour is still inspectable, and expiries are surfaced everywhere.
     resolved = by_status["TARGET_HIT"] + by_status["STOP_HIT"] + by_status["EXPIRED"]
     decisive = by_status["TARGET_HIT"] + by_status["STOP_HIT"]
-    hit_rate = round(by_status["TARGET_HIT"] / decisive * 100, 2) if decisive else 0.0
+    hit_rate_decisive = round(by_status["TARGET_HIT"] / decisive * 100, 2) if decisive else 0.0
+    # An expiry is a non-win: capital was committed and the thesis did not pay.
+    hit_rate_resolved = round(by_status["TARGET_HIT"] / resolved * 100, 2) if resolved else 0.0
     avg_pnl_r = round(sum(pnl_vals) / len(pnl_vals), 3) if pnl_vals else 0.0
     profit_factor = round(wins_r / losses_r, 2) if losses_r > 0 else (wins_r if wins_r > 0 else 0.0)
 
-    # Per-setup breakdown (decisive trades only)
+    # Per-setup breakdown — expiries included, so a setup that mostly stalls can
+    # no longer look identical to one that mostly wins.
     by_setup: dict[str, dict] = {}
     for r in rows:
         st = (r["status"] or "").upper()
-        if st not in ("TARGET_HIT", "STOP_HIT"):
+        if st not in ("TARGET_HIT", "STOP_HIT", "EXPIRED"):
             continue
         setup = (r["setup"] or "UNKNOWN").upper()
-        bucket = by_setup.setdefault(setup, {"setup": setup, "wins": 0, "losses": 0})
+        bucket = by_setup.setdefault(
+            setup, {"setup": setup, "wins": 0, "losses": 0, "expired": 0}
+        )
         if st == "TARGET_HIT":
             bucket["wins"] += 1
-        else:
+        elif st == "STOP_HIT":
             bucket["losses"] += 1
+        else:
+            bucket["expired"] += 1
     setup_rows = []
     for s in by_setup.values():
-        n = s["wins"] + s["losses"]
-        s["total"] = n
-        s["hit_rate_pct"] = round(s["wins"] / n * 100, 2) if n else 0.0
+        decisive_n = s["wins"] + s["losses"]
+        resolved_n = decisive_n + s["expired"]
+        s["total"] = resolved_n
+        s["decisive"] = decisive_n
+        s["hit_rate_pct"] = round(s["wins"] / resolved_n * 100, 2) if resolved_n else 0.0
+        s["hit_rate_decisive_pct"] = round(s["wins"] / decisive_n * 100, 2) if decisive_n else 0.0
         setup_rows.append(s)
     setup_rows.sort(key=lambda x: x["total"], reverse=True)
 
@@ -2498,7 +2585,14 @@ def get_research_outcomes(
         "stop_hit": by_status["STOP_HIT"],
         "expired": by_status["EXPIRED"],
         "resolved": resolved,
-        "hit_rate_pct": hit_rate,
+        "decisive": decisive,
+        # Primary headline: wins over everything that actually finished.
+        "hit_rate_pct": hit_rate_resolved,
+        "hit_rate_resolved_pct": hit_rate_resolved,
+        # The historical figure, kept and named so the difference is auditable.
+        "hit_rate_decisive_pct": hit_rate_decisive,
+        "hit_rate_basis": "target_hit / (target_hit + stop_hit + expired)",
+        "expired_pct_of_resolved": round(by_status["EXPIRED"] / resolved * 100, 2) if resolved else 0.0,
         "avg_pnl_r": avg_pnl_r,
         "profit_factor": profit_factor,
         "by_setup": setup_rows,

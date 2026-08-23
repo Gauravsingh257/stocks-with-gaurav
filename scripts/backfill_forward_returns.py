@@ -179,7 +179,12 @@ def run(*, limit: int | None, source: str, dry_run: bool, chunk: int) -> dict:
             no_price += len(scan_dates)
             continue
         for scan_date in scan_dates:
-            label = compute_label(symbol, scan_date, bars, benchmark_bars=bench)
+            # Store the SAME `NSE:` form every other table uses (signals_log,
+            # stock_recommendations, fundamentals_quarterly). Writing the bare
+            # ticker here made `JOIN forward_returns USING (symbol, date)` match
+            # zero rows — a LEFT JOIN just returns NULLs, so the evidence base
+            # would have looked "unlabelled" rather than mis-keyed.
+            label = compute_label(f"NSE:{symbol}", scan_date, bars, benchmark_bars=bench)
             if label is not None:
                 labels.append(label)
 
