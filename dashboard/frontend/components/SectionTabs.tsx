@@ -11,6 +11,12 @@ import { usePathname } from "next/navigation";
  *
  * Example: the "Markets" group renders this with [OI Radar, Market Intel] so
  * neither page is orphaned once it leaves the top-level sidebar.
+ *
+ * These read as *tabs*, not as a line of prose: the inactive ones previously
+ * had a transparent background and a transparent bottom border, which made a
+ * row of navigation look like a caption. Each item now has a hover state, the
+ * active one is tinted and underlined, and `aria-current` tells a screen reader
+ * which page it is on.
  */
 export type SectionTab = { href: string; label: string };
 
@@ -25,27 +31,17 @@ export default function SectionTabs({
   return (
     <nav
       aria-label={label ? `${label} section` : "Section"}
-      className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 mb-4 border-b border-cyan-500/10"
+      className="tab-strip -mx-1 mb-4"
     >
-      {label && (
-        <span
-          className="text-[0.6rem] font-semibold uppercase tracking-[0.14em] pr-2 shrink-0"
-          style={{ color: "var(--text-dim)" }}
-        >
-          {label}
-        </span>
-      )}
+      {label && <span className="tab-strip-label">{label}</span>}
       {items.map((t) => {
         const active = path === t.href || (t.href !== "/" && path.startsWith(t.href));
         return (
           <Link
             key={t.href}
             href={t.href}
-            className={`px-3 py-2 text-[0.75rem] whitespace-nowrap rounded-t-md border-b-2 transition-colors ${
-              active
-                ? "border-[var(--accent)] text-[var(--accent)] font-semibold"
-                : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
+            className="tab-item"
+            aria-current={active ? "page" : undefined}
           >
             {t.label}
           </Link>
