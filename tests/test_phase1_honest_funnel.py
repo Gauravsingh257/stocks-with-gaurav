@@ -328,3 +328,43 @@ def test_provider_type_errors_do_not_drop_a_symbol():
     assert snap.sector == "Basic Materials"
     assert snap.raw_pe == 18.4
     assert snap.raw_pb is None
+
+
+# ── hand-assigned sector overrides (highest-priority tier) ────────────────────
+
+def test_manual_override_wins_over_every_auto_tier(monkeypatch, tmp_path):
+    """Reference-data coverage is a limit of our sources, not a property of the
+    company. Anything identifiable can be hand-assigned, and that assignment
+    outranks NSE-official and yfinance."""
+    import services.sector_classification as sc
+
+    csv_path = tmp_path / "ov.csv"
+    csv_path.write_text("symbol,sector\nRATNAVEER,Capital Goods\nZZZ,Pharma\n", encoding="utf-8")
+    monkeypatch.setattr(sc, "_OVERRIDE_PATH", csv_path)
+    monkeypatch.setattr(sc, "_overrides", None)
+    monkeypatch.setattr(sc, "_memo", {"RATNAVEER": "SHOULD_NOT_WIN"})
+
+    assert sc.resolve_sector("NSE:RATNAVEER") == "Capital Goods"
+    assert sc.resolve_sector("ZZZ") == "Pharma"
+
+
+def test_blank_and_placeholder_rows_are_ignored(monkeypatch, tmp_path):
+    """A half-filled worksheet must be safe to ship."""
+    import services.sector_classification as sc
+
+    csv_path = tmp_path / "ov.csv"
+    csv_path.write_text(
+        "symbol,sector\nAAA,\nBBB,Unknown\nCCC,Unassigned\nDDD,-\nEEE,Realty\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sc, "_OVERRIDE_PATH", csv_path)
+    monkeypatch.setattr(sc, "_overrides", None)
+    assert sc.load_overrides(refresh=True) == {"EEE": "Realty"}
+
+
+def test_missing_override_file_is_not_an_error(monkeypatch, tmp_path):
+    import services.sector_classification as sc
+
+    monkeypatch.setattr(sc, "_OVERRIDE_PATH", tmp_path / "nope.csv")
+    monkeypatch.setattr(sc, "_overrides", None)
+    assert sc.load_overrides(refresh=True) == {}
