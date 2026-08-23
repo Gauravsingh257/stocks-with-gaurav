@@ -16,6 +16,7 @@ Public API (called from FastAPI lifespan):
 """
 
 import logging
+import sys
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -233,6 +234,37 @@ def start_scheduler() -> None:
         name="FVG-Tap (index 5m, flag-gated)",
         replace_existing=True,
         misfire_grace_time=60,
+    )
+
+    # Weekly stock-universe refresh — company, sector and the headline ratios
+    # (PE / ROE / debt-equity / growth) for every NSE symbol, powering the
+    # Stock Universe table on the research page.
+    #
+    # SATURDAY on purpose: the market is closed, so nothing competes with the
+    # live engine for the provider, and a slow full-universe crawl cannot
+    # affect a trading session. Runs in a thread (not the request path) and is
+    # entirely best-effort — a failed refresh leaves last week's snapshot in
+    # place, which the UI labels with its own `refreshed_at`.
+    def _run_universe_refresh():
+        try:
+            import subprocess
+            logger.info("[Universe] weekly refresh starting")
+            proc = subprocess.run(
+                [sys.executable, "-m", "scripts.refresh_stock_universe"],
+                capture_output=True, text=True, timeout=3600,
+            )
+            tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-12:]
+            logger.info("[Universe] refresh rc=%s %s", proc.returncode, " ".join(tail))
+        except Exception:
+            logger.exception("[Universe] weekly refresh failed (previous snapshot kept)")
+
+    _scheduler.add_job(
+        _run_universe_refresh,
+        CronTrigger(hour=9, minute=0, day_of_week="sat", timezone="Asia/Kolkata"),
+        id="stock_universe_refresh",
+        name="Stock universe + fundamentals (weekly, Sat 09:00 IST)",
+        replace_existing=True,
+        misfire_grace_time=6 * 3600,
     )
 
     # Equity state machine (SWING_SM tracked book): daily pre-market tick.

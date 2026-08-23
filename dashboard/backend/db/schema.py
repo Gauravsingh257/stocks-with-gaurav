@@ -435,6 +435,41 @@ CREATE TABLE IF NOT EXISTS fundamentals_quarterly (
     PRIMARY KEY (symbol, period_end)
 );
 CREATE INDEX IF NOT EXISTS idx_fundamentals_quarterly_symbol ON fundamentals_quarterly(symbol, period_end DESC);
+
+-- ─────────────────────────────────────────
+-- TABLE 17: stock_universe — the researchable NSE universe, one row per symbol
+-- Company, sector (from the layered classifier) and the headline valuation /
+-- quality / leverage ratios, so the whole investable list can be searched and
+-- screened in one place instead of one symbol at a time.
+--
+-- A SNAPSHOT, not a live feed: refreshed weekly (Saturday, markets closed) by
+-- scripts/refresh_stock_universe.py. `refreshed_at` is surfaced in the UI so a
+-- stale table is visible rather than silently trusted. Ratios are nullable —
+-- a missing PE is shown as "—", never as 0, because 0 would screen as cheap.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS stock_universe (
+    symbol           TEXT PRIMARY KEY,
+    company_name     TEXT,
+    sector           TEXT NOT NULL DEFAULT 'Unassigned',
+    sector_source    TEXT,
+    instrument       TEXT NOT NULL DEFAULT 'EQUITY',
+    price            REAL,
+    market_cap_cr    REAL,
+    turnover_cr      REAL,
+    pe               REAL,
+    pb               REAL,
+    roe_pct          REAL,
+    debt_to_equity   REAL,
+    revenue_growth_pct REAL,
+    net_margin_pct   REAL,
+    roe_source       TEXT,
+    promoter_pct     REAL,
+    pct_from_52w_high REAL,
+    ret_1y_pct       REAL,
+    refreshed_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_stock_universe_sector ON stock_universe(sector);
+CREATE INDEX IF NOT EXISTS idx_stock_universe_instrument ON stock_universe(instrument);
 """
 
 
