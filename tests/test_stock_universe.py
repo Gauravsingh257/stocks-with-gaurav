@@ -130,3 +130,49 @@ def test_universe_upsert_and_read(tmp_path, monkeypatch):
     again = get_universe()
     assert again["total"] == 3
     assert next(r for r in again["items"] if r["symbol"] == "AAA")["pe"] == 25.0
+
+
+def test_throttle_paces_provider_calls(monkeypatch):
+    """A burst of ~2,000 .info calls gets HTTP 401 'Invalid Crumb' and then
+    empty dicts — which records as 'no fundamentals' rather than 'rate-limited'.
+    The first full production run finished 2,166 symbols in 47s and got ratios
+    for only 32%."""
+    import time as _t
+
+    import scripts.refresh_stock_universe as r
+
+    monkeypatch.setattr(r, "_THROTTLE_SEC", 0.05)
+    monkeypatch.setattr(r, "_last_call", [0.0])
+    start = _t.time()
+    for _ in range(4):
+        r._throttle()
+    assert _t.time() - start >= 0.10   # at least a few gaps were enforced
+
+
+def test_empty_provider_reply_is_retried(monkeypatch):
+    """An empty dict means throttled, not 'this company has no data'."""
+    import scripts.refresh_stock_universe as r
+
+    calls = {"n": 0}
+
+    class _Ticker:
+        def __init__(self, _sym):
+            pass
+
+        @property
+        def info(self):
+            calls["n"] += 1
+            # throttled twice, then a real payload
+            return {} if calls["n"] < 3 else {"marketCap": 1e10, "trailingPE": 20.0}
+
+    import sys as _sys
+    import types as _types
+    fake = _types.ModuleType("yfinance")
+    fake.Ticker = _Ticker
+    monkeypatch.setitem(_sys.modules, "yfinance", fake)
+    monkeypatch.setattr(r, "_THROTTLE_SEC", 0.0)
+    monkeypatch.setattr(r, "_RETRIES", 3)
+
+    out = r.fetch_one("TEST")
+    assert calls["n"] >= 3
+    assert out["pe"] == 20.0

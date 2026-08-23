@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -45,17 +46,51 @@ def _num(v):
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
+# Provider throttle. yfinance answers a burst of ~2,000 .info calls with
+# HTTP 401 "Invalid Crumb" and then returns empty dicts — which looks like
+# "this company has no fundamentals" rather than "we were rate-limited".
+# The first full run finished 2,166 symbols in 47s and got ratios for only
+# 32%. Pacing the calls is the difference between a real table and a mostly
+# empty one; the weekly job has an hour, so it can afford to be slow.
+_THROTTLE_SEC = float(os.getenv("UNIVERSE_FETCH_SPACING_SEC", "0.25"))
+_RETRIES = int(os.getenv("UNIVERSE_FETCH_RETRIES", "2"))
+_rate_lock = threading.Lock()
+_last_call = [0.0]
+
+
+def _throttle() -> None:
+    with _rate_lock:
+        gap = time.time() - _last_call[0]
+        if gap < _THROTTLE_SEC:
+            time.sleep(_THROTTLE_SEC - gap)
+        _last_call[0] = time.time()
+
+
 def fetch_one(symbol: str) -> dict:
-    """Provider snapshot for one symbol. Never raises."""
+    """Provider snapshot for one symbol. Never raises.
+
+    Retries on a throttled/empty response so a rate-limit is not silently
+    recorded as "no fundamentals available for this company".
+    """
     import warnings
     warnings.filterwarnings("ignore")
     import yfinance as yf
 
     out = {"symbol": symbol}
-    try:
-        info = yf.Ticker(f"{symbol}.NS").info or {}
-    except Exception as exc:
-        log.debug("info failed %s: %s", symbol, exc)
+    info = {}
+    for attempt in range(_RETRIES + 1):
+        try:
+            _throttle()
+            info = yf.Ticker(f"{symbol}.NS").info or {}
+        except Exception as exc:
+            log.debug("info failed %s (try %d): %s", symbol, attempt + 1, exc)
+            info = {}
+        # A throttled reply comes back as an empty/near-empty dict.
+        if info.get("marketCap") or info.get("trailingPE") or info.get("profitMargins"):
+            break
+        if attempt < _RETRIES:
+            time.sleep(1.5 * (attempt + 1))
+    if not info:
         return out
 
     price = _num(info.get("currentPrice")) or _num(info.get("previousClose"))
@@ -94,7 +129,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", type=int, default=2200)
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--map", default="data/sector_map_FULL.csv")
     args = ap.parse_args()
@@ -213,6 +248,7 @@ def main() -> int:
         "with_de": have("debt_to_equity"), "with_mcap": have("market_cap_cr"),
         "with_margin": have("net_margin_pct"),
         "with_turnover": have("turnover_cr"),
+        "fundamentals_coverage_pct": round(have("pe") / max(len(rows), 1) * 100, 1),
         "elapsed_sec": round(time.time() - started, 1),
     }
     if args.dry_run:
