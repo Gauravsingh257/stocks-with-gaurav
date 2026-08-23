@@ -14,14 +14,14 @@ const ADMIN_EMAILS = new Set(["hellogaurav2577@gmail.com"]);
 
 // Nav consolidated 8 flat items → 5 grouped destinations. Folded pages remain
 // one click away via <SectionTabs> inside each group:
-//   Research  ← Screeners
+//   Research  ← Screeners, Stock Universe
 //   Portfolio ← Track Record (/analytics), Journal
 //   Markets   ← OI Radar, Market Intel
 type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; admin?: boolean; match?: string[] };
 const NAV: NavItem[] = [
   { href: "/command",         label: "Command Center", icon: Home },
   { href: "/terminal",        label: "Terminal",  icon: Sparkles },
-  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners"] },
+  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners", "/universe"] },
   { href: "/watchlist",       label: "Watchlist", icon: Bookmark, auth: true },
   ...(PIL_ENABLED
     ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
