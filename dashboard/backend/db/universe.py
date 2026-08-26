@@ -102,3 +102,56 @@ def get_universe(
         "refreshed_at": meta["refreshed_at"] if meta else None,
         "sectors": [{"sector": r["sector"], "count": r["n"]} for r in sectors],
     }
+
+
+def get_symbol(symbol: str) -> dict[str, Any] | None:
+    """Exact-match single-symbol lookup for the public /stock/<symbol> SEO page.
+
+    Deliberately separate from get_universe(): that one does a LIKE '%term%'
+    scan plus sector/meta aggregates, so "TCS" would also match "TCSLTD" and
+    every page render would pay for facet counts it never shows. This is a
+    single indexed row read — cheap enough to sit on a server-render path.
+
+    Returns None for an unknown symbol so the route can emit a real 404 rather
+    than an empty page (a soft-404 is worse for indexing than no page at all).
+    """
+    clean = (symbol or "").strip().upper().replace("NSE:", "").replace(".NS", "")
+    if not clean:
+        return None
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM stock_universe WHERE UPPER(symbol) = ? LIMIT 1", (clean,)
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception as exc:
+        log.warning("[universe] symbol read failed for %s: %s", clean, exc)
+        return None
+    finally:
+        conn.close()
+
+
+def list_symbols_for_sitemap(limit: int = 5000) -> dict[str, Any]:
+    """Minimal {symbol, company_name, sector} rows for sitemap generation.
+
+    The sitemap needs three columns for ~2.4k rows; get_universe() returns all
+    18. Keeping this thin keeps the sitemap build off the slow path.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT symbol, company_name, sector, refreshed_at FROM stock_universe "
+            "WHERE instrument = 'EQUITY' "
+            "ORDER BY COALESCE(turnover_cr, 0) DESC, symbol ASC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return {
+            "available": True,
+            "items": [dict(r) for r in rows],
+            "count": len(rows),
+        }
+    except Exception as exc:
+        log.warning("[universe] sitemap list failed: %s", exc)
+        return {"available": False, "items": [], "count": 0, "error": str(exc)}
+    finally:
+        conn.close()
