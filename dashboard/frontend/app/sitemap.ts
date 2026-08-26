@@ -18,7 +18,17 @@ import type { MetadataRoute } from "next";
 import { indexableRoutes, site } from "@/lib/site";
 import { fetchSitemapSymbols, normalizeSymbol } from "@/lib/seo/stockData";
 
-export const revalidate = 43200;
+/**
+ * One hour, not twelve.
+ *
+ * Railway (backend) and Vercel (frontend) both deploy from `main`, in parallel,
+ * and Vercel usually wins. If this route builds before the symbol endpoint is
+ * live it emits only the static routes — so the recovery window, not the
+ * steady-state freshness, is what sets this number. A Vercel redeploy also
+ * clears the data cache outright, which is the fast path; this is the safety
+ * net for when the deploy sequence is not followed exactly.
+ */
+export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();

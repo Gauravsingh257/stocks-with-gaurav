@@ -29,6 +29,14 @@ import type { StockAnalysis } from "@/lib/api";
 const UNIVERSE_REVALIDATE_SEC = 60 * 60 * 12;
 /** Analysis is intraday-sensitive; an hour keeps pages fresh without hammering yfinance. */
 const ANALYSIS_REVALIDATE_SEC = 60 * 60;
+/**
+ * Shorter than the universe TTL on purpose. The sitemap has a cliff the stock
+ * pages do not: if it is built while the backend lacks the symbol endpoint it
+ * bakes a handful of static URLs and every stock page becomes undiscoverable
+ * for a full cache cycle. An hour bounds that blast radius. It is cheap — one
+ * thin three-column read per hour.
+ */
+const SITEMAP_REVALIDATE_SEC = 60 * 60;
 /** Hard ceiling on the render path. Past this we ship Tier 1 and let the client finish. */
 const ANALYSIS_TIMEOUT_MS = 6_000;
 
@@ -154,7 +162,7 @@ export async function fetchSitemapSymbols(): Promise<SitemapSymbol[]> {
   const url = apiUrl("/api/research/universe/sitemap?limit=5000");
   if (!url) return [];
   try {
-    const res = await fetch(url, { next: { revalidate: UNIVERSE_REVALIDATE_SEC } });
+    const res = await fetch(url, { next: { revalidate: SITEMAP_REVALIDATE_SEC } });
     if (!res.ok) return [];
     const json = (await res.json()) as { items?: SitemapSymbol[] };
     return Array.isArray(json?.items) ? json.items : [];
