@@ -2210,6 +2210,51 @@ def get_stock_universe(
         })
 
 
+@router.get("/api/research/universe/symbol/{symbol}")
+@router.get("/research/universe/symbol/{symbol}")
+def get_universe_symbol(symbol: str):
+    """One symbol's universe row — the fast tier behind the public /stock page.
+
+    Server-rendered by the Next.js /stock/<symbol> route, so it must never call
+    a provider: it is a single indexed read off the weekly `stock_universe`
+    snapshot.
+
+    An unknown symbol returns 200 with available=false, NOT 404 — deliberately.
+    FastAPI already answers 404 when a route does not exist, so a 404 here would
+    be indistinguishable from this endpoint simply not being deployed yet. The
+    caller turns "symbol not in universe" into a real page 404, and if that
+    signal were ambiguous, one backend rollback would 404 all ~2,364 stock URLs
+    at once and deindex the long tail. Reason codes keep the two cases apart.
+    """
+    try:
+        from dashboard.backend.db.universe import get_symbol
+
+        row = get_symbol(symbol)
+        if not row:
+            return _safe_json_response(
+                {"available": False, "item": None, "reason": "not_in_universe"}
+            )
+        return _safe_json_response({"available": True, "item": row})
+    except Exception:
+        log.exception("universe symbol read failed for %s", symbol)
+        return _safe_json_response(
+            {"available": False, "item": None, "reason": "universe_unavailable"}
+        )
+
+
+@router.get("/api/research/universe/sitemap")
+@router.get("/research/universe/sitemap")
+def get_universe_sitemap(limit: int = Query(5000, ge=1, le=5000)):
+    """Thin {symbol, company_name, sector} list used to build sitemap.xml."""
+    try:
+        from dashboard.backend.db.universe import list_symbols_for_sitemap
+
+        return _safe_json_response(list_symbols_for_sitemap(limit=limit))
+    except Exception:
+        log.exception("universe sitemap list failed")
+        return _safe_json_response({"available": False, "items": [], "count": 0})
+
+
 @router.get("/api/research/quality-universe")
 @router.get("/research/quality-universe")
 async def get_quality_universe_endpoint(

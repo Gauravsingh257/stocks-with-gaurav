@@ -8,6 +8,7 @@ import { AuthProvider } from "@/lib/auth";
 import { site } from "@/lib/site";
 import { Analytics } from "@vercel/analytics/react";
 import AnalyticsScripts from "@/components/AnalyticsScripts";
+import SiteJsonLd from "@/components/SiteJsonLd";
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
@@ -47,6 +48,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        <SiteJsonLd />
+      </head>
       <body
         className="flex min-h-screen overflow-x-hidden"
         style={{ background: "var(--bg-base)", position: "relative" }}
