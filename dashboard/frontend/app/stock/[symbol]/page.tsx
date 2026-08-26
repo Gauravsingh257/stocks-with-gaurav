@@ -26,7 +26,18 @@ import {
 import { site } from "@/lib/site";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 
-/** Tail symbols are rendered on demand and then cached, rather than pre-built. */
+/**
+ * Empty on purpose: zero pages are pre-built, so a 2,113-symbol universe never
+ * touches build time. But exporting it at all is what marks the route
+ * statically-generatable — without it Next renders every request dynamically
+ * and Vercel sends `no-store`, so each of the 2,113 URLs re-rendered on every
+ * single crawl. With it, `dynamicParams` renders tail symbols on demand and
+ * then caches them, which is the ISR behaviour this route always intended.
+ */
+export function generateStaticParams() {
+  return [];
+}
+
 export const dynamicParams = true;
 export const revalidate = 43200;
 
