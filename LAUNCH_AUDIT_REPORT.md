@@ -1,4 +1,9 @@
 # 🔍 Launch Readiness Audit — stockswithgaurav.com
+
+> **STATUS: HISTORICAL** · workstream: `platform` · last substantive update: 2026-07-05
+> Pre-launch audit. Its one critical blocker (JWT forgery) was FIXED in PR #58 and deployed - the 'NOT ready' verdict at the top refers to 2026-07-04 and is no longer the current state.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Date:** 2026-07-04 · **Scope:** live backend (`web-production-2781a.up.railway.app`) + frontend/backend code
 **Method:** live API probing + source review. Authorized security testing on owner's own system.
 

@@ -1,5 +1,9 @@
 # Module Status
 
+> **STATUS: LIVE** · workstream: `ui-ux` · last substantive update: 2026-07-12
+> Still the per-module stage tracker, but not refreshed since 2026-07-12 and predates Stock Universe, the SEO surface and the UI-affordance pass.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 Single source of truth for where each user-facing module stands. Stages:
 **In Development** → **Production – Validation** (live, observing) → **Stable**.
 

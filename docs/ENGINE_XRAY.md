@@ -1,5 +1,9 @@
 # PHASE F-ENGINE X-RAY — Full Strategy Logic & Execution Breakdown
 
+> **STATUS: HISTORICAL** · workstream: `engine` · last substantive update: 2026-05-16
+> Research snapshot of the scorer as it stood in May 2026. Superseded by the Phase 0/1 selection-engine teardown (2026-08-23).
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 Research only. No production change. Every number from the committed
 260-trade real DB (`docs/forensics/trade_database.csv`) + exact code
 paths (file:line). This phase **corrects** a misattribution in F-Robust /

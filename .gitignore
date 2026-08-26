@@ -132,3 +132,7 @@ trade_graphs/
 content_engine/
 demo_viral_posts.py
 package.json
+
+# Claude Code: share hooks + project settings, keep personal overrides local
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

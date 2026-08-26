@@ -1,5 +1,9 @@
 # PHASE G2 — Canonical Stock Engine Architecture (DESIGN ONLY)
 
+> **STATUS: HISTORICAL** · workstream: `engine` · last substantive update: 2026-05-17
+> Target blueprint (DESIGN ONLY). Large parts have since shipped (state machine, risk engine, momentum book, PIL). Read as design intent, not as current architecture.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 No implementation. This is the target blueprint the platform migrates to.
 Every component names the **real existing module** it reuses or replaces,
 so this is a migration map, not a greenfield fantasy.

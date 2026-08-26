@@ -1,5 +1,9 @@
 # ♿ Accessibility Report — stockswithgaurav.com
 
+> **STATUS: LIVE** · workstream: `ui-ux` · last substantive update: 2026-07-06
+> A11y findings; some fixes shipped (PRs #78/#81), several items still open and unactioned.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Date:** 2026-07-05 · **Standard:** WCAG 2.1 AA (with AAA notes) · **Method:** code review + Playwright DOM/contrast scans on the deployed site (dark theme, 360–390px). Screen-reader + real-device passes are explicitly out of scope for automated tooling and flagged as manual.
 
 **Status:** partial — safe global fixes shipped; several findings recommended (some are design decisions left to the owner).

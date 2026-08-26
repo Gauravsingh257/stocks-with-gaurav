@@ -1,5 +1,9 @@
 # 📱 Responsive / Multi-Device Optimization — stockswithgaurav.com
 
+> **STATUS: HISTORICAL** · workstream: `ui-ux` · last substantive update: 2026-07-05
+> The prompt that produced MOBILE_AUDIT_FINDINGS.md. Job input, already consumed.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 ## Role & Objective
 You are a senior frontend engineer specializing in responsive design. The site (Next.js + Tailwind, on Vercel) is **broken/cramped on mobile and tablet**. Make **every page and every element** render cleanly and usably on **mobile (360–430px), tablet (768–1024px), laptop (1280–1440px), and large desktop (1920px+)** — no horizontal scroll, no clipped text, no overflowing rows, no mid-word wraps, touch-friendly targets.
 

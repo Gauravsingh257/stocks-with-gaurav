@@ -1,5 +1,9 @@
 # Portfolio Risk Engine
 
+> **STATUS: LIVE** · workstream: `portfolio` · last substantive update: 2026-07-09
+> Describes services/risk_engine.py, which is live with flags default ON. Current.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 `services/risk_engine.py` — a configurable, reversible risk layer for portfolio
 **promotions** (sizing + acceptance) and **exits** (trend-break). Every component
 is independently flag-gated and reads its configuration **live from the

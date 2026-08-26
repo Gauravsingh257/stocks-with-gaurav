@@ -1,5 +1,9 @@
 # Portfolio Selection & Risk Audit — August 2026
 
+> **STATUS: LIVE** · workstream: `portfolio` · last substantive update: 2026-08-19
+> Phase 0 forensics complete; decisions D1-D6 are still OPEN. Active.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 **Trigger:** `NSE:VIPULLTD` sitting in the LONGTERM book at **−21.37%** (entry ₹14.93, CMP ₹11.74,
 SL ₹8.93, T1 ₹35.93, 30d held) — a ₹15 micro-cap with ~₹1.1 Cr/day turnover.
 

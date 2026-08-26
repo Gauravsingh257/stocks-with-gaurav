@@ -1,5 +1,9 @@
 # Phase 2 Flag Enablement Criteria
 
+> **STATUS: HISTORICAL** · workstream: `selection` · last substantive update: 2026-06-05
+> Flag-enablement framework from June. Superseded by the Phase 2 'SMC as a ranking factor, not a gate' work (PRs #179/#180).
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 Decision framework for turning on the Phase-2 signal-quality flags shipped (default-OFF) in PR #40. **No flag is enabled until the criteria below are met on live shadow data.**
 
 | Flag | Default (today) | Candidate value | Status |

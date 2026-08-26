@@ -1,5 +1,9 @@
 # 🔍 PUBLIC-LAUNCH READINESS AUDIT — stockswithgaurav.com
 
+> **STATUS: HISTORICAL** · workstream: `platform` · last substantive update: 2026-07-05
+> The prompt that produced LAUNCH_AUDIT_REPORT.md. Job input, already consumed.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 ## Role & Objective
 You are a senior full-stack + trading-systems auditor. The site is going from private/invite to **public launch**. Your job is to verify that **every page, every data point, every filter, and every performance number is correct, truthful, and safe to show a public audience** — including skeptical retail traders and potential SEBI/compliance scrutiny. Assume nothing renders correctly until proven. Treat any unverified number shown to the public as a **liability**.
 

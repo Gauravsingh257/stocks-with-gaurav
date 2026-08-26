@@ -1,5 +1,9 @@
 # 🚀 LAUNCH_CHECKLIST.md
 
+> **STATUS: LIVE** · workstream: `platform` · last substantive update: 2026-07-12
+> MASTER launch tracker and the closest thing the repo has to a roadmap. The paid launch has NOT happened: payments, legal pages, secrets audit, backups and monitoring are all still open gates.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Single source of truth for the public launch of stockswithgaurav.com (₹1,200/mo).**
 Living document — update until launch. Nothing here is "done" until it's checked and dated.
 

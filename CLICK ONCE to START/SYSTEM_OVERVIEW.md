@@ -1,5 +1,9 @@
 # SMC Trading System — Complete System Documentation
 
+> **STATUS: HISTORICAL** · workstream: `platform` · last substantive update: 2026-03-28
+> AI-agent reference last updated 2026-03-28. It claims engine V4.3r while CLAUDE.md says v4.2.1 - they disagree. CLAUDE.md is authoritative; this file is a March snapshot.
+> Current project state lives in [`../docs/PROJECT_STATE.md`](../docs/PROJECT_STATE.md).
+
 > **Purpose:** Single reference document for any AI agent (Cursor, GPT, Claude, etc.)
 > to understand, debug, and modify this trading system without full codebase context.
 >
