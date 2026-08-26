@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "c:\\Users\\g6666\\Trading Algo\\.claude\\hooks\\session_start.py"
+            ],
+            "timeout": 20,
+            "statusMessage": "Loading project state..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "c:\\Users\\g6666\\Trading Algo\\.claude\\hooks\\session_end.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
