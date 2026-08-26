@@ -1,5 +1,9 @@
 # stockswithgaurav.com — Deep Website Audit
 
+> **STATUS: HISTORICAL** · workstream: `platform` · last substantive update: 2026-03-18
+> OLDEST DOC IN THE REPO. Describes the March 2026 stack, before PIL, the momentum book, Stock Universe and the SEO surface. Do not use for current architecture.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 **Scope:** Full stack (Vercel frontend → Railway web backend → Redis / Engine).  
 **Date:** 2026-03-18  
 **No code was modified; analysis only.**

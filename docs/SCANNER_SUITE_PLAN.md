@@ -1,5 +1,9 @@
 # Scanner Suite — Architecture & Implementation Plan
 
+> **STATUS: HISTORICAL** · workstream: `selection` · last substantive update: 2026-06-28
+> Implementation plan that SHIPPED (PR #56, screeners live). Superseded by the running code.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 **Goal:** Add a "Screeners" section to stockswithgaurav.com hosting multiple technical scanners
 (starting with Supertrend(10,3) flip + EMA10), that:
 1. **Never hangs, lags, or slows the site** — even with many concurrent users.

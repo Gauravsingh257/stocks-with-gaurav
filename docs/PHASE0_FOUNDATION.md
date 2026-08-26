@@ -1,5 +1,9 @@
 # Phase 0 — Foundation Hardening
 
+> **STATUS: LIVE** · workstream: `selection` · last substantive update: 2026-08-23
+> Phase 0 is deployed with its flags ON. Current.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 Makes the inputs to stock selection trustworthy and measurable. It deliberately
 changes **what the system knows**, not yet **what it decides**.
 

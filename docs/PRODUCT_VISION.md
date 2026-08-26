@@ -1,5 +1,9 @@
 # PRODUCT VISION — Stocks With Gaurav (CANONICAL NORTH-STAR)
 
+> **STATUS: REFERENCE** · workstream: `platform` · last substantive update: 2026-05-17
+> Canonical north-star for what the platform is for. Product intent does not expire - keep judging changes against it.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 > This document is the **single source of truth for what the platform is
 > for**. Every phase, design doc, and code change is judged against it.
 > It is product intent, not an implementation plan — the implementation

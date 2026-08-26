@@ -1,5 +1,9 @@
 # PHASE G — System Mind Alignment Audit
 
+> **STATUS: HISTORICAL** · workstream: `engine` · last substantive update: 2026-05-16
+> May 2026 vision-vs-system audit. Its findings drove the G2 phases and have largely been actioned.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 Research only. No implementation. Every claim is code-cited (file:line).
 Scope: the full system — the live SMC engine (SETUP A–E in
 `smc_mtf_engine_v4.py`) **and** the research/watchlist pipeline

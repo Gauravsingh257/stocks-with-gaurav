@@ -1,5 +1,9 @@
 # Momentum Continuation Engine — Design & Implementation
 
+> **STATUS: LIVE** · workstream: `portfolio` · last substantive update: 2026-07-10
+> Design doc for a subsystem that is now LIVE and automated. The 'INERT by default' safety contract in the text is no longer true — the flags are ON.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 A first-class, **independent** subsystem that complements (never replaces) the
 production **SMC Pullback Swing Engine**. It harvests the one gap proven in the
 Phase-1 study: strong leaders that keep moving without offering a pullback

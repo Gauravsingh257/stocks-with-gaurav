@@ -1,5 +1,9 @@
 # 🔬 Trading Engine Validation Audit — stockswithgaurav.com
 
+> **STATUS: HISTORICAL** · workstream: `engine` · last substantive update: 2026-07-05
+> Engine validation audit pinned to a 2026-07-05 data snapshot (26 closed SWING trades). Predates the risk engine, Phase 0 and SMC-as-score.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Auditor role:** Senior Quant Researcher + Trading-Systems Auditor + Production QA
 **Date:** 2026-07-05 (IST) · **Scope:** scanner, indicators, promotion, journal, analytics
 **Method:** source review (file:line), live API capture, clean-room recomputation, unit-test execution.

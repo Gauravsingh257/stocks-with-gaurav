@@ -1,5 +1,9 @@
 # PHASE F-FORENSICS — Trade-by-Trade Alpha Autopsy
 
+> **STATUS: HISTORICAL** · workstream: `selection` · last substantive update: 2026-05-16
+> 260-trade autopsy. The raw evidence in docs/forensics/ is still valid as a dataset; the conclusions predate the risk engine, Phase 0 and SMC-as-score.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 **Evidence base:** 260 *real* simulated trades (225 SWING + 35 LONGTERM)
 across 7 independent, regime-labelled, point-in-time backtest windows
 (no look-ahead). Raw data committed in `docs/forensics/raw_*.json`,

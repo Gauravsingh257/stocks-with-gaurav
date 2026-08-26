@@ -1,5 +1,9 @@
 # 🚦 RELEASE_BLOCKERS — Frontend Production Readiness
 
+> **STATUS: HISTORICAL** · workstream: `ui-ux` · last substantive update: 2026-07-06
+> Frontend readiness verdict from 2026-07-06. Superseded as the tracker by LAUNCH_CHECKLIST.md; retained as the record of what was verified at that point.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Date:** 2026-07-05 · **Verdict: NOT production-ready yet** — Critical items remain (mostly required validations I cannot perform without a physical device + live market data).
 
 **How to read this:** the responsive *engineering* is in good shape and verified where I can verify it. What blocks sign-off is **validation coverage** the acceptance criteria require but that needs a real device, live data, or dedicated audit phases.

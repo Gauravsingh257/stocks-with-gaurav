@@ -1,5 +1,9 @@
 # Alpha Baseline — Phase F8 (the gate ALPHA_V2 must beat)
 
+> **STATUS: HISTORICAL** · workstream: `selection` · last substantive update: 2026-05-17
+> Point-in-time walk-forward baseline. Superseded as the tuning reference by the calibration-report process (2026-07-25 onward). Numbers remain valid as a historical gate.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 This is the **first real walk-forward backtest** of the strategy, run *after*
 the Phase F1 fix that un-broke the real OHLC technical path
 (`technical_scanner._snapshot_from_ohlc`). Before F1, `snapshot_from_ohlc`

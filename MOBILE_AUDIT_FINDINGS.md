@@ -1,5 +1,9 @@
 # 📱 Responsive Audit — Coverage Matrix & Findings
 
+> **STATUS: LIVE** · workstream: `ui-ux` · last substantive update: 2026-07-05
+> Responsive coverage matrix with items still marked not-yet-audited. Open.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 **Method:** live inspection via headless browser (Playwright) at **390 / 768 / 1024 / 1440 / 1920px**, using an overflow detector (`scrollWidth > clientWidth`) and an essential-info visibility check. Info-hierarchy principle: on mobile, keep only high-value trading info inline (LIVE, Regime, P&L, Signals); tuck diagnostics behind a control.
 
 **Status legend:** ✅ verified pass · 🟡 fixed, re-verify pending · ⬜ not yet audited · ⚠️ known debt

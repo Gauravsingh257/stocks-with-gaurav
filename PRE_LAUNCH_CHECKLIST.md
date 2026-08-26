@@ -1,5 +1,9 @@
 # 🚀 Pre-Launch Checklist — stockswithgaurav.com
 
+> **STATUS: HISTORICAL** · workstream: `platform` · last substantive update: 2026-07-05
+> SUPERSEDED BY LAUNCH_CHECKLIST.md (2026-07-12), which declares itself the single source of truth for launch. Kept for its infrastructure detail; do not track launch status here.
+> Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 Operational readiness for public launch. Check every box before flipping to public. Owner-driven; items marked 🤖 can be assisted/verified by tooling, 👤 require the owner.
 
 ---

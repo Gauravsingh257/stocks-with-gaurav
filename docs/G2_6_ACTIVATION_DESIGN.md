@@ -1,5 +1,10 @@
 # PHASE G2-6 — Equity State-Machine Activation (DESIGN ONLY)
 
+> **STATUS: HISTORICAL** · workstream: `engine` · last substantive update: 2026-05-17
+> Activation design that has since SHIPPED - the equity state machine is live in alert mode.
+> Superseded by the implementation. The `Status: design. No code.` line below refers to May 2026.
+> Current project state lives in [`PROJECT_STATE.md`](PROJECT_STATE.md).
+
 **Status: design. No code. No flag exists yet. Nothing in this document
 ships until each step is separately approved.** This is the activation
 plan for the planned-execution state machine that G2-5 proved on SWING
