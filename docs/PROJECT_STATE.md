@@ -147,10 +147,18 @@ site-wide affordance pass making interactive things look interactive.
 
 ## `platform` — the largest unstarted body of work
 
-**NOW** — nothing in flight. This is the gap between "site is public" and "site is a business".
+**NOW** — building the **project-continuity system** on branch `chore/project-continuity`
+(5 commits, **not pushed**). Separately, the commercial launch — the gap between "site is
+public" and "site is a business" — remains unstarted.
 
-**STOPPED AT** — [`../LAUNCH_CHECKLIST.md`](../LAUNCH_CHECKLIST.md) is the master tracker and is
-still **live**; its `🔒` gates are unmet.
+**STOPPED AT** — two separate threads:
+- *Continuity system:* Steps 1–4 committed locally but **not pushed** — doc STATUS banners,
+  CLAUDE.md regenerated, this file created, SessionStart/SessionEnd hooks. The hooks are
+  **committed but not yet firing**: Claude Code only watches directories that had a settings
+  file at startup, and `.claude/settings.json` was new. They activate on `/hooks` or a restart.
+  Step 5 (`/checkpoint`, `/where-are-we` skills) is committed; Step 6 (weekly curator) not started.
+- *Commercial launch:* [`../LAUNCH_CHECKLIST.md`](../LAUNCH_CHECKLIST.md) is the master tracker
+  and is still **live**; its `🔒` gates are unmet.
 
 **NEXT** (roughly ordered; all are launch gates)
 1. **Legal pages** — Privacy, Terms, Refund, standalone Disclaimer. Cheapest gate to close.
@@ -185,7 +193,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 ## Housekeeping
 
-- Branch `chore/project-continuity` holds the continuity system itself (docs only) and is
-  **not yet pushed**.
+- Branch `chore/project-continuity` holds the continuity system (docs + `.claude/` hooks and
+  skills), **5 commits, not yet pushed**. Nothing in it touches application code.
 - Three stale PRs closed 2026-08-27 (#1 obsolete Copilot draft, #2 Speed Insights → carried to
   `seo` NEXT, #4 FVG-Tap research → REJECTED verdict recorded). All branches retained on origin.
