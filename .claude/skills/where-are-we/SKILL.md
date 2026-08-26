@@ -55,6 +55,27 @@ prefer one — the disagreement is itself the useful finding.
 If you need to know *why* something is the way it is, that's project memory's job, not this
 file's. Pull the relevant memory rather than speculating.
 
+## Step 2b — Check project memory for stale arcs
+
+Project memory lives outside the repo (on this machine:
+`~/.claude/projects/c--Users-g6666-Trading-Algo/memory/`), so the Sunday cloud curator cannot
+see it. Auditing it is this command's job — nothing else looks.
+
+Memory files that describe an arc as *active*, *in progress*, *validation phase*, *soak*, or
+*pending* quietly become lies when the arc ends. A stale "active" marker is worse than no
+memory at all, because a future session will treat finished work as ongoing.
+
+```bash
+ls -lt ~/.claude/projects/c--Users-g6666-Trading-Algo/memory/*.md | head -20
+grep -lEi "active|in progress|validation phase|soak|pending" \
+  ~/.claude/projects/c--Users-g6666-Trading-Algo/memory/*.md
+```
+
+For each match, ask whether the repo shows related activity in roughly the last three weeks
+(`git log --since="3 weeks ago" --oneline` plus a grep for the subject). Flag — don't fix — any
+file that claims an arc is live while the code has moved on. One line each is enough; if
+nothing is stale, say nothing about memory at all.
+
 ## Step 3 — Report
 
 Keep it to roughly a screen. Structure:
