@@ -26,14 +26,14 @@ brand-new **SEO** workstream that put ~2,100 stock pages into Google. The immedi
 finishing SEO Phase 2 (internal linking, Core Web Vitals, GSC monitoring). The largest *unstarted*
 body of work is the commercial launch: payments, legal pages, monitoring.
 
-## Live system check — 2026-08-27
+## Live system check — 2026-08-29
 
 Verified against the running system, not from docs:
 
 | | |
 |---|---|
 | Engine | **live**, `v4.2.1`, mode `AGGRESSIVE`, scheduler running, Kite token fresh |
-| Books | Swing **20/20 (FULL)** · Long-term 19/20 · Momentum 16 active + 4 pending |
+| Books | Swing **20/20 FULL** (18 active + 2 pending) · Long-term **20/20 FULL** (17+3) · Momentum 17 active |
 | SEO | sitemap **2,117 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
 | Backend | Railway `web-production-2781a` healthy. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
 
@@ -44,7 +44,7 @@ Verified against the running system, not from docs:
 | Workstream | State | One line |
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
-| `selection` | 🟡 recently active | Phase 0/1 live; Phase 2 built, flag OFF, awaiting calibration evidence |
+| `selection` | 🟡 in validation | Phase 0/1/2 **all live** (Phase 2 = SWING only); measuring, not tuning |
 | `portfolio` | 🟢 steady | All three books running; audit decisions D1–D6 answered |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
@@ -78,16 +78,26 @@ that would deindex the long tail). Deliberately deferred: `/stock/*` still rende
 
 ## `selection` — recently active
 
-**NOW** — idle, in the **validation phase**. No new engine features until the current ones prove out.
+**NOW** — Phase 0 + 1 + 2 are **all live on the `web` service**, in validation. No new engine
+features until the current ones prove out.
 
 **STOPPED AT** — PR #180 (2026-08-23) scoped SMC-as-score to the horizon it was validated on.
-Phase 0 + Phase 1 are deployed with flags ON. Phase 2 is merged but **`PHASE2_SMC_AS_SCORE=0`
-(OFF)**, `PHASE2_HORIZONS=SWING`.
+Verified in Railway env on 2026-08-29, **not** from code defaults:
+`PHASE0_KITE_OHLC`, `PHASE0_NO_SYNTHETIC`, `PHASE0_REAL_SECTORS`, `PHASE1_STRICT_FUNNEL`,
+`PHASE1_UNIFIED_FEED`, `PHASE1_SECTOR_UNKNOWN_STRICT`, `EXCEPTIONALISM_ENABLED`,
+`REGIME_GOVERNOR_ENABLED`, `SECTOR_LEADERSHIP_SCORING_ENABLED`,
+`SECTOR_DIVERSIFICATION_ENABLED` — all `=1`. **`PHASE2_SMC_AS_SCORE=1`**, with
+`PHASE2_HORIZONS` unset so it defaults to `SWING` only; Long-Term is untouched by design.
+Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demonstrably scoring.
+
+> **Correction:** this file previously said `PHASE2_SMC_AS_SCORE=0`. That was the *code default*,
+> read from `services/phase2_ranking.py` instead of the deployed environment. Check Railway env
+> for flag state, never the code default — the whole design is that env overrides the default.
 
 **NEXT**
-1. Accrue live shadow data on Phase 2 — do **not** flip the flag without it.
-2. Read the calibration report before any tuning. Bootstrap says the weight variants are
-   statistically **tied** — do not re-optimise on 43 days of data.
+1. Measure Phase 2's effect now that it is live — it has been on since ~2026-08-23/24, so a
+   before/after cohort exists. Read the calibration report; do not tune on impressions.
+2. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
 3. Keep the honest funnel reporting from PR #169 in view; LT hit rate is honestly ~7%.
 
 **BLOCKED** — nothing. Gated on *time and data*, not on a decision.
