@@ -147,16 +147,16 @@ site-wide affordance pass making interactive things look interactive.
 
 ## `platform` — the largest unstarted body of work
 
-**NOW** — building the **project-continuity system** on branch `chore/project-continuity`
-(5 commits, **not pushed**). Separately, the commercial launch — the gap between "site is
-public" and "site is a business" — remains unstarted.
+**NOW** — nothing in flight. The commercial launch — the gap between "site is public" and "site
+is a business" — remains the largest unstarted body of work.
 
 **STOPPED AT** — two separate threads:
-- *Continuity system:* Steps 1–4 committed locally but **not pushed** — doc STATUS banners,
-  CLAUDE.md regenerated, this file created, SessionStart/SessionEnd hooks. The hooks are
-  **committed but not yet firing**: Claude Code only watches directories that had a settings
-  file at startup, and `.claude/settings.json` was new. They activate on `/hooks` or a restart.
-  Step 5 (`/checkpoint`, `/where-are-we` skills) is committed; Step 6 (weekly curator) not started.
+- *Continuity system:* **PR #183 merged to `main` 2026-08-26.** Verified working in a live
+  session: the SessionStart hook fires and injects state, and `/checkpoint` + `/where-are-we`
+  are registered. Four sources of truth now split cleanly — `CLAUDE.md` (architecture), this
+  file (state), project memory (why), git/gh (history). **One piece unproven:** the Sunday
+  curator (`trig_01KBuoy5gBsFsnY3anQQpLKM`) is enabled but has **never run** — first real fire
+  is 2026-08-30 09:00 IST. Treat its behaviour as unverified until then.
 - *Commercial launch:* [`../LAUNCH_CHECKLIST.md`](../LAUNCH_CHECKLIST.md) is the master tracker
   and is still **live**; its `🔒` gates are unmet.
 
@@ -193,7 +193,11 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 ## Housekeeping
 
-- Branch `chore/project-continuity` holds the continuity system (docs + `.claude/` hooks and
-  skills), **5 commits, not yet pushed**. Nothing in it touches application code.
+- Continuity system merged (PR #183, 6 commits, docs + `.claude/` only). Refresh this file with
+  `/checkpoint`; reconcile it against reality with `/where-are-we`. The Sunday curator proposes
+  fixes by PR and never edits state directly — disable at claude.ai/code/routines.
+- Watch out when branching: cut new branches from `main`, not from a merged feature branch. A
+  stale base silently proposes reverting the signal bot's `signal_history/` commits — PR #183
+  nearly deleted 30 rows of live BANKNIFTY signals this way.
 - Three stale PRs closed 2026-08-27 (#1 obsolete Copilot draft, #2 Speed Insights → carried to
   `seo` NEXT, #4 FVG-Tap research → REJECTED verdict recorded). All branches retained on origin.
