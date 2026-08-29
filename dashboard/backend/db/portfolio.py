@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS portfolio_positions (
     confidence_score      REAL DEFAULT 0,
     reasoning             TEXT DEFAULT '',
     recommendation_id     INTEGER,
+    -- Which door admitted this position. The SAME string the admission gate is
+    -- given, so the row and the gate log can never disagree. Needed because
+    -- `recommendation_id` is polysemous: door 1 stores a signals_log id, door 2
+    -- a stock_recommendations id, and only door 1's path applies Phase 2. The
+    -- gate's own record lives in Redis on a 30-day TTL, so origin was not
+    -- durably answerable before this column. Nullable — legacy rows stay NULL.
+    source_door           TEXT,
     -- PENDING = armed, awaiting the planned entry to be genuinely traded through
     -- (no P&L, no days-held, excluded from analytics). EXPIRED = an armed idea
     -- that never triggered and was retired (never a trade → never journaled).
@@ -293,6 +300,35 @@ def migrate_portfolio_risk_columns() -> None:
         conn.close()
 
 
+def migrate_portfolio_origin_column() -> None:
+    """Add `source_door` (idempotent, in-place ADD COLUMN — no rebuild).
+
+    Records which door admitted a position, using the same string already passed
+    to `admission_gate.evaluate_safe`, so the durable row and the shadow log can
+    never disagree.
+
+    Why it is needed: `recommendation_id` alone cannot answer "where did this
+    come from" — door 1 (`promote_to_portfolio`) stores a signals_log id and its
+    path applies Phase 2, while door 2 (`seed_from_recommendations`) stores a
+    stock_recommendations id and its path does not. Until now the only record of
+    the door was the gate's Redis log, which expires after 30 days, so origin
+    became unanswerable for any position older than that.
+
+    Nullable → existing rows stay NULL and are untouched; NULL simply means
+    "written before this column existed", which is honest and distinguishable
+    from an attributed row."""
+    conn = get_connection()
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
+        if "source_door" not in have:
+            conn.execute("ALTER TABLE portfolio_positions ADD COLUMN source_door TEXT")
+        conn.commit()
+    except Exception as exc:
+        logger.error("[Portfolio] migrate_portfolio_origin_column failed (non-fatal): %s", exc)
+    finally:
+        conn.close()
+
+
 # Two closes of the SAME symbol at the SAME entry inside this window cannot be
 # two genuine holdings — a position cannot be entered and exited twice at an
 # identical price within minutes. Used by dedupe Rule 2 (phantom re-fill door).
@@ -500,6 +536,7 @@ def init_portfolio_db() -> None:
     migrate_portfolio_positions()
     migrate_portfolio_pending()
     migrate_portfolio_risk_columns()
+    migrate_portfolio_origin_column()
     migrate_journal_duplicate_flag()
 
 
@@ -740,17 +777,28 @@ def add_position(payload: dict) -> int:
 
         # Risk-engine sizing fields (nullable — present only when the engine sized
         # this position). Columns exist via migrate_portfolio_risk_columns.
-        _has_risk_cols = "position_size" in {
-            r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()
-        }
+        _cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
+        _has_risk_cols = "position_size" in _cols
+
+        # Durable origin. Deliberately the SAME expression handed to
+        # admission_gate.evaluate_safe above, so the stored row and the shadow
+        # log cannot drift apart. Appended conditionally on the column existing,
+        # mirroring the risk-column guard, so a database that has not run the
+        # migration still inserts exactly as before rather than raising.
+        _origin_col, _origin_val = "", ()
+        if "source_door" in _cols:
+            _origin_col = ", source_door"
+            _origin_val = (payload.get("source_door") or "add_position:unattributed",)
+
         if _has_risk_cols:
             cursor = conn.execute(
-                """
+                f"""
                 INSERT INTO portfolio_positions
                     (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
                      current_price, confidence_score, reasoning, recommendation_id, status,
-                     arm_ref_price, entered_at, position_size, risk_weight_pct, atr_pct, turnover_cr)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     arm_ref_price, entered_at, position_size, risk_weight_pct, atr_pct,
+                     turnover_cr{_origin_col})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{', ?' if _origin_col else ''})
                 """,
                 (
                     symbol, horizon, payload.get("direction", "LONG"),
@@ -760,16 +808,16 @@ def add_position(payload: dict) -> int:
                     status, arm_ref, entered_at,
                     payload.get("position_size"), payload.get("risk_weight_pct"),
                     payload.get("atr_pct"), payload.get("turnover_cr"),
-                ),
+                ) + _origin_val,
             )
         else:
             cursor = conn.execute(
-                """
+                f"""
                 INSERT INTO portfolio_positions
                     (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
                      current_price, confidence_score, reasoning, recommendation_id, status,
-                     arm_ref_price, entered_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     arm_ref_price, entered_at{_origin_col})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{', ?' if _origin_col else ''})
                 """,
                 (
                     symbol, horizon, payload.get("direction", "LONG"),
@@ -777,7 +825,7 @@ def add_position(payload: dict) -> int:
                     float(payload.get("confidence_score", 0)),
                     payload.get("reasoning", ""), payload.get("recommendation_id"),
                     status, arm_ref, entered_at,
-                ),
+                ) + _origin_val,
             )
         conn.commit()
         pos_id = cursor.lastrowid
@@ -1330,6 +1378,14 @@ def seed_portfolio_from_recommendations() -> list[dict]:
             ).fetchall()
         }
 
+        # Durable origin for THIS door — the same literal handed to the admission
+        # gate below, so the stored row and the shadow log agree. Guarded on the
+        # column existing (migrate_portfolio_origin_column) so a database that
+        # has not migrated inserts exactly as before. Computed once, not per row.
+        _seed_cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_positions)").fetchall()}
+        _origin_col = ", source_door" if "source_door" in _seed_cols else ""
+        _origin_val = ("seed_from_recommendations",) if _origin_col else ()
+
         new_positions: list[dict] = []
         for row in rows:
             row_d = dict(row)
@@ -1426,14 +1482,15 @@ def seed_portfolio_from_recommendations() -> list[dict]:
                 logger.debug("[AdmissionGate] shadow eval skipped (seed)", exc_info=True)
 
             conn.execute(
-                """
+                f"""
                 INSERT INTO portfolio_positions
                     (symbol, horizon, direction, entry_price, stop_loss, target_1, target_2,
                      current_price, profit_loss, profit_loss_pct, drawdown, drawdown_pct,
                      high_since_entry, low_since_entry, days_held,
                      confidence_score, reasoning, recommendation_id, status,
-                     arm_ref_price, entered_at, created_at)
-                VALUES (?, ?, 'LONG', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
+                     arm_ref_price, entered_at, created_at{_origin_col})
+                VALUES (?, ?, 'LONG', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE',
+                        ?, ?, ?{', ?' if _origin_col else ''})
                 """,
                 (
                     symbol, horizon,
@@ -1448,7 +1505,7 @@ def seed_portfolio_from_recommendations() -> list[dict]:
                     row_d.get("recommendation_id"),
                     arm_ref, entered_at,
                     row_d.get("created_at", datetime.now(_IST).isoformat()),
-                ),
+                ) + _origin_val,
             )
             active_counts[horizon] = active_counts.get(horizon, 0) + 1
             new_positions.append({
