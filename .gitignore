@@ -136,3 +136,8 @@ package.json
 # Claude Code: share hooks + project settings, keep personal overrides local
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Scratch API/OHLC dumps from ad-hoc analysis sessions. Underscore prefix is the
+# existing convention for these (_audit_*.json, _disc.json, _shadow_ohlc.json …);
+# they are regenerated on demand and one is 8 MB, so they never belong in git.
+_*.json
