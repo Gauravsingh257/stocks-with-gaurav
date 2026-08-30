@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-08-27**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-08-31**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -26,14 +26,14 @@ brand-new **SEO** workstream that put ~2,100 stock pages into Google. The immedi
 finishing SEO Phase 2 (internal linking, Core Web Vitals, GSC monitoring). The largest *unstarted*
 body of work is the commercial launch: payments, legal pages, monitoring.
 
-## Live system check — 2026-08-29
+## Live system check — 2026-08-31
 
 Verified against the running system, not from docs:
 
 | | |
 |---|---|
 | Engine | **live**, `v4.2.1`, mode `AGGRESSIVE`, scheduler running, Kite token fresh |
-| Books | Swing **20/20 FULL** (18 active + 2 pending) · Long-term **20/20 FULL** (17+3) · Momentum 17 active |
+| Books | Swing **14/20** (12 active + 2 pending) · Long-term **16/20** (13+3) · Momentum 17 active — room in both after the stale-exit cull |
 | SEO | sitemap **2,117 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
 | Backend | Railway `web-production-2781a` healthy. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
 
@@ -45,7 +45,7 @@ Verified against the running system, not from docs:
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
 | `selection` | 🟡 in validation | Phase 0/1/2 **all live** (Phase 2 = SWING only); measuring, not tuning |
-| `portfolio` | 🟢 steady | All three books running; audit decisions D1–D6 answered |
+| `portfolio` | 🔴 **ACTIVE** | Stale-exit outage fixed + live; per-book patience Swing 20d / LT 45d |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
@@ -94,27 +94,49 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 > read from `services/phase2_ranking.py` instead of the deployed environment. Check Railway env
 > for flag state, never the code default — the whole design is that env overrides the default.
 
-**NEXT**
-1. Measure Phase 2's effect now that it is live — it has been on since ~2026-08-23/24, so a
-   before/after cohort exists. Read the calibration report; do not tune on impressions.
-2. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
-3. Keep the honest funnel reporting from PR #169 in view; LT hit rate is honestly ~7%.
+**NEXT** — two findings from 2026-08-31 outrank everything else here, both **unverified**:
+
+1. **Confidence score is inversely related to outcome.** On 93 closed trades: highest-conf
+   quartile mean **−1.05%**, win **17.4%**; lowest-conf quartile **+3.90%**, win **58.3%**;
+   correlation **−0.142**. Hypothesis worth testing first: `swing_alpha_agent` *downgrades*
+   confidence when CMP is far from entry (−30% if gap >5%), so high conf ≈ chasing and low conf ≈
+   pullback setups. If real, this outranks every exit-rule and slot change. **Verify before acting.**
+2. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
+   symbols, same confidence scores, differing only in the `setup` label. Odd for 1–8 week vs
+   6–24 month horizons, and it makes the books less independent than assumed. Also only **3**
+   candidates are served where ranking runs report `selected_count: 20`.
+3. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
+   sample is **2 positions, not 7** (only KRISHANA and ANTHEM came through the Phase-2 door).
+4. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
 
 **BLOCKED** — nothing. Gated on *time and data*, not on a decision.
 
 **Why** → `[[phase2-smc-as-score]]`, `[[selection-engine-teardown-phase0]]`,
 `[[calibration-validation-phase]]`, `[[explainability-principles]]`.
 
-## `portfolio` — steady
+## `portfolio` — ACTIVE (exit discipline restored)
 
-**NOW** — running. Swing book is **at cap (20/20)**, so new ideas cannot enter until something exits.
+**NOW** — nothing in flight. Both books have room again: Swing 14/20 used, LT 16/20.
 
-**STOPPED AT** — PR #161 (2026-08-19) shipped the upstream `admission_gate` in **shadow** mode.
-Shadow data only accrues on position creation, so it fills slowly.
+**STOPPED AT** — 2026-08-31, the stale-exit outage found and fixed:
+
+- **The bug:** the stale/dead-money cull sat inside the `else` of the trend-break branch, so the
+  risk engine (2026-07-09, flags default-ON) made it **unreachable**. `PORTFOLIO_STALE_EXIT` read
+  `"1"` the whole time. Dead ~7 weeks → positions sat 38–87 days going nowhere. → `[[flag-on-but-unreachable]]`
+- **Fixed and LIVE:** `PORTFOLIO_STALE_EXIT_INDEPENDENT=1` set on `web`. **Verified fired** — 8
+  positions closed and journaled 2026-08-31 00:31 (4 SWING, 4 LT; combined −2.30%, avg −0.29%).
+- **Per-book patience, live:** Swing **20d**, LT **45d** (`PORTFOLIO_STALE_EXIT_MIN_DAYS_SWING`
+  / `_LONGTERM`). GRINDWELL at 39d was correctly KEPT — a flat 20-day rule would have culled it.
+- **`source_door` on positions** (PR-less, `535aa87`) — deployed, column verified in prod, but
+  **still 0 non-null**: no position has been created since. Unproven until one is.
+- 2 positions closed manually on the 8-week Swing horizon (EVEREADY 110d, GRAUWEIL 90d).
 
 **NEXT**
-1. Let admission-gate shadow data accumulate, then compare against the enforcing `entry_gate`.
-2. Watch the swing cap — at 20/20 the book is inert to new signals.
+1. Watch 2026-09-01 open: 4 free Swing + 4 free LT slots. Does anything actually promote? Only
+   **3 candidates** exist on the feed, so this tests whether slots were ever the constraint.
+2. `python -m scripts.exit_rule_health` after any risk/exit change — exits non-zero on an
+   unexplained silence. Currently 0.
+3. Admission-gate shadow review 2026-09-18 — **export Redis first, 30-day TTL**.
 
 **BLOCKED** — nothing.
 
@@ -161,12 +183,19 @@ site-wide affordance pass making interactive things look interactive.
 is a business" — remains the largest unstarted body of work.
 
 **STOPPED AT** — two separate threads:
-- *Continuity system:* **PR #183 merged to `main` 2026-08-26.** Verified working in a live
-  session: the SessionStart hook fires and injects state, and `/checkpoint` + `/where-are-we`
-  are registered. Four sources of truth now split cleanly — `CLAUDE.md` (architecture), this
-  file (state), project memory (why), git/gh (history). **One piece unproven:** the Sunday
-  curator (`trig_01KBuoy5gBsFsnY3anQQpLKM`) is enabled but has **never run** — first real fire
-  is 2026-08-30 09:00 IST. Treat its behaviour as unverified until then.
+- *Continuity system:* fully verified. PR #183 merged 2026-08-26; hooks, `/checkpoint` and
+  `/where-are-we` all confirmed working in live sessions. The Sunday curator **ran for the first
+  time 2026-08-30 03:31 UTC and correctly did nothing** (no drift → no PR), which is the intended
+  silent week. Known blind spot: it is a *cloud* agent, so it cannot read Railway env and will
+  always reason from code defaults — it must never be trusted on flag state.
+- *Experiment tracking (new 2026-08-31):* an audit found **four** shadow/alert experiments
+  running, **three for 86–96 days with no review date**. Six calendar reminders now exist
+  (`collab.shreesingh@gmail.com`), each naming the flag, the file, and forcing a
+  promote/retire/extend decision — plus a **monthly recurring audit** with the rediscovery
+  commands so this cannot silently recur.
+- *Stagnation shadow log:* shipped (`19285e7`) — a GitHub Action at 11:15 UTC Mon–Fri appending
+  to `docs/validation/stagnation_shadow_log.csv`. **Has never run**; first fire is a weekday.
+  Shipped but unproven.
 - *Commercial launch:* [`../LAUNCH_CHECKLIST.md`](../LAUNCH_CHECKLIST.md) is the master tracker
   and is still **live**; its `🔒` gates are unmet.
 
@@ -195,6 +224,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| direct-to-main 2026-08-30/31 | `portfolio` | stale-exit outage fixed + enabled, per-book patience, `source_door`, exit-rule health check |
 | #181–#182 | `seo` | SSR stock pages, sitemap, JSON-LD, ISR fix |
 | #179–#180 | `selection` | SMC as a ranking factor (flag OFF) |
 | #174–#178 | `selection` `ui-ux` | Stock Universe page + tab + affordance pass |
