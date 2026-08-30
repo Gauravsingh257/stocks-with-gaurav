@@ -38,6 +38,21 @@ _STALE_EXIT_ON = os.getenv("PORTFOLIO_STALE_EXIT", "1").strip().lower() in {"1",
 _STALE_EXIT_MIN_DAYS = int(os.getenv("PORTFOLIO_STALE_EXIT_MIN_DAYS", "20"))
 _STALE_EXIT_UPPER_PCT = float(os.getenv("PORTFOLIO_STALE_EXIT_UPPER_PCT", "3.0"))    # <= +3% P&L = no real progress
 _STALE_EXIT_LOWER_PCT = float(os.getenv("PORTFOLIO_STALE_EXIT_LOWER_PCT", "-5.0"))   # >= -5% P&L = still near entry
+# Evaluate the stale cull on BOTH exit paths, not only the legacy fallback.
+#
+# The stale cull was written inside the `else` of the trend-break branch, so
+# enabling the risk engine's TREND_BREAK exit silently made it unreachable:
+# STALE_EXIT fired 20 times between 2026-07-05 and 2026-07-08 and then never
+# again, because the risk engine shipped 2026-07-09 with its flags default-ON.
+# The two rules answer different questions — trend-break asks "has this broken
+# down?", stale asks "has this gone nowhere?" — so a position that is neither
+# broken nor moving was matched by nothing and sat until something else closed it.
+#
+# Default "0" keeps today's behaviour byte-identical; flip to "1" to make the
+# stale cull evaluate regardless of which structural exit is active.
+_STALE_EXIT_INDEPENDENT = os.getenv(
+    "PORTFOLIO_STALE_EXIT_INDEPENDENT", "0"
+).strip().lower() in {"1", "true", "yes"}
 
 # per-day 200-DMA cache {symbol: (day, dma)}
 _dma_cache: dict[str, tuple[str, float | None]] = {}
@@ -158,7 +173,8 @@ class PositionTrackingService:
                 # enabled; flip TREND_BREAK_EXIT_ENABLED=0 to fall back to legacy.
                 _tb_on = False
                 try:
-                    from services.risk_engine import cfg as _rcfg, evaluate_trend_break_exit
+                    from services.risk_engine import cfg as _rcfg
+                    from services.risk_engine import evaluate_trend_break_exit
                     _rc = _rcfg()
                     _tb_on = _rc["RISK_ENGINE_ENABLED"] and _rc["TREND_BREAK_EXIT_ENABLED"]
                 except Exception:
@@ -187,6 +203,20 @@ class PositionTrackingService:
                     ):
                         new_status = "CLOSED"
                         exit_reason = "STALE_EXIT"
+
+                # Stale cull, evaluated on BOTH paths (see _STALE_EXIT_INDEPENDENT).
+                # `exit_reason is None` means neither TREND_BREAK nor the legacy
+                # culls claimed this position, so the legacy branch above cannot
+                # double-fire: it has already set exit_reason if it matched.
+                if (
+                    exit_reason is None
+                    and stale_exit_on
+                    and _STALE_EXIT_INDEPENDENT
+                    and days_held >= _STALE_EXIT_MIN_DAYS
+                    and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
+                ):
+                    new_status = "CLOSED"
+                    exit_reason = "STALE_EXIT"
 
             is_exit = (new_status != "ACTIVE" and old_status == "ACTIVE")
             # On an exit, keep the row ACTIVE for the metric write so close()
