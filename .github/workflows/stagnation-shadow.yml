@@ -1,0 +1,63 @@
+name: Stagnation Shadow Log
+
+# Read-only observer for the proposed stagnation-exit rule ("held >20 days AND
+# return within +-4% -> exit"). It records what the rule WOULD fire on and
+# whether a replacement candidate was actually available, and changes nothing.
+#
+# It exists because the benefit the rule is FOR — recycling a freed slot into a
+# better idea — could not be measured from history: the point-in-time candidate
+# ledger held zero candidates with a knowable outcome, and 82% of long-term
+# candidates expire without ever triggering. Only forward observation answers
+# it. Reviewed 2026-09-28 (calendar reminder).
+
+on:
+  schedule:
+    # 11:15 UTC = 16:45 IST (Mon-Fri), just after the archive-signals job so the
+    # backend has already refreshed prices for the day.
+    - cron: "15 11 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      band:
+        description: "abs % return band that counts as stagnant"
+        required: false
+        default: "4"
+
+concurrency:
+  group: stagnation-shadow
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Log what the stagnation rule would fire on
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit the appended log back to the repo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install --quiet requests
+
+      - name: Append today's observation
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL || 'https://web-production-2781a.up.railway.app' }}
+        run: |
+          python -m scripts.stagnation_shadow --band "${{ github.event.inputs.band || '4' }}"
+
+      - name: Commit if the log changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- docs/validation/stagnation_shadow_log.csv; then
+            echo "no change — nothing to commit"
+            exit 0
+          fi
+          git add docs/validation/stagnation_shadow_log.csv
+          git commit -m "chore(shadow): stagnation observation $(date -u +%Y-%m-%d) [skip ci]"
+          git push
