@@ -122,3 +122,64 @@ def test_flag_exists_and_defaults_off(monkeypatch):
     assert pts._STALE_EXIT_INDEPENDENT is True
     monkeypatch.delenv("PORTFOLIO_STALE_EXIT_INDEPENDENT", raising=False)
     importlib.reload(pts)
+
+
+# ── per-book patience ────────────────────────────────────────────────────────
+# Swing exists to make money quickly, so a flat position is shuffled out at 20
+# days. Long-Term can sit through a flat stretch and still resolve, so culling
+# it at 20 would fight the strategy — it gets 45.
+
+def test_swing_and_longterm_have_different_patience():
+    import importlib
+
+    import services.position_tracking_service as pts
+    importlib.reload(pts)
+    assert pts._stale_min_days("SWING") == 20
+    assert pts._stale_min_days("LONGTERM") == 45
+
+
+def test_a_35_day_flat_position_is_culled_in_swing_but_kept_in_longterm():
+    """The whole point of the split, expressed as one case."""
+    import importlib
+
+    import services.position_tracking_service as pts
+    importlib.reload(pts)
+    days = 35
+    assert days >= pts._stale_min_days("SWING"), "swing culls a 35-day flat position"
+    assert days < pts._stale_min_days("LONGTERM"), "long-term keeps it"
+
+
+def test_unknown_or_missing_horizon_falls_back_to_the_global_threshold():
+    """A book nobody configured must never be culled on a threshold nobody
+    chose for it."""
+    import importlib
+
+    import services.position_tracking_service as pts
+    importlib.reload(pts)
+    assert pts._stale_min_days(None) == pts._STALE_EXIT_MIN_DAYS
+    assert pts._stale_min_days("") == pts._STALE_EXIT_MIN_DAYS
+    assert pts._stale_min_days("MOMENTUM") == pts._STALE_EXIT_MIN_DAYS
+    assert pts._stale_min_days("SOME_NEW_BOOK") == pts._STALE_EXIT_MIN_DAYS
+
+
+def test_horizon_matching_is_case_and_whitespace_insensitive():
+    import importlib
+
+    import services.position_tracking_service as pts
+    importlib.reload(pts)
+    assert pts._stale_min_days("swing") == 20
+    assert pts._stale_min_days("  LongTerm  ".replace("LongTerm", "longterm")) == 45
+
+
+def test_per_book_thresholds_are_env_overridable(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_SWING", "15")
+    monkeypatch.setenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_LONGTERM", "60")
+    import services.position_tracking_service as pts
+    importlib.reload(pts)
+    assert pts._stale_min_days("SWING") == 15
+    assert pts._stale_min_days("LONGTERM") == 60
+    monkeypatch.delenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_SWING", raising=False)
+    monkeypatch.delenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_LONGTERM", raising=False)
+    importlib.reload(pts)

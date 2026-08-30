@@ -54,6 +54,27 @@ _STALE_EXIT_INDEPENDENT = os.getenv(
     "PORTFOLIO_STALE_EXIT_INDEPENDENT", "0"
 ).strip().lower() in {"1", "true", "yes"}
 
+# Per-book patience. One global threshold cannot serve both books, because they
+# are not trying to do the same thing:
+#   SWING    — exists to make money quickly. A position going nowhere should be
+#              shuffled out for one with more potential, so it gets 20 days.
+#   LONGTERM — can sit through a long flat stretch and still resolve later, so a
+#              20-day cull would fight the strategy. It gets 45 days.
+# MOMENTUM is not tracked here; it has its own MOMENTUM_TIME_EXIT_DAYS (40).
+# An unknown/missing horizon falls back to the global value, so a new book can
+# never be culled on a threshold nobody chose for it.
+_STALE_EXIT_MIN_DAYS_BY_BOOK = {
+    "SWING": int(os.getenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_SWING", "20")),
+    "LONGTERM": int(os.getenv("PORTFOLIO_STALE_EXIT_MIN_DAYS_LONGTERM", "45")),
+}
+
+
+def _stale_min_days(horizon: str | None) -> int:
+    """Days a position of this book may sit flat before the stale cull applies."""
+    if not horizon:
+        return _STALE_EXIT_MIN_DAYS
+    return _STALE_EXIT_MIN_DAYS_BY_BOOK.get(str(horizon).strip().upper(), _STALE_EXIT_MIN_DAYS)
+
 # per-day 200-DMA cache {symbol: (day, dma)}
 _dma_cache: dict[str, tuple[str, float | None]] = {}
 
@@ -155,6 +176,13 @@ class PositionTrackingService:
             high_since = max(prev_high, cmp)
             low_since = min(prev_low, cmp)
 
+            # Which book this position belongs to — decides how long it may sit
+            # flat before the stale cull applies. Read from the raw row so no
+            # store interface change is needed; a store without a horizon simply
+            # falls back to the global threshold.
+            _horizon = pos.raw.get("horizon") if isinstance(pos.raw, dict) else None
+            stale_min_days = _stale_min_days(_horizon)
+
             # Auto-resolve status
             old_status = pos.status or "ACTIVE"
             new_status = "ACTIVE"
@@ -198,7 +226,7 @@ class PositionTrackingService:
                     if (
                         exit_reason is None
                         and stale_exit_on
-                        and days_held >= _STALE_EXIT_MIN_DAYS
+                        and days_held >= stale_min_days
                         and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
                     ):
                         new_status = "CLOSED"
@@ -212,7 +240,7 @@ class PositionTrackingService:
                     exit_reason is None
                     and stale_exit_on
                     and _STALE_EXIT_INDEPENDENT
-                    and days_held >= _STALE_EXIT_MIN_DAYS
+                    and days_held >= stale_min_days
                     and _STALE_EXIT_LOWER_PCT <= pl_pct <= _STALE_EXIT_UPPER_PCT
                 ):
                     new_status = "CLOSED"
