@@ -4,9 +4,16 @@
 > Read-only analysis. No strategy, selection, entry, exit, threshold or portfolio behaviour was
 > changed in producing this report.
 >
-> **Verdict: INCONCLUSIVE.** The post-cutover sample is 10 entries with a mean holding period of
-> 2 days, against a pre-cutover comparison of 79 with a mean of ~19–48 days. The cohorts are not
-> comparable yet. Re-run this report at n≥30 post-cutover closes.
+> **Verdict: INCONCLUSIVE.** Unchanged, but for a stronger reason than first recorded.
+>
+> **CORRECTION (2026-08-30):** the effective Phase-2 sample is **2 positions, not 7.** A
+> door-attribution audit established that 5 of the 7 post-cutover swing positions entered through
+> `seed_from_recommendations`, a path that never applies Phase 2. Only **KRISHANA** and **ANTHEM**
+> are confirmed Phase-2-influenced. Section 4's original framing treated all 7 as a post-Phase-2
+> cohort; that was wrong. See §3a.
+>
+> With n=2 outcomes, no performance conclusion of any kind is available. Re-run at n≥30
+> *Phase-2-attributed* closes — not merely 30 post-cutover closes.
 
 ## 1. What Phase 2 actually does
 
@@ -62,7 +69,52 @@ Two further reasons attribution is weak:
 > **This is the single biggest gap.** Without persisting `phase2_score` on the recommendation
 > row, no future re-run of this report can attribute outcomes to Phase 2 either. See §7.
 
+## 3a. Door attribution — the correction (added 2026-08-30)
+
+A follow-up audit answered what §3 said could not be answered, using a source this report had not
+consulted: the admission gate's own `source_door` record.
+
+**Two doors write into the swing book, and only one applies Phase 2.**
+
+| Door | Path | Phase 2? |
+|---|---|---|
+| 1 — `promote_to_portfolio` | `validation_engine` (Phase 2 rewrites `final_selected`) → `signals_log` → `select_from_final_ideas` | **YES** |
+| 2 — `seed_from_recommendations` | `ranking_engine` (**no Phase 2 anywhere in the module**) → agent → `stock_recommendations` → `trade_tracker` → `running_trades` → seed | **NO** |
+
+Per-position, from `admission_gate:decisions:*` in Redis and corroborated by the id namespace
+(`recommendation_id` is polysemous — door 1 stores a `signals_log` id, door 2 a
+`stock_recommendations` id, confirmed against the track-record ledger):
+
+| Symbol | recommendation_id | Door | Phase 2 applied? |
+|---|---:|---|---|
+| **KRISHANA** | 919968 | `promote_to_portfolio` | **YES** |
+| **ANTHEM** | 938783 | `promote_to_portfolio` | **YES** |
+| EBGNG | 455 | `seed_from_recommendations` | NO |
+| BEPL | 456 | `seed_from_recommendations` | NO |
+| AWL | 473 | `seed_from_recommendations` | NO |
+| POLICYBZR | 477 | `seed_from_recommendations` | NO |
+| DCBBANK | 478 | `seed_from_recommendations` | NO |
+
+**Consequences for this report:**
+
+- The **effective Phase-2 outcome sample is 2**, not 7. Section 4's post-cutover tables mix both
+  doors and therefore do **not** measure Phase 2; read them as "post-cutover book activity".
+- The three realized post-cutover closes (`KRONOX`, `SWIGGY`, `SHANTIGEAR`) were also created via
+  the `stock_recommendations` store, so the realized post-cohort is **not** Phase 2 either.
+- The clean stop-distance finding in §4 stands, and is now better explained: it is a property of
+  which door admitted the position, not of Phase 2.
+
+`source_door` is now persisted on every new position (2026-08-30), so future re-runs can split the
+cohorts directly instead of reconstructing this from a 30-day Redis log. The five existing door-2
+rows predate the column and remain NULL; their attribution survives only in Redis, which expires
+around **2026-09-23**.
+
 ## 4. Measured facts
+
+> ⚠️ **Read these tables as post-cutover *book activity*, not as a Phase 2 cohort.** Per §3a, 5 of
+> the 7 open positions and all 3 closed ones entered through the non-Phase-2 door. The split below
+> is by date, which is what was available before door attribution existed. It is retained as the
+> measured record; it does not measure Phase 2.
 
 Cutover taken as **2026-08-24**. Split by `created_at` for closed rows, `entered_at` for open.
 
@@ -109,6 +161,10 @@ cohort is being constructed differently.
 
 **Verdict: INCONCLUSIVE.** Specifically *not* a FAIL, despite post-cutover P/L looking worse.
 
+**The decisive reason (added 2026-08-30): the Phase-2 sample is 2 positions.** Even if every
+confound below were controlled, n=2 supports no conclusion. Everything that follows was the
+original reasoning and still holds — it is simply no longer the binding constraint.
+
 The headline comparison (+0.12% vs +2.56%) is **not evidence of anything**, because:
 
 1. **Holding-period confound (fatal).** Post-cutover positions have held 2 days; pre-cutover
@@ -121,6 +177,9 @@ The headline comparison (+0.12% vs +2.56%) is **not evidence of anything**, beca
    and the prior bootstrap already found the weight variants statistically **tied**.
 4. **Not isolated.** Phase 0/1, sector flags and the regime governor changed in the same window.
 5. **Regime uncontrolled.** No matched market-condition comparison was performed.
+6. **Cohort contamination (found 2026-08-30).** 5 of the 7 never passed through Phase 2 at all —
+   the "post-cutover cohort" was a date range, not a treatment group. This is the error that
+   matters most, because it made the sample look ~3.5× larger than it is.
 
 The 30% stop-out rate within 1–3 days is the one number worth watching. It is **not** currently
 alarming — tighter stops (§4) mechanically produce more, earlier stop-outs, which is the intended
