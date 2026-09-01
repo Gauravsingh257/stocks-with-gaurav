@@ -24,20 +24,22 @@ grep -cE '^\- \[ \].*🔒' LAUNCH_CHECKLIST.md   # open hard launch gates
 
 Then read `docs/PROJECT_STATE.md` — every workstream's `NEXT` and `BLOCKED`.
 
-Then the calendar (`collab.shreesingh@gmail.com`, `list_events`, next ~45 days). It carries
-**two unrelated streams** and both matter:
-- **Trading-system reviews** — shadow/alert experiments with forced promote/retire/extend decisions.
-- **Brand/influencer business** — payment follow-ups and deliverable deadlines, each with the
-  contact, amount and terms in the description. These are money and reputation with hard dates;
-  they usually outrank engineering work even though this is a code repo.
+Then the calendar (`collab.shreesingh@gmail.com`, `list_events`, next ~45 days).
+
+**Scope warning — this calendar is shared and mostly belongs to a different business.** It
+carries brand/influencer work (content deadlines, payment follow-ups with contacts and fees)
+that has **nothing to do with this project**. Include ONLY events about the trading system /
+stockswithgaurav.com — they are identifiable by `stocks-with-gaurav` in the description, or by
+naming a flag, a repo file or a shadow experiment. Everything else is out of scope: do not list
+it, do not prioritise it, do not mention it. If in doubt, leave it out.
 
 If a source fails (gh offline, MCP down, API 502), say so in one line and carry on. A partial
 list delivered now beats a complete one after a retry loop.
 
 ## Order by what it costs to be late
 
-1. **Overdue or due today** — a missed brand deliverable or an unpaid invoice costs real money.
-2. **Dated this week** — calendar reviews, expiring data.
+1. **Overdue or due today** — an expired TTL destroys evidence that cannot be recovered.
+2. **Dated this week** — experiment reviews, expiring data windows.
 3. **Decisions only Gaurav can make** — these block everything downstream and are usually the
    real bottleneck, not the engineering.
 4. **Highest-leverage engineering** — prefer the upstream fix. A selection bug outranks an exit
@@ -46,8 +48,8 @@ list delivered now beats a complete one after a retry loop.
 
 Two ordering rules worth stating because they are easy to get wrong:
 
-- **Time-critical beats important.** Redis TTLs, 30/60-day payment terms and content deadlines do
-  not wait for a better moment.
+- **Time-critical beats important.** A Redis TTL or an expiring data window does not wait for a
+  better moment; a refactor does.
 - **Unverified findings are not tasks.** "Confidence score is inversely correlated with outcome"
   is a *hypothesis to test*, not a fix to ship. List it as "verify X", never as "fix X".
 
