@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-08-31**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-10**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -20,21 +20,24 @@
 ## In one paragraph
 
 The trading system is **live and trading**; the website is **publicly readable but not commercially
-launched** (no payments, no legal pages). The last three weeks were spent making stock *selection*
-honest and measurable (Phase 0/1 shipped, Phase 2 built but flag-OFF), and the last two days on a
-brand-new **SEO** workstream that put ~2,100 stock pages into Google. The immediate next move is
-finishing SEO Phase 2 (internal linking, Core Web Vitals, GSC monitoring). The largest *unstarted*
-body of work is the commercial launch: payments, legal pages, monitoring.
+launched** (no payments, no legal pages). August was spent making stock *selection* honest and
+measurable (Phase 0/1/2 all live, now in validation) and putting ~2,300 stock pages into Google via
+a new **SEO** workstream. Early September closed a long-running integrity bug: the phantom "Entry
+Triggered" Telegram alerts were never a gate defect — a **duplicate Railway deployment** was running
+the whole app against its own throwaway database. The immediate next move is finishing SEO Phase 2
+(internal linking, Core Web Vitals, GSC monitoring). The largest *unstarted* body of work is the
+commercial launch: payments, legal pages, monitoring.
 
-## Live system check — 2026-08-31
+## Live system check — 2026-09-10
 
 Verified against the running system, not from docs:
 
 | | |
 |---|---|
-| Engine | **live**, `v4.2.1`, mode `AGGRESSIVE`, scheduler running, Kite token fresh |
-| Books | Swing **14/20** (12 active + 2 pending) · Long-term **16/20** (13+3) · Momentum 17 active — room in both after the stale-exit cull |
-| SEO | sitemap **2,117 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
+| Engine | **live**, `v4.2.1`, scheduler running, Kite connected |
+| Books | Swing **17/20** (13 active + 4 pending) · Long-term **11/20** (9+2) · Momentum 12 active |
+| Alerts | Telegram ↔ website **in sync**. The duplicate Railway project is silenced and has stayed silenced |
+| SEO | sitemap **2,316 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
 | Backend | Railway `web-production-2781a` healthy. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
 
 ---
@@ -45,7 +48,7 @@ Verified against the running system, not from docs:
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
 | `selection` | 🟡 in validation | Phase 0/1/2 **all live** (Phase 2 = SWING only); measuring, not tuning |
-| `portfolio` | 🔴 **ACTIVE** | Stale-exit outage fixed + live; per-book patience Swing 20d / LT 45d |
+| `portfolio` | 🔴 **ACTIVE** | Phantom entry alerts solved — a duplicate deployment, now silenced; stale-exit fix holding |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
@@ -116,31 +119,39 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 
 ## `portfolio` — ACTIVE (exit discipline restored)
 
-**NOW** — nothing in flight. Both books have room again: Swing 14/20 used, LT 16/20.
+**NOW** — nothing in flight. Books have room: Swing 17/20 used, LT 11/20.
 
-**STOPPED AT** — 2026-08-31, the stale-exit outage found and fixed:
+**STOPPED AT** — two arcs, both closed:
 
-- **The bug:** the stale/dead-money cull sat inside the `else` of the trend-break branch, so the
-  risk engine (2026-07-09, flags default-ON) made it **unreachable**. `PORTFOLIO_STALE_EXIT` read
-  `"1"` the whole time. Dead ~7 weeks → positions sat 38–87 days going nowhere. → `[[flag-on-but-unreachable]]`
-- **Fixed and LIVE:** `PORTFOLIO_STALE_EXIT_INDEPENDENT=1` set on `web`. **Verified fired** — 8
-  positions closed and journaled 2026-08-31 00:31 (4 SWING, 4 LT; combined −2.30%, avg −0.29%).
-- **Per-book patience, live:** Swing **20d**, LT **45d** (`PORTFOLIO_STALE_EXIT_MIN_DAYS_SWING`
-  / `_LONGTERM`). GRINDWELL at 39d was correctly KEPT — a flat 20-day rule would have culled it.
-- **`source_door` on positions** (PR-less, `535aa87`) — deployed, column verified in prod, but
-  **still 0 non-null**: no position has been created since. Unproven until one is.
-- 2 positions closed manually on the 8-week Swing horizon (EVEREADY 110d, GRAUWEIL 90d).
+- **2026-09-02 — the phantom "Entry Triggered" alerts, solved.** Telegram kept announcing entries
+  (SBIFUNDS, OLAELEC, NIACL, and many more daily) that never appeared on the site. The cause was
+  **not** a gate bypass: a *second Railway project* (`affectionate-luck`, service misleadingly named
+  `engine`) was running `scripts/start_web.py` — the entire dashboard app, portfolio tracker
+  included — against its own **volume-less, ephemeral** `/app/dashboard.db`, holding the **same** bot
+  token and channel. Its book was real to itself and invisible to the site. Fixed read-only-safely by
+  **deleting `TELEGRAM_BOT_TOKEN` from that service** and restarting it — no code, no canonical
+  change. Verified silent, and still silent 2026-09-10. → `[[duplicate-railway-project-phantom-alerts]]`
+- **2026-08-31 — stale-exit outage fixed and live.** The cull sat unreachable inside the trend-break
+  `else` for ~7 weeks while its flag read `"1"`. `PORTFOLIO_STALE_EXIT_INDEPENDENT=1` on `web` fixed
+  it and fired immediately (8 positions closed 00:31, combined −2.30%). Per-book patience live:
+  Swing **20d**, LT **45d**. → `[[flag-on-but-unreachable]]`
+- **`source_door` now proven.** Positions created 2026-09-02 carry `promote_to_portfolio` /
+  `seed_from_recommendations` — the attribution column works. This also answers the open question
+  from the last checkpoint: promotion happens normally when slots free up, so **slots were never the
+  binding constraint**.
 
 **NEXT**
-1. Watch 2026-09-01 open: 4 free Swing + 4 free LT slots. Does anything actually promote? Only
-   **3 candidates** exist on the feed, so this tests whether slots were ever the constraint.
+1. **Decide the duplicate project's fate.** It is silenced but still deployed and still auto-builds
+   from `main`. Delete `affectionate-luck` once the channel has been clean for a few sessions — but
+   establish *why* it exists first; nothing in the repo records it.
 2. `python -m scripts.exit_rule_health` after any risk/exit change — exits non-zero on an
    unexplained silence. Currently 0.
 3. Admission-gate shadow review 2026-09-18 — **export Redis first, 30-day TTL**.
 
 **BLOCKED** — nothing.
 
-**Why** → `[[two-portfolio-gates]]` (the two gates mean *opposite* things by "admission" — the single
+**Why** → `[[duplicate-railway-project-phantom-alerts]]` (why `entry_gate` was never the culprit),
+`[[two-portfolio-gates]]` (the two gates mean *opposite* things by "admission" — the single
 most confusable thing in this codebase), `[[giveback-rule-nogo]]` (D6: give-back rule was backtested
 and **rejected**), `[[portfolio-selection-audit-2026-08]]` (D1–D5 answered: hold, hold, new-rules-
 apply-to-new-entries-only, no price floor, no turnover change).
@@ -192,10 +203,11 @@ is a business" — remains the largest unstarted body of work.
   running, **three for 86–96 days with no review date**. Six calendar reminders now exist
   (`collab.shreesingh@gmail.com`), each naming the flag, the file, and forcing a
   promote/retire/extend decision — plus a **monthly recurring audit** with the rediscovery
-  commands so this cannot silently recur.
-- *Stagnation shadow log:* shipped (`19285e7`) — a GitHub Action at 11:15 UTC Mon–Fri appending
-  to `docs/validation/stagnation_shadow_log.csv`. **Has never run**; first fire is a weekday.
-  Shipped but unproven.
+  commands so this cannot silently recur. **The same blind spot recurred at the deployment layer:**
+  a duplicate Railway project ran the full app unnoticed for ≥2 weeks (see `portfolio`). The calendar
+  now audits flags; nothing audits *deployments*.
+- *Stagnation shadow log:* **running and proven.** The 11:15 UTC Mon–Fri Action has appended to
+  `docs/validation/stagnation_shadow_log.csv` on every weekday since 2026-09-01. Review 2026-09-28.
 - *Commercial launch:* [`../LAUNCH_CHECKLIST.md`](../LAUNCH_CHECKLIST.md) is the master tracker
   and is still **live**; its `🔒` gates are unmet.
 
@@ -224,6 +236,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| **no-PR 2026-09-02** | `portfolio` | duplicate Railway project silenced (Telegram token deleted) — config-only, so it leaves **no git trace**; this row is the only record |
 | direct-to-main 2026-08-30/31 | `portfolio` | stale-exit outage fixed + enabled, per-book patience, `source_door`, exit-rule health check |
 | #181–#182 | `seo` | SSR stock pages, sitemap, JSON-LD, ISR fix |
 | #179–#180 | `selection` | SMC as a ranking factor (flag OFF) |
