@@ -44,6 +44,22 @@ ENGINE_VERSIONS = {
 }
 
 
+def _sector_of(symbol):
+    """Sector label for the audit's sector attribution.
+
+    Pure dict lookup — the same source `admission_gate.sector_for` uses — so it
+    is deterministic and safe to apply to historical rows. Unclassified symbols
+    come back as the codebase's existing "OTHER" sentinel (not a real sector);
+    the audit counts it separately rather than treating it as a category. None
+    only on lookup failure. Never raises — a lifecycle record must not fail to
+    be written over a missing label."""
+    try:
+        from services.portfolio_risk import get_sector
+        return get_sector(str(symbol or "").replace("NSE:", "")) or None
+    except Exception:
+        return None
+
+
 def _pct(price, entry):
     """Excursion as % from entry — the raw high/low is meaningless on its own."""
     p, e = _f(price), _f(entry)
@@ -127,9 +143,16 @@ def backfill(dry_run: bool = False) -> dict:
                         "mae_pct": _pct(d.get("low_since_entry"), d.get("entry_price")),
                         "high_since_entry": _f(d.get("high_since_entry")),
                         "low_since_entry": _f(d.get("low_since_entry")),
+                        # `sector` is carried here so the OLD-vs-NEW audit can do
+                        # sector attribution — the one gap the 2026-09-13 audit hit.
+                        # Pure dict lookup (services.portfolio_risk.get_sector), no
+                        # I/O and no trading effect; absent rather than guessed when
+                        # unresolvable. Regime is backfilled separately from the
+                        # timestamped regime_history by scripts/lifecycle_enrich_context.
                         "context_json": json.dumps({
                             "reasoning": d.get("reasoning"), "horizon": d.get("horizon"),
                             "confidence": _f(d.get("confidence_score")),
+                            "sector": _sector_of(d.get("symbol")),
                         }, default=str),
                         "source_table": "portfolio_journal", "source_id": str(d["id"]),
                         "is_duplicate": int(d.get("is_duplicate") or 0), "is_legacy": 1,
