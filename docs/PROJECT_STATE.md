@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-10**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-13**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -24,21 +24,25 @@ launched** (no payments, no legal pages). August was spent making stock *selecti
 measurable (Phase 0/1/2 all live, now in validation) and putting ~2,300 stock pages into Google via
 a new **SEO** workstream. Early September closed a long-running integrity bug: the phantom "Entry
 Triggered" Telegram alerts were never a gate defect — a **duplicate Railway deployment** was running
-the whole app against its own throwaway database. The immediate next move is finishing SEO Phase 2
-(internal linking, Core Web Vitals, GSC monitoring). The largest *unstarted* body of work is the
-commercial launch: payments, legal pages, monitoring.
+the whole app against its own throwaway database. Mid-September turned to the *instruments*: two
+shadow programmes had accumulated evidence they structurally could not act on, and both were
+measurement defects rather than failing subsystems. Fixing them put the first selection-quality
+change of the validation phase into production (`ENTRY_ANCHOR_MAX_GAP_PCT=10`). The immediate next
+move is validating that over two live sessions, then finishing SEO Phase 2. The largest *unstarted*
+body of work is the commercial launch: payments, legal pages, monitoring.
 
-## Live system check — 2026-09-10
+## Live system check — 2026-09-13
 
 Verified against the running system, not from docs:
 
 | | |
 |---|---|
 | Engine | **live**, `v4.2.1`, scheduler running, Kite connected |
-| Books | Swing **17/20** (13 active + 4 pending) · Long-term **11/20** (9+2) · Momentum 12 active |
+| Books | Swing 14 active · Momentum live. Journal holds **127** real closed trades (+26 re-seed dupes excluded) |
 | Alerts | Telegram ↔ website **in sync**. The duplicate Railway project is silenced and has stayed silenced |
 | SEO | sitemap **2,316 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
-| Backend | Railway `web-production-2781a` healthy. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
+| Backend | Railway `web-production-2781a` healthy, deploy `afd78c8a`. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
+| Railway | **4** services in `accomplished-passion`/production: `web`, `engine`, `scanner` (Scanner Suite cron), `Redis`. Selection flags live on `web` only |
 
 ---
 
@@ -47,8 +51,8 @@ Verified against the running system, not from docs:
 | Workstream | State | One line |
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
-| `selection` | 🟡 in validation | Phase 0/1/2 **all live** (Phase 2 = SWING only); measuring, not tuning |
-| `portfolio` | 🔴 **ACTIVE** | Phantom entry alerts solved — a duplicate deployment, now silenced; stale-exit fix holding |
+| `selection` | 🔴 **ACTIVE** | Anchor10 **live** since 2026-09-13 — first quality change of the validation phase; needs 2 live sessions |
+| `portfolio` | 🟡 in validation | Admission-gate metrics now complete on both doors; no threshold set yet |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
@@ -79,10 +83,22 @@ needs browser OAuth from Gaurav if any CLI-side work comes up.
 that would deindex the long tail). Deliberately deferred: `/stock/*` still renders dashboard chrome
 — that's a CWV decision, not a bug. No `generateStaticParams` list by explicit call; ISR only.
 
-## `selection` — recently active
+## `selection` — ACTIVE
 
-**NOW** — Phase 0 + 1 + 2 are **all live on the `web` service**, in validation. No new engine
-features until the current ones prove out.
+**NOW** — **Anchor10 is LIVE.** `ENTRY_ANCHOR_MAX_GAP_PCT=10` set on `web` 2026-09-13 (PR #184),
+replacing the historical 30%. Planned entries now re-anchor to `CMP − 0.5·ATR` when more than 10%
+from price instead of 30%, so a LIMIT order no longer sits a third of the way below a running
+stock. **Unexercised until Monday 2026-09-14** — it was enabled on a Sunday, so no scan has run
+under it yet. Phase 0/1/2 remain live and in validation.
+
+Two things the next session must not re-derive:
+- **This value is a module constant read at import** ([validation_engine.py:44](../services/validation_engine.py#L44)).
+  A Railway variable change alone does **not** restart the service — it needs an explicit
+  `railway redeploy --service web`. Rollback to `30` needs the same. This is not the usual
+  "remove the env var, no redeploy" flag.
+- The A/B shadow **goes flat by design** from 2026-09-14: `cfg_current` reads live scan entries,
+  so Config A now *is* Config B. The rollback signal must come from live idea quality, not from
+  `anchor-shadow-status`.
 
 **STOPPED AT** — PR #180 (2026-08-23) scoped SMC-as-score to the horizon it was validated on.
 Verified in Railway env on 2026-08-29, **not** from code defaults:
@@ -97,31 +113,57 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 > read from `services/phase2_ranking.py` instead of the deployed environment. Check Railway env
 > for flag state, never the code default — the whole design is that env overrides the default.
 
-**NEXT** — two findings from 2026-08-31 outrank everything else here, both **unverified**:
+**NEXT** — ordered:
 
-1. **Confidence score is inversely related to outcome.** On 93 closed trades: highest-conf
-   quartile mean **−1.05%**, win **17.4%**; lowest-conf quartile **+3.90%**, win **58.3%**;
-   correlation **−0.142**. Hypothesis worth testing first: `swing_alpha_agent` *downgrades*
-   confidence when CMP is far from entry (−30% if gap >5%), so high conf ≈ chasing and low conf ≈
-   pullback setups. If real, this outranks every exit-rule and slot change. **Verify before acting.**
-2. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
+1. **Validate Anchor10 on 2026-09-14 and 09-15.** Checklist: idea count not down >20% vs the
+   ~15–20/session baseline; actionable% (within 5% of entry) up from the 25–40% Config-A norm;
+   median remaining-RR ≥2.0 (Config A was running 0.22–1.36); no stop-inversion drops. Two clean
+   sessions → keep; a count collapse → roll back to `30` **and redeploy**.
+2. **Confidence-inversion — DIAGNOSED 2026-09-13, verdict: insufficient evidence, do not act.**
+   The pattern reproduces (sample identified: SWING, duplicates excluded, n=93, r=−0.138 vs the
+   −0.142 reported; q4 −0.95%/21.7% win vs q1 +2.69%/60.9%) but it is **not significant**
+   (permutation p=0.131 on the quartile spread, p=0.188 on the correlation) and is **heavily
+   confounded**: q4 median hold **5 days** vs q1 **23 days**, exit mix 74% STOP_HIT vs 35%.
+   The dominant relationship is `days_held → outcome` (**r=+0.246**) — which is an *outcome*, not
+   a predictor. Removing 2 of 93 trades halves the effect. Residual worth watching: within the
+   short (r=−0.332, n=32) and medium (r=−0.279, n=22) holding strata the sign persists, which the
+   days_held confound does not explain. **The decisive test is runnable today, no instrumentation
+   needed** — `stock_recommendations` already stores `scan_cmp` and `entry_type`
+   ([schema.py:144](../dashboard/backend/db/schema.py#L144)), so a read-only join
+   `portfolio_journal → portfolio_positions → stock_recommendations` recovers each trade's
+   gap at scan time and tests the `swing_alpha_agent` penalty hypothesis directly
+   (×0.7 above 5% gap, ×0.85 above 3% — [swing_alpha_agent.py:125](../agents/swing_alpha_agent.py#L125)).
+   Do not touch ranking or confidence logic before that join is run.
+3. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
    symbols, same confidence scores, differing only in the `setup` label. Odd for 1–8 week vs
    6–24 month horizons, and it makes the books less independent than assumed. Also only **3**
    candidates are served where ranking runs report `selected_count: 20`.
-3. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
+4. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
    sample is **2 positions, not 7** (only KRISHANA and ANTHEM came through the Phase-2 door).
-4. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
+5. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
 
 **BLOCKED** — nothing. Gated on *time and data*, not on a decision.
 
 **Why** → `[[phase2-smc-as-score]]`, `[[selection-engine-teardown-phase0]]`,
 `[[calibration-validation-phase]]`, `[[explainability-principles]]`.
 
-## `portfolio` — ACTIVE (exit discipline restored)
+## `portfolio` — in validation (exit discipline restored)
 
-**NOW** — nothing in flight. Books have room: Swing 17/20 used, LT 11/20.
+**NOW** — nothing in flight. The admission gate now records **complete metrics on both doors**
+(PR #184, 2026-09-13). Enforcement stays OFF and every `PROMOTE_*` threshold stays a no-op.
 
-**STOPPED AT** — two arcs, both closed:
+**STOPPED AT** — three arcs, all closed:
+
+- **2026-09-13 — the seed door was measuring nothing.** `seed_from_recommendations` passed
+  `row_d.get("turnover_cr")` / `atr_pct`, but `row_d` comes from
+  `running_trades LEFT JOIN stock_recommendations` and **neither table has either column** — so
+  both were `None` 100% of the time (0/14, against 42/42 on the promotion door). Because the gate
+  **fails closed on a null metric**, setting either liquidity threshold would have rejected that
+  entire door — a quarter of all admissions — for *missing data*, not for quality. Now sourced from
+  `risk_engine.liquidity_metrics()`, the same helper the promotion door already feeds the gate
+  through, so the two doors are finally comparable. Also fixed: `admission_shadow_report.py --json`
+  wrote only the summary, so the documented "export before the 30-day TTL" preserved counts and
+  lost every per-candidate metric Step 4 calibrates on.
 
 - **2026-09-02 — the phantom "Entry Triggered" alerts, solved.** Telegram kept announcing entries
   (SBIFUNDS, OLAELEC, NIACL, and many more daily) that never appeared on the site. The cause was
@@ -146,7 +188,16 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    establish *why* it exists first; nothing in the repo records it.
 2. `python -m scripts.exit_rule_health` after any risk/exit change — exits non-zero on an
    unexplained silence. Currently 0.
-3. Admission-gate shadow review 2026-09-18 — **export Redis first, 30-day TTL**.
+3. **Admission-gate shadow review 2026-09-18.** Raw rows already exported to
+   `docs/validation/admission_shadow_raw_2026-09-12.json` (the 30-day TTL would have eaten the
+   08-19 rows on the review date itself). On the 56-row dataset, calibrate
+   **`PROMOTE_MAX_STOP_WIDTH_PCT` first** — it is the only threshold that is populated 56/56 on
+   *both* doors, needs no new data, and targets a known real failure (the 2026-08 audit's GARUDA
+   entered through the no-policy door; one live row still shows a 39% stop width against a 10%
+   cap). Distribution: median 5.0%, p90 9.9%, max 14.7% → a cap of 10 flags ~10%.
+   `PROMOTE_MIN_PRICE` is the safe second. The two **liquidity** thresholds
+   (`MIN_TURNOVER_CR`, `MAX_ATR_PCT`) must wait for a few sessions of the newly-plumbed seed-door
+   metrics — they had zero seed-door coverage before 2026-09-13.
 
 **BLOCKED** — nothing.
 
@@ -236,6 +287,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| **#184** + env 2026-09-13 | `selection` `portfolio` | Anchor10 evaluation-window fix → `ENTRY_ANCHOR_MAX_GAP_PCT=10` **live on `web`**; admission-gate seed-door metrics; raw shadow export |
 | **no-PR 2026-09-02** | `portfolio` | duplicate Railway project silenced (Telegram token deleted) — config-only, so it leaves **no git trace**; this row is the only record |
 | direct-to-main 2026-08-30/31 | `portfolio` | stale-exit outage fixed + enabled, per-book patience, `source_door`, exit-rule health check |
 | #181–#182 | `seo` | SSR stock pages, sitemap, JSON-LD, ISR fix |
