@@ -31,6 +31,56 @@ change of the validation phase into production (`ENTRY_ANCHOR_MAX_GAP_PCT=10`). 
 move is validating that over two live sessions, then finishing SEO Phase 2. The largest *unstarted*
 body of work is the commercial launch: payments, legal pages, monitoring.
 
+## North-star objective — portfolio quality, OLD vs NEW
+
+> Set 2026-09-13. **MEASURE FIRST → COMPARE FAIRLY → IDENTIFY CAUSE → THEN CHANGE.**
+
+The question that now governs this project: **did the late-Aug / early-Sep 2026 engine changes
+actually improve (1) stock selection, (2) entry quality, (3) risk/SL quality, (4) portfolio
+outcomes?** Not whether any individual feature can be tuned — features are not optimised in
+isolation until the portfolio-level answer is in.
+
+**Target date: ~2026-10-15**, when the NEW cohort should be substantially resolved. Earlier runs
+will reproduce the 2026-09-13 artefact and must not be used to justify a change.
+
+**Framework:** `python -m scripts.portfolio_quality_audit [--book SWING] [--json out.json]` —
+read-only, over the canonical `trade_lifecycle` ledger (reconciles 1:1 with the journals;
+`/api/lifecycle/validate` currently all-green). It enforces three rules:
+
+1. Cohorts split on **position creation**, never close date — a change is judged on the trades
+   it *selected*.
+2. **Outcome metrics are withheld** below 80% resolved / n≥30, and the report says why. Closed
+   trades are a censored sample — winners stay open, stop-outs close fast.
+3. **Entry-time metrics always reported** (stop width, RR-at-entry, entry gap, sector, regime,
+   confidence) — fixed at open, so outcome cannot bias them. The honest early signal.
+
+**Cohorts** (creation date, IST): `pre_risk` <2026-07-09 · `risk` 07-09→08-23 (PR #90) ·
+`selection` 08-23→09-13 (PRs #170-180 + stale-exit) · `anchor10` ≥09-13. Deliberately *not*
+boundaries: the 09-02 phantom-alert fix and the 09-13 measurement fixes — neither changed
+trading behaviour.
+
+**Already established (entry-time, censoring-immune — these hold):**
+
+| Metric | pre_risk | risk | selection |
+|---|---|---|---|
+| stop width median / max | 5.0% / **39.2%** | 5.0% / 9.4% | 5.0% / 9.7% |
+| stops >10% | **14** | **0** | **0** |
+| RR at entry (median) | **1.65** | **3.00** | **3.00** |
+| confidence (median) | 72.1 | 77.2 | 76.7 |
+
+Attributable to the **risk engine** (`[[risk-engine]]`, PR #90): the stop cap and the RR floor.
+Both improvements land exactly on the 07-09 boundary and neither can be produced by censoring.
+
+**Not yet answerable** — win rate, expectancy, profit factor, winners vs losers, regime- and
+sector-adjusted outcomes. `risk` is 62% resolved, `selection` 42%, `anchor10` has no positions.
+**Do not read the outcome columns until the audit says `mature=True`.**
+
+**Open measurement gaps:** (a) `context_json` sector/regime is not yet populated in production —
+sector lands on the next `web` restart via the backfill, regime needs
+`python -m scripts.lifecycle_enrich_context` run against the prod DB; (b) `entry_gap_pct` is not
+captured at creation, so entry-gap attribution still relies on `arm_ref_price`, which exists only
+on arm-on-tap rows (43/93).
+
 ## Live system check — 2026-09-13
 
 Verified against the running system, not from docs:
