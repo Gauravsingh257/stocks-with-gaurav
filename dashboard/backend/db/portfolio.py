@@ -1466,14 +1466,33 @@ def seed_portfolio_from_recommendations() -> list[dict]:
             try:
                 from services.admission_gate import evaluate_safe, sector_counts_from_conn
 
+                # Liquidity metrics are NOT on this path's rows. row_d comes from
+                # `running_trades LEFT JOIN stock_recommendations`, and neither
+                # table has a turnover_cr or atr_pct column — so the previous
+                # row_d.get() pair returned None 100% of the time and every
+                # seeded candidate logged with both metrics blank. The gate fails
+                # closed on a null metric, so once its liquidity thresholds leave
+                # no-op this door would have been rejected wholesale for missing
+                # data rather than for quality. Supply the metrics from the SAME
+                # helper the promotion door already feeds the gate through
+                # (risk_engine.evaluate_promotion → liquidity_metrics) so both
+                # doors are measured on identical inputs — the whole point of the
+                # shadow census. No policy is evaluated here; thresholds stay the
+                # gate's business. Cached once per IST day per symbol, returns
+                # (None, None) on any failure, and this line is reached only for
+                # genuinely new seeds (every skip guard is above it).
+                from services.risk_engine import liquidity_metrics
+
+                _atr_pct, _turnover_cr = liquidity_metrics(symbol)
+
                 evaluate_safe(
                     symbol, horizon,
                     row_d.get("entry_price"), row_d.get("stop_loss"),
                     source_door="seed_from_recommendations",
                     direction="LONG",
                     price=row_d.get("current_price"),
-                    turnover_cr=row_d.get("turnover_cr"),
-                    atr_pct=row_d.get("atr_pct"),
+                    turnover_cr=_turnover_cr,
+                    atr_pct=_atr_pct,
                     position_size=row_d.get("position_size"),
                     sector_counts=sector_counts_from_conn(conn, horizon),
                     book_used=active_counts.get(horizon, 0), book_max=cap,

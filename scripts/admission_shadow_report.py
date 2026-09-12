@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -180,9 +181,21 @@ def main() -> int:
     if args.json:
         payload = dict(s)
         payload["config"] = c
+        # Raw, row-level decisions — NOT just the summary.
+        #
+        # The Redis store behind this report has a 30-day TTL, and the documented
+        # procedure is "export before the review". Exporting only the summary did
+        # not honour that: `rejected_rows` is the sole row-level field and it is
+        # empty while every threshold is a no-op, so the export preserved counts
+        # and lost every metric needed to CHOOSE a threshold. These rows carry
+        # price / turnover_cr / atr_pct / stop_width_pct / sector per candidate,
+        # which is exactly what Step 4 calibrates on.
+        payload["decisions"] = decisions
+        payload["exported_at"] = datetime.now().isoformat(timespec="seconds")
+        payload["window_days"] = args.days
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, default=str)
-        print(f"\nwrote {args.json}")
+        print(f"\nwrote {args.json}  ({len(decisions)} raw decisions + summary)")
     return 0
 
 

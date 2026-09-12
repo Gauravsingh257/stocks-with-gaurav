@@ -36,6 +36,21 @@ C3_MAX_AVG_DIST_PCT = 6.0        # Anchor10 avg distance from entry
 C4_MIN_MEDIAN_REM_RR = 2.0       # Anchor10 median remaining RR from CMP
 SESSIONS_REQUIRED = 3            # minimum stable sessions before a GO call
 
+# C1–C4 are judged over a TRAILING WINDOW, not over all recorded history.
+#
+# docs/PHASE2_ENABLEMENT_CRITERIA.md specifies "C1–C4 hold on every session in
+# the window (no oscillation)". The original implementation ran `all()` across
+# the entire append-only session list, which makes the verdict monotonically
+# non-recoverable: a single breach in June pins `overall` at NOT_READY forever,
+# no matter how long the programme runs clean afterwards. That is a broken
+# acceptance test, not a signal — by 2026-09-11 the store held 60 sessions with
+# C1 60/60, C2 57/60, C3 60/60, C4 59/60, every breach in July and a 30-session
+# clean run since 2026-07-27, yet the endpoint still read NOT_READY.
+#
+# The window restores the documented meaning: recent, consecutive stability.
+# Thresholds are untouched. Full history is still returned as the audit trail.
+EVAL_WINDOW_SESSIONS = int(os.getenv("SHADOW_ANCHOR_EVAL_WINDOW", "10"))
+
 REDIS_SESSIONS_KEY = "shadow:anchor10:sessions"
 
 
@@ -242,16 +257,24 @@ def _session_passes(s: dict) -> dict:
 
 
 def evaluate_criteria(sessions: list[dict], anchor_gap: float = ANCHOR_GAP_DEFAULT) -> dict:
-    """C1–C5 PASS/FAIL across the recorded sessions, for the status endpoint."""
+    """C1–C5 PASS/FAIL over the trailing evaluation window, for the status endpoint.
+
+    `sessions` is the full append-only history and is returned verbatim as the
+    audit trail; only the last EVAL_WINDOW_SESSIONS are judged (see the constant
+    for why). `window_size` / `evaluated_sessions` report what was actually
+    judged, so a reader can never mistake the verdict's basis.
+    """
     n = len(sessions)
-    per = [_session_passes(s) for s in sessions]
+    window = sessions[-EVAL_WINDOW_SESSIONS:] if EVAL_WINDOW_SESSIONS > 0 else list(sessions)
+    n_win = len(window)
+    per = [_session_passes(s) for s in window]
     c1 = all(p["C1_count_stable"] for p in per) if per else False
     c2 = all(p["C2_actionable"] for p in per) if per else False
     c3 = all(p["C3_avg_distance"] for p in per) if per else False
     c4 = all(p["C4_median_rr"] for p in per) if per else False
-    c5 = (n >= SESSIONS_REQUIRED) and c1 and c2 and c3 and c4   # stability over the window
+    c5 = (n_win >= SESSIONS_REQUIRED) and c1 and c2 and c3 and c4   # stability over the window
     ready = c5
-    overall = "READY" if ready else ("COLLECTING" if n < SESSIONS_REQUIRED else "NOT_READY")
+    overall = "READY" if ready else ("COLLECTING" if n_win < SESSIONS_REQUIRED else "NOT_READY")
     latest = sessions[-1] if sessions else None
     latest_summary = None
     if latest:
@@ -271,19 +294,26 @@ def evaluate_criteria(sessions: list[dict], anchor_gap: float = ANCHOR_GAP_DEFAU
         "anchor_gap_pct": anchor_gap,
         "session_count": n,
         "sessions_required": SESSIONS_REQUIRED,
+        # What the verdict above was actually computed on.
+        "window_size": EVAL_WINDOW_SESSIONS,
+        "evaluated_sessions": n_win,
+        "evaluated_from": (window[0].get("date") if window else None),
+        "evaluated_to": (window[-1].get("date") if window else None),
         "criteria": {
-            "C1_count_stable": {"pass": c1, "rule": f"count drop <= {C1_MAX_COUNT_DROP_PCT:.0f}% every session"},
-            "C2_actionable": {"pass": c2, "rule": f"Anchor10 actionable% >= {C2_MIN_ACTIONABLE_PCT:.0f}% every session"},
-            "C3_avg_distance": {"pass": c3, "rule": f"Anchor10 avg distance <= {C3_MAX_AVG_DIST_PCT:.0f}% every session"},
-            "C4_median_rr": {"pass": c4, "rule": f"Anchor10 median remaining RR >= {C4_MIN_MEDIAN_REM_RR} every session"},
-            "C5_stable_window": {"pass": c5, "rule": f">= {SESSIONS_REQUIRED} sessions with C1–C4 all holding"},
+            "C1_count_stable": {"pass": c1, "rule": f"count drop <= {C1_MAX_COUNT_DROP_PCT:.0f}% every session in window"},
+            "C2_actionable": {"pass": c2, "rule": f"Anchor10 actionable% >= {C2_MIN_ACTIONABLE_PCT:.0f}% every session in window"},
+            "C3_avg_distance": {"pass": c3, "rule": f"Anchor10 avg distance <= {C3_MAX_AVG_DIST_PCT:.0f}% every session in window"},
+            "C4_median_rr": {"pass": c4, "rule": f"Anchor10 median remaining RR >= {C4_MIN_MEDIAN_REM_RR} every session in window"},
+            "C5_stable_window": {"pass": c5, "rule": f">= {SESSIONS_REQUIRED} sessions in window with C1–C4 all holding"},
         },
         "overall": overall,
         "latest": latest_summary,
         "recommendation": (
             "Criteria met — prepare ENTRY_ANCHOR_MAX_GAP_PCT=10 production enablement (monitor 2 live sessions, keep rollback ready)."
             if ready else
-            f"Keep collecting — {n}/{SESSIONS_REQUIRED} sessions; STRUCTURAL_TARGET_CAP stays 0."
+            f"Keep collecting — {n_win}/{SESSIONS_REQUIRED} sessions in the "
+            f"{EVAL_WINDOW_SESSIONS}-session window ({n} recorded); "
+            "STRUCTURAL_TARGET_CAP stays 0."
         ),
         "sessions": sessions,
     }
