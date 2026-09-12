@@ -31,6 +31,62 @@ change of the validation phase into production (`ENTRY_ANCHOR_MAX_GAP_PCT=10`). 
 move is validating that over two live sessions, then finishing SEO Phase 2. The largest *unstarted*
 body of work is the commercial launch: payments, legal pages, monitoring.
 
+## Aug-end → Sep-1st-week change audit — 2026-09-13 (read-only)
+
+**Scope: 2026-08-23 → 09-07 only** (July changes deliberately excluded).
+
+**Entry: NOTHING CHANGED.** No entry-model, gap, confirmation, entry-type or RR/target change
+lands in this window — Anchor10 is 09-13, outside it. So *no* entry-quality improvement can be
+attributed to this change set. Any entry improvement seen later belongs to Anchor10.
+
+**Selection** — 08-23/24: Phase 0 real inputs (`ec31896`), honest L1∧L2∧L3 funnel (`c6e455f`),
+Phase 2 SMC as a ranking factor scoped to SWING (`7d01e2b`/`94d4e8a`), plus two *loosening*
+fixes — quality gate no longer requires every provider (`8b25ff0`) and unclassified sector no
+longer skips a stock (`44aa119`). 08-29: `source_door` (measurement only).
+
+**The one that actually changed what reaches the portfolio — `4fe80ae`.** The exceptionalism
+final gate ran LAST and rewrote `final_selected` on every record without consulting layer1/2/3,
+so it silently discarded the funnel decision: **17.6% of SWING and 22.2% of LONGTERM selections
+had FAILED Layer 1** and survived by that path. Measured effect in `signals_log`, selections that
+failed Layer 1:
+
+| month | selected rows | L1-failed | share |
+|---|---|---|---|
+| 2026-07 | 47,788* | 37,539 | **78.6%** |
+| 2026-08 | 1,481 | 210 | 14.2% |
+| 2026-09 | 731 | 0 | **0.0%** |
+
+<sub>*July truncated by the 50k export cap; the trend is unambiguous.</sub>
+
+**Risk** — 08-31 only: stale cull made reachable (`74e2082`, dead ~7 weeks), per-book patience
+Swing 20d / LT 45d (`7100b37`), `exit_rule_health` diagnostic (`814f595`), stagnation shadow
+(`19285e7`, observes only).
+
+### ⚠️ The open concern — the tightening may have cut the right tail
+
+Matching 69 closed positions to their nearest prior scan row (approximate — 57 could not be
+matched, the pre-`position_provenance` gap):
+
+| | n | win | mean | median | med days |
+|---|---|---|---|---|---|
+| scan row **passed** L1 | 47 | 40.4% | **+0.86%** | −5.01% | 11 |
+| scan row **failed** L1 (readmitted, now excluded) | 22 | 45.5% | **+5.44%** | −2.25% | 11 |
+
+Identical median holding period, comparable creation dates — so **no maturity confound**. But the
++4.59pp gap is **p=0.109, not significant**, and **fragile**: removing SCANSTL (+51.18%) and BI
+(+42.10%) collapses it to +1.32%. Two trades of 22 carry the effect.
+
+**Hypothesis worth monitoring, NOT acting on:** Layer 1 is a conventional quality screen, and
+outlier winners often fail conventional screens — both top performers were L1 failures. Removing
+readmission may systematically trim the fat right tail while correctly removing junk. This is the
+single thing most worth watching as `NEW_SELECTION` matures. **Do not loosen the funnel on this
+evidence** — it is directional only, and `4fe80ae` fixed a real integrity defect.
+
+**Data incident found (unrelated to logic):** on **2026-09-07** `quality_passed` collapsed to a
+median of **75** across 12 SWING runs, against ~900–1,600 every other day. A provider/availability
+failure, not a code change — no scan config changed that day. Worth a look; selections that day
+came from a 12× smaller pool.
+
 ## Provenance audit — 2026-09-13 (read-only)
 
 **Provenance cannot be traced through the recommendation link, and the lifecycle ledger's
