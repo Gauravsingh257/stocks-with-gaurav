@@ -830,6 +830,19 @@ def add_position(payload: dict) -> int:
         conn.commit()
         pos_id = cursor.lastrowid
         logger.info("[Portfolio] Added %s to %s as %s (id=%d)", symbol, horizon, status, pos_id)
+
+        # Write-time provenance (door 1). Recorded AFTER the commit above, so a
+        # provenance failure can never roll back or block a real position — the
+        # capture swallows everything and returns None. Deliberately not a
+        # backfill: the whole point is to record the configuration and selection
+        # evidence in force NOW, which a later reconstruction cannot recover.
+        try:
+            from .position_provenance import capture as _prov_capture
+            _prov_capture(pos_id, {**payload, "symbol": symbol, "horizon": horizon,
+                                   "arm_ref_price": arm_ref, "status": status}, conn=conn)
+            conn.commit()
+        except Exception:
+            logger.debug("[Portfolio] provenance capture skipped", exc_info=True)
         return pos_id
     finally:
         conn.close()
@@ -1526,6 +1539,27 @@ def seed_portfolio_from_recommendations() -> list[dict]:
                     row_d.get("created_at", datetime.now(_IST).isoformat()),
                 ) + _origin_val,
             )
+            # Write-time provenance (door 2 — the raw-INSERT seed path). Captured
+            # here for the same reason it is captured on door 1: this door applies
+            # no risk policy, so knowing WHICH door and WHICH scan produced a
+            # position is the only way a later audit can keep the two cohorts
+            # apart. Best-effort; never blocks the seed.
+            try:
+                from .position_provenance import capture as _prov_capture
+                _prov_capture(
+                    int(conn.execute("SELECT last_insert_rowid()").fetchone()[0]),
+                    {"symbol": symbol, "horizon": horizon,
+                     "entry_price": row_d.get("entry_price"), "stop_loss": row_d.get("stop_loss"),
+                     "target_1": t1, "target_2": t2,
+                     "current_price": row_d.get("current_price"), "arm_ref_price": arm_ref,
+                     "confidence_score": row_d.get("confidence_score"),
+                     "reasoning": row_d.get("reasoning"),
+                     "recommendation_id": row_d.get("recommendation_id"),
+                     "atr_pct": _atr_pct, "turnover_cr": _turnover_cr,
+                     "source_door": "seed_from_recommendations", "status": "ACTIVE"},
+                    conn=conn)
+            except Exception:
+                logger.debug("[Portfolio] provenance capture skipped (seed)", exc_info=True)
             active_counts[horizon] = active_counts.get(horizon, 0) + 1
             new_positions.append({
                 "symbol": symbol, "horizon": horizon,
