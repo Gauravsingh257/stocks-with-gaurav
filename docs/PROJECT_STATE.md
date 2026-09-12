@@ -119,7 +119,19 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    ~15–20/session baseline; actionable% (within 5% of entry) up from the 25–40% Config-A norm;
    median remaining-RR ≥2.0 (Config A was running 0.22–1.36); no stop-inversion drops. Two clean
    sessions → keep; a count collapse → roll back to `30` **and redeploy**.
-2. **Confidence-inversion — DIAGNOSED 2026-09-13, verdict: insufficient evidence, do not act.**
+2. **Confidence-inversion — CLOSED 2026-09-13. The stated hypothesis is REFUTED; do not act.**
+   The decisive scan-gap join was run (read-only, via `portfolio_journal → /api/portfolio/{id}`,
+   using `arm_ref_price` as the scan-time price; n=43 of 93 carry it — it exists only for
+   arm-on-tap rows). **The `swing_alpha_agent` penalty does not explain the inversion and is
+   barely present in traded positions:** mean confidence is flat across the penalty bands
+   (≤3% gap → 76.7, 3–5% → 76.1, >5% → 76.0) and `r(gap, confidence) = **+0.139**` — the wrong
+   sign for the hypothesis. Only 9 of 43 positions fall in any penalty band at all, because the
+   reachability filter already removes extended ideas before they can become positions.
+   **A stronger candidate signal emerged instead:** `r(entry_gap, outcome) = **−0.266**`
+   (p=0.083) — bigger arm-to-entry gap, worse outcome — with the 3–5% band at **−6.18% mean and
+   0/8 wins**. That is independent support for the Anchor10 change already shipped, which
+   tightens exactly this gap. Neither result is significant at n=43; **no ranking or confidence
+   change is justified**. Full prior diagnosis retained in `[[confidence-inversion-is-confounded]]`.
    The pattern reproduces (sample identified: SWING, duplicates excluded, n=93, r=−0.138 vs the
    −0.142 reported; q4 −0.95%/21.7% win vs q1 +2.69%/60.9%) but it is **not significant**
    (permutation p=0.131 on the quartile spread, p=0.188 on the correlation) and is **heavily
@@ -127,20 +139,29 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    The dominant relationship is `days_held → outcome` (**r=+0.246**) — which is an *outcome*, not
    a predictor. Removing 2 of 93 trades halves the effect. Residual worth watching: within the
    short (r=−0.332, n=32) and medium (r=−0.279, n=22) holding strata the sign persists, which the
-   days_held confound does not explain. **The decisive test is runnable today, no instrumentation
-   needed** — `stock_recommendations` already stores `scan_cmp` and `entry_type`
-   ([schema.py:144](../dashboard/backend/db/schema.py#L144)), so a read-only join
-   `portfolio_journal → portfolio_positions → stock_recommendations` recovers each trade's
-   gap at scan time and tests the `swing_alpha_agent` penalty hypothesis directly
-   (×0.7 above 5% gap, ×0.85 above 3% — [swing_alpha_agent.py:125](../agents/swing_alpha_agent.py#L125)).
-   Do not touch ranking or confidence logic before that join is run.
-3. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
+   days_held confound does not explain. Superseded by the scan-gap join in item 2 above.
+3. **OLD vs NEW engine audit — run 2026-09-13. Verdict: no detectable deterioration, one proven
+   improvement, and the headline comparison is invalid as stated.** Splitting SWING closed trades
+   on position creation at 2026-08-23 looks catastrophic (OLD n=78: 53.8% win, +3.03% mean,
+   PF 2.23 → NEW n=15: 13.3% win, −2.63% mean, PF 0.41) — but that is **censoring, not decay**.
+   The NEW cohort is only **48% resolved** (15 closed vs 16 still open at +0.68% mean, 8/16
+   positive), and median hold falls monotonically by creation month — 40 → 23 → 11 → 7 → 2 days —
+   which is what a shrinking exposure window mechanically produces. Matched on holding period
+   (≤7 days) the gap is **not significant** (OLD −1.27% n=20 vs NEW −3.64% n=12, permutation
+   p=0.215). The exit mix confirms it: NEW is 87% STOP_HIT because only fast resolutions have
+   closed. **The one genuine, censoring-immune improvement is stop-width discipline** (set at
+   entry, so outcome cannot bias it): p90 fell 12.05% (July) → 5.00% (Aug/Sep) and candidates
+   above a 10% cap went 6 → 4 → **0 → 0**, attributable to the risk engine's stop cap
+   (`[[risk-engine]]`, PR #90). Everything else is **not yet measurable** — re-run once the NEW
+   cohort matures. Measurement gap: `sector` is not stored on position rows, so sector/regime
+   attribution was impossible.
+4. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
    symbols, same confidence scores, differing only in the `setup` label. Odd for 1–8 week vs
    6–24 month horizons, and it makes the books less independent than assumed. Also only **3**
    candidates are served where ranking runs report `selected_count: 20`.
-4. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
+5. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
    sample is **2 positions, not 7** (only KRISHANA and ANTHEM came through the Phase-2 door).
-5. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
+6. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
 
 **BLOCKED** — nothing. Gated on *time and data*, not on a decision.
 
@@ -188,7 +209,18 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    establish *why* it exists first; nothing in the repo records it.
 2. `python -m scripts.exit_rule_health` after any risk/exit change — exits non-zero on an
    unexplained silence. Currently 0.
-3. **Admission-gate shadow review 2026-09-18.** Raw rows already exported to
+3. **Admission-gate shadow review 2026-09-18 — calibration done 2026-09-13, value NOT set.**
+   On the 56-row dataset `PROMOTE_MAX_STOP_WIDTH_PCT` splits cleanly by book and a single global
+   cap is misleading: **SWING** n=40, median 5.00%, **max 9.73%** — a 10% cap is a *no-op* there;
+   **LONGTERM** n=16, median 8.00%, max 14.66% — a 10% cap flags **31%** of the book. All five
+   candidates above 10% are LT, all via `promote_to_portfolio`. LT uses 2.0×ATR base risk against
+   swing's 1.3× *by design* ([validation_engine.py](../services/validation_engine.py)), so a
+   global 10 would read as a guardrail while actually being a 31% cut to one book — the same
+   one-threshold-two-books mistake the per-book stale-exit patience fixed.
+   **Recommended: `PROMOTE_MAX_STOP_WIDTH_PCT=12`** — flags 2/56 (AVALON 14.66%, LTFOODS 12.68%),
+   zero swing impact, and it is *safe if enforcement is ever flipped by accident*, which a 10 is
+   not. Longer term, add per-book support mirroring `_STALE_EXIT_MIN_DAYS_BY_BOOK`, then
+   SWING=10 / LONGTERM=12. Raw rows already exported to
    `docs/validation/admission_shadow_raw_2026-09-12.json` (the 30-day TTL would have eaten the
    08-19 rows on the review date itself). On the 56-row dataset, calibrate
    **`PROMOTE_MAX_STOP_WIDTH_PCT` first** — it is the only threshold that is populated 56/56 on
