@@ -69,7 +69,42 @@ across the risk boundary. At **position** level OLD is already median **3.00**; 
 ledger rows that include research ideas with a different target field. **The RR improvement is not
 confirmed** — treat RR as UNCHANGED (and *lower*, 2.33, in `NEW_SELECTION`).
 
-**Hard data gaps blocking a stock-quality verdict:** `chart_entry_json` is populated **6/143** and
+**Provenance capture FIXED 2026-09-13 (PR pending → `position_provenance`).** New append-only
+table written at *both* creation doors, after the position commit so it can never block a write:
+engine_version + algorithm_hash + all 22 selection/risk flags **as they were at capture**;
+`scan_id` + `signals_log_id`; setup, entry_type and SMC evidence; confidence; entry geometry
+(stop width, RR, entry gap); sector; regime; source_door; and an immutable **snapshot** of the
+recommendation rather than a reference to it. Unresolvable fields are **named** in `missing`, so a
+later audit can tell "we looked and it wasn't there" from "nobody looked".
+
+> **Design rule — never store a pointer to something mutable.** A foreign key into recycled
+> `stock_recommendations` rows decays into a *false* link, which is worse than no link because it
+> still resolves.
+
+**`scan_id` is the unlock.** `signals_log` was *always* durable and already holds the entire
+candidate universe per scan — every symbol's confidence, layer1/2/3 passes, `final_selected`,
+`rejection_reason` and `layer_details` (the SMC evidence). Positions simply never recorded which
+scan produced them. From now on "**why this stock over the alternatives available at that time?**"
+is answerable, with `selected_count` / `universe_scanned` as the denominator.
+
+**RISK-LOSS FINDING RESOLVED — expected consequence plus an already-fixed bug, NOT a risk-model
+problem.** Decomposing the −4.82% → −6.70% average-loss move by exit reason:
+
+| cohort | STOP_HIT losses | soft exits (STALE/STRUCTURE/TREND) |
+|---|---|---|
+| `OLD` | n=13, avg **−6.48%** | n=16, avg −1.60% to −3.10% |
+| `NEW_MECHANICS` | n=16, avg −7.16% | **n=2** |
+| `NEW_SELECTION` | n=14, avg **−5.36%** (planned stop 5.00%) | n=0 |
+
+The stop-loss itself did **not** deteriorate — in the newest cohort it is the *best* of the three
+(−5.36%). The headline move is a **mix effect**: OLD's average loss was softened by 16 soft exits,
+`NEW_MECHANICS` had only 2. And the `NEW_MECHANICS` window (07-07 → 08-20) is **exactly** the
+period the stale cull was unreachable (died 2026-07-09 when the risk engine shipped trend-break
+default-ON, fixed 2026-08-31 — `[[flag-on-but-unreachable]]`). So the one mature OLD-vs-NEW
+comparison is **contaminated by a known bug that is already fixed**, and therefore *understates*
+the current engine. No risk-logic change is warranted.
+
+**Remaining hard gaps (historical only — capture is fixed going forward):** `chart_entry_json` is populated **6/143** and
 `chart_exit_json` **3/143**, so chart-level review is not possible; per-trade `smc_evidence`
 (BOS/CHoCH, OB, FVG, liquidity, MTF) is unrecoverable because the recommendation rows were
 recycled; no market-cap field, so the small-cap concentration in `NEW_SELECTION` cannot be
