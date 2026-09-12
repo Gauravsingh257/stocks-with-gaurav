@@ -31,6 +31,50 @@ change of the validation phase into production (`ENTRY_ANCHOR_MAX_GAP_PCT=10`). 
 move is validating that over two live sessions, then finishing SEO Phase 2. The largest *unstarted*
 body of work is the commercial launch: payments, legal pages, monitoring.
 
+## Provenance audit — 2026-09-13 (read-only)
+
+**Provenance cannot be traced through the recommendation link, and the lifecycle ledger's
+provenance fields are unusable.** Established, not assumed:
+
+- `trade_lifecycle.algorithm_hash` is a **single value (`88bb0bee5688`) across all 143** SWING/LT
+  rows, and `engine_version` likewise — both are stamped at *backfill* from **today's** env, not
+  captured at trade time. `setup`, `recommendation_json` and `strategy_version` are **0/143**.
+  `is_legacy=1` on every row: every SWING/LT record is a retroactive reconstruction.
+- The `position.recommendation_id → stock_recommendations` link is broken by row recycling —
+  position ids run to **1,045,380** while the immutable `research_track_record` ledger covers
+  **206–519**; only **26/155** positions resolve.
+
+**What does survive: capability markers** — which code path wrote the row.
+`arm_ref_price` (arm-on-tap, from 07-07), `position_size`/`atr_pct` (risk engine, from 07-09),
+`source_door` (from 08-29). Cohorts below are built from those, not from dates alone:
+
+| cohort | n | resolved | stop-width med / max | RR@entry | conf med | outcome |
+|---|---|---|---|---|---|---|
+| `OLD` (no arm/sizing, ≤07-06) | 68 | **97%** | 7.40% / **40.2%** | 3.00 | 73.8 | win 55%, mean **+4.69%**, PF 3.14, 33d |
+| `NEW_MECHANICS` (07-07→08-20) | 36 | **94%** | 5.23% / 14.3% | 3.00 | 80.0 | win 47%, mean **+2.33%**, PF 1.66, 14d |
+| `NEW_SELECTION` (≥08-23) | 41 | **39%** | 5.00% / 8.0% | 2.33 | 76.6 | withheld — 25 still open |
+| `AMBIGUOUS` | 10 | 100% | — | — | — | excluded from every comparison |
+
+**The one mature comparison — OLD vs NEW_MECHANICS, both ~95% resolved, so censoring does NOT
+apply.** Point estimates favour OLD (win 55→47%, mean +4.69→+2.33%, PF 3.14→1.66) but the gap is
+**not significant** (permutation p=0.206, n=66 vs 34). The mechanism is visible in the exit mix:
+STOP_HIT **20% → 47%** while STALE_EXIT fell **39% → 24%**, and average loss *worsened*
+**−4.82% → −6.70%**. Tighter stops converted soft near-flat exits into full stop losses. Tail risk
+did improve at the extreme (worst −15.44% → −10.41%) but losses beyond −8% became *more* frequent
+(5% → 21%). This is a **shape change in the loss distribution, not a clean improvement**, and it is
+the single most important thing to re-test in October.
+
+**Correction to the 2026-09-13 framework run:** it reported RR-at-entry improving 1.65 → 3.00
+across the risk boundary. At **position** level OLD is already median **3.00**; the 1.65 came from
+ledger rows that include research ideas with a different target field. **The RR improvement is not
+confirmed** — treat RR as UNCHANGED (and *lower*, 2.33, in `NEW_SELECTION`).
+
+**Hard data gaps blocking a stock-quality verdict:** `chart_entry_json` is populated **6/143** and
+`chart_exit_json` **3/143**, so chart-level review is not possible; per-trade `smc_evidence`
+(BOS/CHoCH, OB, FVG, liquidity, MTF) is unrecoverable because the recommendation rows were
+recycled; no market-cap field, so the small-cap concentration in `NEW_SELECTION` cannot be
+quantified. Fixing capture is a prerequisite for ever answering "are we picking better stocks?".
+
 ## North-star objective — portfolio quality, OLD vs NEW
 
 > Set 2026-09-13. **MEASURE FIRST → COMPARE FAIRLY → IDENTIFY CAUSE → THEN CHANGE.**
