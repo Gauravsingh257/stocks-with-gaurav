@@ -86,10 +86,14 @@ evidence** — it is directional only, and `4fe80ae` fixed a real integrity defe
 `l1_counterfactual` compares forward returns for stocks Layer 1 **now excludes** despite qualifying
 as exceptional against the stocks it selects. It works at scan level, so it does not need the
 excluded stocks to ever become trades. Rules: one observation per stock-day; withheld below 30
-labelled 20-day outcomes; never pools across the 08-23 fix date. **Blocked on data, not code** —
-`forward_returns` is filled by a manual backfill last run ~08-23, so post-fix candidates are
-unlabelled. It runs against the prod DB. Revisit once each bucket has ≥30 labelled post-fix rows,
-not before.
+labelled 20-day outcomes; never pools across the 08-23 fix date. **Data status 2026-09-13 (after the backfill):** post-fix label rows 39,743 — 24,024
+with 5d and 11,966 with 10d, but **0 with 20d**, which the metric gates on. The first post-fix
+20-day window only closes around 09-21. The buckets are already large: SWING 334 selected vs 149
+excluded-but-exceptional stock-days; LONGTERM 305 vs 150 — about 9 excluded stock-days per scan day
+per horizon. So ≥30 labelled per bucket needs roughly four labelled post-fix days. **Earliest
+honest read: ~09-25**, after re-running the backfill. Run it server-side: it uses the `REPLACE`
+join, which is too heavy for a request path. Do not lower the 20d gate to read the 10d labels
+early.
 
 **Data incident (2026-09-07) — root-caused and monitored; see the `selection` section.** The
 "median 75" first reported here was a measurement artefact: `ranking_runs.quality_passed` holds two
@@ -237,7 +241,7 @@ Verified against the running system, not from docs:
 | SEO | sitemap **2,316 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
 | Backend | Railway `web-production-2781a` healthy, deploy `afd78c8a`. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
 | Railway | **4** services in `accomplished-passion`/production: `web`, `engine`, `scanner` (Scanner Suite cron **and** the universe OHLC snapshot both research engines read — its deploys republish it), `Redis`. Selection flags live on `web` only |
-| Data health | `GET /api/research/data-health` → `usable: true`, 9/9 shards, expires Tue 09-15 03:19 IST; `scan_health` exit 0; Action green |
+| Data health | `GET /api/research/data-health` → `usable: true`, snapshot `2026-09-13`, 2,143 symbols, 9/9 shards, **96h** shard TTL (expires Thu 09-17 14:32 IST); `scan_health` exit 0 |
 
 ---
 
@@ -246,7 +250,7 @@ Verified against the running system, not from docs:
 | Workstream | State | One line |
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
-| `selection` | 🔴 **ACTIVE** | Anchor10 live, validating 09-14/15 · 09-07 data blackout root-caused, monitoring live (PR #185) · snapshot TTL fix awaiting decision |
+| `selection` | 🔴 **ACTIVE** | Anchor10 live, validating 09-14/15 · 09-07 data blackout root-caused, monitoring live (PR #185) · snapshot TTL raised to 96h, verified |
 | `portfolio` | 🟡 in validation | Admission-gate metrics now complete on both doors; no threshold set yet |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
@@ -312,20 +316,28 @@ Live now: `GET /api/research/data-health` (`usable`, `shards_alive`, `expires_at
 `scripts/scan_health.py` (predictive snapshot check, zero-pass, Layer-1 collapse; `--replay` fires on
 08-14/08-17/08-18/09-07 only); and `.github/workflows/scan-health.yml` (weekday 17:00 IST and Sunday
 10:30 IST — a failed run is the alert). Verified in prod on 2026-09-13: endpoint `usable: true`,
-check exit 0, dispatched Action green. **Until the shard TTL is raised, Friday and Sunday runs will
-fail — correctly.** Monday 09-14 is covered (shards expire Tue 03:19 IST) only because today's
-deploys republished the snapshot.
+check exit 0, dispatched Action green. **Shard TTL raised to 96h on 2026-09-13**
+(`UNIVERSE_OHLC_TTL_SEC=345600`, `scanner` only). The variable is read solely at
+`services/universe_ohlc.py:59`, for shard retention and a diagnostic, so no selection logic is
+affected. Verified live: the post-change boot run published `2026-09-13` (2,143/2,173 symbols,
+98.6%) with **95.99h** shards, and the Scanner Suite results were identical before and after
+(286.7s vs 286.6s, same hit counts). With the real writer TTL, the Friday → Monday case, the
+failed-Friday-refresh case and the holiday-Monday case all pass; the old 50h TTL fails the same
+Friday. A Friday or Sunday `scan-health` failure now means a real problem — for example
+post-close refreshes failing on consecutive days. Rollback: remove the variable (the scanner
+redeploys). Known cosmetic: `web` still computes `stale` against 50h, so after 50h it can show
+`stale: true` alongside `usable: true`. `usable` and `expires_at` are authoritative, and
+`scan_health` ignores `stale`.
 
-**Decisions pending (Gaurav):**
-1. Set `UNIVERSE_OHLC_TTL_SEC=345600` (96h) on `scanner`. That covers a weekend plus a holiday Monday
-   or one missed post-close. Redis is at 39 MB with no maxmemory; one snapshot is ~14 MB. It is a
-   module constant, so an **explicit scanner redeploy** is required
-   (`[[railway-env-change-does-not-restart]]`). Without it, the next exposure is **Mon 09-21**,
-   unless something redeploys that weekend.
-2. Whether the ranking engine should fall back to per-symbol data. That changes selection behaviour,
-   so it was deliberately not done.
-3. Re-run `scripts/backfill_forward_returns.py` (labels stale since ~08-23), so the Layer-1 metric
-   below can mature.
+**Decisions:**
+1. ~~Raise the snapshot TTL~~ — **DONE 2026-09-13**, 96h on `scanner`, verified (see above).
+2. **Still open:** whether the ranking engine should fall back to per-symbol data when the snapshot
+   is missing. That changes selection behaviour, so it was deliberately not done.
+3. ~~Re-run the forward-returns backfill~~ — **DONE 2026-09-13**, server-side on `web`. 212,625 of
+   220,833 stock-day pairs labelled in 78.7s (1% had no price series). Labels now run 04-25 → 09-12:
+   5d through 09-05, 10d through 08-28, 20d through 08-14. **The backfill is still manual** — it
+   must be re-run for new windows to fill in (`[[universe-ohlc-snapshot-weekend-expiry]]` for how
+   it was run).
 
 **STOPPED AT** — PR #180 (2026-08-23) scoped SMC-as-score to the horizon it was validated on.
 Verified in Railway env on 2026-08-29, **not** from code defaults:

@@ -8,10 +8,10 @@ name: Scan Health
 # A FAILED RUN IS THE ALERT: GitHub emails the repo owner. Deliberately not
 # Telegram — research-path Telegram alerts are unwanted.
 #
-# Until the snapshot TTL is raised (UNIVERSE_OHLC_TTL_SEC on the scanner), the
-# Friday and Sunday runs are EXPECTED to fail: the 50h shards genuinely cannot
-# reach Monday's scans unless something republishes over the weekend. That
-# failure is the true state, not noise.
+# The snapshot TTL was raised to 96h on the scanner on 2026-09-13
+# (UNIVERSE_OHLC_TTL_SEC=345600), so a Friday publish now reaches Tuesday. A
+# Friday or Sunday failure is therefore a real problem — e.g. the post-close
+# refresh failing on consecutive days — not the old structural expiry.
 #
 # GitHub cron lands hours late here (the 02:45 UTC Kite login runs 07:20+), so
 # the Sunday predictive run is early enough that even a ~5h delay still lands
