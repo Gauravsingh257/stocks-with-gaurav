@@ -281,15 +281,31 @@ def load_universe_frames(symbols: list[str] | None = None, *, day: str | None = 
 
 
 def snapshot_status(day: str | None = None) -> dict:
-    """Is there a usable snapshot, how big, how old. Read-only diagnostics."""
+    """Is there a usable snapshot, how big, how old. Read-only diagnostics.
+
+    `available` only means a manifest exists — and a manifest can outlive the
+    data it indexes. The manifest and `latest` pointer are written with
+    LKG_TTL_SEC (7 days) but the price shards with LIVE_TTL_SEC (50h), and the
+    scanner republishes only on deploy and at weekday post-close. A Friday
+    snapshot's shards therefore expire on Sunday evening while its manifest keeps
+    pointing at them, and `load_universe_ohlc` then returns {} without an error.
+    On 2026-09-07 — the first weekend since Phase 0 with no deploy to republish —
+    every ranking-engine run passed 0 of ~2,190 stocks, all day, silently.
+
+    `usable` answers the real question (is every shard actually present?).
+    `shard_ttl_hours` / `expires_at` are read from Redis, so they report the TTL
+    the writer really set rather than this process's copy of the constant.
+    """
     client = _get_redis()
     if client is None:
-        return {"available": False, "reason": "no_redis"}
+        return {"available": False, "usable": False, "reason": "no_redis"}
     manifest = _read_manifest(client, day)
     if not manifest:
-        return {"available": False, "reason": "no_snapshot"}
+        return {"available": False, "usable": False, "reason": "no_snapshot"}
     written_at = float(manifest.get("written_at") or 0)
-    return {
+    snapshot_day = str(manifest.get("day") or "")
+    n_shards = int(manifest.get("shards") or 0)
+    status = {
         "available": True,
         "day": manifest.get("day"),
         "symbols": manifest.get("symbols"),
@@ -297,6 +313,24 @@ def snapshot_status(day: str | None = None) -> dict:
         "bytes": manifest.get("bytes"),
         "age_hours": round((time.time() - written_at) / 3600, 2) if written_at else None,
         "stale": bool(written_at and (time.time() - written_at) > LIVE_TTL_SEC),
+    }
+    try:
+        pipe = client.pipeline(transaction=False)
+        for n in range(n_shards):
+            pipe.ttl(_shard_key(snapshot_day, n))
+        ttls = [int(t) if t is not None else -2 for t in pipe.execute()]
+    except Exception as exc:
+        log.warning("universe_ohlc: shard TTL read failed (%s)", exc)
+        return {**status, "usable": False, "shards_alive": None, "reason": "shard_ttl_read_failed"}
+    alive = [t for t in ttls if t != -2]          # -2 = key missing, -1 = no expiry
+    expiring = [t for t in alive if t >= 0]
+    min_ttl = min(expiring) if expiring else None
+    return {
+        **status,
+        "usable": bool(n_shards) and len(alive) == n_shards,
+        "shards_alive": len(alive),
+        "shard_ttl_hours": round(min_ttl / 3600, 2) if min_ttl is not None else None,
+        "expires_at": (time.time() + min_ttl) if min_ttl is not None else None,
     }
 
 
