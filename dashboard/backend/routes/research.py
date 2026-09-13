@@ -1759,6 +1759,34 @@ def get_scan_status():
     return finalize_endpoint("scan_status", payload, valid_scan_status_payload)
 
 
+@router.get("/api/research/data-health")
+@router.get("/research/data-health")
+def get_data_health():
+    """Read-only health of the market data the research scans depend on.
+
+    Added after 2026-09-07, when the universe OHLC snapshot's price shards had
+    expired over the weekend while its manifest survived: every ranking-engine
+    run that Monday passed 0 of ~2,190 stocks and nothing surfaced it. Exposing
+    `universe_ohlc.snapshot_status()` lets `scripts/scan_health.py` check the
+    snapshot BEFORE the morning scans instead of discovering the damage after.
+    Reads one manifest plus one TTL per shard. Never raises.
+    """
+    try:
+        from services.universe_ohlc import kite_ohlc_enabled, snapshot_status
+
+        return _safe_json_response({
+            "universe_ohlc": {"enabled": kite_ohlc_enabled(), **snapshot_status()},
+            "checked_at": time.time(),
+        })
+    except Exception as exc:
+        log.exception("data-health endpoint failed")
+        return _safe_json_response({
+            "universe_ohlc": {"available": False, "usable": False,
+                              "reason": f"error: {str(exc)[:120]}"},
+            "checked_at": time.time(),
+        })
+
+
 @router.get("/api/research/discovery")
 @router.get("/research/discovery")
 async def get_discovery(

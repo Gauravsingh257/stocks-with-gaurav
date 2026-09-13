@@ -1,0 +1,54 @@
+name: Scan Health
+
+# Read-only monitor for the research data pipeline (scripts/scan_health.py).
+# Added after 2026-09-07, when the universe OHLC snapshot's price shards expired
+# over a weekend with no deploy and every ranking-engine run that Monday passed
+# 0 stocks — silently.
+#
+# A FAILED RUN IS THE ALERT: GitHub emails the repo owner. Deliberately not
+# Telegram — research-path Telegram alerts are unwanted.
+#
+# Until the snapshot TTL is raised (UNIVERSE_OHLC_TTL_SEC on the scanner), the
+# Friday and Sunday runs are EXPECTED to fail: the 50h shards genuinely cannot
+# reach Monday's scans unless something republishes over the weekend. That
+# failure is the true state, not noise.
+#
+# GitHub cron lands hours late here (the 02:45 UTC Kite login runs 07:20+), so
+# the Sunday predictive run is early enough that even a ~5h delay still lands
+# well before Monday's 03:00 UTC (08:30 IST) scans.
+
+on:
+  schedule:
+    # 11:30 UTC = 17:00 IST weekdays — after the 15:45 IST post-close publish.
+    # Detective for today's scans + predictive for the next morning's.
+    - cron: "30 11 * * 1-5"
+    # 05:00 UTC = 10:30 IST Sunday — will Monday's scans have data?
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: scan-health
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Research scan data health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install --quiet requests
+
+      - name: Check scan data health
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL || 'https://web-production-2781a.up.railway.app' }}
+        run: python -m scripts.scan_health --hours 30
