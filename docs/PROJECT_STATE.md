@@ -82,10 +82,19 @@ readmission may systematically trim the fat right tail while correctly removing 
 single thing most worth watching as `NEW_SELECTION` matures. **Do not loosen the funnel on this
 evidence** — it is directional only, and `4fe80ae` fixed a real integrity defect.
 
-**Data incident found (unrelated to logic):** on **2026-09-07** `quality_passed` collapsed to a
-median of **75** across 12 SWING runs, against ~900–1,600 every other day. A provider/availability
-failure, not a code change — no scan config changed that day. Worth a look; selections that day
-came from a 12× smaller pool.
+**Now an explicit research metric (PR #185).** `python -m scripts.phase1_calibration` →
+`l1_counterfactual` compares forward returns for stocks Layer 1 **now excludes** despite qualifying
+as exceptional against the stocks it selects. It works at scan level, so it does not need the
+excluded stocks to ever become trades. Rules: one observation per stock-day; withheld below 30
+labelled 20-day outcomes; never pools across the 08-23 fix date. **Blocked on data, not code** —
+`forward_returns` is filled by a manual backfill last run ~08-23, so post-fix candidates are
+unlabelled. It runs against the prod DB. Revisit once each bucket has ≥30 labelled post-fix rows,
+not before.
+
+**Data incident (2026-09-07) — root-caused and monitored; see the `selection` section.** The
+"median 75" first reported here was a measurement artefact: `ranking_runs.quality_passed` holds two
+different quantities (ranking engine ~1,500 vs validation Layer-1 ~400), and pooling them hid what
+actually happened — the ranking engine passed 0 all day and validation's first scan degraded.
 
 ## Provenance audit — 2026-09-13 (read-only)
 
@@ -227,7 +236,8 @@ Verified against the running system, not from docs:
 | Alerts | Telegram ↔ website **in sync**. The duplicate Railway project is silenced and has stayed silenced |
 | SEO | sitemap **2,316 URLs**; `/stock/*` returns `X-Nextjs-Prerender: 1` → ISR confirmed working |
 | Backend | Railway `web-production-2781a` healthy, deploy `afd78c8a`. **`api.stockswithgaurav.com` does not resolve (NXDOMAIN)** — frontend talks to the Railway URL directly, so nothing is broken |
-| Railway | **4** services in `accomplished-passion`/production: `web`, `engine`, `scanner` (Scanner Suite cron), `Redis`. Selection flags live on `web` only |
+| Railway | **4** services in `accomplished-passion`/production: `web`, `engine`, `scanner` (Scanner Suite cron **and** the universe OHLC snapshot both research engines read — its deploys republish it), `Redis`. Selection flags live on `web` only |
+| Data health | `GET /api/research/data-health` → `usable: true`, 9/9 shards, expires Tue 09-15 03:19 IST; `scan_health` exit 0; Action green |
 
 ---
 
@@ -236,7 +246,7 @@ Verified against the running system, not from docs:
 | Workstream | State | One line |
 |---|---|---|
 | `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
-| `selection` | 🔴 **ACTIVE** | Anchor10 **live** since 2026-09-13 — first quality change of the validation phase; needs 2 live sessions |
+| `selection` | 🔴 **ACTIVE** | Anchor10 live, validating 09-14/15 · 09-07 data blackout root-caused, monitoring live (PR #185) · snapshot TTL fix awaiting decision |
 | `portfolio` | 🟡 in validation | Admission-gate metrics now complete on both doors; no threshold set yet |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
 | `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
@@ -285,6 +295,38 @@ Two things the next session must not re-derive:
   so Config A now *is* Config B. The rollback signal must come from live idea quality, not from
   `anchor-shadow-status`.
 
+**Data-integrity incident, 2026-09-07 — root-caused; monitoring LIVE (PR #185, `8822452`).**
+Every ranking-engine run that Monday (both books) passed **0 of ~2,190** stocks, and the first
+validation scan collapsed (Layer 1: 150 vs ~410). The cause is **deterministic**. Both engines read
+the scanner's universe OHLC snapshot in Redis. Its price shards live **50h** while the manifest
+lives 7 days, and the scanner republishes only on deploy and at weekday post-close. So Friday's
+shards expire Sunday ~17:45 IST, before Monday's 08:30 scans, and the orphaned manifest makes the
+loader return `{}` silently. The ranking engine has no fallback; validation limps on per-symbol
+fetches. Earlier Phase-0 Mondays survived **only because weekend pushes redeployed the scanner** —
+09-05/06 was the first quiet weekend. Impact: EDELWEISS and GLAND (SWING) were promoted at 09:22 IST
+from the degraded scan, but the full-data scan an hour later picked both too. **CHENNPETRO** (LT)
+came from a degraded scan, was *not* re-selected on 09-08, and expired without entering.
+→ `[[universe-ohlc-snapshot-weekend-expiry]]`
+
+Live now: `GET /api/research/data-health` (`usable`, `shards_alive`, `expires_at`);
+`scripts/scan_health.py` (predictive snapshot check, zero-pass, Layer-1 collapse; `--replay` fires on
+08-14/08-17/08-18/09-07 only); and `.github/workflows/scan-health.yml` (weekday 17:00 IST and Sunday
+10:30 IST — a failed run is the alert). Verified in prod on 2026-09-13: endpoint `usable: true`,
+check exit 0, dispatched Action green. **Until the shard TTL is raised, Friday and Sunday runs will
+fail — correctly.** Monday 09-14 is covered (shards expire Tue 03:19 IST) only because today's
+deploys republished the snapshot.
+
+**Decisions pending (Gaurav):**
+1. Set `UNIVERSE_OHLC_TTL_SEC=345600` (96h) on `scanner`. That covers a weekend plus a holiday Monday
+   or one missed post-close. Redis is at 39 MB with no maxmemory; one snapshot is ~14 MB. It is a
+   module constant, so an **explicit scanner redeploy** is required
+   (`[[railway-env-change-does-not-restart]]`). Without it, the next exposure is **Mon 09-21**,
+   unless something redeploys that weekend.
+2. Whether the ranking engine should fall back to per-symbol data. That changes selection behaviour,
+   so it was deliberately not done.
+3. Re-run `scripts/backfill_forward_returns.py` (labels stale since ~08-23), so the Layer-1 metric
+   below can mature.
+
 **STOPPED AT** — PR #180 (2026-08-23) scoped SMC-as-score to the horizon it was validated on.
 Verified in Railway env on 2026-08-29, **not** from code defaults:
 `PHASE0_KITE_OHLC`, `PHASE0_NO_SYNTHETIC`, `PHASE0_REAL_SECTORS`, `PHASE1_STRICT_FUNNEL`,
@@ -300,7 +342,9 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 
 **NEXT** — ordered:
 
-1. **Validate Anchor10 on 2026-09-14 and 09-15.** Checklist: idea count not down >20% vs the
+1. **Validate Anchor10 on 2026-09-14 and 09-15.** **First gate:** `GET /api/research/data-health`
+   must show `usable: true` (or `python -m scripts.scan_health` exit 0) — a blind-data morning like
+   09-07 would contaminate the session and must not be read as an Anchor10 result. Checklist: idea count not down >20% vs the
    ~15–20/session baseline; actionable% (within 5% of entry) up from the 25–40% Config-A norm;
    median remaining-RR ≥2.0 (Config A was running 0.22–1.36); no stop-inversion drops. Two clean
    sessions → keep; a count collapse → roll back to `30` **and redeploy**.
@@ -504,6 +548,8 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| **#185** 2026-09-13 | `selection` | 09-07 data-blackout monitoring: `data-health` endpoint, `scan_health.py` + workflow, `l1_counterfactual` metric |
+| direct-to-main 2026-09-13 | `portfolio` `selection` | write-time `position_provenance` (`87a10f6`); OLD-vs-NEW audit framework (`b3d6617`) |
 | **#184** + env 2026-09-13 | `selection` `portfolio` | Anchor10 evaluation-window fix → `ENTRY_ANCHOR_MAX_GAP_PCT=10` **live on `web`**; admission-gate seed-door metrics; raw shadow export |
 | **no-PR 2026-09-02** | `portfolio` | duplicate Railway project silenced (Telegram token deleted) — config-only, so it leaves **no git trace**; this row is the only record |
 | direct-to-main 2026-08-30/31 | `portfolio` | stale-exit outage fixed + enabled, per-book patience, `source_door`, exit-rule health check |
