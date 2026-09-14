@@ -8,7 +8,6 @@ import MobileNav from "@/components/MobileNav";
 import MarketCommandBar from "@/components/MarketCommandBar";
 import BackendStatusNotice from "@/components/BackendStatusNotice";
 import CommandPalette from "@/components/CommandPalette";
-import MultiPanelLayout from "@/components/MultiPanelLayout";
 import PublicAuthFrame from "@/components/PublicAuthFrame";
 import { isPublicDashboardPath } from "@/lib/publicShell";
 
@@ -41,7 +40,6 @@ function Disclaimer() {
 
 export default function LayoutClient({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [terminalLayout, setTerminalLayout] = useState(false);
   const pathname = usePathname();
 
   if (pathname === "/") {
@@ -61,13 +59,9 @@ export default function LayoutClient({ children }: { children: React.ReactNode }
       <div className="flex-1 flex flex-col min-w-0 relative z-[2] overflow-hidden">
         <MarketCommandBar />
         <BackendStatusNotice />
-        <TopBar
-          onMenuClick={() => setSidebarOpen((v) => !v)}
-          terminalLayout={terminalLayout}
-          onTerminalLayoutToggle={() => setTerminalLayout((v) => !v)}
-        />
+        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-20 md:pb-6 md:p-6 lg:p-8">
-          {terminalLayout ? <MultiPanelLayout /> : children}
+          {children}
         </main>
         <Disclaimer />
       </div>
