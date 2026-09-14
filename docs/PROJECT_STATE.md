@@ -494,11 +494,36 @@ validation soak.
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
 
-## `ui-ux` — ACTIVE (minimal header + search Phase 1 shipped)
+## `ui-ux` — ACTIVE (stock page Phase 1 + minimal header + search Phase 1 shipped)
 
-**NOW** — nothing in flight. The minimal header and search Phase 1 are both live and verified in production.
+**NOW** — nothing in flight. Stock page Phase 1A/1B, the minimal header and search Phase 1 are all live and verified in production.
 
-**STOPPED AT** — **2026-09-15: minimal global header, PR #188 (merge 624fe81), verified live.**
+**STOPPED AT** — **2026-09-15: stock page Phase 1A (chart accuracy) + 1B (readable metrics), PR #189 (merge a3463e6), verified live.**
+- **1A — root cause:** `/stock/FCL` showed ASX:FCL (FINEOS) under Fineotex's metrics.
+  - The page embedded TradingView's `tv.js` widget with a **bare ticker**, and its `exchange` option is ignored.
+  - **TradingView does not license NSE data to embedded widgets at all.** Every `NSE:` symbol tested returns "only available on TradingView", even from our own domain.
+  - So ambiguous tickers charted another exchange's company, and others (M&M, BAJAJ-AUTO) showed an empty chart. An `NSE:` prefix only turns wrong into empty.
+- **1A — fix:**
+  - `components/NseStockChart` (lightweight-charts) draws candles from `/api/research/chart-data`, the same `<SYMBOL>.NS` series as the metric price. The TradingView widget is deleted.
+  - `lib/tradingview` builds every tradingview.com link as `NSE:` + (`-`→`_`, `&` kept), checked against TradingView symbol search. All 7 link sites use it.
+- **1B — readable metrics:** `lib/metricInterpretation` gives each metric a tone, label and one-line note.
+  - P/E, P/B and net margin compare with the **sector median**, falling back to the NSE median when fewer than 8 stocks report.
+  - D/E is "Not comparable" for **Finance**, with wider ranges for Power, Utilities, Infra, Realty and Telecom.
+  - ROE, growth, promoter holding and price metrics use fixed ranges. A promoter stake under 20% reads as neutral "Widely held". Revenue growth over 100% reads as caution "Unusually high".
+  - Medians reuse the sector list the page already fetched for peer links (`fetchSectorRows`), so there is **no backend change**. No metric calculation changed.
+  - UI: grouped cards, larger values, a legend, icon plus text pills, tone tokens ≥ 4.5:1 in both themes, and a one-column phone layout. The missing `.stock-analysis-grid` mobile rule is added.
+- **Verified in production (desktop 1440 + mobile 390):** FCL, M&M, BAJAJ-AUTO, J&KBANK, 360ONE, ABB, ITC and HDFCBANK. For each:
+  - the company is correct
+  - the chart is captioned `NSE: <symbol>`
+  - the chart's last close equals the metric price exactly
+  - no TradingView iframe loads and the link is correct
+  - there is no horizontal scroll
+
+  Unit tests: 40 `node:test` cases pass (21 new). Rollback: revert PR #189 (frontend only).
+- **Seen but not changed (next phase):** the SMC analysis card beside the chart (`StockCard`, Tier-2 live analysis) shows its own sector and P/E ("Basic Materials", P/E 213.9 for FCL). The key metrics show "Chemicals" and 222x from the weekly snapshot. Two sources on one page is worth reconciling.
+- **Local-testing gotcha:** `dashboard/frontend/.env.local` blanks `NEXT_PUBLIC_BACKEND_URL`, overriding `.env.production`. Build and start with the `.env.production` backend variables exported. Even then, a browser on `localhost` is CORS-blocked from the backend, so client-side fetches such as chart-data need a relay or a production check.
+
+**Earlier — 2026-09-15: minimal global header, PR #188 (merge 624fe81), verified live.**
 The header had shown operator telemetry to every visitor. It is now only: hamburger (mobile), a wide
 Search pill (md+) or 44px search icon (mobile), theme toggle, account.
 - **Removed from the header:**
