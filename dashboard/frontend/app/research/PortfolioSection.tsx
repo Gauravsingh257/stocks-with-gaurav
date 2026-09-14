@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { PortfolioPosition, PortfolioJournalStats } from "@/lib/api";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 
 interface PortfolioSectionProps {
   title: string;
@@ -104,7 +105,7 @@ function fmtDate(iso: string | null | undefined): string {
 }
 
 function tvUrl(symbol: string) {
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent("NSE:" + symbol.replace("NSE:", ""))}&interval=D`;
+  return tradingViewChartUrl(symbol, "D");
 }
 
 function plColor(v: number) {

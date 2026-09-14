@@ -15,6 +15,7 @@ import {
   Activity,
 } from "lucide-react";
 import { api, type WatchlistIntelItem, type WatchlistFeedEvent } from "@/lib/api";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 import { useAuth } from "@/lib/auth";
 import WatchlistMonitor from "./WatchlistMonitor";
 import WatchlistEventFeed from "@/components/WatchlistEventFeed";
@@ -165,7 +166,7 @@ function StockCard({
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <a
-              href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(row.symbol)}`}
+              href={tradingViewChartUrl(row.symbol)}
               target="_blank"
               rel="noopener noreferrer"
               style={{

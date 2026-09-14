@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { RunningTradeMonitorItem } from "@/lib/api";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 import { CmpFreshnessBadge } from "./CmpFreshnessBadge";
 
 interface Props {
@@ -33,7 +34,7 @@ function fmtTime(iso: string | null | undefined): string {
 }
 
 function tvUrl(symbol: string) {
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}&interval=D`;
+  return tradingViewChartUrl(symbol, "D");
 }
 
 function statusBadge(status: string) {

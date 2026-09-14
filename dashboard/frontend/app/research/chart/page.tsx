@@ -14,6 +14,7 @@ import {
   CrosshairMode,
 } from "lightweight-charts";
 import { api, type ResearchChartData } from "@/lib/api";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 import { SmcZonesPrimitive, type SmcZone, type ZoneOptions } from "@/lib/smcZonesPrimitive";
 
 function fmt(v: number) {
@@ -412,7 +413,7 @@ function ChartContent() {
             {copied ? "Copied!" : "Share"}
           </button>
           <a
-            href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(symbol.replace("NSE:", ""))}&interval=D`}
+            href={tradingViewChartUrl(symbol, "D")}
             target="_blank" rel="noopener noreferrer"
             style={{
               fontSize: "0.75rem", color: "#5b9cf6", textDecoration: "none",

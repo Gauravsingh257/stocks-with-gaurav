@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { api, type SwingIdea, type LongTermIdea } from "@/lib/api";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 
 type IdeaUnion = SwingIdea | LongTermIdea;
 
@@ -126,7 +127,7 @@ function CompareContent() {
                 <th style={{ width: 140 }}>Metric</th>
                 {symbols.map((s) => (
                   <th key={s} style={{ textAlign: "center" }}>
-                    <a href={`https://www.tradingview.com/chart/?symbol=NSE:${s}`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>
+                    <a href={tradingViewChartUrl(s)} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>
                       {s}
                     </a>
                   </th>

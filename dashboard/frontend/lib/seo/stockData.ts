@@ -171,29 +171,32 @@ export async function fetchSitemapSymbols(): Promise<SitemapSymbol[]> {
   }
 }
 
+export type SectorRow = Pick<
+  UniverseRow,
+  "symbol" | "company_name" | "sector" | "pe" | "pb" | "net_margin_pct" | "refreshed_at"
+>;
+
 /**
- * Sector peers for the "related stocks" block — the internal-linking surface that
- * turns 2,364 orphan pages into a crawlable graph. Sorted by turnover upstream, so
- * taking the head gives the most liquid (and most searched) names in the sector.
+ * Every stock in one sector, sorted by turnover upstream. One cached read feeds
+ * two blocks:
+ *   - the head (most liquid, most searched names) becomes the "related stocks"
+ *     links, the internal-linking surface that turns 2,364 orphan pages into a
+ *     crawlable graph;
+ *   - the whole sector gives the medians the key-metric labels compare against
+ *     (lib/metricInterpretation).
+ * The largest sector is ~340 rows, well inside the data-cache entry limit.
  */
-export async function fetchSectorPeers(
-  sector: string | null,
-  excludeSymbol: string,
-  limit = 12,
-): Promise<SitemapSymbol[]> {
+export async function fetchSectorRows(sector: string | null): Promise<SectorRow[]> {
   if (!sector) return [];
   const url = apiUrl(
-    `/api/research/universe?sector=${encodeURIComponent(sector)}&limit=200`,
+    `/api/research/universe?sector=${encodeURIComponent(sector)}&limit=1000`,
   );
   if (!url) return [];
   try {
     const res = await fetch(url, { next: { revalidate: UNIVERSE_REVALIDATE_SEC } });
     if (!res.ok) return [];
-    const json = (await res.json()) as { items?: (SitemapSymbol & { symbol: string })[] };
-    const items = Array.isArray(json?.items) ? json.items : [];
-    return items
-      .filter((r) => normalizeSymbol(r.symbol) !== excludeSymbol)
-      .slice(0, limit);
+    const json = (await res.json()) as { items?: SectorRow[] };
+    return Array.isArray(json?.items) ? json.items : [];
   } catch {
     return [];
   }
