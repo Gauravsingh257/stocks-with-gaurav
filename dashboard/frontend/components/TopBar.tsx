@@ -5,9 +5,9 @@ import { api, type MarketStateResponse } from "@/lib/api";
 import { useEngineSocket } from "@/lib/useWebSocket";
 import { useHealth } from "@/lib/useHealth";
 import { useAuth } from "@/lib/auth";
-import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon, SlidersHorizontal, Search, LogIn, LogOut, Crown } from "lucide-react";
+import { Wifi, WifiOff, RefreshCw, Database, Activity, Sun, Moon, SlidersHorizontal, LogIn, LogOut, Crown } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
-import { openGlobalSearch } from "@/components/CommandPalette";
+import SearchPill from "@/components/SearchPill";
 
 // Admin-only operator controls (Connect Kite, etc.) are gated by exact
 // email match. Anyone else logged in or anonymous never sees them.
@@ -232,22 +232,9 @@ export default function TopBar({ onMenuClick, terminalLayout = false, onTerminal
           </div>
         </div>
 
-        {/* Global search — always visible, all breakpoints. Opens the command
-            palette (stock symbol → /stock/[symbol], or any page). */}
-        <button
-          type="button"
-          onClick={openGlobalSearch}
-          title="Search stocks & pages (Ctrl/⌘+K)"
-          aria-label="Search"
-          className="grid place-items-center w-11 h-11 lg:w-8 lg:h-8 rounded-md shrink-0"
-          style={{
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            cursor: "pointer", color: "var(--text-secondary)",
-          }}
-        >
-          <Search size={16} />
-        </button>
+        {/* Global search — labelled pill on md+, ≥44px icon on small screens.
+            Opens the command palette: validated stocks, sectors and pages. */}
+        <SearchPill />
 
         {/* Theme toggle — always visible (≥44px touch target on mobile) */}
         <button
