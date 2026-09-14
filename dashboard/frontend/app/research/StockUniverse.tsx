@@ -60,24 +60,17 @@ function tone(key: SortKey, v: number | null | undefined): string | undefined {
   return undefined;
 }
 
-/** A deep-link value from global search (/universe?sector=Pharma, ?q=…).
- *  Read as lazy initial state — not in an effect, and not via useSearchParams,
- *  which would force a Suspense boundary onto this statically rendered page. The
- *  server's "" never reaches the markup: the table only renders after data loads. */
-function initialParam(name: string): string {
-  if (typeof window === "undefined") return "";
-  try {
-    return new URLSearchParams(window.location.search).get(name) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function StockUniverse() {
+/** `initialSector` / `initialQuery` seed the filters from a deep link such as
+ *  /universe?sector=Pharma. app/universe/page.tsx reads the URL and remounts this
+ *  table when the link changes; other callers simply omit them. */
+export function StockUniverse({
+  initialSector = "",
+  initialQuery = "",
+}: { initialSector?: string; initialQuery?: string } = {}) {
   const [data, setData] = useState<StockUniverseResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState(() => initialParam("q"));
-  const [sector, setSector] = useState(() => initialParam("sector"));
+  const [search, setSearch] = useState(initialQuery);
+  const [sector, setSector] = useState(initialSector);
   const [sortKey, setSortKey] = useState<SortKey>("turnover_cr");
   const [asc, setAsc] = useState(false);
   const [shown, setShown] = useState(100);

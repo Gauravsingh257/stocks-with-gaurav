@@ -378,8 +378,20 @@ export function searchAll(query: string, stocks: StockEntry[] | null, pages: Pag
   const pageResults = pageHits.slice(0, LIMITS.page).map(({ p, m }) => pageResult(p, m.score, m.fuzzy));
   if (pageResults.length) groups.push({ kind: "page", title: TITLES.page, results: pageResults });
 
-  groups.sort((a, b) => b.results[0].score - a.results[0].score);
-  return groups;
+  // Typo tolerance is a fallback, not a second opinion. When anything matched as
+  // typed, drop the typo matches: "sbin" should show SBIN — not "Nitin Spinners"
+  // (SPIN is one edit from SBIN) or a page whose keywords include "swing". Exact
+  // tiers always outscore fuzzy ones, so the per-group limits above can never
+  // have cut an exact match in favour of a fuzzy one that is now removed.
+  const anyAsTyped = groups.some((g) => g.results.some((r) => !r.fuzzy));
+  const kept = anyAsTyped
+    ? groups
+        .map((g) => ({ ...g, results: g.results.filter((r) => !r.fuzzy) }))
+        .filter((g) => g.results.length > 0)
+    : groups;
+
+  kept.sort((a, b) => b.results[0].score - a.results[0].score);
+  return kept;
 }
 
 /** The flat, keyboard-navigable order of a grouped result set. */

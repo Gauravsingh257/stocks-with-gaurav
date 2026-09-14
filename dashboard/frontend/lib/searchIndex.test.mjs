@@ -31,6 +31,8 @@ const ROWS = [
   { symbol: "DATAPATTNS", company_name: "Data Patterns (India) Limited", sector: "Capital Goods" },
   { symbol: "RELAXO", company_name: "Relaxo Footwears Limited", sector: "Consumer Durables" },
   { symbol: "UNASSIGNEDCO", company_name: "Placeholder Sector Limited", sector: "Unassigned" },
+  { symbol: "SBIN", company_name: "State Bank of India", sector: "Finance" },
+  { symbol: "NITINSPIN", company_name: "Nitin Spinners Limited", sector: "Textiles" },
   { symbol: "RELIANCE", company_name: "duplicate row must be ignored", sector: "Energy" },
 ];
 
@@ -40,6 +42,17 @@ const KNOWN = new Set(STOCKS.map((s) => s.symbol));
 const run = (q, stocks = STOCKS) => flattenGroups(searchAll(q, stocks, PAGES));
 const stocksFor = (q) => run(q).filter((r) => r.kind === "stock");
 const symbolsFor = (q) => stocksFor(q).map((r) => r.label);
+
+test("typo matches are a fallback — anything matching as typed hides them", () => {
+  // Found live on 2026-09-14: "sbin" also listed Nitin Spinners (SPIN is one
+  // edit from SBIN) and the AI Research page (its keyword "swing").
+  assert.deepEqual(symbolsFor("sbin"), ["SBIN"]);
+  assert.equal(run("sbin").some((r) => r.fuzzy), false);
+  assert.equal(run("sbin").some((r) => r.kind === "page"), false);
+  // With nothing matching as typed, typo tolerance still does its job.
+  assert.equal(stocksFor("RELIANCCE")[0].label, "RELIANCE");
+  assert.equal(stocksFor("RELIANCCE")[0].fuzzy, true);
+});
 
 test("the index drops duplicates and keeps turnover order as rank", () => {
   assert.equal(STOCKS.filter((s) => s.symbol === "RELIANCE").length, 1);
