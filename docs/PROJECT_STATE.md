@@ -494,11 +494,39 @@ validation soak.
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
 
-## `ui-ux` — ACTIVE (search Phase 1 shipped)
+## `ui-ux` — ACTIVE (minimal header + search Phase 1 shipped)
 
-**NOW** — nothing in flight. Search Phase 1 is live and verified in production.
+**NOW** — nothing in flight. The minimal header and search Phase 1 are both live and verified in production.
 
-**STOPPED AT** — **2026-09-14/15: global search Phase 1, PRs #186 + #187, verified live.**
+**STOPPED AT** — **2026-09-15: minimal global header, PR #188 (merge 624fe81), verified live.**
+The header had shown operator telemetry to every visitor. It is now only: hamburger (mobile), a wide
+Search pill (md+) or 44px search icon (mobile), theme toggle, account.
+- **Removed from the header:**
+  - `WS LIVE · v734` — outages are covered by the MarketCommandBar status dot and BackendStatusNotice
+  - `Bear · 43` Market Health chip and its 5-min `marketState` poll — duplicated the Command Center
+    and the tape strip
+  - Daily PnL / Signals — the engine's own numbers; the Command Center shows Signals and "Your day"
+  - Terminal Layout, together with `LayoutClient` state and the deleted `MultiPanelLayout`
+    (two link cards)
+- **Moved to an admin-only "Operator" section of the account menu** (`components/OperatorStatus.tsx`):
+  - engine mode and circuit breaker
+  - Kite status/TTL and Refresh/Connect Kite (`/api/kite/login`)
+  - DB/WS, backend version, snapshot time, and a Product Health link
+  - An **amber dot on the avatar** flags Kite needing a login, so moving the button can't hide an
+    outage.
+  - The section mounts only while an admin has the menu open. The header itself no longer opens an
+    engine WebSocket, so visitors save one socket and one poll per tab.
+- **Also fixed:** the account menu now closes on an outside press or Escape. Its old full-screen
+  backdrop only covered the 56px bar, because `backdrop-filter` makes the header the containing
+  block for `position: fixed`.
+- **Verified:**
+  - locally with a mocked admin and a regular user: dot, Operator section, Kite button target, menu
+    closing, no operator UI for non-admins
+  - on production at 1440 and 390: header shows only the search pill (or icon), theme and Sign In;
+    no horizontal scroll; the pill, mobile icon and Ctrl+K open search; `reliance` → RELIANCE
+  - rollback = revert PR #188 (frontend only)
+
+**Earlier — 2026-09-14/15: global search Phase 1, PRs #186 + #187, verified live.**
 The audit came first. Since 07-12 only **6 of 153** visitors had used search, and **11 of 24 stock
 searches (46%) opened a 404**: the palette offered any ticker-shaped query as a stock, and a page
 name like "watchlist" put a fake WATCHLIST stock above the real page. Now:
