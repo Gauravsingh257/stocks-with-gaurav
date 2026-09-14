@@ -9,6 +9,7 @@ import {
   recommendationColors,
 } from "@/utils/calculateConfidence";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
+import { tradingViewChartUrl } from "@/lib/tradingview";
 
 function money(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -172,7 +173,7 @@ export default function StockCard({
           Open Full Analysis
         </Link>
         <a
-          href={`https://www.tradingview.com/chart/?symbol=NSE:${encodeURIComponent(analysis.symbol)}`}
+          href={tradingViewChartUrl(analysis.symbol)}
           target="_blank"
           rel="noopener noreferrer"
           style={{

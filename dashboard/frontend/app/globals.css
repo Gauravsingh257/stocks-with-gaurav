@@ -26,6 +26,25 @@
   --border-interactive: rgba(255,255,255,0.20);
   --bg-field:           rgba(255,255,255,0.045);
   --bg-field-hover:     rgba(255,255,255,0.075);
+
+  /* Status tones for plain-English metric readings (stock page). Foregrounds
+     keep >= 4.5:1 on the dark card surface; never rely on colour alone — each
+     pill also carries an icon and a text label. */
+  --tone-good-fg:           #34d399;
+  --tone-good-bg:           rgba(52,211,153,0.12);
+  --tone-good-border:       rgba(52,211,153,0.38);
+  --tone-caution-fg:        #fbbf24;
+  --tone-caution-bg:        rgba(251,191,36,0.12);
+  --tone-caution-border:    rgba(251,191,36,0.38);
+  --tone-weak-fg:           #fb7185;
+  --tone-weak-bg:           rgba(251,113,133,0.12);
+  --tone-weak-border:       rgba(251,113,133,0.40);
+  --tone-neutral-fg:        #b4c2dd;
+  --tone-neutral-bg:        rgba(180,194,221,0.09);
+  --tone-neutral-border:    rgba(180,194,221,0.28);
+  --tone-unavailable-fg:    #93a3c4;
+  --tone-unavailable-bg:    transparent;
+  --tone-unavailable-border: rgba(147,163,196,0.32);
 }
 
 @theme inline {
@@ -62,11 +81,134 @@
   --border-interactive: rgba(0,0,0,0.24);
   --bg-field:           rgba(0,0,0,0.035);
   --bg-field-hover:     rgba(0,0,0,0.06);
+
+  --tone-good-fg:           #047857;
+  --tone-good-bg:           rgba(4,120,87,0.08);
+  --tone-good-border:       rgba(4,120,87,0.32);
+  --tone-caution-fg:        #92400e;
+  --tone-caution-bg:        rgba(217,119,6,0.10);
+  --tone-caution-border:    rgba(146,64,14,0.30);
+  --tone-weak-fg:           #b91c1c;
+  --tone-weak-bg:           rgba(185,28,28,0.07);
+  --tone-weak-border:       rgba(185,28,28,0.30);
+  --tone-neutral-fg:        #475569;
+  --tone-neutral-bg:        rgba(71,85,105,0.07);
+  --tone-neutral-border:    rgba(71,85,105,0.26);
+  --tone-unavailable-fg:    #5f6b7d;
+  --tone-unavailable-bg:    transparent;
+  --tone-unavailable-border: rgba(95,107,125,0.32);
 }
 
 [data-theme="light"] body {
   background: var(--bg-base);
   color: var(--text-primary);
+}
+
+/* ── Stock page (/stock/<symbol>) ──────────────────────────── */
+.stock-analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+  gap: 16px;
+}
+@media (max-width: 960px) {
+  .stock-analysis-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.nse-chart-host { position: relative; height: 400px; }
+@media (max-width: 640px) {
+  .nse-chart-host { height: 300px; }
+}
+
+.metric-groups { display: grid; gap: 20px; }
+.metric-group-title {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.metric-card {
+  display: grid;
+  grid-template-areas: "label" "value" "pill" "note";
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-interactive);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+.metric-card[data-tone="good"]    { border-left-color: var(--tone-good-fg); }
+.metric-card[data-tone="caution"] { border-left-color: var(--tone-caution-fg); }
+.metric-card[data-tone="weak"]    { border-left-color: var(--tone-weak-fg); }
+.metric-label {
+  grid-area: label;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.metric-value {
+  grid-area: value;
+  font-size: 1.3rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.metric-pill {
+  grid-area: pill;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+  color: var(--tone-neutral-fg);
+  background: var(--tone-neutral-bg);
+  border: 1px solid var(--tone-neutral-border);
+}
+.metric-pill[data-tone="good"]        { color: var(--tone-good-fg); background: var(--tone-good-bg); border-color: var(--tone-good-border); }
+.metric-pill[data-tone="caution"]     { color: var(--tone-caution-fg); background: var(--tone-caution-bg); border-color: var(--tone-caution-border); }
+.metric-pill[data-tone="weak"]        { color: var(--tone-weak-fg); background: var(--tone-weak-bg); border-color: var(--tone-weak-border); }
+.metric-pill[data-tone="unavailable"] { color: var(--tone-unavailable-fg); background: var(--tone-unavailable-bg); border-color: var(--tone-unavailable-border); border-style: dashed; }
+.metric-pill-icon { font-size: 0.72rem; line-height: 1; }
+.metric-note {
+  grid-area: note;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.metric-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Light --text-secondary is 4.4:1 on a tinted card — just under AA for small
+   text — so the metric labels and notes use a darker slate there. */
+[data-theme="light"] .metric-label,
+[data-theme="light"] .metric-note { color: #475569; }
+
+/* Phones: one column; label and value on the left, status on the right. */
+@media (max-width: 560px) {
+  .metric-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .metric-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "label pill" "value pill" "note note";
+    column-gap: 10px;
+    row-gap: 3px;
+    padding: 11px 12px;
+  }
+  .metric-card .metric-pill { align-self: center; justify-self: end; }
+  .metric-value { font-size: 1.15rem; }
 }
 
 [data-theme="light"] .terminal-card,

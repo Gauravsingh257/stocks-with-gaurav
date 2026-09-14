@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import StockCard from "@/components/StockCard";
-import { TradingViewStockWidget } from "@/components/TradingViewStockWidget";
+import NseStockChart from "@/components/NseStockChart";
 import { api, type StockAnalysis } from "@/lib/api";
 
 /**
@@ -50,16 +50,9 @@ export default function StockAnalysisPanel({
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.25fr) minmax(300px, 0.75fr)",
-          gap: 16,
-        }}
-        className="stock-analysis-grid"
-      >
-        <div className="glass" style={{ padding: 10, minHeight: 440 }}>
-          <TradingViewStockWidget symbol={symbol} />
+      <div className="stock-analysis-grid">
+        <div className="glass" style={{ padding: 14, minWidth: 0 }}>
+          <NseStockChart key={symbol} symbol={symbol} />
         </div>
         {analysis ? (
           <StockCard analysis={analysis} />
