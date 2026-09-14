@@ -117,15 +117,12 @@ export default function CommandPalette() {
     track("search_opened", { trigger });
   }, []);
 
+  // Plain client navigation everywhere. /universe reads ?sector= / ?q= through
+  // useSearchParams and keys its table on them, so a sector link applies its
+  // filter even when followed from the Universe page itself.
   const navigate = useCallback(
-    (href: string, reloadIfOnUniverse: boolean) => {
+    (href: string) => {
       closePalette();
-      // StockUniverse reads ?sector= / ?q= on mount. If we are already on
-      // /universe a client push keeps the mounted table, so load it properly.
-      if (reloadIfOnUniverse && window.location.pathname === "/universe") {
-        window.location.assign(href);
-        return;
-      }
       router.push(href);
     },
     [closePalette, router],
@@ -146,7 +143,7 @@ export default function CommandPalette() {
         trigger: triggerRef.current,
         index: indexState,
       });
-      navigate(r.href, r.kind === "sector");
+      navigate(r.href);
     },
     [loggedQuery, indexState, navigate],
   );
@@ -166,7 +163,7 @@ export default function CommandPalette() {
         trigger: triggerRef.current,
         index: indexState,
       });
-      navigate(href, true);
+      navigate(href);
     },
     [query, loggedQuery, indexState, navigate],
   );
