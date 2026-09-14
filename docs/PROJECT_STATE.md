@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-13**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-15**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -253,7 +253,7 @@ Verified against the running system, not from docs:
 | `selection` | 🔴 **ACTIVE** | Anchor10 live, validating 09-14/15 · 09-07 data blackout root-caused, monitoring live (PR #185) · snapshot TTL raised to 96h, verified |
 | `portfolio` | 🟡 in validation | Admission-gate metrics now complete on both doors; no threshold set yet |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
-| `ui-ux` | 🟡 paused | Affordance pass + Universe tab shipped; a11y and responsive matrix still open |
+| `ui-ux` | 🟡 **ACTIVE** | Search Phase 1 live (PRs #186/#187): validated stock, company and sector search; 404 dead-ends fixed · a11y + responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
 
 ---
@@ -354,7 +354,7 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 
 **NEXT** — ordered:
 
-1. **Validate Anchor10 on 2026-09-14 and 09-15.** **First gate:** `GET /api/research/data-health`
+1. **Validate Anchor10 on 2026-09-14 and 09-15.** *Status as of 2026-09-15 ~00:30 IST: the Monday checklist was **not run** — the session moved to search work. It can still be run read-only from `signals_log` and `/api/research/anchor-shadow-status`. Tuesday's data gate is already met: snapshot `2026-09-14`, 88h shards, expires Fri 18 Sep.* **First gate:** `GET /api/research/data-health`
    must show `usable: true` (or `python -m scripts.scan_health` exit 0) — a blind-data morning like
    09-07 would contaminate the session and must not be read as an Anchor10 result. Checklist: idea count not down >20% vs the
    ~15–20/session baseline; actionable% (within 5% of entry) up from the 25–40% Config-A norm;
@@ -494,12 +494,48 @@ validation soak.
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
 
-## `ui-ux` — paused
+## `ui-ux` — ACTIVE (search Phase 1 shipped)
 
-**NOW** — nothing in flight.
+**NOW** — nothing in flight. Search Phase 1 is live and verified in production.
 
-**STOPPED AT** — PRs #177/#178 (2026-08-23): Stock Universe promoted to its own tab, and a
-site-wide affordance pass making interactive things look interactive.
+**STOPPED AT** — **2026-09-14/15: global search Phase 1, PRs #186 + #187, verified live.**
+The audit came first. Since 07-12 only **6 of 153** visitors had used search, and **11 of 24 stock
+searches (46%) opened a 404**: the palette offered any ticker-shaped query as a stock, and a page
+name like "watchlist" put a fake WATCHLIST stock above the real page. Now:
+- `lib/searchIndex.ts` is one pure, unit-tested search core (19 `node:test` cases, run with
+  `node --test dashboard/frontend/lib/searchIndex.test.mjs`). Stocks come only from the published
+  universe: `/api/research/universe/sitemap`, ~37 KB gzipped, cached 12h via
+  `lib/stockIndexLoader.ts`. It matches symbol, company name and sector (with everyday aliases,
+  e.g. "banking" → Finance). Typo tolerance is a **fallback only**, and liquidity breaks ties.
+  **No backend change.**
+- `CommandPalette` groups results as Stocks / Sectors / Pages and covers all 12 nav pages; a no-match
+  falls back to Stock Universe, and Ctrl/⌘+K is kept. `SearchPill` replaces the bare icon: "Search
+  stocks, sectors, pages… ⌘K" on md+, a 44px icon on phones.
+- `/universe` honours `?sector=` / `?q=` via `useSearchParams` under Suspense, keyed on the link.
+- **Verified in a real browser on production:**
+  - `RELIANCCE` → RELIANCE (HTTP 200)
+  - `watchlist` + Enter → /watchlist
+  - `sbin` → SBIN only
+  - the Pharma and IT sector links apply their filter, including from /universe itself
+  - 390px mobile works
+- **Analytics:** `search_opened {trigger}`; `global_search` (the event Product Health already counts)
+  with `result_type`, `position`, `action`, `input`, `fuzzy`, `trigger`, `index`; and
+  `search_no_results`. The verification runs sent ~20 test search events on 2026-09-14; discount them.
+- **Only production verification caught two bugs, not the tests.** Client navigation mounts the new
+  page before `window.location` updates (fixed with `useSearchParams`), and typo matches cluttered
+  exact ones (now a fallback).
+
+**Search, next:**
+1. **Measure ~2026-09-28:** search users (baseline 6/153), the 404 dead-end rate (baseline 46%),
+   top `search_no_results` queries and result positions. Product Health counts `global_search`; the
+   new props need a first-party events query.
+2. **Phase 2 (not started, needs a go):** SWG status badges on stock results (in today's ideas, on the
+   watchlist, held, screener hit, sector leadership), quick actions (chart, add to watchlist, analyze),
+   and recents + trending on the empty state.
+3. **Phase 3:** move the Research, Universe and Terminal search boxes onto the shared core.
+4. **Before surfacing analysis more widely:** the on-demand analysis labels stocks "Strong Buy /
+   Watchlist / Avoid" (`services/stock_search_analysis._recommendation`). Relabel within the
+   analytics-not-advice positioning.
 
 **NEXT**
 1. Full responsive matrix — [`../MOBILE_AUDIT_FINDINGS.md`](../MOBILE_AUDIT_FINDINGS.md) still has
@@ -560,6 +596,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| **#186** + **#187** 2026-09-14 | `ui-ux` | global search Phase 1: validated stock / company / sector autocomplete, typo fallback, all pages, visible ⌘K pill, search analytics, sector deep links |
 | **#185** 2026-09-13 | `selection` | 09-07 data-blackout monitoring: `data-health` endpoint, `scan_health.py` + workflow, `l1_counterfactual` metric |
 | direct-to-main 2026-09-13 | `portfolio` `selection` | write-time `position_provenance` (`87a10f6`); OLD-vs-NEW audit framework (`b3d6617`) |
 | **#184** + env 2026-09-13 | `selection` `portfolio` | Anchor10 evaluation-window fix → `ENTRY_ANCHOR_MAX_GAP_PCT=10` **live on `web`**; admission-gate seed-door metrics; raw shadow export |
