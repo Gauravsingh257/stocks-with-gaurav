@@ -13,6 +13,7 @@ import {
 } from "lightweight-charts";
 import { api, type ResearchChartCandle } from "@/lib/api";
 import { tradingViewChartUrl } from "@/lib/tradingview";
+import { inr, istDateTime, istDay, quoteSourceLabel } from "@/lib/stockFormat";
 import { useTheme } from "@/components/ThemeProvider";
 
 /**
@@ -26,21 +27,27 @@ import { useTheme } from "@/components/ThemeProvider";
  * exist" chart. Adding an NSE: prefix only changes the wrong chart into an empty
  * one.
  *
- * The candles come from /api/research/chart-data, the same `<SYMBOL>.NS` provider
- * series behind the key-metric price, so the chart and the numbers above it
- * always describe the same NSE instrument. A tradingview.com link (which can
- * show NSE) stays available for deeper charting.
+ * The candles come from /api/research/chart-data (`<SYMBOL>.NS` daily bars). The
+ * caption's price is the page's current price — the price resolver quote carried
+ * by the analysis response — unless the candles are from a later session than
+ * that quote (e.g. an hour-old server render), in which case the latest close is
+ * shown. Either way the caption says which one it is. A tradingview.com link
+ * (which can show NSE) stays available for deeper charting.
  */
+
+export interface PriceQuote {
+  price: number;
+  /** services/price_resolver source, e.g. "kite_live". */
+  source?: string | null;
+  /** When the quote was resolved (ISO timestamp). */
+  asOf?: string | null;
+}
 
 type ChartState =
   | { status: "loading" }
   | { status: "ready"; candles: ResearchChartCandle[] }
   | { status: "empty" }
   | { status: "error" };
-
-function inr(value: number): string {
-  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
 
 function dayLabel(day: string): string {
   return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-IN", {
@@ -66,7 +73,7 @@ function timeKey(time: Time | undefined): string | null {
   return null;
 }
 
-export default function NseStockChart({ symbol }: { symbol: string }) {
+export default function NseStockChart({ symbol, quote }: { symbol: string; quote?: PriceQuote | null }) {
   const [state, setState] = useState<ChartState>({ status: "loading" });
   const hostRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLSpanElement>(null);
@@ -145,7 +152,7 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
 
     // OHLC readout under the chart: the hovered day, or the latest one.
     const byDay = new Map(candles.map((c) => [c.time, c]));
-    const latest = candles[candles.length - 1];
+    const latestCandle = candles[candles.length - 1];
     const showDay = (c: ResearchChartCandle) => {
       if (!legendRef.current) return;
       legendRef.current.textContent =
@@ -153,9 +160,9 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
     };
     const onCrosshairMove = (param: MouseEventParams<Time>) => {
       const key = timeKey(param.time);
-      showDay((key && byDay.get(key)) || latest);
+      showDay((key && byDay.get(key)) || latestCandle);
     };
-    showDay(latest);
+    showDay(latestCandle);
     chart.subscribeCrosshairMove(onCrosshairMove);
 
     return () => {
@@ -164,9 +171,21 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
     };
   }, [candles, theme]);
 
+  // ── Caption price ──────────────────────────────────────────────────────────
   const latest = candles?.[candles.length - 1] ?? null;
-  const previous = candles && candles.length > 1 ? candles[candles.length - 2] : null;
-  const dayChange = latest && previous && previous.close ? (latest.close / previous.close - 1) * 100 : null;
+  const quoteDay = istDay(quote?.asOf);
+  const useQuote = !!quote && (!latest || !quoteDay || quoteDay >= latest.time);
+  const shownPrice = useQuote ? quote.price : (latest?.close ?? null);
+  // Day change is measured against the last close before the shown price's session.
+  const sessionDay = useQuote ? quoteDay : (latest?.time ?? null);
+  const previousClose =
+    candles && sessionDay ? ([...candles].reverse().find((c) => c.time < sessionDay)?.close ?? null) : null;
+  const dayChange = shownPrice != null && previousClose ? (shownPrice / previousClose - 1) * 100 : null;
+  const priceNote = useQuote
+    ? [quoteSourceLabel(quote.source), istDateTime(quote.asOf)].filter(Boolean).join(" · ")
+    : latest
+      ? `Close · ${dayLabel(latest.time)}`
+      : null;
 
   const placeholder =
     state.status === "loading"
@@ -188,10 +207,12 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
       >
         <span style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "2px 10px" }}>
           <strong style={{ fontSize: "0.95rem", color: "var(--text-primary)" }}>NSE: {symbol}</strong>
-          <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>Daily · last 6 months</span>
-          {latest && (
-            <span style={{ fontSize: "0.92rem", fontWeight: 750, color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
-              {inr(latest.close)}
+          {shownPrice != null && (
+            <span
+              data-testid="chart-price"
+              style={{ fontSize: "0.92rem", fontWeight: 750, color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}
+            >
+              {inr(shownPrice)}
               {dayChange != null && (
                 <span
                   style={{
@@ -206,6 +227,9 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
                 </span>
               )}
             </span>
+          )}
+          {priceNote && (
+            <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>{priceNote}</span>
           )}
         </span>
         <a
@@ -269,7 +293,7 @@ export default function NseStockChart({ symbol }: { symbol: string }) {
         }}
       >
         <span ref={legendRef} style={{ fontVariantNumeric: "tabular-nums" }} />
-        <span style={{ color: "var(--text-dim)" }}>NSE daily prices · may be delayed</span>
+        <span style={{ color: "var(--text-dim)" }}>Daily NSE candles · last 6 months</span>
       </div>
     </figure>
   );

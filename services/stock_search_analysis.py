@@ -6,6 +6,20 @@ This module intentionally reuses existing research primitives where possible:
 - CMP resolution from services.price_resolver
 - SMC trade levels from services.research_levels
 - fundamentals from services.fundamental_analysis
+
+Two different kinds of "fundamentals" meet in the response, deliberately kept apart:
+
+- ``fundamentals`` — the analyzer's own provider fetch (services.fundamental_analysis,
+  24h disk cache). It is the INPUT to the confidence score and must stay exactly as
+  it is; it is not the site's statement of fact about the company.
+- ``reference`` and ``name`` — the canonical identity and headline ratios from the
+  weekly ``stock_universe`` snapshot, the same row the public /stock/<symbol> page
+  and the Stock Universe use. Anything *displayed* about the company comes from here.
+
+Before this split the /stock page showed two versions of the same stock: the key
+metrics said "Fineotex Chemical Limited · Chemicals · P/E 222x" (snapshot) while the
+analysis card said "FCL · Basic Materials · PE 213.9" (the provider's coarse sector,
+a separately cached P/E, and the ticker in place of the company name).
 """
 
 from __future__ import annotations
@@ -120,6 +134,40 @@ def _fundamentals(symbol: str) -> dict[str, Any]:
     except Exception as exc:
         log.warning("fundamentals failed for %s: %s", symbol, exc)
         return {}
+
+
+def _universe_reference(symbol: str) -> dict[str, Any] | None:
+    """Canonical identity + headline ratios from the weekly ``stock_universe`` snapshot.
+
+    One indexed SQLite read (the same helper behind /api/research/universe/symbol).
+    Returns None when the symbol is not in the universe or the read fails, so the
+    analysis itself never depends on it.
+    """
+    try:
+        from dashboard.backend.db.universe import get_symbol  # noqa: PLC0415
+
+        row = get_symbol(symbol)
+    except Exception as exc:
+        log.debug("universe reference read failed for %s: %s", symbol, exc)
+        return None
+    if not row:
+        return None
+    return {
+        "source": "stock_universe",
+        "as_of": row.get("refreshed_at"),
+        "company_name": row.get("company_name"),
+        "sector": row.get("sector"),
+        # The close the ratios below were computed at — not a current price.
+        "price": row.get("price"),
+        "pe": row.get("pe"),
+        "pb": row.get("pb"),
+        "market_cap_cr": row.get("market_cap_cr"),
+        "roe_pct": row.get("roe_pct"),
+        "debt_to_equity": row.get("debt_to_equity"),
+        "revenue_growth_pct": row.get("revenue_growth_pct"),
+        "net_margin_pct": row.get("net_margin_pct"),
+        "promoter_pct": row.get("promoter_pct"),
+    }
 
 
 def _cmp(symbol: str, fallback: float | None) -> tuple[float | None, str, int | None]:
@@ -289,9 +337,13 @@ def analyze_stock(symbol: str) -> dict[str, Any]:
     if smc_meta and smc_meta.get("reasons"):
         reason = " ".join(str(x) for x in smc_meta["reasons"][:3])
 
+    # Read after scoring on purpose: the reference is display data only and can
+    # never influence confidence, recommendation or levels.
+    reference = _universe_reference(clean)
+
     result = {
         "symbol": clean,
-        "name": clean,
+        "name": (reference or {}).get("company_name") or clean,
         "exchange": "NSE",
         "cmp": round(float(cmp_value), 2) if cmp_value is not None else None,
         "cmp_source": cmp_source,
@@ -307,7 +359,9 @@ def analyze_stock(symbol: str) -> dict[str, Any]:
         "reason": reason,
         "criteria_not_met": criteria_not_met,
         "smc_zones": _zones(candles),
+        # Scoring inputs (provider fetch). Display identity/ratios: ``reference``.
         "fundamentals": fundamentals,
+        "reference": reference,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     _analysis_cache[full_symbol] = (time.time(), result)

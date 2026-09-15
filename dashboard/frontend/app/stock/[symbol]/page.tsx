@@ -9,6 +9,18 @@
  * Render budget is protected by the two-tier split in lib/seo/stockData.ts: the
  * fundamentals below come from a single SQLite read, while the SMC analysis is
  * best-effort and degrades to a client fetch. See that file for why.
+ *
+ * Source of truth — each fact on this page has exactly one source:
+ *   - company, sector, P/E, P/B, ROE, D/E, margins, growth, promoter holding,
+ *     market cap → the weekly `stock_universe` snapshot, labelled with its date.
+ *     The analysis card shows the same row (`analysis.reference`).
+ *   - current price → services/price_resolver (live cache → Kite → delayed) via
+ *     the analysis response, labelled with its source and time; shown in the
+ *     analysis card and the chart caption.
+ *   - the snapshot's own close is shown only as "the price these ratios use".
+ *   - daily price history → /api/research/chart-data.
+ * The analyzer's `fundamentals` object is its confidence input, never displayed
+ * as company facts for a universe stock.
  */
 
 import type { Metadata } from "next";
@@ -21,6 +33,7 @@ import {
   fetchUniverseRow,
   normalizeSymbol,
   sectorSlug,
+  toStockReference,
   type UniverseRow,
 } from "@/lib/seo/stockData";
 import {
@@ -40,6 +53,7 @@ import {
   type Tone,
 } from "@/lib/metricInterpretation";
 import { site } from "@/lib/site";
+import { crore, inr, num, signedPct, snapshotDate } from "@/lib/stockFormat";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 
 /**
@@ -62,28 +76,6 @@ type PageProps = { params: Promise<{ symbol: string }> };
 function displayName(row: UniverseRow | null, symbol: string): string {
   const name = row?.company_name?.trim();
   return name && name.toUpperCase() !== symbol ? name : symbol;
-}
-
-function inr(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
-
-function num(value: number | null | undefined, suffix = ""): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}${suffix}`;
-}
-
-function signedPct(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
-  return `${sign}${Math.abs(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}%`;
-}
-
-function crore(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  if (value >= 100000) return `₹${(value / 100000).toFixed(2)} lakh Cr`;
-  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })} Cr`;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -143,6 +135,7 @@ export default async function StockDetailPage({ params }: PageProps) {
   const slug = sectorSlug(sector);
   const peers = sectorRows.filter((r) => normalizeSymbol(r.symbol) !== symbol).slice(0, 12);
   const benchmarks = sectorBenchmarks(sector, sectorRows);
+  const asOf = snapshotDate(row?.refreshed_at);
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -275,6 +268,7 @@ export default async function StockDetailPage({ params }: PageProps) {
                 ))}
               </div>
               <p style={{ margin: 0, fontSize: "0.8rem", lineHeight: 1.5, color: "var(--text-secondary)", maxWidth: "80ch" }}>
+                {asOf ? `Company, sector and ratios are from the ${asOf} weekly snapshot. ` : ""}
                 {benchmarks.sector
                   ? `Valuation and margin labels compare ${symbol} with ${benchmarks.count} ${benchmarks.sector} stocks (the NSE-wide median where the sector has too few); other labels use fixed ranges.`
                   : `Valuation and margin labels compare ${symbol} with the NSE-wide median; other labels use fixed ranges.`}{" "}
@@ -285,7 +279,7 @@ export default async function StockDetailPage({ params }: PageProps) {
         </div>
         {row ? (
           <div className="metric-groups">
-            {metricGroups(row, sector, benchmarks).map((group) => (
+            {metricGroups(row, sector, benchmarks, asOf).map((group) => (
               <div key={group.title}>
                 <h3 className="metric-group-title">{group.title}</h3>
                 <div className="metric-grid">
@@ -303,14 +297,18 @@ export default async function StockDetailPage({ params }: PageProps) {
         )}
         {row?.refreshed_at && (
           <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-dim)" }}>
-            Fundamentals snapshot last refreshed {row.refreshed_at} · prices may be delayed up to
-            15 minutes.
+            Stock universe snapshot, refreshed weekly · last refresh {row.refreshed_at} UTC. The
+            current price is shown with the chart.
           </p>
         )}
       </section>
 
       {/* Tier 2: SSR'd when the server got it in time, client-fetched otherwise. */}
-      <StockAnalysisPanel symbol={symbol} initial={analysis} />
+      <StockAnalysisPanel
+        symbol={symbol}
+        initial={analysis}
+        reference={row ? toStockReference(row) : null}
+      />
 
       {peers.length > 0 && (
         <section className="glass" style={{ padding: 16, display: "grid", gap: 10 }}>
@@ -388,12 +386,19 @@ function metricGroups(
   row: UniverseRow,
   sector: string | null,
   benchmarks: SectorBenchmarks,
+  asOf: string | null,
 ): { title: string; items: MetricItem[] }[] {
   return [
     {
       title: "Valuation",
       items: [
-        { label: "Last price", value: inr(row.price), hint: "NSE price from the latest fundamentals snapshot." },
+        {
+          // The snapshot's close, labelled for what it is: the basis of P/E, P/B and
+          // market cap. The current price (price resolver) is shown with the chart.
+          label: "Price used for ratios",
+          value: inr(row.price),
+          hint: `${asOf ? `Closing price in the ${asOf} snapshot` : "Snapshot closing price"} that P/E, P/B and market cap are based on. The current price is shown with the chart.`,
+        },
         { label: "Market cap", value: crore(row.market_cap_cr), reading: readMarketCap(row.market_cap_cr) },
         { label: "P/E ratio", value: num(row.pe, "x"), reading: readPE(row.pe, row.net_margin_pct, benchmarks) },
         { label: "P/B ratio", value: num(row.pb, "x"), reading: readPB(row.pb, row.roe_pct, benchmarks) },

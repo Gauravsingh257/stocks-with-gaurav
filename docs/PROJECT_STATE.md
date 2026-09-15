@@ -498,7 +498,31 @@ validation soak.
 
 **NOW** — nothing in flight. Stock page Phase 1A/1B, the minimal header and search Phase 1 are all live and verified in production.
 
-**STOPPED AT** — **2026-09-15: stock page Phase 1A (chart accuracy) + 1B (readable metrics), PR #189 (merge a3463e6), verified live.**
+**STOPPED AT** — **2026-09-15: stock page single source of truth (PR #190).**
+- **Root cause:** `/stock/<symbol>` composes two independent backend products, and each re-fetched the same facts.
+  - **Key metrics** read the weekly `stock_universe` snapshot.
+  - **The analysis card** read `/api/search-stock` → `analyze_stock`:
+    - `name` was just the ticker
+    - sector, P/E and market cap came from `services.fundamental_analysis`, a separate provider fetch with a 24h disk cache, the provider's coarse sector ("Basic Materials"), P/E rounded to 1 dp, and D/E not divided by 100 for values ≤ 10
+    - CMP came from `price_resolver` (live)
+  - **A third price:** key metrics labelled the snapshot close (up to a week old) "Last price". On 09-15 FCL showed ₹57.72 there against ₹54.32 in the card and chart.
+- **Fix (display data only):** `analyze_stock` now attaches the canonical universe row as `reference` and uses its company name. `fundamentals` is kept untouched as the confidence input, and the reference is read *after* scoring. The frontend contract is written in the header comment of `app/stock/[symbol]/page.tsx`:
+  - company, sector and all ratios → snapshot (dated)
+  - current price → price resolver (source + time), shown in the card and chart caption
+  - the snapshot close is labelled "Price used for ratios"
+  - shared formatting lives in `lib/stockFormat.ts`
+- **Tests:**
+  - `tests/test_stock_search_reference.py`: identity from the universe; confidence, recommendation, levels and fundamentals identical with or without a reference; failure-safe.
+  - Node tests: 44 pass.
+- **Found, NOT changed (it is ranking input):** `fundamental_analysis` still divides D/E by 100 only when > 10, so FCL scores 0.87 and ITC 3.29 instead of 0.01 and 0.03. That is the bug already fixed in the universe refresh. It feeds `fundamental_score`, and `ranking_engine` reads `raw_debt_equity`, so fixing it is a ranking change that needs a decision and a calibration check.
+- **Phase 2 (designed, not started):**
+  1. Price and verdict hierarchy above the fold.
+  2. Peer comparison on the same sector-relative framework.
+  3. Missing-data handling (ROE coverage is 28%).
+
+  See the 2026-09-15 session report.
+
+**Earlier — 2026-09-15: stock page Phase 1A (chart accuracy) + 1B (readable metrics), PR #189 (merge a3463e6), verified live.**
 - **1A — root cause:** `/stock/FCL` showed ASX:FCL (FINEOS) under Fineotex's metrics.
   - The page embedded TradingView's `tv.js` widget with a **bare ticker**, and its `exchange` option is ignored.
   - **TradingView does not license NSE data to embedded widgets at all.** Every `NSE:` symbol tested returns "only available on TradingView", even from our own domain.

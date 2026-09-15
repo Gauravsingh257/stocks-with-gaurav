@@ -23,7 +23,7 @@
 // to a live build is not worth it here. These helpers are imported solely by
 // server components; keep it that way (the fetch cache is a no-op in a client).
 import { getBackendBase } from "@/lib/api";
-import type { StockAnalysis } from "@/lib/api";
+import type { StockAnalysis, StockReference } from "@/lib/api";
 
 /** Universe snapshot refreshes weekly (Sat 09:00), so a day is already generous. */
 const UNIVERSE_REVALIDATE_SEC = 60 * 60 * 12;
@@ -58,6 +58,31 @@ export interface UniverseRow {
   pct_from_52w_high: number | null;
   ret_1y_pct: number | null;
   refreshed_at: string | null;
+}
+
+/**
+ * The page's canonical company facts in the shape the analysis card reads
+ * (`StockAnalysis.reference`). The stock page hands this row — the one it already
+ * rendered in the key metrics — to the card, so the card can never show a
+ * different company, sector or ratio, whatever the analysis response's own copy
+ * or cache age.
+ */
+export function toStockReference(row: UniverseRow): StockReference {
+  return {
+    source: "stock_universe",
+    as_of: row.refreshed_at,
+    company_name: row.company_name,
+    sector: row.sector,
+    price: row.price,
+    pe: row.pe,
+    pb: row.pb,
+    market_cap_cr: row.market_cap_cr,
+    roe_pct: row.roe_pct,
+    debt_to_equity: row.debt_to_equity,
+    revenue_growth_pct: row.revenue_growth_pct,
+    net_margin_pct: row.net_margin_pct,
+    promoter_pct: row.promoter_pct,
+  };
 }
 
 /** Strip NSE:/​.NS decoration and any character that can't appear in an NSE ticker. */

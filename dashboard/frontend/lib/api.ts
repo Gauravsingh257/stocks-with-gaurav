@@ -399,8 +399,30 @@ export interface StockAnalysisZone {
   level?: number;
 }
 
+/**
+ * Canonical identity and headline ratios for a symbol: its row in the weekly
+ * `stock_universe` snapshot — the same data as the /stock page's key metrics.
+ * `price` is the close those ratios were computed at, not a current price.
+ */
+export interface StockReference {
+  source: string;
+  as_of: string | null;
+  company_name: string | null;
+  sector: string | null;
+  price: number | null;
+  pe: number | null;
+  pb: number | null;
+  market_cap_cr: number | null;
+  roe_pct: number | null;
+  debt_to_equity: number | null;
+  revenue_growth_pct: number | null;
+  net_margin_pct: number | null;
+  promoter_pct: number | null;
+}
+
 export interface StockAnalysis {
   symbol: string;
+  /** Company name from the universe snapshot (the ticker when the symbol isn't in it). */
   name: string;
   exchange: string;
   cmp: number | null;
@@ -417,6 +439,15 @@ export interface StockAnalysis {
   reason: string;
   criteria_not_met: string[];
   smc_zones: StockAnalysisZone[];
+  /**
+   * Canonical display data; null when the symbol isn't in the universe. Absent
+   * on responses from backends older than 2026-09-15.
+   */
+  reference?: StockReference | null;
+  /**
+   * The analyzer's own provider fetch — the input to its confidence score.
+   * Display company facts from `reference` whenever it is present.
+   */
   fundamentals: {
     score?: number;
     pe_ratio?: number | null;
