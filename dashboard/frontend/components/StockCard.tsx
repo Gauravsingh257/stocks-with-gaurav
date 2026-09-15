@@ -10,6 +10,7 @@ import {
 } from "@/utils/calculateConfidence";
 import AddToWatchlistButton from "@/components/AddToWatchlistButton";
 import { tradingViewChartUrl } from "@/lib/tradingview";
+import { crore, num, quoteSourceLabel, snapshotDate } from "@/lib/stockFormat";
 
 function money(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -53,6 +54,16 @@ export default function StockCard({
       ? `${money(analysis.entry_zone[0])}–${money(analysis.entry_zone[1])}`
       : "-";
 
+  // Company facts come from the canonical universe row whenever the analyzer found
+  // one — the same source as the stock page's key metrics. `fundamentals` is the
+  // analyzer's scoring input and is only shown for symbols outside the universe.
+  const ref = analysis.reference;
+  const companyName = ref?.company_name || analysis.name || analysis.symbol;
+  const sector = ref ? ref.sector : analysis.fundamentals?.sector;
+  const pe = ref ? ref.pe : analysis.fundamentals?.pe_ratio;
+  const marketCap = ref ? ref.market_cap_cr : analysis.fundamentals?.market_cap_cr;
+  const factsTitle = ref?.as_of ? `From the ${snapshotDate(ref.as_of)} stock universe snapshot` : undefined;
+
   return (
     <div
       className="glass"
@@ -70,11 +81,11 @@ export default function StockCard({
             href={`/stock/${encodeURIComponent(analysis.symbol)}`}
             style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 800, fontSize: compact ? "1rem" : "1.15rem" }}
           >
-            {analysis.name || analysis.symbol}
+            {companyName}
           </Link>
-          <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem", marginTop: 2 }}>
+          <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem", marginTop: 2 }} title={factsTitle}>
             NSE:{analysis.symbol}
-            {analysis.fundamentals?.sector ? ` · ${analysis.fundamentals.sector}` : ""}
+            {sector ? ` · ${sector}` : ""}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
@@ -90,7 +101,10 @@ export default function StockCard({
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-        <Metric label="CMP" value={money(analysis.cmp)} />
+        <Metric
+          label={analysis.cmp_source ? `CMP · ${quoteSourceLabel(analysis.cmp_source)}` : "CMP"}
+          value={money(analysis.cmp)}
+        />
         {showTradeLevels ? (
           <>
             <Metric label="Entry Zone" value={entry} />
@@ -141,12 +155,14 @@ export default function StockCard({
         <span style={{ fontSize: "0.72rem", padding: "3px 8px", borderRadius: 6, background: "rgba(0,212,255,0.1)", color: "var(--accent)", border: "1px solid rgba(0,212,255,0.18)", fontWeight: 700 }}>
           {setupLabel(analysis.horizon, analysis.setup_type)}
         </span>
-        {analysis.fundamentals?.pe_ratio != null && (
-          <span style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }}>PE {analysis.fundamentals.pe_ratio.toFixed(1)}</span>
+        {pe != null && (
+          <span style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }} title={factsTitle}>
+            P/E {num(pe, "x")}
+          </span>
         )}
-        {analysis.fundamentals?.market_cap_cr != null && (
-          <span style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }}>
-            MCap {Math.round(analysis.fundamentals.market_cap_cr).toLocaleString("en-IN")} Cr
+        {marketCap != null && (
+          <span style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }} title={factsTitle}>
+            MCap {crore(marketCap)}
           </span>
         )}
       </div>

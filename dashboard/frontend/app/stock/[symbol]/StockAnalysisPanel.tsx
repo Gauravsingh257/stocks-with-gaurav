@@ -52,7 +52,15 @@ export default function StockAnalysisPanel({
     <div style={{ display: "grid", gap: 16 }}>
       <div className="stock-analysis-grid">
         <div className="glass" style={{ padding: 14, minWidth: 0 }}>
-          <NseStockChart key={symbol} symbol={symbol} />
+          <NseStockChart
+            key={symbol}
+            symbol={symbol}
+            quote={
+              analysis?.cmp != null
+                ? { price: analysis.cmp, source: analysis.cmp_source, asOf: analysis.updated_at }
+                : null
+            }
+          />
         </div>
         {analysis ? (
           <StockCard analysis={analysis} />
