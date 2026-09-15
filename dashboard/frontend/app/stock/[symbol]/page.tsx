@@ -33,6 +33,7 @@ import {
   fetchUniverseRow,
   normalizeSymbol,
   sectorSlug,
+  toStockReference,
   type UniverseRow,
 } from "@/lib/seo/stockData";
 import {
@@ -303,7 +304,11 @@ export default async function StockDetailPage({ params }: PageProps) {
       </section>
 
       {/* Tier 2: SSR'd when the server got it in time, client-fetched otherwise. */}
-      <StockAnalysisPanel symbol={symbol} initial={analysis} />
+      <StockAnalysisPanel
+        symbol={symbol}
+        initial={analysis}
+        reference={row ? toStockReference(row) : null}
+      />
 
       {peers.length > 0 && (
         <section className="glass" style={{ padding: 16, display: "grid", gap: 10 }}>

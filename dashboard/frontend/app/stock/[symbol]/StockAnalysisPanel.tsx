@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import StockCard from "@/components/StockCard";
 import NseStockChart from "@/components/NseStockChart";
-import { api, type StockAnalysis } from "@/lib/api";
+import { api, type StockAnalysis, type StockReference } from "@/lib/api";
 
 /**
  * The SMC half of /stock/<symbol>.
@@ -18,9 +18,12 @@ import { api, type StockAnalysis } from "@/lib/api";
 export default function StockAnalysisPanel({
   symbol,
   initial,
+  reference = null,
 }: {
   symbol: string;
   initial: StockAnalysis | null;
+  /** The universe row the page's key metrics show; the card displays the same facts. */
+  reference?: StockReference | null;
 }) {
   const [analysis, setAnalysis] = useState<StockAnalysis | null>(initial);
   // Only "loading" when the server handed us nothing — otherwise first paint is final.
@@ -63,7 +66,7 @@ export default function StockAnalysisPanel({
           />
         </div>
         {analysis ? (
-          <StockCard analysis={analysis} />
+          <StockCard analysis={reference ? { ...analysis, reference } : analysis} />
         ) : (
           <div className="glass" style={{ padding: 18, color: "var(--text-secondary)" }}>
             {loading ? "Loading SMC analysis…" : error ?? "SMC analysis unavailable right now."}
