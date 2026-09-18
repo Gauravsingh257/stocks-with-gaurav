@@ -498,7 +498,27 @@ validation soak.
 
 **NOW** — nothing in flight. Stock page Phase 1A/1B, the minimal header and search Phase 1 are all live and verified in production.
 
-**STOPPED AT** — **2026-09-15: stock page single source of truth (PR #190).**
+**STOPPED AT** — **2026-09-15: stock page single source of truth, PR #190 (merge ffb4908), verified live, then an engine incident caused by the merge time.**
+- **Verified in production** on 9 stocks: FCL, HDFCBANK, ITC, M&M, ABB, TCS, RELIANCE, SBIN, 360ONE.
+  - Company, sector, P/E and market cap are identical in key metrics and the analysis card.
+  - The card CMP equals the chart caption price, labelled "Live · 12:57 IST".
+  - The snapshot close is shown only as "Price used for ratios".
+  - Details are in the PR #190 comments.
+- **⚠ INCIDENT (engine):** PR #190 merged at **12:56 IST, during market hours**. Git Bash `TZ=Asia/Kolkata date` printed UTC, which read as 07:26. Every main push redeploys the engine (no `watchPatterns`).
+  - **Cause of the duplicates:** the SRB live scanner keeps its day state in memory, so the restarted engine replayed today's candles and re-fired the 09:30 SRB NIFTY entry at 12:58.
+  - **What went out:** a second live BUY attempt (failed: Kite "No IPs configured"), a duplicate Telegram entry (`srb_NIFTY_20260915125806`) and a duplicate exit (`exit_tgt_NSE_NIFTY 50_20260915125808`).
+  - **Engine afterwards:** healthy, 0 active trades, Daily PnL 3.0R.
+  - **Pre-existing, seen in the same logs:**
+    - **No static IP is set on the Kite app,** so all API orders fail. The 09:30 SRB order failed too.
+    - **Engine→dashboard sync gets HTTP 401** "Invalid or missing X-Sync-Key".
+  - **Owner decisions needed:**
+    - correct the duplicate Telegram alert or not
+    - SRB fix: persist day state, or reject stale breakdown candles (trading logic)
+    - Kite static IP
+    - X-Sync-Key
+    - per-service `watchPatterns`
+  - **Rule:** push to main only before 09:15 IST, and get IST from PowerShell or Railway.
+  - This doc was committed on a branch and deliberately **not merged the same day**, because a same-day restart would re-fire SRB again.
 - **Root cause:** `/stock/<symbol>` composes two independent backend products, and each re-fetched the same facts.
   - **Key metrics** read the weekly `stock_universe` snapshot.
   - **The analysis card** read `/api/search-stock` → `analyze_stock`:
@@ -515,12 +535,27 @@ validation soak.
   - `tests/test_stock_search_reference.py`: identity from the universe; confidence, recommendation, levels and fundamentals identical with or without a reference; failure-safe.
   - Node tests: 44 pass.
 - **Found, NOT changed (it is ranking input):** `fundamental_analysis` still divides D/E by 100 only when > 10, so FCL scores 0.87 and ITC 3.29 instead of 0.01 and 0.03. That is the bug already fixed in the universe refresh. It feeds `fundamental_score`, and `ranking_engine` reads `raw_debt_equity`, so fixing it is a ranking change that needs a decision and a calibration check.
-- **Phase 2 (designed, not started):**
-  1. Price and verdict hierarchy above the fold.
-  2. Peer comparison on the same sector-relative framework.
-  3. Missing-data handling (ROE coverage is 28%).
-
-  See the 2026-09-15 session report.
+- **Phase 2 — designed, NOT started (needs a go):**
+  1. **Price and verdict hierarchy above the fold.**
+     - **Header:** company, `NSE:ticker`, sector chip, and the current price large, with day change, source and time.
+     - **Freshness row:** "Price: Live 12:57 IST · Fundamentals: 12 Sept snapshot".
+     - **"At a glance" strip:** four tiles built only from the existing readers — Valuation (P/E vs sector), Profitability (ROE and net margin), Balance sheet (D/E), Price trend (52-week and 1-year). Each shows a tone, a label and one deterministic summary sentence. Descriptive only.
+     - **Mobile:** price first, tiles 2×2, chart below.
+     - **Decisions needed:**
+       - **Fresh price:** today the price comes from a server render cached up to 1h. Option: a cached `/api/research/quote/{s}` using the live cache or delayed yfinance, never Kite REST from public traffic, because the engine shares the token.
+       - **52-week high:** the snapshot stores only `pct_from_52w_high`, and the chart covers 6 months. Option: store it in the refresh, or give the chart a year.
+       - **The card's Watchlist/Strong Buy badge** reads like advice under the Option A positioning.
+  2. **Peer comparison.**
+     - **Data:** the `fetchSectorRows` rows the page already loads, so no backend change.
+     - **Peers:** 5–8 in the same curated sector, nearest by log market cap, turnover as tie-break. Fewer than 3 falls back to the sector median only.
+     - **Layout:** one row for the stock, one for the sector median, one per peer. Columns: market cap, P/E, P/B, ROE, net margin, D/E, revenue growth, 1-year return. Every cell uses the same `readX()` tone and `lib/stockFormat`; the stock's row is highlighted.
+     - **Mobile:** a scrollable table with a sticky first column. Link to `/universe?sector=`.
+  3. **Missing ROE and fundamentals.** ROE is present for 649 of 2,348 stocks (28%); P/E 2,090; D/E 2,082.
+     - **Three kinds of gap:** "Not reported" (null), "Not meaningful" (loss-making P/E, lender D/E) and "Stale" (snapshot older than 8 days).
+     - **Unavailable cards:** de-emphasised, with a coverage hint.
+     - **Verdict tiles:** a tile whose inputs are all missing says "Not enough data" and never takes a tone. Missing is never read as good (NULL, never 0).
+     - **Data lift:** re-run the throttled `scripts/backfill_fundamentals_quarterly.py` (ROE from filings) outside market hours.
+     - **Separately:** the `fundamental_analysis` D/E ≤ 10 bug (a ranking decision).
 
 **Earlier — 2026-09-15: stock page Phase 1A (chart accuracy) + 1B (readable metrics), PR #189 (merge a3463e6), verified live.**
 - **1A — root cause:** `/stock/FCL` showed ASX:FCL (FINEOS) under Fineotex's metrics.
