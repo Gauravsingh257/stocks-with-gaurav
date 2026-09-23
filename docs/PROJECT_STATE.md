@@ -614,7 +614,7 @@ the trading path.
     - X-Sync-Key
     - per-service `watchPatterns`
   - **Rule:** push to main only before 09:15 IST, and get IST from PowerShell or Railway.
-  - This doc was committed on a branch and deliberately **not merged the same day**, because a same-day restart would re-fire SRB again.
+  - This doc was committed on a branch and deliberately **not merged the same day**, because a same-day restart would re-fire SRB again. **Merged to main 2026-09-23 ~22:40 IST** (market closed, engine scan loop idle — a restart in that window cannot replay SRB).
 - **Root cause:** `/stock/<symbol>` composes two independent backend products, and each re-fetched the same facts.
   - **Key metrics** read the weekly `stock_universe` snapshot.
   - **The analysis card** read `/api/search-stock` → `analyze_stock`:
