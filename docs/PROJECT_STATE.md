@@ -522,7 +522,14 @@ apply-to-new-entries-only, no price floor, no turnover change).
 **STOPPED AT** — FVG-Tap has been in **alert mode** (not auto-traded) since 2026-05-26, a
 validation soak.
 
-**2026-09-23 — SRB and options trading RETIRED** (branch `chore/retire-srb-and-options`, **not merged**).
+**2026-09-23 — SRB and options trading PERMANENTLY RETIRED** (merged to `main` 2026-09-23 ~23:55 IST,
+market closed; branch `chore/retire-srb-and-options`, commit `a05721b`).
+**The SRB live path is retired permanently** — no scan, no auto-execute, no GTT trail, no Telegram
+signal. **Options signal generation and execution are retired permanently** — no `OPTIONS-*` emitter,
+no OI short-covering alert, no option execution buttons, and no code path that can resolve an NFO
+contract or place an option order. **All historical SRB/options records are preserved** untouched in
+`signal_history/signals_2026.csv` and `trade_ledger_2026.csv`. **`/oi-intelligence` remains live and
+read-only** (snapshot job kept; it reads the option chain for analytics and can place nothing).
 Evidence: SRB 19% win rate, PF 0.57, −14.25R over 58 genuine trades, negative in all six months;
 option-contract signals 31% win rate, PF 0.82, −28.04R over 155 trades. Nothing ever executed —
 Kite rejects every order for want of a static IP — so the record is theoretical and that block was
@@ -609,9 +616,20 @@ protective, not costly.
     `DASHBOARD_URL`. Fix = copy `TRADES_SYNC_KEY` to the engine service (env change + restart —
     deliberately not done mid-session).
 
-**NEXT** — ordered: (1) SRB duplicate guard, (2) `TRADES_SYNC_KEY` on engine, (3) Kite static IP,
-(4) Railway `watchPatterns`, (5) decide FVG-Tap's fate on soak evidence. No new engine features
-during the validation phase.
+**NEXT** — ordered:
+1. **`TRADES_SYNC_KEY` on the engine service** — closed trades still never reach the dashboard journal (401).
+2. **Railway `watchPatterns`** — stop docs/frontend/bot commits restarting the live engine.
+3. **`detect_session_low` — OPEN, deliberately NOT fixed.** `BankNiftySignalEngine._collect_morning_signals`
+   calls `self.detect_session_low(...)`, which does not exist (the method is `detect_session_low_break`),
+   so the OI directional bias raises silently, `bias_locked` never becomes True, and the OI bias filter on
+   index setups is dormant. This is **index behaviour, not options**, and repairing it would *enable* a
+   filter that has never run — it needs an explicit decision plus its own validation, so it was left
+   untouched during the 2026-09-23 retirement.
+4. **Kite static IP** — owner has deliberately left it unconfigured; no API order can fill until it is set.
+5. Decide FVG-Tap's fate on soak evidence.
+
+*(The former item "SRB duplicate guard" is obsolete: the SRB live path no longer exists, so a restart
+cannot replay it.)* No new engine features during the validation phase.
 
 **BLOCKED** — all four operational fixes need Gaurav: three touch production config, one touches
 the trading path.
