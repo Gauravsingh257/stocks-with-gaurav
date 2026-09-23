@@ -354,12 +354,33 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
 
 **NEXT** — ordered:
 
-1. **Validate Anchor10 on 2026-09-14 and 09-15.** *Status as of 2026-09-15 ~00:30 IST: the Monday checklist was **not run** — the session moved to search work. It can still be run read-only from `signals_log` and `/api/research/anchor-shadow-status`. Tuesday's data gate is already met: snapshot `2026-09-14`, 88h shards, expires Fri 18 Sep.* **First gate:** `GET /api/research/data-health`
-   must show `usable: true` (or `python -m scripts.scan_health` exit 0) — a blind-data morning like
-   09-07 would contaminate the session and must not be read as an Anchor10 result. Checklist: idea count not down >20% vs the
-   ~15–20/session baseline; actionable% (within 5% of entry) up from the 25–40% Config-A norm;
-   median remaining-RR ≥2.0 (Config A was running 0.22–1.36); no stop-inversion drops. Two clean
-   sessions → keep; a count collapse → roll back to `30` **and redeploy**.
+1. **Anchor10 — VALIDATED 2026-09-20 (read-only). Verdict: KEEP `ENTRY_ANCHOR_MAX_GAP_PCT=10`.**
+   *Data gate first:* `/api/research/data-health` → `usable: true`, snapshot day `2026-09-18`,
+   2,133 symbols, 9/9 shards, ~46h TTL left. Not a blind-data read.
+   *Source:* `/api/research/anchor-shadow-status` (64 sessions logged). From **2026-09-14** the A/B
+   rows are identical by design — `cfg_current` reads live scan entries, so Config A *is* the live
+   Anchor10 config. The post-09-14 rows are therefore direct measurements of production:
+
+   | Session | Ideas | Actionable % | Avg dist from entry | Median remaining RR | Extended >10% |
+   |---|---|---|---|---|---|
+   | Baseline 08-31 → 09-11 (at 30%) | 15–20 | 25–40% | 12.0–16.0% | 0.22–1.36 | 45–60% |
+   | 2026-09-14 | 20 | 100% | 2.3% | 2.63 | 0 |
+   | 2026-09-15 | 20 | 95% | 2.5% | 2.63 | 0 |
+   | 2026-09-17 | 13 | 92.3% | 3.0% | 2.62 | 0 |
+   | 2026-09-18 | 13 | 84.6% | 3.3% | 2.62 | 0 |
+
+   All five shadow criteria (C1 count stability, C2 actionable ≥60%, C3 avg distance ≤6%,
+   C4 median RR ≥2.0, C5 ≥3 stable sessions) **PASS**; `overall: READY`. Entry distance is the
+   mechanism: extended ideas (>10% from CMP) went 45–60% → **0**.
+   **Two caveats, neither changing the verdict:**
+   - Idea count fell 20 → 13 on 09-17/18. Session-over-session drop is 0% and 13 sits just below the
+     15–20 baseline band, but the count comes from *selection* upstream (the 09-18 ranking run
+     reports `selected_count: 14` for SWING) — the anchor re-prices entries, it does not filter
+     ideas. Watch it; do not attribute it to Anchor10.
+   - Sessions **09-16 and 09-19 are missing** from the shadow log (`evaluated_to: 2026-09-18`); the
+     daily shadow job did not record them. Worth a look, separate from this verdict.
+   Rolling back to `30` would restore 12–16% average entry distance and sub-1.4 median RR.
+   **No change made.**
 2. **Confidence-inversion — CLOSED 2026-09-13. The stated hypothesis is REFUTED; do not act.**
    The decisive scan-gap join was run (read-only, via `portfolio_journal → /api/portfolio/{id}`,
    using `arm_ref_price` as the scan-time price; n=43 of 93 carry it — it exists only for
@@ -396,10 +417,24 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    (`[[risk-engine]]`, PR #90). Everything else is **not yet measurable** — re-run once the NEW
    cohort matures. Measurement gap: `sector` is not stored on position rows, so sector/regime
    attribution was impossible.
-4. **`/api/research/swing` and `/api/research/longterm` return identical candidates** — same three
-   symbols, same confidence scores, differing only in the `setup` label. Odd for 1–8 week vs
-   6–24 month horizons, and it makes the books less independent than assumed. Also only **3**
-   candidates are served where ranking runs report `selected_count: 20`.
+4. **Swing vs Long-Term convergence — traced 2026-09-20 (read-only). Not a serving bug; a
+   book-differentiation gap.** `PHASE1_UNIFIED_FEED=1` on web, so both endpoints serve
+   `_authoritative_rows(horizon)` → `get_latest_signals_scan_report(horizon)`, which **does** filter
+   by horizon and picks distinct scans (`VAL-SWING-2026-09-18-e0a21219` vs
+   `VAL-LONGTERM-2026-09-18-c9b70325`). The lists are not literally the same.
+   **The exact convergence point is layers 1–2.** For 2026-09-18 both horizons report an identical
+   funnel — `total 2200 → layer1_pass 246 → layer2_pass 1340` — and diverge only at layer 3
+   (413 vs 501) and final selection (**14** swing vs **17** LT). **12 of the 14 swing names are also
+   LT names (86% overlap).** Horizon first enters in `services/validation_engine.py`, and only as
+   *re-pricing*: `_smc_score(..., horizon)`, `base_risk = 2.0×ATR` (LT) vs `1.3×ATR` (swing),
+   `target_mult` 3.5 vs 3.0, and the holding-period label. One candidate pool is priced two ways;
+   nothing selects for a 6–24 month thesis.
+   **The "only 3 candidates" part is not a bug at all:** `FREE_TIER_LIMIT = 3`
+   ([research.py:204](../dashboard/backend/routes/research.py#L204)) gates anonymous/free callers,
+   and since both books sort by confidence, a logged-out visitor sees the same top 3 in both —
+   which is what "identical candidates" looked like.
+   **Decision needed:** whether LONGTERM should get horizon-specific selection criteria (quality,
+   fundamentals, trend persistence) rather than swing's pool at a wider stop.
 5. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
    sample is **2 positions, not 7** (only KRISHANA and ANTHEM came through the Phase-2 door).
 6. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
@@ -487,9 +522,70 @@ apply-to-new-entries-only, no price floor, no turnover change).
 **STOPPED AT** — FVG-Tap has been in **alert mode** (not auto-traded) since 2026-05-26, a
 validation soak.
 
-**NEXT** — decide FVG-Tap's fate on soak evidence. No new engine features during validation phase.
+**2026-09-20 — read-only operations audit. Three live faults confirmed, nothing changed.**
 
-**BLOCKED** — nothing.
+- **A. SRB replays the day's signal after a mid-session restart.**
+  `strategies/second_red_break/live_scanner.py` holds `_signal_emitted`, `DayState` and
+  `_last_candle_time` **in memory only** (`state_db` is used by `smc_mtf_engine_v4.py` alone). On
+  boot `_ensure_daily_reset()` compares the date only, then `scan()` walks every 5-minute candle
+  since 09:15, and `max_entry_hour=10` is tested against the **candle's** time, not the clock.
+  **Scope is narrower than feared:** the main loop is gated by `is_market_open()` (Mon–Fri
+  09:00–16:30 IST), so the nightly bot-commit restarts (20:12–21:04) never scan. Only a restart
+  **inside the session** replays — exactly one to date, 2026-09-15 12:56.
+  **Harm is proven, not theoretical:** `signal_history/signals_2026.csv` on `main` carries both
+  pairs for 09-15 — `srb_NIFTY_20260915093003` + `exit_tgt_…104647` (WIN, `pnl_r 3.0`) **and**
+  `srb_NIFTY_20260915125806` + `exit_tgt_…125808` (WIN, `pnl_r 3.0`). One setup is recorded as
+  **two wins, +3.0R double-counted**, alongside a second live BUY attempt.
+  **Options (all trading-path — owner decision):**
+  1. *Persist day state* (emitted / trade_done / last candle) keyed by date+instrument. Exact, and
+     the only option that also restores in-trade management; costs a new persistence path in the
+     trading loop plus a rollover/corruption story.
+  2. *Reject stale trigger candles* — emit ENTRY only when the breakdown candle is within ~2 bars
+     of the clock. One condition, no storage, fails safe; does not restore in-trade state, and a
+     genuine signal arriving during a restart is missed (already true today).
+  3. *Deterministic `signal_id`* — today the id embeds the emit time (`…125806`), so the existing
+     delivery dedup cannot recognise a duplicate. Keying it to the breakdown candle would let dedup
+     suppress the replay on its own.
+  **Recommended: 2 + 3 as the minimal reversible guard; 1 later, for in-trade continuity.**
+
+- **B. Every push to `main` restarts all three services.** No `watchPatterns` in `railway.toml`,
+  `railway-web.toml`, `railway-engine.toml` or `railway-scanner.toml`. Engine/web/scanner deployment
+  timestamps coincide exactly; the engine restarted 09-15 21:04, 09-16 20:43 + 20:55, 09-17 20:52 +
+  21:03, 09-18 20:12 + 20:30 — all triggered by the nightly bot commits
+  (`chore(signals): archive`, `chore(shadow): stagnation observation`), which touch only
+  `signal_history/**` and `docs/validation/**`. The live engine restarts about twice an evening for
+  data it never reads.
+  **Remedy (NOT implemented):** Railway honours `[build] watchPatterns` per service, and each
+  service already points at its own config file. Each needs a generous set — engine:
+  `smc_mtf_engine_v4.py`, `engine/**`, `engine_runtime.py`, `strategies/**`, `services/**`,
+  `agents/**`, `config/**`, `utils/**`, `models/**`, `run_engine_railway.py`, `Dockerfile.engine`,
+  `requirements*.txt`, `railway-engine.toml`; web: `dashboard/backend/**`, `services/**`,
+  `scripts/start_web.py`, `Dockerfile`, `requirements*.txt`, `railway.toml`; scanner:
+  `scripts/scanner_cron.py`, `services/**`, `Dockerfile.scanner`, `railway-scanner.toml`. Docs,
+  `dashboard/frontend/**` and the bot's data commits would then restart nothing. **Trap:** shared
+  code (`services/**`, `config/**`) must appear in *every* service's list — a missing pattern means
+  a service silently runs stale code, which is worse than a restart. The dashboard's "Watch Paths"
+  field is the same control and must not disagree with the file. This does **not** remove the need
+  for the SRB guard: a crash-restart can still land mid-session.
+
+- **C. Kite cannot place orders, and the engine's journal sync is rejected.**
+  - *Kite static IP:* reconfirmed 2026-09-17 09:45 IST (deployment `794e7656`) —
+    `SRB BUY order FAILED: NIFTY2692223250PE — No IPs configured for this app`. Every SRB order
+    since at least 09-15 fails; the Telegram alert honestly reads `❌ FAILED`. Signals fire, nothing
+    executes. The fix is on the Kite developer console (static IP allowlist), not in this repo.
+  - *X-Sync-Key 401 — root cause found:* `TRADES_SYNC_KEY` is set on **web** (the validator,
+    `dashboard/backend/routes/agents.py:27`) but is **absent from the engine service's 29
+    variables**. `services/dashboard_sync.py:35` attaches the header only when the variable is set
+    locally, so the POST arrives without it and web answers 401. The engine does have
+    `DASHBOARD_URL`. Fix = copy `TRADES_SYNC_KEY` to the engine service (env change + restart —
+    deliberately not done mid-session).
+
+**NEXT** — ordered: (1) SRB duplicate guard, (2) `TRADES_SYNC_KEY` on engine, (3) Kite static IP,
+(4) Railway `watchPatterns`, (5) decide FVG-Tap's fate on soak evidence. No new engine features
+during the validation phase.
+
+**BLOCKED** — all four operational fixes need Gaurav: three touch production config, one touches
+the trading path.
 
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
@@ -498,7 +594,27 @@ validation soak.
 
 **NOW** — nothing in flight. Stock page Phase 1A/1B, the minimal header and search Phase 1 are all live and verified in production.
 
-**STOPPED AT** — **2026-09-15: stock page single source of truth (PR #190).**
+**STOPPED AT** — **2026-09-15: stock page single source of truth, PR #190 (merge ffb4908), verified live, then an engine incident caused by the merge time.**
+- **Verified in production** on 9 stocks: FCL, HDFCBANK, ITC, M&M, ABB, TCS, RELIANCE, SBIN, 360ONE.
+  - Company, sector, P/E and market cap are identical in key metrics and the analysis card.
+  - The card CMP equals the chart caption price, labelled "Live · 12:57 IST".
+  - The snapshot close is shown only as "Price used for ratios".
+  - Details are in the PR #190 comments.
+- **⚠ INCIDENT (engine):** PR #190 merged at **12:56 IST, during market hours**. Git Bash `TZ=Asia/Kolkata date` printed UTC, which read as 07:26. Every main push redeploys the engine (no `watchPatterns`).
+  - **Cause of the duplicates:** the SRB live scanner keeps its day state in memory, so the restarted engine replayed today's candles and re-fired the 09:30 SRB NIFTY entry at 12:58.
+  - **What went out:** a second live BUY attempt (failed: Kite "No IPs configured"), a duplicate Telegram entry (`srb_NIFTY_20260915125806`) and a duplicate exit (`exit_tgt_NSE_NIFTY 50_20260915125808`).
+  - **Engine afterwards:** healthy, 0 active trades, Daily PnL 3.0R.
+  - **Pre-existing, seen in the same logs:**
+    - **No static IP is set on the Kite app,** so all API orders fail. The 09:30 SRB order failed too.
+    - **Engine→dashboard sync gets HTTP 401** "Invalid or missing X-Sync-Key".
+  - **Owner decisions needed:**
+    - correct the duplicate Telegram alert or not
+    - SRB fix: persist day state, or reject stale breakdown candles (trading logic)
+    - Kite static IP
+    - X-Sync-Key
+    - per-service `watchPatterns`
+  - **Rule:** push to main only before 09:15 IST, and get IST from PowerShell or Railway.
+  - This doc was committed on a branch and deliberately **not merged the same day**, because a same-day restart would re-fire SRB again. **Merged to main 2026-09-23 ~22:40 IST** (market closed, engine scan loop idle — a restart in that window cannot replay SRB).
 - **Root cause:** `/stock/<symbol>` composes two independent backend products, and each re-fetched the same facts.
   - **Key metrics** read the weekly `stock_universe` snapshot.
   - **The analysis card** read `/api/search-stock` → `analyze_stock`:
@@ -515,12 +631,27 @@ validation soak.
   - `tests/test_stock_search_reference.py`: identity from the universe; confidence, recommendation, levels and fundamentals identical with or without a reference; failure-safe.
   - Node tests: 44 pass.
 - **Found, NOT changed (it is ranking input):** `fundamental_analysis` still divides D/E by 100 only when > 10, so FCL scores 0.87 and ITC 3.29 instead of 0.01 and 0.03. That is the bug already fixed in the universe refresh. It feeds `fundamental_score`, and `ranking_engine` reads `raw_debt_equity`, so fixing it is a ranking change that needs a decision and a calibration check.
-- **Phase 2 (designed, not started):**
-  1. Price and verdict hierarchy above the fold.
-  2. Peer comparison on the same sector-relative framework.
-  3. Missing-data handling (ROE coverage is 28%).
-
-  See the 2026-09-15 session report.
+- **Phase 2 — designed, NOT started (needs a go):**
+  1. **Price and verdict hierarchy above the fold.**
+     - **Header:** company, `NSE:ticker`, sector chip, and the current price large, with day change, source and time.
+     - **Freshness row:** "Price: Live 12:57 IST · Fundamentals: 12 Sept snapshot".
+     - **"At a glance" strip:** four tiles built only from the existing readers — Valuation (P/E vs sector), Profitability (ROE and net margin), Balance sheet (D/E), Price trend (52-week and 1-year). Each shows a tone, a label and one deterministic summary sentence. Descriptive only.
+     - **Mobile:** price first, tiles 2×2, chart below.
+     - **Decisions needed:**
+       - **Fresh price:** today the price comes from a server render cached up to 1h. Option: a cached `/api/research/quote/{s}` using the live cache or delayed yfinance, never Kite REST from public traffic, because the engine shares the token.
+       - **52-week high:** the snapshot stores only `pct_from_52w_high`, and the chart covers 6 months. Option: store it in the refresh, or give the chart a year.
+       - **The card's Watchlist/Strong Buy badge** reads like advice under the Option A positioning.
+  2. **Peer comparison.**
+     - **Data:** the `fetchSectorRows` rows the page already loads, so no backend change.
+     - **Peers:** 5–8 in the same curated sector, nearest by log market cap, turnover as tie-break. Fewer than 3 falls back to the sector median only.
+     - **Layout:** one row for the stock, one for the sector median, one per peer. Columns: market cap, P/E, P/B, ROE, net margin, D/E, revenue growth, 1-year return. Every cell uses the same `readX()` tone and `lib/stockFormat`; the stock's row is highlighted.
+     - **Mobile:** a scrollable table with a sticky first column. Link to `/universe?sector=`.
+  3. **Missing ROE and fundamentals.** ROE is present for 649 of 2,348 stocks (28%); P/E 2,090; D/E 2,082.
+     - **Three kinds of gap:** "Not reported" (null), "Not meaningful" (loss-making P/E, lender D/E) and "Stale" (snapshot older than 8 days).
+     - **Unavailable cards:** de-emphasised, with a coverage hint.
+     - **Verdict tiles:** a tile whose inputs are all missing says "Not enough data" and never takes a tone. Missing is never read as good (NULL, never 0).
+     - **Data lift:** re-run the throttled `scripts/backfill_fundamentals_quarterly.py` (ROE from filings) outside market hours.
+     - **Separately:** the `fundamental_analysis` D/E ≤ 10 bug (a ranking decision).
 
 **Earlier — 2026-09-15: stock page Phase 1A (chart accuracy) + 1B (readable metrics), PR #189 (merge a3463e6), verified live.**
 - **1A — root cause:** `/stock/FCL` showed ASX:FCL (FINEOS) under Fineotex's metrics.
