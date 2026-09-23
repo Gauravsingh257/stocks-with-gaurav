@@ -46,7 +46,6 @@ from smc_trading_engine.strategy.entry_model import evaluate_entry
 # smc_confluence_engine removed (Phase 4 cleanup — functionality merged into risk_management)
 import risk_management as risk_mgr
 from manual_trade_handler_v2 import ManualTradeHandlerV2
-from option_monitor_module import OptionMonitor
 from services.trade_graph_hooks import build_trade_graph, update_trade_graph_trail, close_trade_graph
 
 # Feature 1 & 2: TradingView MCP bridge for visual validation + Pine cross-check
@@ -79,28 +78,11 @@ from engine.oi_sentiment import (
     update_oi_sentiment, get_oi_scores, get_oi_sentiment,
     get_oi_summary_text, reset_oi_state,
 )
-from engine.oi_short_covering import (
-    scan_short_covering,
-    reset_state as reset_oi_sc_state,
-)
+from engine.oi_short_covering import reset_state as reset_oi_sc_state
 from engine.smc_zone_tap import (
     scan_zone_taps, format_zone_tap_alert,
     reset_state as reset_zone_tap_state,
 )
-try:
-    from trade_executor_bot import send_signal_with_buttons as _send_trade_buttons
-    _TRADE_BUTTONS_AVAILABLE = True
-except ImportError:
-    _TRADE_BUTTONS_AVAILABLE = False
-# ── Second Red Break Strategy (Full-Auto) ──────────────────────
-try:
-    from strategies.second_red_break.live_scanner import scan_second_red_break, get_scanner as _get_srb_scanner
-    from strategies.second_red_break.live_executor import execute_srb_trade as _execute_srb_trade
-    from strategies.second_red_break.live_executor import modify_srb_gtt as _modify_srb_gtt
-    _SRB_AVAILABLE = True
-except ImportError as _srb_e:
-    _SRB_AVAILABLE = False
-    logging.warning("SRB strategy not available: %s", _srb_e)
 from engine.market_state_engine import (
     update_market_state, get_market_state, get_market_state_label,
     reset_market_state,
@@ -606,7 +588,6 @@ if BACKTEST_MODE:
     print("[BACKTEST] Skipping Kite/Telegram init...")
     kite = None
     manual_handler = None
-    option_monitor = None
     bn_signal_engine = None
 else:
     try:
@@ -659,13 +640,6 @@ else:
         # Initialize Manual Trade Handler
         manual_handler = ManualTradeHandlerV2(kite)
 
-        # Initialize Option Monitor (Merged)
-        option_monitor = OptionMonitor(kite)
-        try:
-            option_monitor.initialize()
-        except Exception as om_e:
-            print(f"Option Monitor Init Failed: {om_e}")
-
         # Initialize Bank Nifty Signal Engine
         bn_signal_engine = BankNiftySignalEngine(kite, telegram_fn=telegram_send)
         try:
@@ -678,7 +652,6 @@ else:
         kite = None
         _current_kite_token = None
         manual_handler = None
-        option_monitor = None
         bn_signal_engine = None
         logging.warning("Module-level Kite init failed — _reinit_kite() will retry with latest token")
 
@@ -4982,165 +4955,6 @@ def generate_chart(symbol, candles, direction, entry, sl, target, ob,
         return None
 
 
-def generate_oi_chart(signal):
-    """
-    Generate a professional chart for OI Short Covering signals.
-    Shows:
-    - OI drop pattern (bar chart)
-    - Price rise pattern (line chart)
-    - Trade levels: Entry, SL, Target
-    - Score breakdown panel
-    """
-    try:
-        from engine.oi_short_covering import get_strike_history
-
-        tsym = signal["tradingsymbol"]
-        history = get_strike_history(tsym)
-
-        if not history or len(history) < 3:
-            return None
-
-        fname = f"oi_chart_{uuid.uuid4().hex[:6]}.png"
-
-        # Extract data from history: (timestamp, oi, ltp, volume)
-        timestamps = [h[0] for h in history]
-        oi_values = [h[1] for h in history]
-        ltp_values = [h[2] for h in history]
-
-        # Time labels
-        time_labels = [ts.strftime("%H:%M") for ts in timestamps]
-
-        # Create figure with dark theme
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8),
-                                        gridspec_kw={'height_ratios': [1.2, 1]},
-                                        facecolor='#1a1a2e')
-
-        # --- TOP PANEL: OI Bars ---
-        ax1.set_facecolor('#1a1a2e')
-        colors = []
-        for i in range(len(oi_values)):
-            if i == 0:
-                colors.append('#FF9800')
-            elif oi_values[i] < oi_values[i-1]:
-                colors.append('#ef5350')  # Red = OI dropping (short covering)
-            else:
-                colors.append('#26a69a')  # Green = OI building
-
-        ax1.bar(range(len(oi_values)), oi_values, color=colors, alpha=0.8, width=0.6)
-        ax1.set_ylabel('Open Interest', color='white', fontsize=10)
-        ax1.tick_params(colors='white', labelsize=8)
-        ax1.set_xticks(range(len(time_labels)))
-        ax1.set_xticklabels(time_labels, rotation=45, ha='right', fontsize=7, color='white')
-        ax1.grid(axis='y', color='#2a2a2a', linestyle='-', alpha=0.5)
-
-        # Peak OI line
-        peak_oi = signal.get("peak_oi", max(oi_values))
-        ax1.axhline(peak_oi, color='#FF9800', linewidth=1, linestyle='--', alpha=0.7)
-        ax1.text(len(oi_values)-1, peak_oi, f' Peak: {peak_oi:,.0f}',
-                 color='#FF9800', fontsize=8, va='bottom')
-
-        # Current OI annotation
-        current_oi = signal.get("current_oi", oi_values[-1])
-        drop_pct = round((peak_oi - current_oi) / peak_oi * 100, 1) if peak_oi > 0 else 0
-        ax1.text(len(oi_values)-1, current_oi, f' {current_oi:,.0f}\n ({drop_pct:.1f}% drop)',
-                 color='#ef5350', fontsize=8, fontweight='bold', va='top')
-
-        # Title for OI panel
-        underlying = signal.get("underlying", "")
-        strike = signal.get("strike", "")
-        opt_type = signal.get("opt_type", "")
-        bias = signal.get("underlying_bias", "")
-        score = signal.get("score", 0)
-        ax1.set_title(
-            f"OI SHORT COVERING  |  {underlying} {strike} {opt_type}  |  Score: {score}/10  |  {bias}",
-            fontsize=13, fontweight='bold', color='#FF9800', loc='left', pad=12
-        )
-
-        # --- BOTTOM PANEL: Price + Trade Levels ---
-        ax2.set_facecolor('#1a1a2e')
-        ax2.plot(range(len(ltp_values)), ltp_values, color='#2196F3',
-                 linewidth=2, marker='o', markersize=3, label='Option LTP')
-
-        ax2.set_ylabel('Option Premium (₹)', color='white', fontsize=10)
-        ax2.tick_params(colors='white', labelsize=8)
-        ax2.set_xticks(range(len(time_labels)))
-        ax2.set_xticklabels(time_labels, rotation=45, ha='right', fontsize=7, color='white')
-        ax2.grid(axis='y', color='#2a2a2a', linestyle='-', alpha=0.5)
-
-        # Trade levels
-        levels = signal.get("trade_levels", {})
-        entry_price = levels.get("entry", signal.get("current_ltp", 0))
-        sl_price = levels.get("sl", 0)
-        target_price = levels.get("target", 0)
-        rr = levels.get("rr", 2.0)
-
-        x_range = range(len(ltp_values))
-        if entry_price > 0:
-            ax2.axhline(entry_price, color='#2196F3', linewidth=1.5, linestyle='--', alpha=0.8)
-            ax2.text(len(ltp_values)-1, entry_price,
-                     f'  ENTRY ₹{entry_price:.1f}',
-                     color='white', fontsize=9, fontweight='bold', va='bottom',
-                     bbox=dict(boxstyle='round,pad=0.2', facecolor='#2196F3', alpha=0.85))
-
-        if sl_price > 0:
-            ax2.axhline(sl_price, color='#FF1744', linewidth=1.5, linestyle='--', alpha=0.8)
-            ax2.text(len(ltp_values)-1, sl_price,
-                     f'  SL ₹{sl_price:.1f}',
-                     color='white', fontsize=9, fontweight='bold', va='top',
-                     bbox=dict(boxstyle='round,pad=0.2', facecolor='#FF1744', alpha=0.85))
-
-        if target_price > 0:
-            ax2.axhline(target_price, color='#00E676', linewidth=1.5, linestyle='--', alpha=0.8)
-            ax2.text(len(ltp_values)-1, target_price,
-                     f'  TGT ₹{target_price:.1f} (RR:{rr:.1f})',
-                     color='white', fontsize=9, fontweight='bold', va='bottom',
-                     bbox=dict(boxstyle='round,pad=0.2', facecolor='#00E676', alpha=0.85))
-
-        # --- Score breakdown box ---
-        bd = signal.get("score_breakdown", {})
-        if bd:
-            bd_lines = [f"{'─'*16}", "SCORE BREAKDOWN"]
-            for k, v in bd.items():
-                bar = "█" * v + "░" * (3 - v)
-                bd_lines.append(f"  {k}: {bar} +{v}")
-            bd_lines.append(f"{'─'*16}")
-            bd_lines.append(f"  TOTAL: {score}/10")
-            bd_text = "\n".join(bd_lines)
-
-            ax2.text(0.02, 0.97, bd_text, transform=ax2.transAxes,
-                     fontsize=8, color='white', verticalalignment='top',
-                     family='monospace',
-                     bbox=dict(boxstyle='round,pad=0.5', facecolor='#333355', alpha=0.85))
-
-        # --- Pattern explanation ---
-        if opt_type == "CE":
-            pattern_text = "CALL writers covering → BULLISH"
-        else:
-            pattern_text = "PUT writers covering → BEARISH"
-        ax2.text(0.98, 0.03, pattern_text, transform=ax2.transAxes,
-                 fontsize=10, color='#FF9800', fontweight='bold',
-                 ha='right', va='bottom', alpha=0.9,
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor='#1a1a2e', edgecolor='#FF9800', alpha=0.8))
-
-        # --- Watermark ---
-        fig.text(0.5, 0.5, 'SMC ENGINE', fontsize=50, color='white', alpha=0.03,
-                 ha='center', va='center', fontweight='bold')
-
-        fig.tight_layout(pad=2.0)
-        fig.savefig(fname, dpi=150, bbox_inches='tight',
-                    facecolor='#1a1a2e', edgecolor='none')
-        plt.close(fig)
-
-        return fname
-    except Exception as e:
-        if DEBUG_MODE:
-            print(f"OI Chart error: {e}")
-            import traceback
-            traceback.print_exc()
-        return None
-# =====================================================
-# LIVE TRADE MONITOR (SL/TP CHECK)
-# =====================================================
 def monitor_active_trades(symbol, current_price):
     """W1 UPGRADE: 3-stage trailing stop + circuit breaker integration."""
     global ACTIVE_TRADES, DAILY_LOG, DAILY_PNL_R, CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_ACTIVE
@@ -5794,7 +5608,7 @@ def _reinit_kite():
     """Re-read token from Redis/env/file and re-create the kite instance.
     Called by run_live_mode on each attempt so Railway retry loops work
     after morning_login.bat updates the token in Redis."""
-    global kite, _current_kite_token, manual_handler, option_monitor, bn_signal_engine
+    global kite, _current_kite_token, manual_handler, bn_signal_engine
     try:
         api_key = get_api_key()
         access_token = get_access_token()
@@ -5812,11 +5626,6 @@ def _reinit_kite():
         logging.info("[reinit_kite] Kite session refreshed (token=%s)", mask_tok)
         try:
             manual_handler = ManualTradeHandlerV2(kite)
-        except Exception:
-            pass
-        try:
-            option_monitor = OptionMonitor(kite)
-            option_monitor.initialize()
         except Exception:
             pass
         try:
@@ -5947,11 +5756,6 @@ def reinitialize_engine(reason: str) -> None:
         pass
 
     # 4) Re-init dependent sub-engines (connection state)
-    try:
-        if option_monitor:
-            option_monitor.initialize()
-    except Exception as e:
-        logging.warning("[reinit_engine] option_monitor init failed: %s", e)
     try:
         if bn_signal_engine:
             bn_signal_engine.initialize()
@@ -6569,154 +6373,15 @@ def run_live_mode():
                             for zt_sig in zt_signals:
                                 zt_msg = format_zone_tap_alert(zt_sig)
                                 zt_msg = paper_prefix(zt_msg)
-                                if _TRADE_BUTTONS_AVAILABLE:
-                                    _send_trade_buttons(zt_sig, zt_msg)
-                                else:
-                                    _under = (zt_sig.get("underlying") or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
-                                    _dir = (zt_sig.get("direction") or "").lower()[:5]
-                                    sid = f"zt_5m_{_under}_{_dir}_{t.time():.0f}"
-                                    telegram_send(zt_msg, signal_id=sid)
+                                _under = (zt_sig.get("underlying") or "").replace(" ", "_").replace(":", "_").strip("_") or "unknown"
+                                _dir = (zt_sig.get("direction") or "").lower()[:5]
+                                sid = f"zt_5m_{_under}_{_dir}_{t.time():.0f}"
+                                telegram_send(zt_msg, signal_id=sid)
                                 print(f"  🎯 ZONE TAP: {zt_sig['underlying']} {zt_sig['direction']} "
                                       f"@ {zt_sig['zone_type']} | {zt_sig['pattern']} | "
                                       f"score {zt_sig['score']}")
                     except Exception as e:
                         print(f"  ⚠️ Zone tap scan error ({index_sym}): {e}")
-
-            # ========================================
-            # 🔴 SECOND RED BREAK SCAN (EVERY 5 MIN)
-            # ========================================
-            _srb_current_5m = now_ist().minute // 5
-            if not hasattr(scan_second_red_break, '_last_5m_slot'):
-                scan_second_red_break._last_5m_slot = -1
-            if _SRB_AVAILABLE and _srb_current_5m != scan_second_red_break._last_5m_slot:
-                try:
-                    # Bypass OHLC cache (15-min TTL) — SRB needs fresh 5m candles every scan
-                    _srb_token = get_token("NSE:NIFTY 50")
-                    _srb_candles = []
-                    if _srb_token:
-                        try:
-                            _respect_api_throttle()
-                            _srb_candles = _kite_call(
-                                kite.historical_data,
-                                _srb_token,
-                                now_ist() - timedelta(days=1),
-                                now_ist(),
-                                "5minute",
-                                timeout=_KITE_TIMEOUT_SEC,
-                            )
-                        except Exception as _srb_fetch_err:
-                            logging.warning("SRB fresh fetch failed, falling back to cache: %s", _srb_fetch_err)
-                            _srb_candles = fetch_ohlc("NSE:NIFTY 50", "5minute", 80)
-                    if _srb_candles:
-                        _srb_sig = scan_second_red_break(_srb_candles, "NIFTY")
-                        if _srb_sig:
-                            # ── Auto-execute: place PUT order immediately ──
-                            _srb_result = _execute_srb_trade(
-                                signal=_srb_sig,
-                                kite=kite,
-                                paper_mode=PAPER_MODE,
-                            )
-                            _srb_success = _srb_result.get("success", False)
-                            _srb_tsym = _srb_result.get("tradingsymbol", "?")
-                            _srb_qty = _srb_result.get("qty", 0)
-                            _srb_oid = _srb_result.get("order_id", "")
-                            _srb_gid = _srb_result.get("gtt_id", "")
-
-                            # ── Register in ACTIVE_TRADES for monitoring ──
-                            _srb_sig["setup"] = "SECOND-RED-BREAK"
-                            _srb_sig["_registered_today"] = True
-                            _srb_sig["option"] = _srb_tsym
-                            _srb_sig["srb_order_id"] = _srb_oid
-                            _srb_sig["srb_gtt_id"] = _srb_gid
-                            _srb_sig["srb_executed"] = _srb_success
-                            _srb_sig["srb_qty"] = _srb_qty
-                            _srb_sig["srb_opt_entry"] = _srb_result.get("opt_ltp", 0)
-                            _srb_sig["srb_opt_sl"] = _srb_result.get("opt_sl", 0)
-                            _srb_sig["srb_opt_target"] = _srb_result.get("opt_target", 0)
-                            _srb_sig["srb_opt_risk"] = max(_srb_result.get("opt_ltp", 0) - _srb_result.get("opt_sl", 0), 0)
-                            _srb_sig["srb_sl_trailed"] = False
-                            _srb_sig["srb_trailing_active"] = False
-                            _srb_sig["srb_peak_r"] = 0.0
-                            _srb_sig["srb_last_trail_sl"] = 0.0
-
-                            with ACTIVE_TRADES_LOCK:
-                                ACTIVE_TRADES.append(_srb_sig)
-                            DAILY_SIGNAL_COUNT += 1
-                            log_paper_trade(_srb_sig)
-                            persist_active_trades()
-
-                            # ── Telegram notification ──
-                            _srb_status = "✅ EXECUTED" if _srb_success else "❌ FAILED"
-                            _srb_sl_method = _srb_result.get("sl_method", "?")
-                            _exec_detail = ""
-                            if _srb_success:
-                                _exec_detail = (
-                                    f"\n\n💰 <b>AUTO-EXECUTED:</b>\n"
-                                    f"Option: {_srb_tsym}\n"
-                                    f"Qty: {_srb_qty}\n"
-                                    f"LTP: {_srb_result.get('opt_ltp', '?')}\n"
-                                    f"Opt SL: {_srb_result.get('opt_sl', '?')}\n"
-                                    f"Opt TGT: {_srb_result.get('opt_target', '?')}\n"
-                                    f"SL Method: {_srb_sl_method}\n"
-                                    f"Order: {_srb_oid}\n"
-                                    f"GTT: {_srb_gid}"
-                                )
-                            else:
-                                _exec_detail = f"\n\n❌ Error: {_srb_result.get('error', 'unknown')}"
-
-                            _srb_msg = (
-                                f"🔴 <b>SECOND RED BREAK — {_srb_status}</b>\n"
-                                f"{'📝 [PAPER] ' if PAPER_MODE else ''}"
-                                f"<b>{_srb_sig['symbol']}</b> | PUT\n\n"
-                                f"2nd Red: {_srb_sig.get('srb_second_red_time', '?')}\n"
-                                f"2nd Red Low: {_srb_sig.get('srb_second_red_low', '?')}\n"
-                                f"Entry (index): {_srb_sig['entry']}\n"
-                                f"SL (index): {_srb_sig['sl']}\n"
-                                f"Target (index): {_srb_sig['target']}\n"
-                                f"RR: {_srb_sig['rr']}"
-                                f"{_exec_detail}"
-                            )
-                            _srb_sid = f"srb_NIFTY_{now_ist().strftime('%Y%m%d%H%M%S')}"
-                            telegram_send_signal(
-                                paper_prefix(_srb_msg),
-                                signal_id=_srb_sid,
-                                signal_meta={
-                                    "signal_kind": "ENTRY",
-                                    "symbol": _srb_sig["symbol"],
-                                    "direction": "SHORT",
-                                    "strategy_name": "SECOND-RED-BREAK",
-                                    "entry": _srb_sig["entry"],
-                                    "stop_loss": _srb_sig["sl"],
-                                    "target1": _srb_sig["target"],
-                                    "score": _srb_sig.get("smc_score"),
-                                    "confidence": _srb_sig.get("ai_score"),
-                                    "grade": _srb_sig.get("grade"),
-                                    "rr": _srb_sig["rr"],
-                                },
-                            )
-                            print(f"  🔴 SRB: NIFTY ENTRY @ {_srb_sig['entry']} | SL={_srb_sig['sl']} "
-                                  f"TGT={_srb_sig['target']} | {_srb_status}")
-                    else:
-                        # No signal — log diagnostic state
-                        try:
-                            from strategies.second_red_break.live_scanner import get_scanner as _get_srb_scanner
-                            _srb_diag = _get_srb_scanner().get_state_summary()
-                            _srb_nifty = _srb_diag.get("NIFTY", {})
-                            logging.info(
-                                "SRB scan (no signal): red_count=%s 2nd_red=%s trade_done=%s emitted=%s candles=%d",
-                                _srb_nifty.get("red_count", "?"),
-                                _srb_nifty.get("second_red_found", "?"),
-                                _srb_nifty.get("trade_done", "?"),
-                                _srb_nifty.get("signal_emitted", "?"),
-                                len(_srb_candles),
-                            )
-                        except Exception:
-                            pass
-                    scan_second_red_break._last_5m_slot = _srb_current_5m
-                except Exception as _srb_err:
-                    logging.error("SRB scan/execute error: %s", _srb_err)
-                    print(f"  ⚠️ SRB error: {_srb_err}")
-                    scan_second_red_break._last_5m_slot = _srb_current_5m
 
             try:
                 import engine_runtime
@@ -6948,7 +6613,6 @@ def run_live_mode():
                 _diag_lines.append("")
                 _diag_lines.append("<b>Sub-engines:</b>")
                 _diag_lines.append(f"  BN Signal Engine: {'✅' if bn_signal_engine else '❌'}")
-                _diag_lines.append(f"  Option Monitor: {'✅' if option_monitor else '❌'}")
                 try:
                     from engine.smc_zone_tap import _state as _zt_state_dict
                     _zt_state_info = []
@@ -7323,79 +6987,6 @@ def run_live_mode():
                                 monitor_active_trades(t_obj["symbol"], price)
                         except Exception: pass
 
-                    # ── SRB Strategy 6: Full trail from 3R (1.5R gap) ──
-                    if _SRB_AVAILABLE:
-                        _SRB_TRAIL_GAP_R = 1.5
-                        _SRB_TRAIL_STEP_R = 0.5  # Only update GTT when SL moves by 0.5R+
-                        for t_obj in list(ACTIVE_TRADES):
-                            if t_obj.get("setup") != "SECOND-RED-BREAK":
-                                continue
-                            if not t_obj.get("srb_executed"):
-                                continue
-                            _opt_sym = t_obj.get("option", "")
-                            _opt_entry = t_obj.get("srb_opt_entry", 0)
-                            _opt_risk = t_obj.get("srb_opt_risk", 0)
-                            if not _opt_sym or _opt_entry <= 0 or _opt_risk <= 0:
-                                continue
-                            try:
-                                _opt_ltp_data = kite.ltp([f"NFO:{_opt_sym}"])
-                                _opt_ltp = _opt_ltp_data[f"NFO:{_opt_sym}"]["last_price"]
-                                _opt_profit_r = (_opt_ltp - _opt_entry) / _opt_risk
-
-                                # Update peak R tracking
-                                _prev_peak = t_obj.get("srb_peak_r", 0.0)
-                                if _opt_profit_r > _prev_peak:
-                                    t_obj["srb_peak_r"] = _opt_profit_r
-
-                                _peak_r = t_obj["srb_peak_r"]
-
-                                # Activate trailing once 3R is reached
-                                if _peak_r >= 3.0 and not t_obj.get("srb_trailing_active"):
-                                    t_obj["srb_trailing_active"] = True
-                                    _new_trail_sl = _opt_entry + (_peak_r - _SRB_TRAIL_GAP_R) * _opt_risk
-                                    _trail_res = _modify_srb_gtt(kite, t_obj, new_trail_sl=_new_trail_sl)
-                                    if _trail_res.get("success"):
-                                        t_obj["srb_gtt_id"] = _trail_res["new_gtt_id"]
-                                        t_obj["srb_opt_sl"] = _trail_res["new_sl"]
-                                        t_obj["srb_last_trail_sl"] = _trail_res["new_sl"]
-                                        persist_active_trades()
-                                        _trail_msg = (
-                                            f"🚀 <b>SRB 3R TRAIL ACTIVATED</b>\n"
-                                            f"<b>{t_obj['symbol']}</b> | {_opt_sym}\n\n"
-                                            f"Option LTP: {_opt_ltp:.2f}\n"
-                                            f"Peak R: {_peak_r:.1f}R\n"
-                                            f"Trail SL: {_trail_res['new_sl']:.2f} (locks {_peak_r - _SRB_TRAIL_GAP_R:.1f}R)\n"
-                                            f"💰 Minimum profit locked: {_peak_r - _SRB_TRAIL_GAP_R:.1f}R"
-                                        )
-                                        telegram_send_signal(_trail_msg, signal_id=f"srb_trail3r_{now_ist().strftime('%H%M%S')}")
-                                        print(f"  🚀 SRB 3R Trail activated: {_opt_sym} SL → {_trail_res['new_sl']}")
-
-                                # Update trailing SL as peak grows (only if SL moves by 0.5R+)
-                                elif t_obj.get("srb_trailing_active") and _peak_r >= 3.0:
-                                    _new_trail_sl = _opt_entry + (_peak_r - _SRB_TRAIL_GAP_R) * _opt_risk
-                                    _last_sl = t_obj.get("srb_last_trail_sl", 0)
-                                    _sl_move_r = (_new_trail_sl - _last_sl) / _opt_risk if _opt_risk > 0 else 0
-                                    if _sl_move_r >= _SRB_TRAIL_STEP_R:
-                                        _trail_res = _modify_srb_gtt(kite, t_obj, new_trail_sl=_new_trail_sl)
-                                        if _trail_res.get("success"):
-                                            t_obj["srb_gtt_id"] = _trail_res["new_gtt_id"]
-                                            t_obj["srb_opt_sl"] = _trail_res["new_sl"]
-                                            t_obj["srb_last_trail_sl"] = _trail_res["new_sl"]
-                                            persist_active_trades()
-                                            _trail_msg = (
-                                                f"📈 <b>SRB TRAIL UPDATE</b>\n"
-                                                f"<b>{t_obj['symbol']}</b> | {_opt_sym}\n\n"
-                                                f"Option LTP: {_opt_ltp:.2f}\n"
-                                                f"Peak R: {_peak_r:.1f}R\n"
-                                                f"Trail SL: {_trail_res['new_sl']:.2f} (locks {_peak_r - _SRB_TRAIL_GAP_R:.1f}R)\n"
-                                                f"Old SL: {_last_sl:.2f}"
-                                            )
-                                            telegram_send_signal(_trail_msg, signal_id=f"srb_trail_upd_{now_ist().strftime('%H%M%S')}")
-                                            print(f"  📈 SRB Trail update: {_opt_sym} SL → {_trail_res['new_sl']} (peak {_peak_r:.1f}R)")
-
-                            except Exception as _trail_err:
-                                logging.debug("SRB trail check error: %s", _trail_err)
-                        
                 # 2. Check for Next Minute Start
                 if now_ist().second == 0:
                     break
@@ -7407,79 +6998,12 @@ def run_live_mode():
                     except Exception as e:
                         logging.warning(f"Manual Poll Error: {e}")
 
-                # 4. POLL OPTION MONITOR (Independent Interval checked inside poll)
-                if option_monitor:
-                    try:
-                        option_monitor.poll()
-                    except Exception as e:
-                        logging.warning(f"Option Monitor Poll Error: {e}")
-
                 # 5. POLL BANK NIFTY SIGNAL ENGINE
                 if bn_signal_engine:
                     try:
                         bn_signal_engine.poll()
                     except Exception as e:
                         logging.warning(f"BN Signal Engine Poll Error: {e}")
-
-                # 6. POLL OI SHORT-COVERING DETECTOR
-                # Heavy work (kite.quote + chart generation) is offloaded to a
-                # daemon thread so the monitor loop is never blocked by slow I/O.
-                if kite and not BACKTEST_MODE:
-                    try:
-                        sc_signals, sc_structure_alerts = scan_short_covering(
-                            kite,
-                            telegram_fn=None,
-                            fetch_ohlc_fn=fetch_ohlc
-                        )
-                        if sc_signals or sc_structure_alerts:
-                            # Fire-and-forget: send alerts in background thread
-                            def _send_oi_alerts(sigs, s_alerts):
-                                for sc_sig in sigs:
-                                    try:
-                                        from engine.oi_short_covering import _format_alert
-                                        sc_msg = _format_alert(sc_sig)
-                                        sc_msg = paper_prefix(sc_msg)
-                                        sc_chart = generate_oi_chart(sc_sig)
-                                        if sc_chart:
-                                            telegram_send_image(sc_chart, sc_msg)
-                                            if os.path.exists(sc_chart):
-                                                os.remove(sc_chart)
-                                        if _TRADE_BUTTONS_AVAILABLE:
-                                            _oi_btn_sig = {
-                                                "underlying": sc_sig.get("underlying", "NIFTY"),
-                                                "direction": "LONG" if sc_sig.get("opt_type") == "CE" else "SHORT",
-                                                "spot": sc_sig.get("spot"),
-                                                "strike": sc_sig.get("strike"),
-                                                "opt_type": sc_sig.get("opt_type"),
-                                                "trade_levels": sc_sig.get("trade_levels"),
-                                                "entry": sc_sig.get("trade_levels", {}).get("entry"),
-                                                "sl": sc_sig.get("trade_levels", {}).get("sl"),
-                                                "tp1": sc_sig.get("trade_levels", {}).get("target"),
-                                            }
-                                            _send_trade_buttons(_oi_btn_sig, sc_msg)
-                                        elif not sc_chart:
-                                            telegram_send(sc_msg)
-                                    except Exception as sc_e:
-                                        logging.error(f"OI SC send error: {sc_e}")
-                                for sa in s_alerts:
-                                    try:
-                                        from engine.oi_short_covering import _format_structure_alert
-                                        sa_msg = paper_prefix(_format_structure_alert(sa))
-                                        telegram_send(sa_msg)
-                                    except Exception as sa_e:
-                                        logging.error(f"OI SC structure alert error: {sa_e}")
-                            import threading as _threading
-                            _oi_t = _threading.Thread(
-                                target=_send_oi_alerts,
-                                args=(sc_signals, sc_structure_alerts),
-                                daemon=True,
-                                name="oi-alert-sender",
-                            )
-                            _oi_t.start()
-                            logging.info("OI SC: %d signal(s), %d structure alert(s) — sending async",
-                                         len(sc_signals), len(sc_structure_alerts))
-                    except Exception as e:
-                        logging.error(f"OI Short-Covering Poll Error: {e}")
 
                 # Sleep briefly to prevent CPU burn
                 t.sleep(1)

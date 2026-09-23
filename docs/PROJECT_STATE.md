@@ -522,6 +522,35 @@ apply-to-new-entries-only, no price floor, no turnover change).
 **STOPPED AT** — FVG-Tap has been in **alert mode** (not auto-traded) since 2026-05-26, a
 validation soak.
 
+**2026-09-23 — SRB and options trading RETIRED** (branch `chore/retire-srb-and-options`, **not merged**).
+Evidence: SRB 19% win rate, PF 0.57, −14.25R over 58 genuine trades, negative in all six months;
+option-contract signals 31% win rate, PF 0.82, −28.04R over 155 trades. Nothing ever executed —
+Kite rejects every order for want of a static IP — so the record is theoretical and that block was
+protective, not costly.
+- **Removed (live paths only):** the SRB scan / auto-execute / GTT-trail blocks in
+  `smc_mtf_engine_v4.py`; `strategies/second_red_break/live_{scanner,executor}.py`;
+  `option_monitor_module.py`; `trade_executor_bot.py` — the only NFO order path — and its launcher
+  thread in `run_engine_railway.py`; the OI short-covering scan and its Telegram alerts; the option
+  execution buttons on zone-tap alerts; and the option-signal emitters in `engine/options.py`
+  (`evaluate_signals`, `_send_trade_signal`, `_check_standalone_oi_signals`,
+  `_register_option_trade`, `_check_option_exits`, `_build_signal_reasoning`).
+- **Kept deliberately:** `engine/options.py` tick store + directional-bias path (index context),
+  `engine/oi_short_covering.py` (dashboard history only), the read-only `/oi-intelligence` page and
+  its snapshot job, SRB `strategy/utils/backtest` for offline research, and **every historical
+  record** in `signal_history/` and `trade_ledger_2026.csv`.
+- **Guard:** `tests/test_no_option_execution_paths.py` (11 cases) fails if a retired module is
+  imported again, an `OPTIONS-*` / `SECOND-RED-BREAK` emitter returns, or
+  `find_option_tradingsymbol` / `place_gtt(` reappears. There was never an env flag to switch any of
+  this off, so the protection has to be structural.
+- **Found, NOT fixed (pre-existing):** `BankNiftySignalEngine._collect_morning_signals` calls
+  `self.detect_session_low`, which does not exist (the method is `detect_session_low_break`), so the
+  OI directional bias has been raising silently and `bias_locked` never becomes True — the OI bias
+  filter on index setups is dormant. Left untouched: repairing it would *enable* a dormant filter and
+  change index signal behaviour.
+- **Validation:** full suite 1005 passed with the same 11 failures / 9 errors as `main` (all
+  pre-existing, unrelated modules); engine boots in `BACKTEST_MODE`; ruff unchanged or better
+  (engine 416 → 410).
+
 **2026-09-20 — read-only operations audit. Three live faults confirmed, nothing changed.**
 
 - **A. SRB replays the day's signal after a mid-session restart.**

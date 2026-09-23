@@ -43,7 +43,9 @@ Risk Controls:
 
 Integration:
 ────────────
-  Called from BankNiftySignalEngine.poll() alongside evaluate_signals().
+  RETIRED as a live signal source on 2026-09-23 — scan_short_covering() has no
+  production caller. The module stays because the read-only /oi-intelligence
+  dashboard uses get_strike_history(); it must not be wired back into the engine.
   Manages its own per-strike OI history internally.
 """
 
