@@ -1774,10 +1774,18 @@ def get_data_health():
     try:
         from services.universe_ohlc import kite_ohlc_enabled, snapshot_status
 
-        return _safe_json_response({
+        payload = {
             "universe_ohlc": {"enabled": kite_ohlc_enabled(), **snapshot_status()},
             "checked_at": time.time(),
-        })
+        }
+        try:
+            from services.index_ohlc import index_snapshot_status
+
+            payload["index_ohlc"] = index_snapshot_status()
+        except Exception as exc:
+            payload["index_ohlc"] = {"available": False, "usable": False,
+                                     "reason": f"error: {str(exc)[:120]}"}
+        return _safe_json_response(payload)
     except Exception as exc:
         log.exception("data-health endpoint failed")
         return _safe_json_response({

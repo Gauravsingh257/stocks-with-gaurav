@@ -87,6 +87,32 @@ def refresh_universe_ohlc_once() -> dict:
         return {"error": True}
 
 
+def refresh_index_ohlc_once() -> dict:
+    """Sector-rotation Phase 0 — publish NSE benchmark + sector index history.
+
+    ~24 Kite requests (<10s). Flag-gated (`SECTOR_INDEX_OHLC_ENABLED`); writes
+    only `ohlc:index:*`, which nothing in the selection path reads. A failure is
+    logged and swallowed, and the previous snapshot stays served.
+    """
+    try:
+        from services.index_ohlc import index_ohlc_enabled, refresh_index_ohlc
+    except Exception as exc:
+        log.warning("index OHLC module unavailable: %s", exc)
+        return {"skipped": True, "reason": "import_failed"}
+
+    if not index_ohlc_enabled():
+        return {"skipped": True, "reason": "flag_off"}
+
+    t0 = time.time()
+    try:
+        result = refresh_index_ohlc()
+        log.info("=== index OHLC refresh DONE in %.1fs: %s ===", time.time() - t0, result)
+        return result
+    except Exception:
+        log.exception("index OHLC refresh FAILED (previous snapshot preserved)")
+        return {"error": True}
+
+
 def run_once(mode: str | None = None) -> dict:
     from services.scanners.runner import run_all
 
@@ -107,6 +133,7 @@ def run_once(mode: str | None = None) -> dict:
     # Runs after the scanners so a slow universe crawl can never delay the
     # scanner snapshots the website serves.
     summary["universe_ohlc"] = refresh_universe_ohlc_once()
+    summary["index_ohlc"] = refresh_index_ohlc_once()
     return summary
 
 

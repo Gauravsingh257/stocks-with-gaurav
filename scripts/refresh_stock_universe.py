@@ -129,6 +129,44 @@ def fetch_one(symbol: str) -> dict:
     return out
 
 
+_UNRESOLVED = frozenset({"", "Unassigned", "Unknown"})
+
+
+def resolve_live_sector(symbol: str, fetched: dict | None, cached: dict | None,
+                        resolver=None) -> tuple[str, str]:
+    """Sector for a symbol the CSV map has not seen, plus where it came from.
+
+    Order: the classifier (manual override -> NSE official -> cached provider ->
+    legacy), then the provider industry THIS run just fetched, then the on-disk
+    provider cache. Returns ("Unassigned", "") only when every tier is empty.
+
+    The classifier answers "Unknown" (sector_classification.UNKNOWN) on a miss,
+    not "Unassigned". Until 2026-09-27 only "Unassigned" fell through, so every
+    symbol newer than the CSV map skipped both provider tiers and was stored as
+    "Unknown" — 234 equities in the 2026-09-26 refresh, 225 of which the
+    provider classifies cleanly.
+    """
+    from services.industry_map import canon_from_provider
+
+    if resolver is None:
+        from services.sector_classification import resolve_sector as resolver
+    try:
+        out = resolver(symbol) or ""
+    except Exception:
+        out = ""
+    if out not in _UNRESOLVED:
+        return out, "classifier"
+    f = fetched or {}
+    out = canon_from_provider(f.get("industry_raw"), f.get("sector_raw")) or ""
+    if out not in _UNRESOLVED:
+        return out, "provider"
+    c = cached or {}
+    out = canon_from_provider(c.get("industry"), c.get("sector")) or ""
+    if out not in _UNRESOLVED:
+        return out, "provider_cache"
+    return "Unassigned", ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", type=int, default=2200)
@@ -141,7 +179,6 @@ def main() -> int:
     import csv
 
     from dashboard.backend.db.universe import upsert_universe
-    from services.industry_map import canon_from_provider
     from services.instrument_type import EQUITY, classify
     from services.universe_manager import load_nse_universe
 
@@ -218,30 +255,14 @@ def main() -> int:
     # map has not seen yet (the universe drifts week to week — 190 names differed
     # between the map and the live list) resolves properly instead of silently
     # becoming "Unassigned".
-    _live_cache: dict[str, str] = {}
-
-    def _resolve_live(sym: str) -> str:
-        if sym in _live_cache:
-            return _live_cache[sym]
-        try:
-            from services.sector_classification import resolve_sector
-            out = resolve_sector(sym) or "Unassigned"
-        except Exception:
-            out = "Unassigned"
-        if out == "Unassigned":
-            live_f = fetched.get(sym) or {}
-            out = canon_from_provider(live_f.get("industry_raw"), live_f.get("sector_raw")) or "Unassigned"
-        if out == "Unassigned":
-            p = (provider_all.get(sym) or {})
-            out = canon_from_provider(p.get("industry"), p.get("sector")) or "Unassigned"
-        _live_cache[sym] = out
-        return out
-
     rows = []
     for sym in symbols:
         f = fetched.get(sym, {})
         m = smap.get(sym, {})
-        sector = m.get("sector") or _resolve_live(sym)
+        if m.get("sector"):
+            sector, sector_source = m["sector"], m.get("source") or ""
+        else:
+            sector, sector_source = resolve_live_sector(sym, f, provider_all.get(sym))
         kind = classify(sym, m.get("company_name"))
         if sector in {"Sovereign Gold Bond", "Government Security", "Corporate Bond / NCD",
                       "SME Board", "SME Trading", "Trade-to-Trade", "Rights Entitlement",
@@ -262,7 +283,7 @@ def main() -> int:
             "symbol": sym,
             "company_name": m.get("company_name") or "",
             "sector": sector,
-            "sector_source": m.get("source") or "",
+            "sector_source": sector_source,
             "instrument": EQUITY if kind == EQUITY else kind,
             "price": f.get("price"),
             "market_cap_cr": f.get("market_cap_cr"),

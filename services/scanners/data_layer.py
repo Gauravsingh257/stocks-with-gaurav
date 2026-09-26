@@ -30,6 +30,7 @@ class KiteOHLCFetcher:
     def __init__(self, kite=None):
         self._kite = kite or self._build_kite()
         self._tok_map: dict[str, int] = {}
+        self._index_map: dict[str, int] = {}
         self._rate_lock = threading.Lock()
         self._last_call = 0.0
 
@@ -55,6 +56,18 @@ class KiteOHLCFetcher:
             if r.get("segment") == "NSE" and r.get("instrument_type") == "EQ"
         }
         return len(self._tok_map)
+
+    def load_index_instruments(self) -> int:
+        """Build tradingsymbol→instrument_token map for NSE indices ("NIFTY 50",
+        "NIFTY IT", …). Kept apart from the equity map so an index can never
+        leak into a universe fetch."""
+        inst = self._kite.instruments("NSE")
+        self._index_map = {
+            r["tradingsymbol"]: r["instrument_token"]
+            for r in inst
+            if r.get("segment") == "INDICES"
+        }
+        return len(self._index_map)
 
     # Index underlyings carried in NFO that are NOT tradeable equities.
     _NFO_INDEX_NAMES = frozenset(
@@ -96,6 +109,18 @@ class KiteOHLCFetcher:
         token = self._tok_map.get(symbol)
         if token is None:
             return None
+        return self._fetch_token(token, symbol, interval, lookback_days, retries)
+
+    def fetch_index(self, name: str, interval: str, lookback_days: int, retries: int = 2) -> list[dict] | None:
+        """Candles for one NSE index. Call load_index_instruments() first.
+        Index volume is always 0 from Kite."""
+        token = self._index_map.get(name)
+        if token is None:
+            return None
+        return self._fetch_token(token, name, interval, lookback_days, retries)
+
+    def _fetch_token(self, token: int, symbol: str, interval: str, lookback_days: int,
+                     retries: int = 2) -> list[dict] | None:
         to_date = datetime.now()
         from_date = to_date - timedelta(days=lookback_days)
         for attempt in range(retries + 1):

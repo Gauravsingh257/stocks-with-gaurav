@@ -200,3 +200,28 @@ def test_sector_falls_back_to_the_live_classifier(monkeypatch, tmp_path):
     monkeypatch.setattr(sc, "_overrides", {})
     monkeypatch.setattr(sc, "_OVERRIDE_PATH", tmp_path / "none.csv")
     assert sc.resolve_sector("NEWCO") == "Pharma"
+
+
+# ── sector fallback for symbols the CSV map has not seen (2026-09-27) ─────────
+
+def test_classifier_unknown_falls_through_to_live_provider_industry():
+    from scripts.refresh_stock_universe import resolve_live_sector
+
+    fetched = {"industry_raw": "Specialty Chemicals", "sector_raw": "Basic Materials"}
+    assert resolve_live_sector("NEWCO", fetched, None, resolver=lambda s: "Unknown") == (
+        "Chemicals", "provider")
+
+
+def test_classifier_hit_wins_over_provider():
+    from scripts.refresh_stock_universe import resolve_live_sector
+
+    fetched = {"industry_raw": "Specialty Chemicals"}
+    assert resolve_live_sector("X", fetched, None, resolver=lambda s: "Pharma") == ("Pharma", "classifier")
+
+
+def test_provider_cache_is_last_resort_and_miss_is_unassigned():
+    from scripts.refresh_stock_universe import resolve_live_sector
+
+    unknown = lambda s: "Unknown"  # noqa: E731
+    assert resolve_live_sector("X", {}, {"industry": "Steel"}, resolver=unknown) == ("Metal", "provider_cache")
+    assert resolve_live_sector("X", {}, None, resolver=unknown) == ("Unassigned", "")
