@@ -267,6 +267,35 @@ def start_scheduler() -> None:
         misfire_grace_time=6 * 3600,
     )
 
+    # Sector rotation history (read-only analytics, Phase 1). Appends the day's
+    # rows to `sector_rotation_daily` from the Kite snapshots the scanner
+    # publishes after the close (~15:45 + ~13 min crawl). Nothing in ranking,
+    # selection, portfolio or trading reads the table. Subprocess so a slow
+    # compute can never block this scheduler. Flag-gated: SECTOR_ROTATION_ENABLED.
+    def _run_sector_rotation():
+        import os as _os
+        if _os.getenv("SECTOR_ROTATION_ENABLED", "0").strip().lower() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import subprocess
+            proc = subprocess.run(
+                [sys.executable, "-m", "scripts.build_sector_rotation"],
+                capture_output=True, text=True, timeout=1800,
+            )
+            tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-8:]
+            logger.info("[SectorRotation] rc=%s %s", proc.returncode, " ".join(tail))
+        except Exception:
+            logger.exception("[SectorRotation] daily build failed (history unchanged)")
+
+    _scheduler.add_job(
+        _run_sector_rotation,
+        CronTrigger(hour=16, minute=40, day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="sector_rotation_daily",
+        name="Sector rotation history (weekdays 16:40 IST, flag-gated)",
+        replace_existing=True,
+        misfire_grace_time=3 * 3600,
+    )
+
     # Equity state machine (SWING_SM tracked book): daily pre-market tick.
     # ISOLATED + flag-gated (EQUITY_STATE_MACHINE; off ⟹ instant no-op).
     # This is the persistent ARMED→TAPPED→ENTRY_ACTIVE/EXPIRED tracker that
