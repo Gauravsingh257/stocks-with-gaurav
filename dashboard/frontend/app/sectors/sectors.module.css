@@ -1,0 +1,533 @@
+/* Sector Rotation — built only from the site's theme tokens (globals.css), so it
+   follows light/dark. Quadrant colours reuse the existing semantic tones. */
+
+.page {
+  --q-leading: var(--tone-good-fg);
+  --q-improving: var(--accent);
+  --q-weakening: var(--tone-caution-fg);
+  --q-lagging: var(--tone-weak-fg);
+  display: grid;
+  gap: 14px;
+  color: var(--text-primary);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 0;
+}
+
+.header {
+  display: grid;
+  gap: 12px;
+}
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  max-width: 70ch;
+}
+.previewTag {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tone-caution-fg);
+  border: 1px dashed var(--tone-caution-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+.controlGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.controlLabel {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+}
+.seg button {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  padding: 6px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-height: 32px;
+}
+.seg button:hover {
+  color: var(--text-primary);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border-glow);
+}
+.seg button:focus-visible,
+.chip:focus-visible,
+.close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.benchBanner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: var(--accent-dim);
+  border: 1px solid var(--border-glow);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.benchBanner strong {
+  color: var(--text-primary);
+}
+
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.stale {
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--tone-caution-border);
+  background: var(--tone-caution-bg);
+  color: var(--tone-caution-fg);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.mainGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.sectionTitle {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.mapWrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+.mapWrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.mapNote {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sectorG {
+  cursor: pointer;
+  outline: none;
+}
+.sectorG:focus-visible .head {
+  stroke: var(--text-primary);
+  stroke-width: 2.5;
+}
+
+.quadGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.quad {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--bg-card);
+  min-width: 0;
+}
+.quadHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.quadHint {
+  margin: 4px 0 8px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.chip {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text-primary);
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 10px;
+  cursor: pointer;
+  min-height: 30px;
+}
+.chip:hover {
+  border-color: var(--border-interactive);
+}
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chipLow {
+  border-style: dashed;
+}
+.none {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  min-width: 860px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.table th,
+.table td {
+  padding: 8px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table th {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  position: sticky;
+  top: 0;
+}
+.table th button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--bg-surface);
+  z-index: 1;
+}
+.table tbody tr {
+  cursor: pointer;
+}
+.table tbody tr:hover td {
+  filter: brightness(1.08);
+}
+.table tbody tr[aria-selected="true"] td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.sectorCell {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.quadChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.45);
+  z-index: 60;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 100vw);
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  z-index: 61;
+  overflow-y: auto;
+  padding: 18px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  box-shadow: -20px 0 50px rgba(0, 0, 0, 0.3);
+}
+.drawerHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+.drawerTitle {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+.close {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  min-height: 34px;
+}
+.metaLine {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.metric {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: var(--bg-card);
+}
+.metric span {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.metric b {
+  display: block;
+  margin-top: 3px;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.metric small {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+.confBox {
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  border: 1px solid var(--tone-neutral-border);
+  background: var(--tone-neutral-bg);
+  color: var(--text-secondary);
+}
+.stockList {
+  display: grid;
+  gap: 2px;
+}
+.stock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.stock:hover {
+  background: var(--bg-card-hover);
+}
+.stockSym {
+  font-weight: 750;
+}
+.stockName {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.muted {
+  color: var(--text-dim);
+}
+.linkBtn {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 6px 0;
+  justify-self: start;
+}
+
+.skeleton {
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--bg-card) 0%, var(--bg-card-hover) 50%, var(--bg-card) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.errorBox {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+.retry {
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--border-glow);
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.footer {
+  display: grid;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+.defs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 6px 18px;
+}
+.defs b {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 980px) {
+  .mainGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .card {
+    padding: 12px;
+  }
+  .quadGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .drawer {
+    top: auto;
+    width: 100vw;
+    max-height: 88vh;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}

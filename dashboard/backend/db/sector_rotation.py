@@ -165,3 +165,42 @@ def summary() -> dict[str, Any]:
         return out
     finally:
         conn.close()
+
+
+def read_recent(timeframe: str, n_dates: int, kinds: tuple[str, ...] = ("sector", "market")) -> list[dict[str, Any]]:
+    """Rows of the most recent `n_dates` stored dates for one timeframe. A pure read —
+    what the Phase 2 API serves; nothing is recomputed."""
+    conn = get_connection()
+    try:
+        ensure_table(conn)
+        dates = [r["date"] for r in conn.execute(
+            "SELECT DISTINCT date FROM sector_rotation_daily WHERE timeframe = ? ORDER BY date DESC LIMIT ?",
+            (timeframe, int(n_dates)),
+        )]
+        if not dates:
+            return []
+        marks = ", ".join("?" * len(dates))
+        kmarks = ", ".join("?" * len(kinds))
+        rows = conn.execute(
+            f"SELECT * FROM sector_rotation_daily WHERE timeframe = ? AND date IN ({marks}) "
+            f"AND kind IN ({kmarks}) ORDER BY date ASC, entity ASC",
+            (timeframe, *dates, *kinds),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def latest_stamp() -> dict[str, Any]:
+    """Latest date + write time per timeframe — the cache key for API payloads."""
+    conn = get_connection()
+    try:
+        ensure_table(conn)
+        out = {}
+        for r in conn.execute(
+            "SELECT timeframe, MAX(date) d, MAX(written_at) w FROM sector_rotation_daily GROUP BY timeframe"
+        ):
+            out[r["timeframe"]] = {"date": r["d"], "written_at": r["w"]}
+        return out
+    finally:
+        conn.close()
