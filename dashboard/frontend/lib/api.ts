@@ -1639,6 +1639,109 @@ export interface StockUniverseResponse {
   sectors: { sector: string; count: number }[];
 }
 
+/* ── Sector rotation (Phase 2, read-only; serves precomputed sector_rotation_daily rows) ── */
+
+export type SectorTimeframe = "D" | "W";
+export type SectorBenchmarkKey = "market" | "nifty50";
+export type SectorQuadrant = "leading" | "weakening" | "lagging" | "improving";
+
+export interface SectorTrailPoint {
+  date: string;
+  rs_ratio: number;
+  rs_momentum: number;
+}
+
+export interface SectorRotationRow {
+  sector: string;
+  rs_ratio: number | null;
+  rs_momentum: number | null;
+  rs_accel: number | null;
+  quadrant: SectorQuadrant | null;
+  rs_ratio_core: number | null;
+  as_of: string | null;
+  partial: boolean;
+  written_at: string | null;
+  source_mode: string | null;
+  n_constituents: number | null;
+  n_core: number | null;
+  provider_share: number | null;
+  confidence: "high" | "medium" | "low" | "insufficient" | null;
+  ret_bar: number | null;
+  ret_lookback: number | null;
+  ret_vs_market?: number | null;
+  pct_above_20: number | null;
+  pct_above_50: number | null;
+  pct_above_200: number | null;
+  new_highs_52w: number | null;
+  new_lows_52w: number | null;
+  n_52w_eligible: number | null;
+  vol_ratio: number | null;
+  up_turnover_pct: number | null;
+  dispersion: number | null;
+  trail: SectorTrailPoint[];
+  plottable: boolean;
+}
+
+export interface SectorBenchmark {
+  key: SectorBenchmarkKey;
+  label: string;
+  short: string;
+  description: string;
+}
+
+export interface SectorFreshness {
+  status: "fresh" | "stale" | "unknown";
+  as_of: string | null;
+  expected?: string;
+  sessions_behind: number | null;
+  note: string;
+}
+
+export interface SectorRotationResponse {
+  enabled: boolean;
+  timeframe: SectorTimeframe;
+  timeframe_label: string;
+  lookback_label: string;
+  benchmark: SectorBenchmark;
+  benchmarks: { key: SectorBenchmarkKey; label: string }[];
+  as_of: string | null;
+  week_partial: boolean;
+  written_at: string | null;
+  freshness: SectorFreshness;
+  trail_length: number;
+  trail_dates: string[];
+  quadrant_counts: Record<SectorQuadrant, number>;
+  market: SectorRotationRow | null;
+  sectors: SectorRotationRow[];
+  definitions: Record<string, string>;
+  calc_version: string | null;
+  disclaimer: string;
+  generated_at?: number;
+  cache?: "hit" | "miss";
+}
+
+export interface SectorConstituent {
+  symbol: string;
+  company_name: string | null;
+  sector_source: string | null;
+  price: number | null;
+  market_cap_cr: number | null;
+  turnover_cr: number | null;
+  ret_1y_pct: number | null;
+  pct_from_52w_high: number | null;
+  refreshed_at: string | null;
+  liquid: boolean;
+}
+
+export interface SectorConstituentsResponse {
+  enabled: boolean;
+  sector: string;
+  count: number;
+  items: SectorConstituent[];
+  refreshed_at: string | null;
+  note: string;
+}
+
 export const api = {
   /** Regime-governor exposure block — market state, suggested exposure/cash %, leading sectors. */
   marketState: () => get<MarketStateResponse>("/api/market/state"),
@@ -1745,6 +1848,11 @@ export const api = {
     const qs = q.toString();
     return get<StockUniverseResponse>(`/api/research/universe${qs ? `?${qs}` : ""}`);
   },
+  /** Sector rotation — precomputed rows; 404 while SECTOR_ROTATION_API_ENABLED is off. */
+  sectorRotation: (tf: SectorTimeframe, benchmark: SectorBenchmarkKey, trail = 10) =>
+    get<SectorRotationResponse>(`/api/sectors/rotation?tf=${tf}&benchmark=${benchmark}&trail=${trail}`),
+  sectorConstituents: (sector: string) =>
+    get<SectorConstituentsResponse>(`/api/sectors/constituents?sector=${encodeURIComponent(sector)}`),
   researchCoverage: (targetUniverse = 2200) => get<ResearchCoverageResponse>(`/api/research/coverage?target_universe=${targetUniverse}`),
   researchValidation: (horizon: "SWING" | "LONGTERM" = "SWING", topK = 10, targetUniverse = 2200) =>
     get<ResearchValidationResponse>(`/api/research/validation?horizon=${horizon}&top_k=${topK}&target_universe=${targetUniverse}`),
