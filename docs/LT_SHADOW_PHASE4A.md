@@ -80,7 +80,7 @@ not run for Swing, for scans with `log_scan=False`, or for backtest scans that p
   - any exception is logged and dropped;
   - there is **no enforcement flag**.
 
-**Flag:** `LT_SHADOW_SELECTOR_ENABLED` on `web`. Rollback = unset it.
+**Flag:** `LT_SHADOW_SELECTOR_ENABLED=1` on `web` since 2026-09-27 (shadow logging only; deploy `2595a62`, PR #209). The first run is the Mon 2026-09-28 08:40 IST scan. Rollback = unset it.
 
 ### Provenance persisted per run
 
@@ -121,7 +121,42 @@ scheduled, run it out of band before each calibration read.
 
 ## 5. Debt/equity impact (2026-09-25 universe)
 
-_Filled from `scripts/measure_de_fix_impact.py`; see below._
+`scripts/measure_de_fix_impact.py` was run over the 2,200 symbols of scan
+`VAL-LONGTERM-2026-09-25-38e51cf5`. Fundamentals were fetched through the production code path
+(2 workers, 3 retries). 1,944 symbols had real fundamentals and 1,788 had a D/E value.
+
+| Measure | Result |
+|---|---|
+| Names the fix changes | **508** (26.1% of real). Every one has provider D/E ≤ 9.988, i.e. true D/E < 0.10x |
+| Δ `fundamental_score` on those | mean **+0.065**, median +0.077, max +0.109 (= 0.11 × Δdebt_quality) |
+| Δ fundamental percentile, all names | mean \|Δ\| **5.96 pts**; max up +25.9 (ONIXSOLAR), max down −4.9 (BTML) |
+| Top-N kept, `fundamental_score` alone | top-25: 17 · top-50: 37 · top-100: 79 |
+| Top-N kept, LT fundamental block (fund 0.30 + growth 0.20 + quality 0.18) | top-25: **9** · top-50: **18** · top-100: **40** |
+| Control's 17 `final_selected` | 3 changed; mean Δ fundamental percentile −0.94 pts |
+
+**Reading.** The bug suppresses exactly the least-indebted names. Fixing it barely touches the
+current control, because fundamentals hardly enter that funnel, but it reshuffles the Long-Term
+fundamental ranking heavily. Flipping `FUND_DE_UNIT_FIX` is therefore a real selection change for
+`generate_rankings` (both books). It is not a cosmetic fix and needs its own control run.
+
+**Coverage side-finding (not changed).** With 8 concurrent workers — production's
+`FUND_FETCH_CONCURRENCY` — the provider answered for only 854 names locally ("Invalid Crumb"
+401s). With 2 workers it answered for 1,944. Production's 2026-09-25 scan had real fundamentals
+for 1,054. So production probably loses around 40% of the available fundamentals to provider
+throttling. That shrinks the shadow's eligible pool, and it touches live data coverage, so it
+belongs to a separate decision.
+
+### Replay preview (2026-09-25, not persisted)
+
+`lt-shadow-v1` was replayed locally on the same scan's exported `signals_log` inputs with the
+fundamentals above. The run was deterministic across 3 shuffled orders.
+
+- **Eligible:** 1,086 of 2,200. Excluded: illiquid 599, failed L2 200, no OHLC 181, no real
+  fundamentals 132, no plan 2.
+- **Budget:** 17, the control's count. **Overlap with the control: 1 of 17** (FINCABLES).
+- All 17 control picks were *eligible*, so the shadow disagreed on ranking alone.
+- This is a single scan and is not evidence of edge in either direction. Production's eligible
+  pool will be smaller until fundamentals coverage improves.
 
 ## 6. Next calibration step (pre-registered — decide nothing before it)
 
