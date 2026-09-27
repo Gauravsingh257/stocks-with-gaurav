@@ -15,6 +15,9 @@ Flags (env, read per request so no redeploy is needed to flip them):
   SECTOR_ROTATION_API_ENABLED  default off — rotation/constituents return 404 when off.
   SECTOR_ROTATION_PAGE_PUBLIC  default off — the /sectors page renders only with
                                ?preview=1 until this is on (validation phase).
+  SECTOR_ROTATION_HOMEPAGE_ENABLED  default off — the homepage widget (Phase 3)
+                               renders only when this AND the API flag are on;
+                               otherwise the homepage keeps its static preview.
 
 Nothing in ranking, selection, portfolio or trading reads these endpoints.
 """
@@ -50,6 +53,10 @@ def page_public() -> bool:
     return _flag("SECTOR_ROTATION_PAGE_PUBLIC")
 
 
+def homepage_widget() -> bool:
+    return api_enabled() and _flag("SECTOR_ROTATION_HOMEPAGE_ENABLED")
+
+
 def _disabled() -> JSONResponse:
     return JSONResponse(status_code=404, content={"enabled": False, "detail": "sector rotation is not enabled"})
 
@@ -67,7 +74,7 @@ def _stamp() -> dict:
 
 @router.get("/api/sectors/status")
 def sectors_status():
-    out = {"api_enabled": api_enabled(), "page_public": page_public()}
+    out = {"api_enabled": api_enabled(), "page_public": page_public(), "homepage_widget": homepage_widget()}
     if out["api_enabled"]:
         try:
             out["latest"] = _stamp()

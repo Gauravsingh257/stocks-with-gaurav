@@ -16,8 +16,9 @@
  */
 import { Maximize2, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SectorQuadrant, SectorRotationRow } from "@/lib/api";
+import type { SectorRotationRow } from "@/lib/api";
 import { QUADRANT_LABEL, QUADRANT_VAR, num, pct, signed } from "./format";
+import { fittedExtent, notability, placeLabels, smoothPath } from "./mapGeometry";
 import styles from "./sectors.module.css";
 
 type Props = {
@@ -30,7 +31,6 @@ type Props = {
 };
 
 type View = { cx: number; cy: number; k: number };
-type Box = [number, number, number, number];
 
 // Phones only: a laptop-width map card must keep its labels.
 const COMPACT_BELOW = 440;
@@ -40,26 +40,6 @@ function niceStep(span: number): number {
   const raw = span / 5;
   for (const s of [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10]) if (raw <= s) return s;
   return 20;
-}
-
-function smoothPath(p: [number, number][]): string {
-  if (p.length < 2) return "";
-  let d = `M${p[0][0].toFixed(1)},${p[0][1].toFixed(1)}`;
-  for (let i = 0; i < p.length - 1; i++) {
-    const p0 = p[i - 1] ?? p[i];
-    const p1 = p[i];
-    const p2 = p[i + 1];
-    const p3 = p[i + 2] ?? p2;
-    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
-    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
-    d += ` C${c1[0].toFixed(1)},${c1[1].toFixed(1)} ${c2[0].toFixed(1)},${c2[1].toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
-  }
-  return d;
-}
-
-function quadOf(x: number, y: number): SectorQuadrant {
-  if (x >= 100) return y >= 100 ? "leading" : "weakening";
-  return y >= 100 ? "improving" : "lagging";
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -98,12 +78,7 @@ export default function RotationMap({ sectors, focus, onOpen, benchmarkShort, un
   const plot = useMemo(() => sectors.filter((s) => s.plottable && s.trail.length > 0), [sectors]);
 
   // Fitted extent: symmetric around 100 so the quadrant cross is centred at 1×.
-  const dom = useMemo(() => {
-    let maxDev = 1;
-    for (const s of plot)
-      for (const t of s.trail) maxDev = Math.max(maxDev, Math.abs(t.rs_ratio - 100), Math.abs(t.rs_momentum - 100));
-    return Math.ceil(maxDev * 1.08 * 4) / 4;
-  }, [plot]);
+  const dom = useMemo(() => fittedExtent(plot), [plot]);
 
   const clamp = useCallback((v: View): View => {
     const k = Math.min(MAX_ZOOM, Math.max(1, v.k));
@@ -288,54 +263,13 @@ export default function RotationMap({ sectors, focus, onOpen, benchmarkShort, un
   };
 
   // ── labels: priority order, only where they fit beside their own dot ─────
-  const labels = useMemo(() => {
-    const r0 = compact ? 5 : 6.5;
-    const inView = heads.filter((h) => h.x >= m.l && h.x <= W - m.r && h.y >= m.t && h.y <= H - m.b);
-    const placed: Box[] = inView.map((h) => [h.x - r0, h.y - r0, h.x + r0, h.y + r0]);
-    const notability = (s: SectorRotationRow) => {
-      const a = s.trail[0];
-      const b = s.trail[s.trail.length - 1];
-      const moved = quadOf(a.rs_ratio, a.rs_momentum) !== quadOf(b.rs_ratio, b.rs_momentum) ? 1.5 : 0;
-      return Math.hypot(b.rs_ratio - 100, b.rs_momentum - 100) + moved;
-    };
-    const order = [...inView].sort((a, b) => {
-      if (a.s.sector === active) return -1;
-      if (b.s.sector === active) return 1;
-      return notability(b.s) - notability(a.s);
-    });
-    const out: { sector: string; lx: number; ly: number; anchor: "start" | "end" }[] = [];
-    for (const h of order) {
-      // ~0.62em per character for the 650-weight label face (measured against
-      // rendered text; a smaller estimate let compact labels overlap).
-      const tw = h.s.sector.length * fs * 0.62 + 4;
-      const isOwn = (p: Box) => Math.abs(p[0] - (h.x - r0)) < 0.01 && Math.abs(p[1] - (h.y - r0)) < 0.01;
-      const blocked = (b: Box) => placed.some((p) => !isOwn(p) && !(b[2] < p[0] || b[0] > p[2] || b[3] < p[1] || b[1] > p[3]));
-      const slot = (anchor: "start" | "end", off: number) => {
-        const lx = anchor === "start" ? h.x + 9 : h.x - 9;
-        const ly = h.y + 4 + off;
-        // Padded for descenders and the 3px outline stroke drawn behind each label.
-        const box: Box = anchor === "start"
-          ? [lx - 1.5, ly - fs - 1, lx + tw + 1.5, ly + 4]
-          : [lx - tw - 1.5, ly - fs - 1, lx + 1.5, ly + 4];
-        const inside = box[0] >= m.l && box[2] <= W - m.r && box[1] >= m.t && box[3] <= H - m.b;
-        return { lx, ly, anchor, box, ok: inside && !blocked(box) };
-      };
-      const isActive = h.s.sector === active;
-      let chosen: ReturnType<typeof slot> | null = null;
-      for (const o of isActive ? [0, -11, 11, -20, 20] : [0, -10, 10]) {
-        for (const a of ["start", "end"] as const) {
-          const c = slot(a, o);
-          if (c.ok) { chosen = c; break; }
-        }
-        if (chosen) break;
-      }
-      if (!chosen && isActive) chosen = slot(h.x + tw + 12 > W - m.r ? "end" : "start", 0);
-      if (!chosen) continue;
-      placed.push(chosen.box);
-      out.push({ sector: h.s.sector, lx: chosen.lx, ly: chosen.ly, anchor: chosen.anchor });
-    }
-    return out;
-  }, [heads, active, compact, fs, W, H, m]);
+  const labels = useMemo(() => placeLabels({
+    heads: heads.map((h) => ({ name: h.s.sector, x: h.x, y: h.y, priority: notability(h.s) })),
+    active,
+    fs,
+    bounds: { l: m.l, r: W - m.r, t: m.t, b: H - m.b },
+    dotRadius: compact ? 5 : 6.5,
+  }), [heads, active, compact, fs, W, H, m]);
 
   // ── static geometry ──────────────────────────────────────────────────────
   const step = niceStep(x1 - x0);
