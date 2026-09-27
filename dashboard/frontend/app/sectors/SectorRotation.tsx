@@ -108,7 +108,6 @@ export default function SectorRotation() {
             universe. A measurement of how sectors have been moving, not a forecast or a recommendation.
           </p>
         </div>
-        <span className={styles.previewTag}>Preview</span>
       </div>
       <div className={styles.controls}>
         <Segmented label="Timeframe" value={tf} onChange={setTf}

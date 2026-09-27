@@ -43,16 +43,6 @@
   line-height: 1.5;
   max-width: 70ch;
 }
-.previewTag {
-  font-size: 0.66rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--tone-caution-fg);
-  border: 1px dashed var(--tone-caution-border);
-  border-radius: 999px;
-  padding: 2px 8px;
-}
 
 .controls {
   display: flex;

@@ -1,27 +1,27 @@
 /**
- * /sectors — Sector Rotation (Phase 2, validation).
+ * /sectors — Sector Rotation (public).
  *
  * A server gate in front of a client view. The view reads precomputed rows from
  * /api/sectors/* — nothing is calculated on a page request.
  *
- * Gate, decided by the backend flags (see dashboard/backend/routes/sectors.py):
- *   - SECTOR_ROTATION_API_ENABLED off       → 404
- *   - SECTOR_ROTATION_PAGE_PUBLIC off       → 404 unless ?preview=1
- *   - backend unreachable / slow            → render anyway; the client shows its
- *                                             own error state. A backend blip must
- *                                             never turn into a 404.
- * noindex throughout Phase 2; not linked from navigation yet.
+ * The gate follows the backend flags (dashboard/backend/routes/sectors.py) and is
+ * cached for 5 minutes, so the page stays statically served:
+ *   - backend says the API or the page is switched off → 404 (kill switch)
+ *   - backend unreachable / slow → render anyway; the client shows its own error
+ *     state. A backend blip must never turn an indexed page into a 404.
  */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import SectionTabs from "@/components/SectionTabs";
 import { getBackendBase } from "@/lib/api";
+import { RESEARCH_TABS } from "@/lib/navGroups";
 import SectorRotation from "./SectorRotation";
 
 export const metadata: Metadata = {
-  title: "Sector Rotation",
+  title: "NSE Sector Rotation — Relative Strength & Breadth",
   description:
-    "Relative strength, momentum and breadth of NSE sectors, measured from every liquid stock in the universe. Analytics only.",
-  robots: { index: false, follow: false },
+    "Where NSE sectors are moving: relative strength, momentum, breadth and 52-week highs for 22 sectors, measured from every liquid stock and updated after each close. Analytics, not advice.",
+  alternates: { canonical: "/sectors" },
 };
 
 type Status = { api_enabled: boolean; page_public: boolean };
@@ -29,7 +29,7 @@ type Status = { api_enabled: boolean; page_public: boolean };
 async function fetchStatus(): Promise<Status | null> {
   const base = getBackendBase();
   if (!base) return null;
-  const request = fetch(`${base}/api/sectors/status`, { cache: "no-store" })
+  const request = fetch(`${base}/api/sectors/status`, { next: { revalidate: 300 } })
     .then((r) => (r.ok ? (r.json() as Promise<Status>) : null))
     .catch(() => null);
   // Render budget via Promise.race, not AbortSignal (see lib/seo/stockData.ts).
@@ -37,18 +37,12 @@ async function fetchStatus(): Promise<Status | null> {
   return Promise.race([request, budget]);
 }
 
-export default async function SectorsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ preview?: string }>;
-}) {
-  const [status, params] = await Promise.all([fetchStatus(), searchParams]);
-  if (status) {
-    if (!status.api_enabled) notFound();
-    if (!status.page_public && params.preview !== "1") notFound();
-  }
+export default async function SectorsPage() {
+  const status = await fetchStatus();
+  if (status && (!status.api_enabled || !status.page_public)) notFound();
   return (
     <div className="px-4 md:px-6 pt-4 pb-10">
+      <SectionTabs items={RESEARCH_TABS} label="Research" />
       <SectorRotation />
     </div>
   );
