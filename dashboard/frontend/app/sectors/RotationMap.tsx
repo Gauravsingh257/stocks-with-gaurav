@@ -13,7 +13,9 @@ type Props = {
   unitLabel: string;
 };
 
-const COMPACT_BELOW = 560;
+// Phones only: a laptop-width map card (~470-530px at 1024-1280px viewports)
+// must keep its labels; compact mode shows a label only for the selected sector.
+const COMPACT_BELOW = 440;
 
 function niceStep(span: number): number {
   const raw = span / 4;
