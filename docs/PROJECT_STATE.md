@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-15**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-27**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -28,8 +28,10 @@ the whole app against its own throwaway database. Mid-September turned to the *i
 shadow programmes had accumulated evidence they structurally could not act on, and both were
 measurement defects rather than failing subsystems. Fixing them put the first selection-quality
 change of the validation phase into production (`ENTRY_ANCHOR_MAX_GAP_PCT=10`). The immediate next
-move is validating that over two live sessions, then finishing SEO Phase 2. The largest *unstarted*
-body of work is the commercial launch: payments, legal pages, monitoring.
+move is validating that over two live sessions, then finishing SEO Phase 2. Late September shipped
+**Sector Rotation** end to end — a public, indexed `/sectors` page plus a homepage widget — and closed
+it on 2026-09-27. The largest *unstarted* body of work is the commercial launch: payments, legal
+pages, monitoring.
 
 ## Aug-end → Sep-1st-week change audit — 2026-09-13 (read-only)
 
@@ -249,11 +251,11 @@ Verified against the running system, not from docs:
 
 | Workstream | State | One line |
 |---|---|---|
-| `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; Phase 2 (linking, CWV, GSC) not started |
+| `seo` | 🔴 **ACTIVE** | Phase 1 shipped + live; `/sectors` indexed + in sitemap (2026-09-27); Phase 2 (linking, CWV, GSC) not started |
 | `selection` | 🔴 **ACTIVE** | Anchor10 live, validating 09-14/15 · 09-07 data blackout root-caused, monitoring live (PR #185) · snapshot TTL raised to 96h, verified |
 | `portfolio` | 🟡 in validation | Admission-gate metrics now complete on both doors; no threshold set yet |
 | `engine` | 🟢 steady | No open work. FVG-Tap in alert-mode soak |
-| `ui-ux` | 🟡 **ACTIVE** | Search Phase 1 live (PRs #186/#187): validated stock, company and sector search; 404 dead-ends fixed · a11y + responsive matrix still open |
+| `ui-ux` | 🟡 **ACTIVE** | **Sector Rotation CLOSED 2026-09-27** (public `/sectors` + homepage widget, PRs #193–#202) · Search Phase 1 live · a11y + responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
 
 ---
@@ -273,7 +275,8 @@ sitemap, JSON-LD, GSC domain property verified via Hostinger DNS.
 3. **Re-add Vercel Speed Insights** — PR #2 was closed 2026-08-27 (4-month-old `pnpm-lock.yaml`
    would have conflicted). Reinstall fresh against current deps; the feature is still wanted.
 4. **Monitor GSC** — indexation coverage of the 2,113 equity URLs; watch for soft-404s.
-5. Later: sector pages, screener landing pages, `/learn` content, freshness signals, backlinks.
+5. Later: per-sector pages (the `/sectors` hub is live, indexable and in the sitemap since
+   2026-09-27), screener landing pages, `/learn` content, freshness signals, backlinks.
 
 **BLOCKED** — nothing hard-blocked. Note `vercel` CLI is installed but **logged out**; `vercel login`
 needs browser OAuth from Gaurav if any CLI-side work comes up.
@@ -641,6 +644,16 @@ the trading path.
 
 **NOW** — nothing in flight. Stock page Phase 1A/1B, the minimal header and search Phase 1 are all live and verified in production.
 
+**Sector Rotation — CLOSED 2026-09-27** (PRs #193–#202, final merge `a9e9cef`, verified in production). Owner closed it; no further phases.
+- **Live:** public, indexable `/sectors` (canonical, sitemap, Research tab, site search) and the homepage "Where sectors are moving" card linking to it. Default benchmark **whole market** (equal-weight); NIFTY 50 selectable and labelled.
+- **Data flow:** scanner post-close publishes Kite universe bars `ohlc:universe:*` + 24 NSE indices `ohlc:index:*` → `web` job 16:40 IST (`scripts/build_sector_rotation.py`) → `services/sector_rotation_engine.py` (pure, `sr-1.1`) → `sector_rotation_daily` (append-only, point-in-time) → `/api/sectors/{status,rotation,constituents}` (Redis-cached; no price maths per request) → `/sectors` + the server-rendered homepage widget (map served as cached SVG `/sector-map/{wide,phone}`). Sectors come from `stock_universe.sector`. No Yahoo.
+- **Flags — all `=1`; rollback = unset, no redeploy:** `web` `SECTOR_ROTATION_API_ENABLED` (API + page), `SECTOR_ROTATION_ENABLED` (daily job), `SECTOR_ROTATION_HOMEPAGE_ENABLED` (off → original hero within ~5 min), `SECTOR_ROTATION_PAGE_PUBLIC` (off → `/sectors` 404); `scanner` `SECTOR_INDEX_OHLC_ENABLED`.
+- **Isolation:** nothing in ranking, selection, portfolio, trading or scanner logic imports it (grep-verified 2026-09-27); `resolve_sector()` and the scanner's sector map are untouched.
+- **Validation:** independent plain-Python recompute 180/180 in prod; API vs table 1,496/1,496; rendered heatmap vs API 264/264; 0 map-label overlaps 1440→390; homepage 53.8 KB (11.2 KB gz, was 33.8/6.6), TTFB ~130 ms, CLS 0; API 500 / slow / stale / flag-off all fall back cleanly; 8 major pages 200 with 0 console errors.
+- **Fixed on the way:** `stock_universe` "Unknown" sector bug (#193: current-universe coverage 90.2% → 99.6%); the site-wide footer no longer claims all data comes "via yfinance".
+- **Monitoring, non-blocking:** first live daily row Mon 2026-09-28 after 16:40 IST (`source_mode='live'`). After any push to `main` the homepage may show the original hero for ≤5 min (backend redeploys while Vercel builds — expected).
+- **Parked (owner decisions, do not fix unasked):** scanner lacks `PHASE0_REAL_SECTORS` (its Sector Rotation *screener* still uses the 96-name map); ~266 orphan `stock_universe` rows; T2T/SME filter fails open. → `[[sector-rotation-intelligence]]`
+
 **STOPPED AT** — **2026-09-15: stock page single source of truth, PR #190 (merge ffb4908), verified live, then an engine incident caused by the merge time.**
 - **Verified in production** on 9 stocks: FCL, HDFCBANK, ITC, M&M, ABB, TCS, RELIANCE, SBIN, 360ONE.
   - Company, sector, P/E and market cap are identical in key metrics and the analysis card.
@@ -851,6 +864,7 @@ only enough to orient, mapping recent PR ranges to workstreams:
 
 | PRs | Workstream | Arc |
 |---|---|---|
+| **#193–#202** 2026-09-27 | `ui-ux` `seo` | Sector Rotation, **CLOSED**: data foundation (Kite index history, sector-coverage fix) → read-only engine + `sector_rotation_daily` → `/api/sectors` + `/sectors` → map polish/zoom → homepage widget → public, indexed, in nav |
 | **#186** + **#187** 2026-09-14 | `ui-ux` | global search Phase 1: validated stock / company / sector autocomplete, typo fallback, all pages, visible ⌘K pill, search analytics, sector deep links |
 | **#185** 2026-09-13 | `selection` | 09-07 data-blackout monitoring: `data-health` endpoint, `scan_health.py` + workflow, `l1_counterfactual` metric |
 | direct-to-main 2026-09-13 | `portfolio` `selection` | write-time `position_provenance` (`87a10f6`); OLD-vs-NEW audit framework (`b3d6617`) |
