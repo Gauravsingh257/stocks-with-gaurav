@@ -267,6 +267,34 @@ def start_scheduler() -> None:
         misfire_grace_time=6 * 3600,
     )
 
+    # Daily dashboard.db backup to the Railway bucket (RPO <= 24h). Subprocess so
+    # a slow copy can never block this scheduler; never at startup. 02:30 IST sits
+    # outside market hours and every scan window. Flag-gated: BACKUP_ENABLED.
+    def _run_db_backup():
+        import os as _os
+        if _os.getenv("BACKUP_ENABLED", "0").strip().lower() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import subprocess
+            proc = subprocess.run(
+                [sys.executable, "-m", "scripts.backup_dashboard_db"],
+                capture_output=True, text=True, timeout=3 * 3600,
+            )
+            tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-14:]
+            log = logger.info if proc.returncode == 0 else logger.error
+            log("[DBBackup] rc=%s %s", proc.returncode, " ".join(tail))
+        except Exception:
+            logger.exception("[DBBackup] daily backup failed")
+
+    _scheduler.add_job(
+        _run_db_backup,
+        CronTrigger(hour=2, minute=30, timezone="Asia/Kolkata"),
+        id="dashboard_db_backup",
+        name="dashboard.db backup to bucket (daily 02:30 IST, flag-gated)",
+        replace_existing=True,
+        misfire_grace_time=6 * 3600,
+    )
+
     # Sector rotation history (read-only analytics, Phase 1). Appends the day's
     # rows to `sector_rotation_daily` from the Kite snapshots the scanner
     # publishes after the close (~15:45 + ~13 min crawl). Nothing in ranking,
