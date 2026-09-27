@@ -50,6 +50,20 @@ SELECTOR_VERSION = "lt-shadow-v1"
 WEIGHTS: dict[str, float] = {"fundamental": 0.30, "growth": 0.20, "quality": 0.18, "technical": 0.14}
 
 
+# Explicit allowlist of behaviour flags that shape the control funnel or the data
+# both sides see. Flags only — never add a credential here.
+CONTROL_ENV_KEYS: tuple[str, ...] = (
+    "PHASE0_NO_SYNTHETIC", "PHASE0_KITE_OHLC", "PHASE1_STRICT_FUNNEL", "PHASE1_TIGHT_ENTRY_GAP",
+    "PHASE1_ENTRY_GAP_PCT", "PHASE1_SECTOR_UNKNOWN_STRICT", "PHASE2_SMC_AS_SCORE", "PHASE2_HORIZONS",
+    "ENTRY_ANCHOR_MAX_GAP_PCT", "STRUCTURAL_TARGET_CAP", "VALIDATION_LAYER1_MIN_SCORE",
+    "EXCEPTIONALISM_ENABLED", "EXCEPTIONALISM_SHADOW", "EXCEPTIONALISM_SOFT_CEILING",
+    "REGIME_GOVERNOR_ENABLED", "GOVERNOR_FORCE_STATE", "SECTOR_LEADERSHIP_SCORING_ENABLED",
+    "SECTOR_DIVERSIFICATION_ENABLED", "SECTOR_UNASSIGNED_BLOCKS", "MARKET_HEALTH_ENABLED",
+    "DISCOVERY_MIN_UNIQUE_SYMBOLS", "RESEARCH_DATA_SOURCE", "RESEARCH_MIN_MCAP_CR",
+    "RESEARCH_REQUIRE_REAL_DATA", "FUND_DE_UNIT_FIX", "FUND_FETCH_CONCURRENCY", "FUNDAMENTALS_CACHE_TTL_H",
+)
+
+
 def lt_shadow_enabled() -> bool:
     return os.getenv("LT_SHADOW_SELECTOR_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
@@ -83,12 +97,13 @@ class ShadowInput:
 @dataclass(slots=True)
 class ShadowPick:
     symbol: str
-    rank: int
-    score: float
+    rank: int | None                   # None only for a control pick the shadow could not rank
+    score: float | None
     selected: bool
     control_selected: bool
     components: dict[str, float]
     inp: ShadowInput
+    exclusion: str | None = None       # why an ineligible control pick was not rankable
 
 
 @dataclass(slots=True)
@@ -101,6 +116,7 @@ class ShadowRun:
     control_count: int
     picks: list[ShadowPick] = field(default_factory=list)
     exclusions: dict[str, int] = field(default_factory=dict)
+    coverage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def selected(self) -> list[ShadowPick]:
@@ -124,6 +140,14 @@ def config(min_turnover_cr: float) -> dict[str, Any]:
         "budget": "control final_selected count on the same scan",
         "debt_equity": "provider percent / 100 (fundamental_analysis.debt_equity_ratio)",
         "log_top_n": log_top_n(),
+        # Logging only (Phase 4B), selection unchanged: every control pick is also
+        # logged with its shadow rank or exclusion, and each run records how much of
+        # the common-support pool had real fundamentals.
+        "log_schema": 2,
+        # The control is only a stable control while these stay put. Recording them
+        # per run makes a mid-collection flag flip visible instead of silently
+        # mixing two control regimes into one comparison.
+        "control_env": {k: os.getenv(k) for k in CONTROL_ENV_KEYS},
     }
 
 
@@ -170,14 +194,14 @@ def input_from_record(record: Any, fund: Any, smc_score: float | None) -> Shadow
     )
 
 
-def _exclusion(i: ShadowInput, min_turnover_cr: float) -> str | None:
+def _exclusion(i: ShadowInput, min_turnover_cr: float, *, need_fundamentals: bool = True) -> str | None:
     if i.cmp is None or i.avg_turnover_cr is None:
         return "no_ohlc"
     if i.avg_turnover_cr < min_turnover_cr:
         return "illiquid"
     if not i.layer2_pass:
         return "failed_layer2_quality"
-    if i.fundamental_score_de_fixed is None:
+    if need_fundamentals and i.fundamental_score_de_fixed is None:
         return "no_real_fundamentals"
     if i.entry is None:
         return "no_tradable_plan"
@@ -233,11 +257,26 @@ def select(inputs: Iterable[ShadowInput], *, scan_id: str, date: str, min_turnov
 
     budget = control_count
     keep = max(top_n or log_top_n(), budget)
+    # Common support = everything that clears the non-fundamental filters. Its
+    # fundamentals coverage is what provider throttling takes away from the shadow.
+    support = sum(1 for i in inputs if _exclusion(i, min_turnover_cr, need_fundamentals=False) is None)
+    coverage = {
+        "universe_real_fundamentals": sum(1 for i in inputs if i.fundamental_score_de_fixed is not None),
+        "support_ex_fundamentals": support,
+        "support_with_fundamentals": len(pool),
+        "support_coverage_pct": round(len(pool) / support * 100, 1) if support else None,
+    }
     run = ShadowRun(scan_id=scan_id, date=date, budget=budget, universe=len(inputs),
-                    eligible=len(pool), control_count=control_count, exclusions=exclusions)
-    for rank, (score, i, comps) in enumerate(scored[:keep], start=1):
-        run.picks.append(ShadowPick(symbol=i.symbol, rank=rank, score=score, selected=rank <= budget,
-                                    control_selected=i.control_selected, components=comps, inp=i))
+                    eligible=len(pool), control_count=control_count, exclusions=exclusions, coverage=coverage)
+    for rank, (score, i, comps) in enumerate(scored, start=1):
+        if rank <= keep or i.control_selected:
+            run.picks.append(ShadowPick(symbol=i.symbol, rank=rank, score=score, selected=rank <= budget,
+                                        control_selected=i.control_selected, components=comps, inp=i))
+    for i in inputs:
+        why = _exclusion(i, min_turnover_cr)
+        if i.control_selected and why:
+            run.picks.append(ShadowPick(symbol=i.symbol, rank=None, score=None, selected=False,
+                                        control_selected=True, components={}, inp=i, exclusion=why))
     return run
 
 
@@ -250,9 +289,9 @@ def run_lt_shadow(scan_id: str, date: str, records: list, fundamental_map: dict,
 
     write_run(run, config(min_turnover_cr))
     log.info(
-        "[LT-SHADOW] %s: universe=%d eligible=%d budget=%d shadow∩control=%d/%d excluded=%s",
+        "[LT-SHADOW] %s: universe=%d eligible=%d budget=%d shadow∩control=%d/%d excluded=%s coverage=%s",
         scan_id, run.universe, run.eligible, run.budget, run.overlap, run.control_count,
-        json.dumps(run.exclusions, sort_keys=True),
+        json.dumps(run.exclusions, sort_keys=True), json.dumps(run.coverage, sort_keys=True),
     )
     return run
 
@@ -264,7 +303,7 @@ def pick_row(run: ShadowRun, p: ShadowPick) -> dict[str, Any]:
         "score": p.score, "selected": int(p.selected), "control_selected": int(p.control_selected),
         "cmp": p.inp.cmp, "entry": p.inp.entry, "stop_loss": p.inp.stop_loss,
         "targets": json.dumps(p.inp.targets), "setup": p.inp.setup,
-        "components": json.dumps(p.components, sort_keys=True),
+        "components": json.dumps(p.components, sort_keys=True), "exclusion": p.exclusion,
         "inputs": json.dumps({k: v for k, v in inp.items()
                               if k not in ("symbol", "cmp", "entry", "stop_loss", "targets", "setup")},
                              sort_keys=True),

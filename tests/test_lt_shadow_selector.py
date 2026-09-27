@@ -55,9 +55,42 @@ def test_budget_matches_the_control_count():
     pool = _pool()
     run = ss.select(pool, scan_id="S", date="d", min_turnover_cr=1.0, top_n=30)
     assert run.control_count == run.budget == 8
-    assert len(run.selected) == 8 and len(run.picks) == 30
-    assert [p.rank for p in run.picks] == list(range(1, 31))
-    assert all(p.selected == (p.rank <= 8) for p in run.picks)
+    assert len(run.selected) == 8
+    top = [p for p in run.picks if p.rank is not None and p.rank <= 30]
+    assert [p.rank for p in top] == list(range(1, 31))
+    assert all(p.selected == (p.rank <= 8) for p in run.picks if p.rank is not None)
+    extra = [p for p in run.picks if p.rank is None or p.rank > 30]
+    assert extra and all(p.control_selected for p in extra)   # only control picks beyond the top-N
+
+
+def test_logging_extension_does_not_change_the_selection():
+    """Phase 4B only adds logged rows. The selected set must equal the plain score order."""
+    pool = _pool(60, seed=3)
+    run = ss.select(pool, scan_id="S", date="d", min_turnover_cr=1.0, top_n=30)
+    ranked = sorted((p for p in run.picks if p.rank is not None), key=lambda p: p.rank)
+    assert [p.rank for p in ranked] == sorted({p.rank for p in ranked})
+    assert [p.symbol for p in run.selected] == [p.symbol for p in ranked[: run.budget]]
+    assert all(ranked[k].score >= ranked[k + 1].score for k in range(len(ranked) - 1))
+
+
+def test_every_control_pick_is_logged_with_rank_or_exclusion():
+    pool = [_inp(f"NSE:G{i:02d}", 0.02 * i) for i in range(40)]
+    pool += [_inp("NSE:CTRL_LOW", 0.001, ctrl=True), _inp("NSE:CTRL_NOFUND", None, ctrl=True),
+             _inp("NSE:CTRL_ILLIQ", 0.9, ctrl=True, turnover=0.1)]
+    run = ss.select(pool, scan_id="S", date="d", min_turnover_cr=1.0, top_n=5)
+    by = {p.symbol: p for p in run.picks}
+    assert by["NSE:CTRL_LOW"].rank == 40 and by["NSE:CTRL_LOW"].exclusion is None
+    assert by["NSE:CTRL_NOFUND"].rank is None and by["NSE:CTRL_NOFUND"].exclusion == "no_real_fundamentals"
+    assert by["NSE:CTRL_ILLIQ"].exclusion == "illiquid"
+    assert run.budget == 3 and len(run.selected) == 3 and not any(by[s].selected for s in by if s.startswith("NSE:CTRL"))
+
+
+def test_coverage_measures_fundamentals_on_the_common_support():
+    pool = [_inp(f"NSE:F{i}", 0.5) for i in range(6)] + [_inp(f"NSE:N{i}", None) for i in range(4)]
+    pool += [_inp("NSE:ILLIQ", 0.5, turnover=0.1), _inp("NSE:ILLIQ_NOFUND", None, turnover=0.1)]
+    run = ss.select(pool, scan_id="S", date="d", min_turnover_cr=1.0)
+    assert run.coverage == {"universe_real_fundamentals": 7, "support_ex_fundamentals": 10,
+                            "support_with_fundamentals": 6, "support_coverage_pct": 60.0}
 
 
 def test_zero_control_selects_nothing_but_still_logs_the_ranking():
@@ -140,15 +173,18 @@ def tmp_db(monkeypatch, tmp_path):
 def test_persisted_run_carries_provenance_and_rerun_replaces(tmp_db, monkeypatch):
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
     run = ss.select(_pool(), scan_id="VAL-LONGTERM-2026-09-28-x", date="2026-09-28", min_turnover_cr=1.0, top_n=12)
-    assert store.write_run(run, ss.config(1.0)) == 12
-    assert store.write_run(run, ss.config(1.0)) == 12
+    assert store.write_run(run, ss.config(1.0)) == len(run.picks)
+    assert store.write_run(run, ss.config(1.0)) == len(run.picks)
     c = tmp_db()
     meta = dict(c.execute("SELECT * FROM lt_shadow_runs").fetchone())
     assert meta["selector_version"] == "lt-shadow-v1" and meta["git_sha"] == "abc123"
     assert meta["budget"] == 8 and meta["overlap"] == run.overlap
     assert json.loads(meta["config"])["weights"] == ss.WEIGHTS
-    rows = c.execute("SELECT * FROM lt_shadow_picks ORDER BY rank").fetchall()
+    rows = c.execute("SELECT * FROM lt_shadow_picks WHERE rank <= 12 ORDER BY rank").fetchall()
     assert len(rows) == 12 and sum(r["selected"] for r in rows) == 8
+    assert json.loads(meta["coverage"])["support_with_fundamentals"] == run.eligible
+    logged = c.execute("SELECT COUNT(*) FROM lt_shadow_picks").fetchone()[0]
+    assert logged == len(run.picks)
     inputs = json.loads(rows[0]["inputs"])
     assert {"fundamental_score_de_fixed", "fundamental_score_legacy", "debt_equity_ratio"} <= set(inputs)
 
@@ -279,3 +315,17 @@ def test_report_compares_shadow_and_control_on_shared_labels(tmp_db):
     assert fr["shadow"]["20d"]["mean_fwd"] == 7.0 and fr["control"]["20d"]["mean_fwd"] == 1.0
     assert fr["shadow"]["60d"]["n_labelled"] == 1 and fr["control"]["60d"]["n_labelled"] == 0
     assert rep["trigger_expiry_approx"]["control"]["triggered_5d_pct"] == 100.0
+    assert fr["control_shadow_eligible"]["20d"]["n"] == 2 and fr["control_shadow_ineligible"]["20d"]["n"] == 0
+    assert fr["control"]["20d"]["distinct_symbols"] == 2
+    assert rep["per_run"][0]["control_shadow_eligible"] == 2 and rep["per_run"][0]["coverage"] is None
+
+
+def test_config_snapshots_control_flags_from_an_allowlist(monkeypatch):
+    monkeypatch.setenv("EXCEPTIONALISM_ENABLED", "1")
+    monkeypatch.setenv("KITE_API_SECRET", "must-not-appear")
+    monkeypatch.delenv("FUND_DE_UNIT_FIX", raising=False)
+    cfg = ss.config(1.0)
+    assert cfg["control_env"]["EXCEPTIONALISM_ENABLED"] == "1"
+    assert cfg["control_env"]["FUND_DE_UNIT_FIX"] is None
+    assert "must-not-appear" not in json.dumps(cfg)
+    assert not any(w in k for k in ss.CONTROL_ENV_KEYS for w in ("SECRET", "TOKEN", "KEY", "PASSWORD"))

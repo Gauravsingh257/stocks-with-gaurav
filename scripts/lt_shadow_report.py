@@ -17,6 +17,12 @@ counts as triggered within N days when MAE_N reaches the entry; an entry at or a
 it counts as immediately triggered. "Expired" = not triggered within 5 trading days
 (~RESEARCH_REC_MAX_AGE_DAYS=7 calendar days). Exact fills need the intraday path.
 
+Common support: `control_shadow_eligible` is the control picks the shadow could
+rank (same liquidity/quality/plan filters AND real fundamentals that day). Shadow
+vs THAT group separates "ranks differently" from "could not see the stock";
+shadow vs the full control mixes the two. Fundamentals coverage is logged per
+run because provider throttling moves it day to day (see docs/LT_SHADOW_PHASE4A.md).
+
 Reports numbers only. It never changes a threshold, a weight or a flag — the
 calibration decision is made on the full sample, never on a handful of runs.
 """
@@ -38,7 +44,7 @@ WINDOWS = (20, 60)
 def _stats(rows: list[dict], w: int) -> dict:
     fwd = [r[f"fwd_{w}d_pct"] for r in rows if r.get(f"fwd_{w}d_pct") is not None]
     exc = [r[f"excess_{w}d_pct"] for r in rows if r.get(f"excess_{w}d_pct") is not None]
-    out = {"n": len(rows), "n_labelled": len(fwd)}
+    out = {"n": len(rows), "n_labelled": len(fwd), "distinct_symbols": len({r["symbol"] for r in rows})}
     if fwd:
         out |= {"mean_fwd": round(statistics.fmean(fwd), 2), "median_fwd": round(statistics.median(fwd), 2),
                 "hit_rate_pos": round(sum(1 for x in fwd if x > 0) / len(fwd) * 100, 1)}
@@ -78,7 +84,8 @@ FR = ("f.base_close, f.fwd_20d_pct, f.excess_20d_pct, f.fwd_60d_pct, f.excess_60
 
 def build_report(conn, since: str | None = None) -> dict:
     runs = _rows(conn, "SELECT * FROM lt_shadow_runs WHERE date >= ? ORDER BY date, scan_id", (since or "",))
-    groups: dict[str, list[dict]] = {"control": [], "shadow": [], "shadow_only": [], "control_only": [], "both": []}
+    groups: dict[str, list[dict]] = {"control": [], "shadow": [], "shadow_only": [], "control_only": [], "both": [],
+                                     "control_shadow_eligible": [], "control_shadow_ineligible": []}
     per_run, swing_overlap = [], {"shadow": 0, "control": 0}
     latest_diff: dict = {}
     for run in runs:
@@ -91,7 +98,11 @@ def build_report(conn, since: str | None = None) -> dict:
                              "WHERE p.scan_id = ? AND p.selected = 1", (sid,))
         swing = {r["symbol"] for r in _rows(conn, "SELECT DISTINCT symbol FROM signals_log WHERE horizon = 'SWING' "
                                                   "AND date = ? AND final_selected = 1", (d,))}
+        ranked = {r["symbol"] for r in _rows(conn, "SELECT symbol FROM lt_shadow_picks WHERE scan_id = ? "
+                                                   "AND control_selected = 1 AND rank IS NOT NULL", (sid,))}
         cs, ss_ = {r["symbol"] for r in control}, {r["symbol"] for r in shadow}
+        groups["control_shadow_eligible"] += [r for r in control if r["symbol"] in ranked]
+        groups["control_shadow_ineligible"] += [r for r in control if r["symbol"] not in ranked]
         groups["control"] += control
         groups["shadow"] += shadow
         groups["shadow_only"] += [r for r in shadow if r["symbol"] not in cs]
@@ -103,7 +114,8 @@ def build_report(conn, since: str | None = None) -> dict:
                         "control": len(cs), "shadow": len(ss_), "overlap": len(cs & ss_),
                         "jaccard": round(len(cs & ss_) / len(cs | ss_), 3) if cs | ss_ else None,
                         "swing_overlap_shadow": len(ss_ & swing), "swing_overlap_control": len(cs & swing),
-                        "swing_final_count": len(swing)})
+                        "swing_final_count": len(swing), "control_shadow_eligible": len(cs & ranked),
+                        "coverage": json.loads(run["coverage"]) if run.get("coverage") else None})
         latest_diff = {"scan_id": sid, "shadow_only": sorted(ss_ - cs), "control_only": sorted(cs - ss_)}
 
     n_ctrl, n_shad = len(groups["control"]), len(groups["shadow"])
