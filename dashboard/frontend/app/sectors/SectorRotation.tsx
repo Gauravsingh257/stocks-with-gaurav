@@ -178,15 +178,10 @@ export default function SectorRotation() {
     <div className={styles.page}>
       {header}
 
-      <div className={styles.benchBanner} aria-live="polite">
-        <span>Quadrants measured against <strong>{data.benchmark.label}</strong>.</span>
-        <span>{data.benchmark.description}</span>
-      </div>
-
       <div className={styles.status}>
         <span>
           <span className={styles.dot} style={{ background: f.status === "fresh" ? "var(--success)" : "var(--warning)" }} />
-          {data.timeframe_label} · as of the {longDate(data.as_of)} close
+          {data.timeframe_label} bars to the close on {longDate(data.as_of)}
           {data.week_partial ? " (week in progress)" : ""}
         </span>
         <span>Computed {writtenIst(data.written_at)}</span>
@@ -199,7 +194,11 @@ export default function SectorRotation() {
       <div className={styles.mainGrid}>
         <section className={styles.card}>
           <h2 className={styles.sectionTitle}>Rotation map · {data.benchmark.short}</h2>
-          <RotationMap sectors={sectors} selected={drawerOpen ? selected : null} onSelect={select}
+          <p className={styles.benchLine} aria-live="polite">
+            Quadrants measured against <strong>{data.benchmark.label}</strong>. {data.benchmark.description}
+          </p>
+          {/* Keyed on timeframe + benchmark so a new data set opens at the fitted view. */}
+          <RotationMap key={`${tf}-${bench}`} sectors={sectors} focus={drawerOpen ? selected : null} onOpen={select}
             benchmarkShort={data.benchmark.short} unitLabel={unit} />
           <div className={styles.mapNote}>
             <div className={styles.legend}>
@@ -247,10 +246,18 @@ export default function SectorRotation() {
       </section>
 
       <footer className={`${styles.card} ${styles.footer}`}>
-        <div className={styles.defs}>
-          {Object.entries(data.definitions).map(([k, v]) => (
-            <div key={k}><b>{DEF_LABEL[k] ?? k.replace(/_/g, " ")}:</b> {v}</div>
-          ))}
+        <details className={styles.howTo}>
+          <summary>How to read these metrics</summary>
+          <div className={styles.defs}>
+            {Object.entries(data.definitions).map(([k, v]) => (
+              <div key={k}><b>{DEF_LABEL[k] ?? k.replace(/_/g, " ")}:</b> {v}</div>
+            ))}
+          </div>
+        </details>
+        <div>
+          Data: NSE end-of-day prices via Zerodha Kite, for {data.market?.n_constituents ?? "every"} liquid
+          equities (average traded value of at least ₹1 Cr a day). Sector labels come from NSE&apos;s official
+          classification, manual assignments, or a data provider&apos;s industry field — see each sector&apos;s confidence.
         </div>
         <div>{data.disclaimer}</div>
       </footer>

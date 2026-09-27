@@ -253,7 +253,7 @@ export function RunningTradesMonitor({ items }: Props) {
           )}
         </div>
         <div style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>
-          Auto-refreshes every 5 min · Prices from NSE via yfinance
+          Auto-refreshes every 5 min · Prices via Zerodha Kite in market hours, Yahoo Finance otherwise
         </div>
       </div>
 

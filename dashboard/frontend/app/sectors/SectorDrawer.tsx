@@ -92,7 +92,7 @@ export default function SectorDrawer({ sector, data, onClose }: {
         <div className={styles.metaLine}>
           <b>Benchmark:</b> {bench.label}. {bench.description}
           <br />
-          <b>Data:</b> {data.timeframe_label} bars, as of the {longDate(sector.as_of)} close
+          <b>Data:</b> {data.timeframe_label.toLowerCase()} bars to the close on {longDate(sector.as_of)}
           {sector.partial ? " (week in progress)" : ""} · computed {writtenIst(sector.written_at)}
         </div>
 
