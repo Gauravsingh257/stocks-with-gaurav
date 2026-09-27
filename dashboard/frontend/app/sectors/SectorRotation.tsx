@@ -18,6 +18,19 @@ type LoadState = "loading" | "ready" | "error" | "disabled";
 
 const TRAILS = [5, 10, 20];
 
+const DEF_LABEL: Record<string, string> = {
+  rs_ratio: "Relative strength",
+  rs_momentum: "Momentum",
+  rs_accel: "Acceleration",
+  pct_above: "Breadth",
+  new_highs_52w: "52-week highs / lows",
+  vol_ratio: "Volume participation",
+  up_turnover_pct: "Up-day traded value",
+  dispersion: "Dispersion",
+  confidence: "Confidence",
+  provider_share: "Provider share",
+};
+
 function Segmented<T extends string | number>({ label, value, options, onChange }: {
   label: string;
   value: T;
@@ -236,7 +249,7 @@ export default function SectorRotation() {
       <footer className={`${styles.card} ${styles.footer}`}>
         <div className={styles.defs}>
           {Object.entries(data.definitions).map(([k, v]) => (
-            <div key={k}><b>{k.replace(/_/g, " ")}:</b> {v}</div>
+            <div key={k}><b>{DEF_LABEL[k] ?? k.replace(/_/g, " ")}:</b> {v}</div>
           ))}
         </div>
         <div>{data.disclaimer}</div>

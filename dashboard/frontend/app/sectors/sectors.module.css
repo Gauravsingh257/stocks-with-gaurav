@@ -269,13 +269,13 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
-  min-width: 860px;
-  font-size: 0.8rem;
+  min-width: 820px;
+  font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
 }
 .table th,
 .table td {
-  padding: 8px 10px;
+  padding: 7px 8px;
   text-align: right;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -327,14 +327,13 @@
   gap: 5px;
   font-size: 0.7rem;
   font-weight: 800;
-  text-transform: capitalize;
 }
 
 .overlay {
   position: fixed;
   inset: 0;
   background: rgba(2, 6, 23, 0.45);
-  z-index: 60;
+  z-index: 1000;
 }
 .drawer {
   position: fixed;
@@ -344,7 +343,7 @@
   width: min(460px, 100vw);
   background: var(--bg-surface);
   border-left: 1px solid var(--border);
-  z-index: 61;
+  z-index: 1001;
   overflow-y: auto;
   padding: 18px 18px calc(24px + env(safe-area-inset-bottom, 0px));
   display: grid;

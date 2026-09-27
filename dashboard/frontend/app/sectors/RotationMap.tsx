@@ -75,23 +75,34 @@ export default function RotationMap({ sectors, selected, onSelect, benchmarkShor
   // Draw the selected sector last so it sits on top.
   const ordered = [...plot].sort((a, b) => Number(a.sector === selected) - Number(b.sector === selected));
 
-  const placed: [number, number, number, number][] = [];
+  // Labels avoid every sector's head dot as well as each other: try right, then
+  // left, at increasing vertical offsets; fall back to the first slot.
+  type Box = [number, number, number, number];
+  const r0 = compact ? 5 : 7;
+  const placed: Box[] = plot.map((s) => {
+    const t = s.trail[s.trail.length - 1];
+    const x = sx(t.rs_ratio);
+    const y = sy(t.rs_momentum);
+    return [x - r0, y - r0, x + r0, y + r0];
+  });
   const labelFor = (s: SectorRotationRow, hx: number, hy: number) => {
     if (compact && selected !== s.sector) return null;
-    const tw = s.sector.length * (compact ? 5.6 : 6.6) + 4;
-    const anchor: "start" | "end" = hx + 10 + tw > W - m.r ? "end" : "start";
-    const lx = anchor === "start" ? hx + 10 : hx - 10;
-    let ly = hy + 4;
-    const box = (): [number, number, number, number] =>
-      anchor === "start" ? [lx, ly - fs, lx + tw, ly + 2] : [lx - tw, ly - fs, lx, ly + 2];
-    const hit = (b: [number, number, number, number]) =>
-      placed.some((p) => !(b[2] < p[0] || b[0] > p[2] || b[3] < p[1] || b[1] > p[3]));
-    for (const off of [0, 13, -13, 25, -25]) {
-      ly = hy + 4 + off;
-      if (!hit(box())) break;
-    }
-    placed.push(box());
-    return { lx, ly, anchor };
+    const tw = s.sector.length * (compact ? 5.6 : 6.4) + 4;
+    const own: Box = [hx - r0, hy - r0, hx + r0, hy + r0];
+    const hit = (b: Box) => placed.some((p) => p !== own && !(p[0] === own[0] && p[1] === own[1])
+      && !(b[2] < p[0] || b[0] > p[2] || b[3] < p[1] || b[1] > p[3]));
+    const slot = (anchor: "start" | "end", off: number) => {
+      const lx = anchor === "start" ? hx + 9 : hx - 9;
+      const ly = hy + 4 + off;
+      const box: Box = anchor === "start" ? [lx, ly - fs, lx + tw, ly + 2] : [lx - tw, ly - fs, lx, ly + 2];
+      const inside = box[0] >= m.l && box[2] <= W - m.r && box[1] >= m.t && box[3] <= H - m.b;
+      return { lx, ly, anchor, box, ok: inside && !hit(box) };
+    };
+    const tries: ["start" | "end", number][] = [];
+    for (const off of [0, -12, 12, -22, 22, -32, 32]) tries.push(["start", off], ["end", off]);
+    const chosen = tries.map(([a, o]) => slot(a, o)).find((c) => c.ok) ?? slot(hx + tw > W - m.r ? "end" : "start", 0);
+    placed.push(chosen.box);
+    return { lx: chosen.lx, ly: chosen.ly, anchor: chosen.anchor };
   };
 
   const quadRects = [
