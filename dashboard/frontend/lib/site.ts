@@ -20,6 +20,7 @@ export const indexableRoutes = [
   "/",
   "/research",
   "/research/track-record",
+  "/sectors",
   "/universe",
 ];
 

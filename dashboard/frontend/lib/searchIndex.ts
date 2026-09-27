@@ -163,6 +163,7 @@ export function buildSearchPages(portfolioHref: string): PageEntry[] {
     { href: "/terminal", label: "Terminal", section: "Home", keywords: "signals live trades engine" },
     { href: "/research", label: "AI Research", section: "Research", keywords: "research ideas analyze discovery swing long term final trade ideas" },
     { href: "/screeners", label: "Screeners", section: "Research", keywords: "scanner scanners supertrend sector rotation" },
+    { href: "/sectors", label: "Sector Rotation", section: "Research", keywords: "sectors rotation relative strength momentum breadth leading lagging improving weakening" },
     { href: "/universe", label: "Stock Universe", section: "Research", keywords: "all stocks fundamentals pe roe debt sectors list" },
     { href: "/research/track-record", label: "Ideas Track Record", section: "Research", keywords: "published ideas outcomes hit rate history" },
     { href: "/watchlist", label: "Watchlist", section: "You", keywords: "alerts monitor saved" },

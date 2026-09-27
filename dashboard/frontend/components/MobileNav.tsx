@@ -13,7 +13,7 @@ const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 const ITEMS = [
   { href: "/command", label: "Home", icon: Home },
   { href: "/terminal", label: "Terminal", icon: Sparkles },
-  { href: "/research", label: "Research", icon: Bot, match: ["/research", "/screeners"] },
+  { href: "/research", label: "Research", icon: Bot, match: ["/research", "/screeners", "/sectors", "/universe"] },
   { href: "/watchlist", label: "Watchlist", icon: Bookmark, auth: true },
   ...(PIL_ENABLED
     ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]

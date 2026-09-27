@@ -17,7 +17,7 @@ import {
   MAP_VARIANTS, QUAD_COLOR, QUAD_LABEL, fetchRotation, fetchSectorStatus, plottable,
 } from "@/lib/sectorRotationServer";
 
-const HREF = "/sectors?preview=1";
+const HREF = "/sectors";
 const ORDER: SectorQuadrant[] = ["leading", "improving", "weakening", "lagging"];
 
 export default async function SectorRotationWidget({ fallback }: { fallback: ReactNode }) {

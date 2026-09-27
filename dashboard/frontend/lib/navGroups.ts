@@ -8,6 +8,7 @@ import type { SectionTab } from "@/components/SectionTabs";
 export const RESEARCH_TABS: SectionTab[] = [
   { href: "/research", label: "AI Research" },
   { href: "/screeners", label: "Screeners" },
+  { href: "/sectors", label: "Sector Rotation" },
   { href: "/universe", label: "Stock Universe" },
 ];
 

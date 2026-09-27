@@ -21,7 +21,7 @@ type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boo
 const NAV: NavItem[] = [
   { href: "/command",         label: "Command Center", icon: Home },
   { href: "/terminal",        label: "Terminal",  icon: Sparkles },
-  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners", "/universe"] },
+  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners", "/sectors", "/universe"] },
   { href: "/watchlist",       label: "Watchlist", icon: Bookmark, auth: true },
   ...(PIL_ENABLED
     ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
