@@ -1,0 +1,69 @@
+name: backend-ci
+
+# Runs the FULL backend suite (no -x) and compares the result with the explicit
+# known-failure baseline in tests/known_failures.txt — see scripts/ci_test_baseline.py.
+# Pre-existing failures are listed, not skipped: CI fails on any NEW failure and on
+# any listed failure that starts passing (so the list has to be kept exact).
+#
+# Excluded on purpose, by marker, because they need credentials or live market data
+# that CI does not have: `integration` and `live` (see pyproject.toml markers).
+
+on:
+  pull_request:
+    paths:
+      - "**.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "tests/**"
+      - ".github/workflows/backend-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "tests/**"
+      - ".github/workflows/backend-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-railway.txt
+            requirements-engine.txt
+
+      - name: Install production dependency sets + test tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-railway.txt -r requirements-engine.txt pytest pytest-asyncio pytest-mock
+
+      - name: Run full suite (no -x, collection errors reported)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest -o addopts="" -q -rfE -p no:cacheprovider \
+            --continue-on-collection-errors -m "not integration and not live" \
+            2>&1 | tee pytest-output.txt
+
+      - name: Compare with known-failure baseline
+        run: python scripts/ci_test_baseline.py pytest-output.txt tests/known_failures.txt
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.txt

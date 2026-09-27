@@ -1,0 +1,6 @@
+# Backend tests that fail on `main` and pre-date backend CI (added 2026-09-27).
+#
+# One pytest node id per line, with the reason as a trailing comment. These are
+# NOT skipped — they run on every CI build. scripts/ci_test_baseline.py fails CI
+# on any failure missing from this list AND on any entry here that starts
+# passing, so this file must always be exact. Fixing one = delete its line.
