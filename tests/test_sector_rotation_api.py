@@ -125,8 +125,9 @@ def test_routes_404_when_flag_off(client, monkeypatch):
     monkeypatch.delenv("SECTOR_ROTATION_API_ENABLED", raising=False)
     assert c.get("/api/sectors/rotation").status_code == 404
     assert c.get("/api/sectors/constituents?sector=IT").status_code == 404
+    monkeypatch.setenv("SECTOR_ROTATION_HOMEPAGE_ENABLED", "1")  # needs the API flag too
     st = c.get("/api/sectors/status").json()
-    assert st == {"api_enabled": False, "page_public": False}
+    assert st == {"api_enabled": False, "page_public": False, "homepage_widget": False}
 
 
 def test_rotation_route_serves_and_caches(client, monkeypatch):
@@ -159,3 +160,12 @@ def test_constituents_route_reads_stock_universe(client, monkeypatch):
     d = c.get("/api/sectors/constituents?sector=IT").json()
     assert [i["symbol"] for i in d["items"]] == ["INFY", "TINYIT"]
     assert [i["liquid"] for i in d["items"]] == [True, False]
+
+
+def test_homepage_widget_flag(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setenv("SECTOR_ROTATION_API_ENABLED", "1")
+    monkeypatch.delenv("SECTOR_ROTATION_HOMEPAGE_ENABLED", raising=False)
+    assert c.get("/api/sectors/status").json()["homepage_widget"] is False
+    monkeypatch.setenv("SECTOR_ROTATION_HOMEPAGE_ENABLED", "1")
+    assert c.get("/api/sectors/status").json()["homepage_widget"] is True

@@ -745,6 +745,100 @@ body {
   }
 }
 
+/* ── Homepage sector rotation widget (Phase 3) ───────────────
+   Reuses the hero card (.public-product-visual) and its preview-* pieces. */
+.sr-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.sr-widget:hover {
+  border-color: rgba(0, 212, 255, 0.45);
+  box-shadow: 0 34px 80px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(0, 212, 255, 0.12);
+}
+.sr-widget:focus-visible {
+  outline: 2px solid #00d4ff;
+  outline-offset: 3px;
+}
+.sr-widget-title {
+  margin-top: -4px;
+  color: #f8fbff;
+  font-size: 1.12rem;
+  font-weight: 850;
+}
+.sr-widget-map {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(4, 9, 18, 0.6);
+}
+.sr-widget-map svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.sr-map-phone {
+  display: none;
+}
+@media (max-width: 560px) {
+  .sr-map-wide {
+    display: none;
+  }
+  .sr-map-phone {
+    display: block;
+  }
+}
+.preview-grid.sr-widget-quads {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 0;
+}
+.sr-widget-quads span {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.sr-widget-quads strong {
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.sr-widget-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  color: #7f8da5;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+.sr-widget-cta {
+  color: #00d4ff;
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.sr-stale {
+  color: #ffb020;
+}
+@media (max-width: 640px) {
+  .sr-widget .preview-topline {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+@media (max-width: 900px) {
+  .preview-grid.sr-widget-quads {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sr-widget-foot {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 /* ── Scrollbar ─────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: var(--bg-base); }

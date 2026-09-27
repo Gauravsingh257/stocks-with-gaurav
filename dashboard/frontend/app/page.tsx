@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { site } from "@/lib/site";
 import PilHomeRedirect from "@/components/PilHomeRedirect";
+import SectorRotationWidget from "@/components/SectorRotationWidget";
 
 export const metadata: Metadata = {
   title: "Educational SMC Research for NSE Traders",
@@ -96,26 +97,8 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="public-product-visual" aria-label="Dashboard preview">
-          <div className="preview-topline">
-            <span>LIVE TERMINAL</span>
-            <span className="preview-live-dot">Engine-linked</span>
-          </div>
-          <div className="preview-chart">
-            <div className="preview-zone zone-a" />
-            <div className="preview-zone zone-b" />
-            <svg viewBox="0 0 640 260" role="img" aria-label="Market structure preview">
-              <path d="M26 207 C84 184 107 222 160 181 S235 97 288 126 S384 194 431 141 S516 52 612 75" />
-              <circle cx="160" cy="181" r="6" />
-              <circle cx="431" cy="141" r="6" />
-            </svg>
-          </div>
-          <div className="preview-grid">
-            <PreviewMetric label="Discovery" value="Quality checked" />
-            <PreviewMetric label="Watchlist" value="Near entry" />
-            <PreviewMetric label="Final review" value="Risk mapped" />
-          </div>
-        </div>
+        {/* Sector rotation overview when available; the original preview otherwise. */}
+        <SectorRotationWidget fallback={<HeroPreview />} />
       </section>
 
       <section className="public-stats" aria-label="Platform summary">
@@ -177,6 +160,32 @@ export default function Home() {
         </div>
       </footer>
     </main>
+  );
+}
+
+/** The original hero visual — shown whenever the sector widget is off or its data is unavailable. */
+function HeroPreview() {
+  return (
+    <div className="public-product-visual" aria-label="Dashboard preview">
+      <div className="preview-topline">
+        <span>LIVE TERMINAL</span>
+        <span className="preview-live-dot">Engine-linked</span>
+      </div>
+      <div className="preview-chart">
+        <div className="preview-zone zone-a" />
+        <div className="preview-zone zone-b" />
+        <svg viewBox="0 0 640 260" role="img" aria-label="Market structure preview">
+          <path d="M26 207 C84 184 107 222 160 181 S235 97 288 126 S384 194 431 141 S516 52 612 75" />
+          <circle cx="160" cy="181" r="6" />
+          <circle cx="431" cy="141" r="6" />
+        </svg>
+      </div>
+      <div className="preview-grid">
+        <PreviewMetric label="Discovery" value="Quality checked" />
+        <PreviewMetric label="Watchlist" value="Near entry" />
+        <PreviewMetric label="Final review" value="Risk mapped" />
+      </div>
+    </div>
   );
 }
 
