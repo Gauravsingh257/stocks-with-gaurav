@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, type SectorConstituentsResponse, type SectorRotationResponse, type SectorRotationRow } from "@/lib/api";
 import {
   QUADRANT_HINT, QUADRANT_LABEL, QUADRANT_VAR, SOURCE_LABEL, crore, longDate, num, pct, signed, writtenIst,
@@ -67,8 +68,11 @@ export default function SectorDrawer({ sector, data, onClose }: {
       note: "The same reading using only stocks whose sector comes from NSE or a manual assignment." });
   }
 
-  return (
-    <>
+  // Portalled to <body>: the dashboard shell wraps page content in a z-[2]
+  // stacking context, which would otherwise keep the drawer under the fixed
+  // mobile navigation (z-50) whatever z-index the drawer declares.
+  return createPortal(
+    <div className={styles.page}>
       <div className={styles.overlay} onClick={onClose} aria-hidden="true" />
       <aside className={styles.drawer} role="dialog" aria-modal="true" aria-labelledby="sector-drawer-title">
         <div className={styles.drawerHead}>
@@ -144,6 +148,7 @@ export default function SectorDrawer({ sector, data, onClose }: {
           )}
         </div>
       </aside>
-    </>
+    </div>,
+    document.body,
   );
 }
