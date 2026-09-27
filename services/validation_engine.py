@@ -1188,6 +1188,21 @@ async def run_validation_scan(
         except Exception as exc:
             log.warning("signals_log write failed for %s: %s", scan_id, exc)
 
+    # PHASE 4A — Long-Term shadow selector. Reads the finished records (never
+    # mutates them) and writes only to lt_shadow_*; nothing downstream reads
+    # those tables. Flag OFF ⟹ nothing runs. Any failure is logged and dropped.
+    # Live scans only (as_of is None): fundamentals are not point-in-time, so a
+    # historical/backtest scan would score past dates with today's numbers.
+    if log_scan and horizon == "LONGTERM" and as_of is None:
+        try:
+            from services.lt_shadow_selector import lt_shadow_enabled, run_lt_shadow
+
+            if lt_shadow_enabled():
+                run_lt_shadow(scan_id, as_of_label, records, fundamental_map, min_turnover_cr,
+                              smc_score_of=lambda r: _smc_score(r.smc, "LONGTERM"))
+        except Exception as exc:
+            log.warning("[LT-SHADOW] skipped for %s: %s", scan_id, exc)
+
     sig_total = len(selected) + len(watchlist) + len(discovery)
     reason_empty = ""
     if sig_total == 0:
