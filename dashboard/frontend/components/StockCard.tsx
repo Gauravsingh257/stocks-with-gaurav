@@ -1,5 +1,6 @@
 "use client";
 
+import { recommendationText } from "@/lib/displayLabels";
 import Link from "next/link";
 import { useMemo } from "react";
 import type { StockAnalysis } from "@/lib/api";
@@ -95,7 +96,7 @@ export default function StockCard({
             </span>
           )}
           <span style={{ fontSize: "0.7rem", padding: "3px 9px", borderRadius: 999, background: colors.bg, color: colors.fg, border: `1px solid ${colors.border}`, fontWeight: 800 }}>
-            {badgeLabel}
+            {recommendationText(badgeLabel)}
           </span>
         </div>
       </div>

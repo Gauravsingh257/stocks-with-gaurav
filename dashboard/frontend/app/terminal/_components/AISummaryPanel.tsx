@@ -7,6 +7,7 @@
  * with their probability + quality + RR.
  */
 
+import { directionText } from "@/lib/displayLabels";
 import { motion } from "framer-motion";
 import { Brain, Target, TrendingUp, TrendingDown, Activity } from "lucide-react";
 import type { AISummaryPayload, SummaryCard } from "../_lib/useTerminalSummary";
@@ -171,7 +172,7 @@ function TopTradeChip({ trade, rank, onClick }: { trade: SummaryCard; rank: numb
               letterSpacing: 0.6,
             }}
           >
-            {trade.direction}
+            {directionText(trade.direction)}
           </span>
           <span
             style={{
