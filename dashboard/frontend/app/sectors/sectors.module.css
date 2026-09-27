@@ -504,7 +504,9 @@
   color: var(--text-secondary);
 }
 
-@media (max-width: 980px) {
+/* The dashboard sidebar takes ~256px, so two columns only fit from ~1200px:
+   at 1024px they squeezed the map to ~350px and it lost its labels. */
+@media (max-width: 1200px) {
   .mainGrid {
     grid-template-columns: minmax(0, 1fr);
   }
