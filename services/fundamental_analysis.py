@@ -172,6 +172,52 @@ def _norm_debt_equity(de: float | None) -> float:
     return _clamp01(1.0 - (de / 4.0))
 
 
+# ---------------------------------------------------------------------------
+# Debt/equity units
+# ---------------------------------------------------------------------------
+# The provider reports `debtToEquity` as a PERCENT for NSE names, always:
+# INFY 9.541 = 0.095x (debt-free), TCS 10.211 = 0.10x, TITAN 195.0 = 1.95x.
+# scripts/refresh_stock_universe.py was corrected for this; the scoring path
+# here still carried the old "divide only when > 10" rule, which leaves every
+# company with a TRUE D/E below 0.10x reading as 0.1x-10x leverage — the least
+# indebted names scored as some of the most indebted (INFY: debt_quality 0.0).
+#
+# Correcting it changes `fundamental_score`, which both books rank on, so the
+# corrected value only reaches live scoring behind FUND_DE_UNIT_FIX (default
+# OFF = legacy behaviour, byte-identical). The corrected score is ALWAYS
+# computed alongside (`fundamental_score_de_fixed`) so the Long-Term shadow
+# selector and the impact report can use it without touching live ranking.
+
+def debt_equity_ratio(provider_value) -> float | None:
+    """Provider `debtToEquity` (a percent) → D/E as a ratio. 9.541 → 0.09541."""
+    de = _num(provider_value)
+    return None if de is None else de / 100.0
+
+
+def legacy_debt_equity(provider_value) -> float | None:
+    """The pre-fix conversion, kept verbatim as the live default until the flag flips."""
+    de = _num(provider_value)
+    if de is not None and de > 10:
+        de = de / 100.0
+    return de
+
+
+def de_unit_fix_enabled() -> bool:
+    return os.getenv("FUND_DE_UNIT_FIX", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _composite(earnings: float, revenue: float, sector: float, inst: float, promoter: float,
+               delivery: float, roe_score: float, debt_score: float) -> tuple[float, float]:
+    """(management_quality, fundamental_score) from the normalised components."""
+    mgmt = _clamp01((roe_score + debt_score) / 2)
+    score = _weighted_score([
+        (earnings, 0.14), (revenue, 0.14), (sector, 0.10), (inst, 0.10),
+        (promoter, 0.08), (delivery, 0.08), (roe_score, 0.12),
+        (roe_score, 0.10), (debt_score, 0.08), (mgmt, 0.06),
+    ])
+    return mgmt, score
+
+
 def _norm_promoter(pct: float | None) -> float:
     """50%+ is high promoter; 25% is low."""
     pct = _num(pct)
@@ -222,10 +268,9 @@ def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
 
     rev_g = _num(info.get("revenueGrowth"))
     earn_g = _num(info.get("earningsGrowth"))
-    de = _num(info.get("debtToEquity"))  # can be in %, e.g. 45.3 means 0.453
-    # yfinance sometimes gives debtToEquity as 45.3 (%) instead of 0.453
-    if de is not None and de > 10:
-        de = de / 100.0
+    de_provider = _num(info.get("debtToEquity"))  # a percent: 45.3 means 0.453x
+    de_fixed = debt_equity_ratio(de_provider)
+    de = de_fixed if de_unit_fix_enabled() else legacy_debt_equity(de_provider)
 
     promoter_pct = (_num(info.get("heldPercentInsiders")) or 0.0) * 100
     inst_pct = (_num(info.get("heldPercentInstitutions")) or 0.0) * 100
@@ -247,14 +292,12 @@ def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
 
     # delivery_volume_trend & management_quality: use available proxies
     delivery = _clamp01((earnings + revenue) / 2)
-    mgmt = _clamp01((roe_score + debt_score) / 2)
     lt_growth = _weighted_score([(earnings, 0.4), (revenue, 0.3), (sector, 0.3)])
 
-    score = _weighted_score([
-        (earnings, 0.14), (revenue, 0.14), (sector, 0.10), (inst_score, 0.10),
-        (promoter_score, 0.08), (delivery, 0.08), (roce_score, 0.12),
-        (roe_score, 0.10), (debt_score, 0.08), (mgmt, 0.06),
-    ])
+    parts = (earnings, revenue, sector, inst_score, promoter_score, delivery, roe_score)
+    mgmt, score = _composite(*parts, debt_score)
+    debt_fixed = _norm_debt_equity(de_fixed)
+    mgmt_fixed, score_fixed = _composite(*parts, debt_fixed)
 
     return FundamentalSnapshot(
         symbol=symbol,
@@ -284,6 +327,11 @@ def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
         sector=info.get("sector"),
         industry=info.get("industry"),
         data_source="yfinance",
+        raw_debt_equity_provider=de_provider,
+        debt_equity_ratio=round(de_fixed, 4) if de_fixed is not None else None,
+        debt_quality_de_fixed=debt_fixed,
+        management_quality_de_fixed=mgmt_fixed,
+        fundamental_score_de_fixed=score_fixed,
     )
 
 
@@ -324,6 +372,11 @@ def _fetch_snapshot(symbol: str) -> "FundamentalSnapshot":
         # These were previously dropped on write, which is why the cached snapshot
         # could never answer "what sector is this".
         "sector": snap.sector, "industry": snap.industry,
+        "raw_debt_equity_provider": snap.raw_debt_equity_provider,
+        "debt_equity_ratio": snap.debt_equity_ratio,
+        "debt_quality_de_fixed": snap.debt_quality_de_fixed,
+        "management_quality_de_fixed": snap.management_quality_de_fixed,
+        "fundamental_score_de_fixed": snap.fundamental_score_de_fixed,
     })
     return snap
 
@@ -361,6 +414,15 @@ class FundamentalSnapshot:
     sector: str | None = None
     industry: str | None = None
     data_source: str = "hash"
+    # Debt/equity with the corrected (always-percent) unit. Computed for every
+    # real snapshot regardless of FUND_DE_UNIT_FIX; read only by the Long-Term
+    # shadow selector and the impact report, never by live ranking. None for
+    # hash snapshots and for cache entries written before these fields existed.
+    raw_debt_equity_provider: float | None = None
+    debt_equity_ratio: float | None = None
+    debt_quality_de_fixed: float | None = None
+    management_quality_de_fixed: float | None = None
+    fundamental_score_de_fixed: float | None = None
 
     def as_factors(self) -> dict[str, Any]:
         return {
