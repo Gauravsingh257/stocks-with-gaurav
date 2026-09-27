@@ -40,9 +40,32 @@ def _load_cache(symbol: str) -> dict | None:
 def _save_cache(symbol: str, payload: dict) -> None:
     try:
         payload["_ts"] = time.time()
-        _cache_path(symbol).write_text(json.dumps(payload))
+        path = _cache_path(symbol)
+        text = json.dumps(payload)
+        try:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(text)
+            os.replace(tmp, path)  # atomic: a concurrent reader never sees a half-written file
+        except OSError:
+            path.write_text(text)  # e.g. Windows, where "NSE:X" names are alternate streams
     except Exception:
         pass
+
+
+def cache_age_hours(symbol: str) -> float | None:
+    """Age of the cached snapshot in hours, or None when there is none."""
+    try:
+        return (time.time() - json.loads(_cache_path(symbol).read_text()).get("_ts", 0)) / 3600
+    except Exception:
+        return None
+
+
+def coverage_fix_enabled() -> bool:
+    """FUND_COVERAGE_FIX — never cache a FAILED provider request (rate limit, crumb,
+    HTTP/timeout) as if it were "no fundamentals". Default OFF = legacy behaviour,
+    where a failure was cached as a hash snapshot for FUNDAMENTALS_CACHE_TTL_H and
+    so hid real data for the whole day. See services/fundamentals_prewarm.py."""
+    return os.getenv("FUND_COVERAGE_FIX", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +269,20 @@ def _yf_symbol(nse_symbol: str) -> str:
     return s
 
 
+class FetchFailed(dict):
+    """An empty `info` that records WHY the request failed.
+
+    It is still an empty dict, so every existing caller treats it exactly as
+    before; only code that asks (`fetch_status`) can tell a failed request —
+    rate limit, expired crumb, HTTP error, timeout — from a symbol the provider
+    genuinely has no fundamentals for.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__()
+        self.reason = reason
+
+
 def _fetch_yf_info(symbol: str) -> dict:
     """Fetch .info from yfinance with a lightweight timeout guard."""
     try:
@@ -255,7 +292,17 @@ def _fetch_yf_info(symbol: str) -> dict:
         return info
     except Exception as exc:
         log.debug("yfinance .info failed for %s: %s", symbol, exc)
-        return {}
+        return FetchFailed(type(exc).__name__)
+
+
+def fetch_status(info: dict) -> str:
+    """"ok" (real fundamentals) · "empty" (provider answered, no fundamentals) ·
+    "transient" (the request failed, or returned no payload at all)."""
+    if isinstance(info, FetchFailed) or not info:
+        return "transient"
+    if info.get("trailingPE") or info.get("returnOnEquity") or info.get("revenueGrowth"):
+        return "ok"
+    return "empty"
 
 
 def _build_snapshot_from_info(symbol: str, info: dict) -> "FundamentalSnapshot":
@@ -342,8 +389,19 @@ def _fetch_snapshot(symbol: str) -> "FundamentalSnapshot":
             return FundamentalSnapshot(**{k: v for k, v in cached.items() if k != "_ts"})
         except Exception:
             pass
+    return refresh_snapshot(symbol)[0]
 
-    info = _fetch_yf_info(symbol)
+
+def refresh_snapshot(symbol: str) -> tuple[FundamentalSnapshot, str]:
+    """Fetch from the provider (ignoring the cache), cache the result, return
+    (snapshot, fetch_status). With FUND_COVERAGE_FIX on, a TRANSIENT failure is
+    returned as the usual hash placeholder but is NOT cached, so the next caller
+    retries instead of inheriting the failure for FUNDAMENTALS_CACHE_TTL_H."""
+    return _save_snapshot_from_info(symbol, _fetch_yf_info(symbol))
+
+
+def _save_snapshot_from_info(symbol: str, info: dict) -> tuple[FundamentalSnapshot, str]:
+    status = fetch_status(info)
     has_data = bool(info.get("trailingPE") or info.get("returnOnEquity") or info.get("revenueGrowth"))
 
     if has_data:
@@ -351,6 +409,9 @@ def _fetch_snapshot(symbol: str) -> "FundamentalSnapshot":
     else:
         log.debug("yfinance returned no fundamentals for %s — using hash fallback", symbol)
         snap = _hash_snapshot(symbol)
+
+    if status == "transient" and coverage_fix_enabled():
+        return snap, status
 
     _save_cache(symbol, {
         "symbol": snap.symbol, "earnings_growth": snap.earnings_growth,
@@ -378,7 +439,7 @@ def _fetch_snapshot(symbol: str) -> "FundamentalSnapshot":
         "management_quality_de_fixed": snap.management_quality_de_fixed,
         "fundamental_score_de_fixed": snap.fundamental_score_de_fixed,
     })
-    return snap
+    return snap, status
 
 
 # ---------------------------------------------------------------------------
