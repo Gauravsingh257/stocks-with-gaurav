@@ -1,5 +1,6 @@
 "use client";
 
+import { actionText } from "@/lib/displayLabels";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, Sparkles, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
@@ -603,7 +604,7 @@ function BestTradeChip({ trade }: { trade: BestTrade }) {
             whiteSpace: "nowrap",
           }}
         >
-          {trade.action}
+          {actionText(trade.action)}
         </span>
       )}
       {trade.rr != null && (

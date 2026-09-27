@@ -3,10 +3,12 @@
 /**
  * DecisionBadge — Phase 4 Decision Engine output.
  *
- * Renders the trade action (STRONG BUY / BUY / WATCH / AVOID) with
- * a conviction pill. This is the headline output of the engine.
+ * Renders the setup-quality tier (internal STRONG BUY / BUY / WATCH / AVOID,
+ * shown to users as TOP SETUP / QUALIFIED / MONITOR / LOW QUALITY via
+ * lib/displayLabels — the site is analytics, not advice) with a conviction pill.
  */
 
+import { actionText } from "@/lib/displayLabels";
 import type { ActionLabel, ConvictionLevel } from "../_lib/opportunity";
 
 interface Props {
@@ -81,7 +83,7 @@ export default function DecisionBadge({ action, conviction, size = "md" }: Props
         }}
       >
         <span style={{ fontSize: isMd ? "0.85rem" : "0.72rem" }}>{a.icon}</span>
-        {action}
+        {actionText(action)}
       </span>
 
       {/* Conviction pill */}

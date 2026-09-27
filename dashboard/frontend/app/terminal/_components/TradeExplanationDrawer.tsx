@@ -1,5 +1,6 @@
 "use client";
 
+import { directionText } from "@/lib/displayLabels";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, X, AlertTriangle, XCircle, ArrowUpRight, ArrowDownRight, Layers, Activity, Target } from "lucide-react";
 import MiniChart from "./MiniChart";
@@ -124,7 +125,7 @@ function Header({ opp, onClose }: { opp: Opportunity; onClose: () => void }) {
               letterSpacing: 0.5,
             }}
           >
-            <DirIcon size={12} /> {opp.direction}
+            <DirIcon size={12} /> {directionText(opp.direction)}
           </span>
         </div>
         <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginTop: 4, letterSpacing: 0.4 }}>

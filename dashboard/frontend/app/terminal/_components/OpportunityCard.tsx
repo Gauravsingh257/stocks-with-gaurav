@@ -1,5 +1,6 @@
 "use client";
 
+import { directionText } from "@/lib/displayLabels";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowDownRight, ArrowUpRight, Bookmark, Check, ShieldCheck, Sparkles, Zap } from "lucide-react";
@@ -135,7 +136,7 @@ export default function OpportunityCard({ opp, onView, onWatch, onMarkTaken, wat
               }}
             >
               <DirIcon size={11} />
-              {opp.direction}
+              {directionText(opp.direction)}
             </span>
           </div>
           <div style={{ marginTop: 4, fontSize: "0.66rem", color: "var(--text-dim)", display: "flex", gap: 8, alignItems: "center" }}>
