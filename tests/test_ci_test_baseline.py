@@ -35,3 +35,9 @@ def test_exact_match_passes():
 def test_crash_without_summary_fails():
     code, lines = compare("FAILED tests/test_a.py::test_known\n", {"tests/test_a.py::test_known"})
     assert code == 1 and "crashed" in lines[0]
+
+
+def test_quiet_mode_summary_is_recognised():
+    quiet = "FAILED tests/test_a.py::test_known - X\n1 failed, 10 passed, 1 warning in 3.2s (0:00:03)\n"
+    code, _ = compare(quiet, {"tests/test_a.py::test_known"})
+    assert code == 0

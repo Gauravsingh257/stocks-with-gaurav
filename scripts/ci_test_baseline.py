@@ -20,7 +20,9 @@ import os
 import re
 import sys
 
-SUMMARY = re.compile(r"^=+ .*\b(passed|failed|error|errors|deselected|skipped)\b.* in [\d.]+s", re.M)
+# pytest's final line: "==== 2 failed, 90 passed in 12.3s ====" normally, or undecorated
+# "2 failed, 90 passed in 12.3s (0:00:12)" under -q.
+SUMMARY = re.compile(r"^(=+ )?\d+ (passed|failed|error|errors|deselected|skipped)\b.* in [\d.]+s", re.M)
 
 
 def parse_outcomes(text: str) -> set[str]:

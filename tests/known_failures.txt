@@ -4,3 +4,52 @@
 # NOT skipped — they run on every CI build. scripts/ci_test_baseline.py fails CI
 # on any failure missing from this list AND on any entry here that starts
 # passing, so this file must always be exact. Fixing one = delete its line.
+#
+# Baseline recorded from the first CI run on 2026-09-27 (clean ubuntu, production
+# dependency sets): 15 failed + 13 errors, 1,058 passed. (Earlier local notes said
+# "11 failures / 9 errors"; the difference is environment — the content_engine
+# tests below fail as import errors wherever that package is absent.)
+
+# 1. `content_engine` module is not in the repo or any requirements file (8)
+tests/test_chart_trade_levels.py::test_trade_levels_bullish_ordering  # ModuleNotFoundError: content_engine
+tests/test_chart_trade_levels.py::test_trade_levels_bearish_ordering  # ModuleNotFoundError: content_engine
+tests/test_chart_trade_levels.py::test_overlay_fracs_monotonic_with_price  # ModuleNotFoundError: content_engine
+tests/test_chart_trade_levels.py::test_legacy_fallback_tiny_df  # ModuleNotFoundError: content_engine
+tests/test_tradingview_cropping.py::test_crop_to_candle_cluster_finds_center_block  # ModuleNotFoundError: content_engine
+tests/test_tradingview_cropping.py::test_crop_to_candle_cluster_uniform_background_fails  # ModuleNotFoundError: content_engine
+tests/test_tradingview_cropping.py::test_crop_chart_region_fallback_center  # ModuleNotFoundError: content_engine
+tests/test_strategy_four_part_series.py  # collection error: ModuleNotFoundError: content_engine
+
+# 2. portfolio arm-on-tap fixture hits a FOREIGN KEY constraint (9)
+tests/test_portfolio_arm_on_tap.py::test_entry_traded_through_pullback_tapped  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_entry_never_reached_when_price_stays_above  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_entry_traded_through_gap  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_armed_position_is_pending_and_excluded_from_active  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_symbol_guard_blocks_double_commit_while_pending  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_activate_on_tap_starts_pnl_from_zero  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_expire_pending_frees_slot_without_journaling  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_reconcile_reclassifies_only_never_triggered  # sqlite3.IntegrityError: FOREIGN KEY
+tests/test_portfolio_arm_on_tap.py::test_reconcile_failsafe_keeps_active_on_missing_data  # sqlite3.IntegrityError: FOREIGN KEY
+
+# 3. OI sentiment: naive vs tz-aware datetime subtraction (3)
+tests/test_oi_sentiment.py::TestCombinedSentiment::test_strongly_bullish  # TypeError: naive - aware datetime
+tests/test_oi_sentiment.py::TestCombinedSentiment::test_strongly_bearish  # TypeError: naive - aware datetime
+tests/test_oi_sentiment.py::TestThrottling::test_refreshes_after_window_expires  # TypeError: naive - aware datetime
+
+# 4. OI short-covering tests assert pre-retirement behaviour (options signals retired 2026-09-23) (2)
+tests/test_oi_short_covering.py::TestDedup::test_daily_limit_per_underlying  # expectation predates retirement
+tests/test_oi_short_covering.py::TestEdgeCases::test_scan_with_no_kite_returns_empty  # scan now returns ([], [])
+
+# 5. Paper-mode Telegram prefix (2)
+tests/test_paper_mode.py::TestPaperPrefix::test_prefix_added  # prefix not applied under test env
+tests/test_paper_mode.py::TestPaperPrefix::test_empty_string  # prefix not applied under test env
+
+# 6. Trade-lifecycle stats expectations (2)
+tests/test_trade_lifecycle.py::test_unexecuted_ideas_do_not_move_win_rate  # unexecuted ideas still counted as signals
+tests/test_trade_lifecycle.py::test_stats_cover_the_whole_filtered_set_not_a_page  # 38 vs 12 in stats window
+
+# 7. PIL scorecard integration (1)
+tests/test_pil_scorecard.py::test_generate_swing_scorecard_integration  # assert 0 == 3
+
+# 8. Ranking-engine levels sanity (1)
+tests/test_ranking_engine_levels.py::test_entry_vs_close_sane  # entry vs close check fails
