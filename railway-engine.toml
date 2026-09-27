@@ -4,6 +4,38 @@
 [build]
 dockerfilePath = "Dockerfile.engine"
 
+# Only changes to code or data this service can load trigger a redeploy — so docs,
+# the Vercel frontend, tests, CI config and the nightly bot data commits
+# (signal_history/**, docs/validation/**) no longer restart it. Derived on
+# 2026-09-27 from a static import graph of the service entry point (including
+# lazy in-function imports and `python -m scripts.*` subprocesses): engine, web
+# and scanner all import across these same packages, so the list is shared and
+# deliberately generous — a MISSING path means the service silently runs stale
+# code, which is worse than an extra restart. Add a new top-level package here.
+watchPatterns = [
+  "/*.py",
+  "/agents/**",
+  "/ai_learning/**",
+  "/backtest/**",
+  "/config/**",
+  "/dashboard/__init__.py",
+  "/dashboard/backend/**",
+  "/data/**",
+  "/engine/**",
+  "/models/**",
+  "/scripts/**",
+  "/services/**",
+  "/signals/**",
+  "/smc_trading_engine/**",
+  "/strategies/**",
+  "/utils/**",
+  "/stock_universe_500.json",
+  "/stock_universe_fno.json",
+  "/Dockerfile.engine",
+  "/requirements-engine.txt",
+  "/railway-engine.toml",
+]
+
 [deploy]
 startCommand = "python run_engine_railway.py"
 healthcheckPath = "/health"
