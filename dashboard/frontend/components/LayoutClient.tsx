@@ -31,7 +31,8 @@ function Disclaimer() {
       automated algorithms and should not be construed as recommendations to buy, sell,
       or hold any security. Consult a qualified financial advisor before making
       investment decisions. Past performance does not guarantee future results.
-      Market data sourced from NSE via yfinance and may be delayed up to 15 minutes.
+      Market data is sourced from NSE through Zerodha Kite Connect and Yahoo Finance,
+      depending on the page, and may be delayed, incomplete or revised.
       Investments in securities are subject to market risks — read all related documents
       carefully.
     </div>

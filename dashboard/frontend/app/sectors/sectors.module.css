@@ -106,21 +106,6 @@
   outline-offset: 2px;
 }
 
-.benchBanner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  align-items: center;
-  padding: 9px 12px;
-  border-radius: 9px;
-  background: var(--accent-dim);
-  border: 1px solid var(--border-glow);
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-}
-.benchBanner strong {
-  color: var(--text-primary);
-}
 
 .status {
   display: flex;
@@ -149,7 +134,7 @@
 
 .mainGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -192,13 +177,173 @@
   align-items: center;
   gap: 5px;
 }
-.sectorG {
-  cursor: pointer;
-  outline: none;
+.mapShell {
+  display: grid;
+  gap: 8px;
 }
-.sectorG:focus-visible .head {
-  stroke: var(--text-primary);
-  stroke-width: 2.5;
+.mapToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mapHelp {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.zoomGroup {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-field);
+  flex-shrink: 0;
+}
+.zoomGroup button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.zoomGroup button + button {
+  border-left: 1px solid var(--border);
+}
+.zoomGroup button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-field-hover);
+}
+.zoomGroup button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.zoomGroup button:focus-visible,
+.mapWrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mapWrap svg {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mapTip {
+  position: absolute;
+  z-index: 3;
+  min-width: 170px;
+  max-width: 220px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-interactive);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.mapTipTitle {
+  font-weight: 800;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+}
+.mapTipQuad {
+  font-size: 0.7rem;
+  font-weight: 800;
+  margin-top: 1px;
+}
+.mapTipGrid {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 7px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.mapTipGrid dt {
+  color: var(--text-dim);
+}
+.mapTipGrid dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.mapTipNote {
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+.mapTipBtn {
+  margin-top: 8px;
+  width: 100%;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--border-glow);
+  border-radius: 7px;
+  padding: 7px;
+  cursor: pointer;
+}
+.mapStrip {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-interactive);
+  background: var(--bg-surface);
+  font-size: 0.76rem;
+}
+.mapStripGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.mapStripGrid dt {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+}
+.mapStripGrid dd {
+  margin: 1px 0 0;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.mapStrip .mapTipBtn {
+  margin-top: 0;
+}
+.mapHint {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-interactive);
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.benchLine {
+  margin: -4px 0 10px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.benchLine strong {
+  color: var(--text-primary);
+}
+.howTo summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.howTo[open] summary {
+  margin-bottom: 8px;
 }
 
 .quadGrid {

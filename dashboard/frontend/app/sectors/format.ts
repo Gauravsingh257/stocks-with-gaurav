@@ -45,11 +45,15 @@ export function crore(v: number | null | undefined): string {
   return `${v.toFixed(1)} Cr`;
 }
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 export function longDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  // "Fri 25 Sep 2026", built explicitly: locale formatting varies ("25 Sept, 2026").
+  return `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 /** `written_at` is stored as UTC "YYYY-MM-DD HH:MM:SS" by SQLite; show it in IST. */
