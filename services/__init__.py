@@ -1,3 +1,5 @@
+# Deploy trigger: any change under services/ redeploys engine, web and scanner
+# (railway*.toml watchPatterns, verified 2026-09-27).
 from .technical_scanner import TechnicalSnapshot, scan_technical
 from .fundamental_analysis import FundamentalSnapshot, analyze_fundamentals
 from .news_analysis import SentimentSnapshot, analyze_news_sentiment
