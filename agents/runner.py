@@ -295,6 +295,36 @@ def start_scheduler() -> None:
         misfire_grace_time=6 * 3600,
     )
 
+    # Fundamentals pre-warm (flag FUND_COVERAGE_FIX). The 08:30/08:40 scans burst
+    # Yahoo `.info` past its rate limit and lost ~half the universe's fundamentals
+    # most days; this refreshes the cache at a sustainable pace first. Subprocess,
+    # hard stop 08:15 IST inside the script, and a short misfire grace so a late
+    # restart can never start it into the scan window.
+    def _run_fundamentals_prewarm():
+        from services.fundamental_analysis import coverage_fix_enabled
+        if not coverage_fix_enabled():
+            return
+        try:
+            import subprocess
+            proc = subprocess.run(
+                [sys.executable, "-m", "scripts.prewarm_fundamentals"],
+                capture_output=True, text=True, timeout=100 * 60,
+            )
+            tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-3:]
+            log = logger.info if proc.returncode == 0 else logger.error
+            log("[FundPrewarm] rc=%s %s", proc.returncode, " ".join(tail))
+        except Exception:
+            logger.exception("[FundPrewarm] failed (scans fall back to their own fetch)")
+
+    _scheduler.add_job(
+        _run_fundamentals_prewarm,
+        CronTrigger(hour=6, minute=45, day_of_week="mon-fri", timezone="Asia/Kolkata"),
+        id="fundamentals_prewarm",
+        name="Fundamentals cache pre-warm (weekdays 06:45 IST, flag-gated)",
+        replace_existing=True,
+        misfire_grace_time=15 * 60,
+    )
+
     # Sector rotation history (read-only analytics, Phase 1). Appends the day's
     # rows to `sector_rotation_daily` from the Kite snapshots the scanner
     # publishes after the close (~15:45 + ~13 min crawl). Nothing in ranking,
