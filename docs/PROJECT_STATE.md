@@ -438,6 +438,10 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    which is what "identical candidates" looked like.
    **Decision needed:** whether LONGTERM should get horizon-specific selection criteria (quality,
    fundamentals, trend persistence) rather than swing's pool at a wider stop.
+   **Update 2026-09-27:** a read-only shadow selector now ranks the LT pool with Long-Term-specific
+   criteria (PRs #209/#211) — see `docs/LT_SHADOW_PHASE4A.md` (`LT_SHADOW_SELECTOR_ENABLED`, OFF;
+   no enforcement path) and `scripts/lt_shadow_report.py`. No decision made yet; nothing live
+   changed.
 5. Measure Phase 2's effect — but see `docs/validation/phase2-validation-report.md`: the effective
    sample is **2 positions, not 7** (only KRISHANA and ANTHEM came through the Phase-2 door).
 6. Bootstrap said the weight variants are statistically **tied** — do not re-optimise on 43 days.
@@ -594,7 +598,12 @@ protective, not costly.
   (`chore(signals): archive`, `chore(shadow): stagnation observation`), which touch only
   `signal_history/**` and `docs/validation/**`. The live engine restarts about twice an evening for
   data it never reads.
-  **Remedy (NOT implemented):** Railway honours `[build] watchPatterns` per service, and each
+  **Remedy — DONE 2026-09-27 (PR #207, `3f05f08`).** Self-verified by PR #208 (`6d4a32f`, a
+  `services/**`-only commit confirmed to still redeploy all three, per the shared-code trap below).
+  Not yet confirmed against a docs-only or `signal_history/**`-only commit actually skipping a
+  redeploy — the nightly `chore(shadow)`/`chore(signals)` bot commits since 09-28 are the live test
+  case; check Railway's deploy history, not this file, before relying on it. Railway honours
+  `[build] watchPatterns` per service, and each
   service already points at its own config file. Each needs a generous set — engine:
   `smc_mtf_engine_v4.py`, `engine/**`, `engine_runtime.py`, `strategies/**`, `services/**`,
   `agents/**`, `config/**`, `utils/**`, `models/**`, `run_engine_railway.py`, `Dockerfile.engine`,
@@ -621,7 +630,7 @@ protective, not costly.
 
 **NEXT** — ordered:
 1. **`TRADES_SYNC_KEY` on the engine service** — closed trades still never reach the dashboard journal (401).
-2. **Railway `watchPatterns`** — stop docs/frontend/bot commits restarting the live engine.
+2. ~~Railway `watchPatterns`~~ — **DONE 2026-09-27** (PR #207, see finding B above).
 3. **`detect_session_low` — OPEN, deliberately NOT fixed.** `BankNiftySignalEngine._collect_morning_signals`
    calls `self.detect_session_low(...)`, which does not exist (the method is `detect_session_low_break`),
    so the OI directional bias raises silently, `bias_locked` never becomes True, and the OI bias filter on
@@ -634,8 +643,10 @@ protective, not costly.
 *(The former item "SRB duplicate guard" is obsolete: the SRB live path no longer exists, so a restart
 cannot replay it.)* No new engine features during the validation phase.
 
-**BLOCKED** — all four operational fixes need Gaurav: three touch production config, one touches
-the trading path.
+**BLOCKED** — three operational fixes still need Gaurav: two touch production config
+(`TRADES_SYNC_KEY`, Kite static IP), one touches the trading path (`detect_session_low`). Railway
+`watchPatterns` is no longer blocked — shipped directly as a config-file change (PR #207), no
+Railway dashboard access needed.
 
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
@@ -691,6 +702,10 @@ the trading path.
   - `tests/test_stock_search_reference.py`: identity from the universe; confidence, recommendation, levels and fundamentals identical with or without a reference; failure-safe.
   - Node tests: 44 pass.
 - **Found, NOT changed (it is ranking input):** `fundamental_analysis` still divides D/E by 100 only when > 10, so FCL scores 0.87 and ITC 3.29 instead of 0.01 and 0.03. That is the bug already fixed in the universe refresh. It feeds `fundamental_score`, and `ranking_engine` reads `raw_debt_equity`, so fixing it is a ranking change that needs a decision and a calibration check.
+  **Update 2026-09-27 (PR #209, `4e34f21`):** a corrected value now computes alongside the legacy
+  one, but it reaches live scoring only behind `FUND_DE_UNIT_FIX` (default OFF, byte-identical to
+  today). The decision and calibration check this note calls for are still open — see
+  `docs/LT_SHADOW_PHASE4A.md`.
 - **Phase 2 — designed, NOT started (needs a go):**
   1. **Price and verdict hierarchy above the fold.**
      - **Header:** company, `NSE:ticker`, sector chip, and the current price large, with day change, source and time.
@@ -801,9 +816,10 @@ name like "watchlist" put a fake WATCHLIST stock above the real page. Now:
    watchlist, held, screener hit, sector leadership), quick actions (chart, add to watchlist, analyze),
    and recents + trending on the empty state.
 3. **Phase 3:** move the Research, Universe and Terminal search boxes onto the shared core.
-4. **Before surfacing analysis more widely:** the on-demand analysis labels stocks "Strong Buy /
-   Watchlist / Avoid" (`services/stock_search_analysis._recommendation`). Relabel within the
-   analytics-not-advice positioning.
+4. ~~Before surfacing analysis more widely: relabel "Strong Buy / Watchlist / Avoid"~~ —
+   **DONE 2026-09-27** (PR #205, `b6db69a`): `lib/displayLabels.ts` maps those labels and the
+   terminal's BUY/SELL/tier badges to descriptive text at every render site; internal values and
+   scoring are unchanged.
 
 **NEXT**
 1. Full responsive matrix — [`../MOBILE_AUDIT_FINDINGS.md`](../MOBILE_AUDIT_FINDINGS.md) still has
@@ -843,7 +859,10 @@ is a business" — remains the largest unstarted body of work.
 1. **Legal pages** — Privacy, Terms, Refund, standalone Disclaimer. Cheapest gate to close.
 2. **Payments** — Razorpay Subscriptions, lifecycle, webhooks + idempotency, GST invoices, trial.
 3. **Secrets audit** — full sweep, rotate anything exposed.
-4. **Monitoring + backups** — uptime/error alerting; DB backup + restore drill.
+4. **Monitoring + backups** — uptime/error alerting still open. DB backup + restore drill:
+   **merged 2026-09-27** (PR #204, `e34b728`) — daily 02:30 IST SQLite online-backup to a Railway
+   bucket plus a restore test, flag `BACKUP_ENABLED`; schedule/flag state on Railway not verified
+   from this session.
 5. Optional: point `api.stockswithgaurav.com` at the Railway backend (currently NXDOMAIN; DNS is on
    **Hostinger**, not Vercel).
 
