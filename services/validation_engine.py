@@ -423,12 +423,24 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     else:
         entry = round(close, 2)
         entry_type = "MARKET"
-    if abs(entry - close) / close > entry_anchor_max_gap():
+    anchored = abs(entry - close) / close > entry_anchor_max_gap()
+    if anchored:
         entry = round(close - atr * 0.5, 2)
     recent_low = min(float(c["low"]) for c in candles[-20:])
     base_risk = max(atr * (2.0 if horizon == "LONGTERM" else 1.3), entry * 0.03)
     ob_floor = float(ob[0]) if ob else recent_low
-    stop = min(entry - base_risk, ob_floor - atr * 0.2, recent_low - atr * 0.15)
+    if anchored:
+        # The structural stop protects the zone the entry sits in. An anchored
+        # entry was moved AWAY from that zone (it was >gap from price), so the
+        # zone's floor no longer relates to this entry — and the 20-bar low is
+        # no better: these stocks rallied off the zone inside 20 bars. Keeping
+        # either produced 20–45% stops (median ~27% after Anchor10, 2026-09-13)
+        # that the risk engine then rejected as stop_too_wide. Measure the risk
+        # from the anchored entry with the same volatility risk this function
+        # already uses as its floor. Target and RR follow from it unchanged.
+        stop = entry - base_risk
+    else:
+        stop = min(entry - base_risk, ob_floor - atr * 0.2, recent_low - atr * 0.15)
     stop = round(stop, 2)
     if stop <= 0 or stop >= entry:
         stop = round(entry - base_risk, 2)
@@ -452,6 +464,8 @@ def _scored_smc_levels(symbol: str, df: pd.DataFrame | None, horizon: Horizon, c
     meta["score"] = round(confirmation_score / 10.0, 2)
     meta["near_setup"] = 5.0 <= meta["score"] < 6.0
     meta["entry_type"] = entry_type
+    meta["anchored"] = anchored
+    meta["stop_basis"] = "volatility_from_anchored_entry" if anchored else "structural"
     meta["scored_smc"] = True
     meta["symbol"] = symbol
     return entry, stop, targets, setup, meta
