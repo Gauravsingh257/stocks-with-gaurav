@@ -427,7 +427,7 @@ def start_scheduler() -> None:
             chat = _os.getenv("TELEGRAM_CHAT_ID", "").strip()
             if not bot or not chat:
                 return
-            _rq.post(
+            _resp = _rq.post(
                 f"https://api.telegram.org/bot{bot}/sendMessage",
                 json={"chat_id": chat,
                       "text": (
@@ -439,6 +439,8 @@ def start_scheduler() -> None:
                       "parse_mode": "HTML"},
                 timeout=8,
             )
+            from services.telegram_health import record_send_result, result_from_response
+            record_send_result("web_ws_watchdog", chat, result_from_response(_resp))
         except Exception:
             pass
 
@@ -542,13 +544,15 @@ def start_scheduler() -> None:
                 if len(items) > 10:
                     lines.append(f"  …and {len(items)-10} more")
             lines.append(f"\n<i>Review on stockswithgaurav.com/research</i>")
-            _rq.post(
+            _resp = _rq.post(
                 f"https://api.telegram.org/bot{bot}/sendMessage",
                 json={"chat_id": chat, "text": "\n".join(lines),
                       "parse_mode": "HTML",
                       "disable_web_page_preview": True},
                 timeout=8,
             )
+            from services.telegram_health import record_send_result, result_from_response
+            record_send_result("web_stage_watchdog", chat, result_from_response(_resp))
         except Exception:
             pass
 
@@ -687,7 +691,7 @@ def start_scheduler() -> None:
                 return
             b = session.get("B_anchor", {})
             lines = "\n".join(f"• {x}" for x in session.get("breaches", []))
-            _rq.post(
+            _resp = _rq.post(
                 f"https://api.telegram.org/bot{bot}/sendMessage",
                 json={"chat_id": chat, "parse_mode": "HTML",
                       "disable_web_page_preview": True,
@@ -700,6 +704,8 @@ def start_scheduler() -> None:
                           "Observational only — ENTRY_ANCHOR_MAX_GAP_PCT is still 30.")},
                 timeout=8,
             )
+            from services.telegram_health import record_send_result, result_from_response
+            record_send_result("web_anchor_shadow", chat, result_from_response(_resp))
         except Exception:
             pass
 

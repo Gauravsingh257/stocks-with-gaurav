@@ -495,14 +495,12 @@ def _send_exit_alert(
             msg += f"Targets: {', '.join(f'₹{float(t):.2f}' for t in targets)}\n"
         msg += f"Stop Loss: ₹{stop:.2f}"
 
-        import requests
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        requests.post(url, json={
-            "chat_id": chat_id,
-            "text": msg,
-            "parse_mode": "HTML",
-        }, timeout=10)
-        log.info("Telegram exit alert sent for %s (%s)", symbol, status)
+        from services.telegram_health import send_message
+        res = send_message(bot_token, chat_id, msg, source="web_research_exit")
+        if res.ok:
+            log.info("Telegram exit alert sent for %s (%s)", symbol, status)
+        else:
+            log.error("Telegram exit alert NOT delivered for %s (%s): %s", symbol, status, res.error)
     except Exception:
         log.exception("Failed to send Telegram exit alert for %s", symbol)
 

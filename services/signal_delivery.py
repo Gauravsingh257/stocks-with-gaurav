@@ -403,7 +403,9 @@ def record_delivery_failure(signal_id: str | None, error: str, message_preview: 
             ),
         )
         pipe.ltrim(FAILURE_LOG_KEY, -FAILURE_LOG_MAX, -1)
-        pipe.expire(FAILURE_LOG_KEY, 86400)
+        # 7 days, not 24h: a failure must survive a weekend/holiday away from the
+        # dashboard (2026-10-09 audit: ten days of failures had already expired).
+        pipe.expire(FAILURE_LOG_KEY, 7 * 86400)
         pipe.execute()
     except Exception as e:
         log.debug("record_delivery_failure failed: %s", e)

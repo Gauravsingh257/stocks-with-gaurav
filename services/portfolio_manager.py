@@ -267,16 +267,10 @@ def _send_portfolio_entry_alert(position: dict) -> None:
 
     msg = "\n".join(lines)
 
-    import requests
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    try:
-        requests.post(url, json={
-            "chat_id": chat_id,
-            "text": msg,
-            "parse_mode": "HTML",
-        }, timeout=10)
-    except Exception:
-        log.warning("Portfolio entry alert: Telegram post failed (best-effort)")
+    from services.telegram_health import send_message
+    res = send_message(bot_token, chat_id, msg, source="web_portfolio_entry")
+    if not res.ok:
+        log.warning("Portfolio entry alert NOT delivered: %s", res.error)
     _log_alert(position.get("symbol"), "ENTRY", msg)
 
 
@@ -324,10 +318,10 @@ def _send_portfolio_armed_alert(position: dict) -> None:
         "<i>Enters only if price trades through the entry. No P&amp;L until then.</i>",
     ]
     try:
-        import requests
-        requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                      json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
-                      timeout=10)
+        from services.telegram_health import send_message
+        res = send_message(bot_token, chat_id, "\n".join(lines), source="web_portfolio_armed")
+        if not res.ok:
+            log.warning("Portfolio armed alert NOT delivered: %s", res.error)
     except Exception:
         log.warning("Portfolio armed alert: Telegram post failed (best-effort)")
 
@@ -423,10 +417,10 @@ def send_portfolio_triggered_alert(symbol: str, horizon: str, entry_price: float
         f"SL: ₹{stop_loss:.2f}" + (f" · T1: ₹{target_1:.2f}" if target_1 is not None else ""),
     ]
     try:
-        import requests
-        requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                      json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
-                      timeout=10)
+        from services.telegram_health import send_message
+        res = send_message(bot_token, chat_id, "\n".join(lines), source="web_portfolio_triggered")
+        if not res.ok:
+            log.warning("Portfolio triggered alert NOT delivered: %s", res.error)
     except Exception:
         log.warning("Portfolio triggered alert: Telegram post failed (best-effort)")
     _log_alert(symbol, "ENTRY_TRIGGERED", "\n".join(lines))
@@ -451,11 +445,8 @@ def _send_portfolio_exit_alert(result: dict) -> None:
         f"Reason: {result.get('exit_reason', 'MANUAL')}\n"
     )
 
-    import requests
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": msg,
-        "parse_mode": "HTML",
-    }, timeout=10)
+    from services.telegram_health import send_message
+    res = send_message(bot_token, chat_id, msg, source="web_portfolio_exit")
+    if not res.ok:
+        log.warning("Portfolio exit alert NOT delivered for %s: %s", result.get("symbol"), res.error)
     _log_alert(result.get("symbol"), "EXIT", msg)

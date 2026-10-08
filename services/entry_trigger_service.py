@@ -173,14 +173,12 @@ def _tg(msg: str) -> None:
     """Best-effort Telegram to the MTF Alerts channel (same creds the rest of
     the platform uses). Never raises."""
     try:
-        import requests
+        from services.telegram_health import send_message
         bot = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         chat = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("SMC_PRO_CHAT_ID", "")
         if not bot or not chat:
             return
-        requests.post(f"https://api.telegram.org/bot{bot}/sendMessage",
-                      json={"chat_id": chat, "text": msg, "parse_mode": "HTML",
-                            "disable_web_page_preview": True}, timeout=8)
+        send_message(bot, chat, msg, source="web_entry_tap", disable_web_page_preview=True, timeout=8)
     except Exception:
         pass
 

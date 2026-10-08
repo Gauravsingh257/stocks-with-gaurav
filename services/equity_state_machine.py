@@ -408,19 +408,12 @@ def _notify_sm_telegram(text: str) -> bool:
     chat = os.getenv("EQUITY_SM_TG_CHAT", "").strip()
     if not token or not chat:
         return False
-    try:
-        import requests
-
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=8,
-        )
-        return r.status_code == 200
-    except Exception as exc:
-        log.warning("SM telegram skipped: %s", exc)
-        return False
+    from services.telegram_health import send_message
+    res = send_message(token, chat, text, source="web_equity_sm",
+                       disable_web_page_preview=True, timeout=8)
+    if not res.ok:
+        log.warning("SM telegram NOT delivered: %s", res.error)
+    return res.ok
 
 
 def _publish_sm_recommendation(sym, fr, fire_date: str, cmp_now: float | None):

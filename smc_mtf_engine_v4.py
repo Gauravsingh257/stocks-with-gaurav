@@ -445,6 +445,7 @@ STOCK_UNIVERSE = []
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SMC_PRO_CHAT_ID = os.getenv("SMC_PRO_CHAT_ID", "")
+TELEGRAM_LAST_ERROR = None  # Telegram's own error text from the last failed telegram_send
 
 DEBUG_MODE = True
 
@@ -489,12 +490,19 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": target, "text": message, "parse_mode": "HTML"}
 
+    global TELEGRAM_LAST_ERROR
+    from services.telegram_health import SendResult, record_send_result, result_from_response
+
     last_exc = None
     for attempt in range(_max_retries):
         try:
             resp = requests.post(url, data=payload, timeout=8)
-            if resp.ok:
+            # Delivered only when Telegram says so (HTTP 200 AND ok:true).
+            res = result_from_response(resp)
+            if res.ok:
                 logging.info("[Telegram] Message sent (chat=%s signal=%s)", target, signal_id)
+                record_send_result("engine", target, res)
+                TELEGRAM_LAST_ERROR = None
                 if signal_id:
                     try:
                         import engine_runtime
@@ -507,7 +515,7 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
                     "[Telegram] API returned %s: %s (attempt %d/%d)",
                     resp.status_code, resp.text[:200], attempt + 1, _max_retries,
                 )
-                last_exc = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                last_exc = Exception(f"HTTP {resp.status_code}: {res.error}")
         except requests.exceptions.Timeout:
             logging.warning("[Telegram] Timeout on attempt %d/%d", attempt + 1, _max_retries)
             last_exc = Exception("Timeout")
@@ -518,6 +526,8 @@ def telegram_send(message: str, chat_id=None, signal_id=None, _max_retries: int 
             t.sleep(2 ** attempt)  # Exponential backoff between retries
 
     logging.error("[Telegram] Failed to send after %d attempts. Last error: %s", _max_retries, last_exc)
+    TELEGRAM_LAST_ERROR = str(last_exc)[:500] if last_exc else "unknown"
+    record_send_result("engine", target, SendResult(ok=False, error=TELEGRAM_LAST_ERROR))
     return False
 
 
@@ -565,7 +575,9 @@ def telegram_send_signal(
         else:
             try:
                 from services.signal_delivery import record_delivery_failure
-                record_delivery_failure(signal_id, "telegram_send_returned_false_after_retries", message)
+                record_delivery_failure(
+                    signal_id, TELEGRAM_LAST_ERROR or "telegram_send_returned_false_after_retries", message
+                )
             except Exception:
                 pass
     except Exception as exc:
@@ -766,6 +778,12 @@ def telegram_send_image(
                     timeout=15,
                 )
             if resp.ok:
+                try:
+                    from services.telegram_health import record_send_result, result_from_response
+
+                    record_send_result("engine_photo", CHAT_ID, result_from_response(resp))
+                except Exception:
+                    pass
                 try:
                     from utils.telegram_signal_log import persist_telegram_signal
 
@@ -4743,6 +4761,12 @@ def telegram_send_with_buttons(message: str, buttons: list, signal_id: str = Non
                 timeout=10,
             )
             if resp.ok:
+                try:
+                    from services.telegram_health import record_send_result, result_from_response
+
+                    record_send_result("engine_buttons", CHAT_ID, result_from_response(resp))
+                except Exception:
+                    pass
                 try:
                     from utils.telegram_signal_log import persist_telegram_signal
 
