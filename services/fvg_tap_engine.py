@@ -250,18 +250,12 @@ def _notify_fvg_tap_telegram(text: str) -> bool:
     chat = os.getenv("FVG_TAP_TG_CHAT", "").strip()
     if not token or not chat:
         return False
-    try:
-        import requests
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=8,
-        )
-        return r.status_code == 200
-    except Exception as exc:
-        log.warning("fvg_tap telegram skipped: %s", exc)
-        return False
+    from services.telegram_health import send_message
+    res = send_message(token, chat, text, source="web_fvg_tap",
+                       disable_web_page_preview=True, timeout=8)
+    if not res.ok:
+        log.warning("fvg_tap telegram NOT delivered: %s", res.error)
+    return res.ok
 
 
 def _publish_fvg_tap_recommendation(sym: str, sig: dict):
@@ -302,7 +296,7 @@ def _publish_fvg_tap_recommendation(sym: str, sig: dict):
         }
         rec_id = create_stock_recommendation(row)
         if isinstance(rec_id, int) and rec_id > 0:
-            _notify_fvg_tap_telegram(
+            delivered = _notify_fvg_tap_telegram(
                 "🧪 <b>FVG-TAP SIGNAL</b> (validation — NOT auto-traded)\n"
                 f"<b>{sym}</b>  {sig['direction']} · MARKET-on-confirmation\n"
                 f"Entry <b>{sig['entry']}</b> · SL {sig['sl']} · "
@@ -312,8 +306,9 @@ def _publish_fvg_tap_recommendation(sym: str, sig: dict):
                 "<i>Index 5m. Backtest-cleared (NIFTY PF2.07 / BANKNIFTY "
                 "PF2.33); live-validating. No position opened.</i>"
             )
-            log.info("fvg_tap published rec #%s + Telegram: %s %s @ %s",
-                     rec_id, sym, sig["direction"], sig["entry"])
+            log.info("fvg_tap published rec #%s (Telegram %s): %s %s @ %s",
+                     rec_id, "delivered" if delivered else "NOT delivered",
+                     sym, sig["direction"], sig["entry"])
         else:
             # 2026-06-01 publish gap: a fire reached the ledger but no rec/
             # Telegram surfaced. Make the reason explicit instead of silent.

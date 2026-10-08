@@ -1,0 +1,42 @@
+name: Telegram Health
+
+# Fails when any Telegram destination has failed consecutive REAL sends
+# (scripts/telegram_health_check.py → /api/system/telegram-health).
+#
+# A FAILED RUN IS THE ALERT: GitHub emails the repo owner. Deliberately not
+# Telegram — the 2026-09-29 → 10-08 outage (bot frozen, every channel send
+# PEER_ID_INVALID) went unnoticed for ten days precisely because the only alert
+# path was the broken one.
+#
+# Runs after the close on weekdays (the engine sends an hourly heartbeat during
+# market hours, so a dead channel has produced failures by then) and mid-session
+# so a morning breakage is caught the same day. GitHub cron can land hours late.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1-5"    # 12:30 IST
+    - cron: "15 11 * * 1-5"  # 16:45 IST
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-health
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Telegram delivery health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requests
+        run: pip install --quiet requests
+      - name: Check Telegram delivery health
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL || 'https://web-production-2781a.up.railway.app' }}
+        run: python -m scripts.telegram_health_check

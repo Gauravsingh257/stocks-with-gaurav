@@ -592,7 +592,26 @@ def health_full():
     except Exception:
         result["kite"] = {"connected": False}
 
+    try:
+        from services.telegram_health import get_health
+        tg = get_health()
+        result["telegram"] = {"ok": tg.get("ok"), "failing": tg.get("failing", [])}
+    except Exception as e:
+        result["telegram"] = {"ok": None, "error": str(e)}
+
     return result
+
+
+@router.get("/telegram-health")
+def telegram_health():
+    """Telegram delivery health from REAL send outcomes, per destination chat.
+
+    `ok: false` means at least one destination has failed FAILING_AFTER
+    consecutive sends. Read by the `Telegram Health` GitHub Action, which fails
+    (and emails) on it — Telegram cannot be trusted to report its own outage.
+    Chat ids are masked."""
+    from services.telegram_health import get_health
+    return get_health()
 
 
 @router.get("/debug/watchlist-sync")
