@@ -3,7 +3,6 @@
 # =====================================================
 
 import time as t
-import requests
 from datetime import datetime, timedelta
 
 try:
@@ -16,25 +15,22 @@ import json
 import os
 import risk_management as rm
 
-BOT_TOKEN = "8388602985:AAEiombJFTGv0Dx9UZeeKkpKeo0hem9hv8I"
-CHAT_ID = "-1003268636791"
+# Credentials come from the environment only. A token hardcoded here was public
+# on GitHub from 2026-03-14 until the bot was hijacked and frozen (2026-09-29).
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 DRY_RUN = False          # Set to False to enable real orders
 USE_SL_M = True         # Use SL-M (Market) or SL-L (Limit)
 
 def telegram_send(message: str):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML"
-            },
-            timeout=5
-        )
-    except Exception as e:
-        print("Telegram error:", e)
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+        return
+    from services.telegram_health import send_message
+    res = send_message(BOT_TOKEN, CHAT_ID, message, source="engine_manual_handler", timeout=5)
+    if not res.ok:
+        print("Telegram error:", res.error)
 
 
 class ManualTradeHandlerV2:
