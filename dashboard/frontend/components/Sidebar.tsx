@@ -89,16 +89,18 @@ export default function Sidebar({
         />
       )}
 
-      {/* Desktop: always visible; Mobile: drawer */}
+      {/* Desktop: always visible (md:flex, in-flow sticky column).
+          Mobile: off-canvas drawer toggled by the hamburger. Display is driven
+          by a single class per state — never `hidden` and `flex` together, or
+          Tailwind's `hidden` wins the cascade and the open drawer stays
+          display:none (which is why it never appeared on mobile). */}
       <aside
         className={`
-          w-64 flex-shrink-0 flex flex-col py-6 px-3 gap-1
+          w-64 flex-shrink-0 flex-col py-6 px-3 gap-1
           bg-slate-900/95 border-r border-cyan-500/10 backdrop-blur-[12px] overflow-y-auto z-[100]
-          hidden md:flex
-          md:sticky md:top-0 md:h-screen
-          md:translate-x-0
           fixed inset-y-0 left-0 transform transition-transform duration-200 ease-out
-          ${isOpen ? "translate-x-0 flex" : "-translate-x-full"}
+          md:flex md:sticky md:top-0 md:h-screen md:translate-x-0
+          ${isOpen ? "flex translate-x-0" : "hidden -translate-x-full"}
         `}
         style={{ gap: 4 }}
       >
