@@ -12,9 +12,7 @@
  */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import SectionTabs from "@/components/SectionTabs";
 import { getBackendBase } from "@/lib/api";
-import { RESEARCH_TABS } from "@/lib/navGroups";
 import SectorRotation from "./SectorRotation";
 
 export const metadata: Metadata = {
@@ -42,7 +40,6 @@ export default async function SectorsPage() {
   if (status && (!status.api_enabled || !status.page_public)) notFound();
   return (
     <div className="px-4 md:px-6 pt-4 pb-10">
-      <SectionTabs items={RESEARCH_TABS} label="Research" />
       <SectorRotation />
     </div>
   );

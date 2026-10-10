@@ -1,34 +1,20 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  BarChart2, Bot, Globe, Zap, Bookmark, LogIn, LogOut, Crown, Sparkles, LayoutDashboard, Home, Activity
-} from "lucide-react";
+import { Zap, LogIn, LogOut, Crown, ChevronDown } from "lucide-react";
 import { SidebarBotWidget } from "@/components/FuturisticElements";
 import { useAuth } from "@/lib/auth";
+import { NAV, activeSectionHref, type NavChild } from "@/lib/navGroups";
 
-// Default ON (live); set NEXT_PUBLIC_PIL_ENABLED=0 to hide.
-const PIL_ENABLED = process.env.NEXT_PUBLIC_PIL_ENABLED !== "0";
 const ADMIN_EMAILS = new Set(["hellogaurav2577@gmail.com"]);
+const OPEN_KEY = "swg-nav-open";
 
-// Nav consolidated 8 flat items → 5 grouped destinations. Folded pages remain
-// one click away via <SectionTabs> inside each group:
-//   Research  ← Screeners, Stock Universe
-//   Portfolio ← Track Record (/analytics), Journal
-//   Markets   ← OI Radar, Market Intel
-type NavItem = { href: string; label: string; icon: typeof BarChart2; auth?: boolean; admin?: boolean; match?: string[] };
-const NAV: NavItem[] = [
-  { href: "/command",         label: "Command Center", icon: Home },
-  { href: "/terminal",        label: "Terminal",  icon: Sparkles },
-  { href: "/research",        label: "Research",  icon: Bot,      match: ["/research", "/screeners", "/sectors", "/universe"] },
-  { href: "/watchlist",       label: "Watchlist", icon: Bookmark, auth: true },
-  ...(PIL_ENABLED
-    ? [{ href: "/intelligence", label: "Portfolio", icon: LayoutDashboard, auth: true, match: ["/intelligence", "/analytics", "/journal"] }]
-    : [{ href: "/analytics",    label: "Portfolio", icon: LayoutDashboard, match: ["/analytics", "/journal"] }]),
-  { href: "/oi-intelligence", label: "Markets",   icon: Globe, match: ["/oi-intelligence", "/market-intelligence"] },
-  { href: "/health",          label: "Product Health", icon: Activity, admin: true },
-];
+const isActive = (path: string, href: string, extra?: string[]) => {
+  const prefixes = [href, ...(extra ?? [])];
+  return prefixes.some((p) => path === p || (p !== "/" && path.startsWith(p)));
+};
 
 export default function Sidebar({
   isOpen = false,
@@ -37,9 +23,59 @@ export default function Sidebar({
   isOpen?: boolean;
   onClose?: () => void;
 }) {
-  const path = usePathname();
+  const path = usePathname() || "";
   const { user, logout } = useAuth();
   const isAdmin = !!user && (user.role === "ADMIN" || ADMIN_EMAILS.has((user.email || "").toLowerCase()));
+
+  // Which sections are expanded. Seeded with the active section so the current
+  // page's siblings are visible on first paint (same on server and client — no
+  // hydration mismatch); persisted expansions are merged in after mount.
+  const activeHref = activeSectionHref(path);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(activeHref ? [activeHref] : []));
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(OPEN_KEY);
+      const stored: string[] = raw ? JSON.parse(raw) : [];
+      if (stored.length) {
+        setOpen((prev) => {
+          const next = new Set(prev);
+          stored.forEach((h) => next.add(h));
+          return next;
+        });
+      }
+    } catch {
+      /* private mode / blocked storage — fall back to active-only */
+    }
+    setHydrated(true);
+  }, []);
+
+  // Keep the section containing the current page open as the route changes.
+  useEffect(() => {
+    if (!activeHref) return;
+    setOpen((prev) => (prev.has(activeHref) ? prev : new Set(prev).add(activeHref)));
+  }, [activeHref]);
+
+  // Remember expanded sections for the rest of the session.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      sessionStorage.setItem(OPEN_KEY, JSON.stringify([...open]));
+    } catch {
+      /* ignore */
+    }
+  }, [open, hydrated]);
+
+  const toggle = (href: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(href)) next.delete(href);
+      else next.add(href);
+      return next;
+    });
+
+  const childIsActive = (c: NavChild) => isActive(path, c.href, c.match);
 
   return (
     <>
@@ -93,23 +129,72 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Nav */}
-        <nav className="flex flex-col gap-0.5 mt-2">
-          {NAV.map(({ href, label, icon: Icon, auth, admin, match }) => {
-            if (auth && !user) return null;
-            if (admin && !isAdmin) return null;
-            const prefixes = match ?? [href];
-            const active = prefixes.some((p) => path === p || (p !== "/" && path.startsWith(p)));
+        {/* Nav — the single source of truth for app navigation */}
+        <nav className="flex flex-col gap-0.5 mt-2" aria-label="Primary">
+          {NAV.map((s) => {
+            if (s.auth && !user) return null;
+            if (s.admin && !isAdmin) return null;
+
+            const sectionActive = isActive(path, s.href, s.match);
+            const Icon = s.icon;
+
+            // Leaf section — a plain link (Home, Terminal, Watchlist, Product Health)
+            if (!s.children?.length) {
+              return (
+                <Link
+                  key={s.href}
+                  href={s.href}
+                  onClick={onClose}
+                  className={`nav-link ${sectionActive ? "active" : ""}`}
+                  aria-current={sectionActive ? "page" : undefined}
+                >
+                  <Icon size={16} />
+                  {s.label}
+                </Link>
+              );
+            }
+
+            // Expandable section — label navigates, chevron toggles
+            const expanded = open.has(s.href);
+            const panelId = `nav-${s.href.replace(/\W+/g, "-")}`;
             return (
-              <Link
-                key={href}
-                href={href}
-                onClick={onClose}
-                className={`nav-link ${active ? "active" : ""}`}
-              >
-                <Icon size={16} />
-                {label}
-              </Link>
+              <div key={s.href} className="nav-section">
+                <div className={`nav-parent ${sectionActive ? "active" : ""}`}>
+                  <Link href={s.href} onClick={onClose} className="nav-parent-link">
+                    <Icon size={16} />
+                    {s.label}
+                  </Link>
+                  <button
+                    type="button"
+                    className="nav-chevron"
+                    aria-label={`${expanded ? "Collapse" : "Expand"} ${s.label}`}
+                    aria-expanded={expanded}
+                    aria-controls={panelId}
+                    onClick={() => toggle(s.href)}
+                  >
+                    <ChevronDown
+                      size={14}
+                      style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+                    />
+                  </button>
+                </div>
+                <div id={panelId} className="nav-children" hidden={!expanded}>
+                  {s.children.map((c) => {
+                    const active = childIsActive(c);
+                    return (
+                      <Link
+                        key={c.href}
+                        href={c.href}
+                        onClick={onClose}
+                        className={`nav-child ${active ? "active" : ""}`}
+                        aria-current={active ? "page" : undefined}
+                      >
+                        {c.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
         </nav>
