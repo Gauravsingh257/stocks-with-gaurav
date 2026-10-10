@@ -59,7 +59,7 @@ A **separate modular system** exists under `smc_trading_engine/` with its own:
 
 | # | Location | Bug | Severity |
 |---|----------|-----|----------|
-| C1 | Line ~193 | **Telegram bot token hardcoded in source code** — `BOT_TOKEN = "8388602985:AAEiombJFTGv0Dx9UZeeKkpKeo0hem9hv8I"`. This is a **security vulnerability**. Anyone with access to this code can send messages to your Telegram groups. | 🔴 CRITICAL |
+| C1 | Line ~193 | **Telegram bot token hardcoded in source code** — `BOT_TOKEN = "<REDACTED — token revoked; see 2026-10-09 security incident>"`. This is a **security vulnerability**. Anyone with access to this code can send messages to your Telegram groups. | 🔴 CRITICAL |
 | C2 | Line ~194 | **Chat IDs hardcoded** — Same issue. Should be env vars only (the `os.getenv` fallbacks defeat the purpose). | 🔴 CRITICAL |
 | C3 | Line ~616-617 | **Dead code / unreachable return**: `return 0.0` followed by another `return 0.0`. The second return is unreachable. The killzone_confidence function returns 0.0 for ALL times after 13:00, meaning **no trades are taken after 1 PM**. This may be intentional but is extremely restrictive. | 🟡 HIGH |
 | C4 | Lines ~299-305 | **STRUCTURE_STATE declared twice** — First on line ~276, then again on line ~299. The second declaration overwrites the first to `{}`. No actual harm, but indicates messy refactoring. | 🟡 MEDIUM |
