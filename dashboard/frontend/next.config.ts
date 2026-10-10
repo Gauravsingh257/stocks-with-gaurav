@@ -18,6 +18,11 @@ const nextConfig: NextConfig = {
 
   allowedDevOrigins: ["*.trycloudflare.com"],
 
+  async redirects() {
+    // Legacy route retired in the IA redesign — Command Center is now "Home".
+    return [{ source: "/dashboard", destination: "/command", permanent: true }];
+  },
+
   async rewrites() {
     const backend = process.env.BACKEND_URL || "";
     if (!backend) {

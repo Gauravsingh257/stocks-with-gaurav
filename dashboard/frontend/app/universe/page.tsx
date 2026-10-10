@@ -14,8 +14,6 @@
  */
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import SectionTabs from "@/components/SectionTabs";
-import { RESEARCH_TABS } from "@/lib/navGroups";
 import { StockUniverse } from "@/app/research/StockUniverse";
 
 function UniverseFromLink() {
@@ -37,7 +35,6 @@ function UniverseLoading() {
 export default function UniversePage() {
   return (
     <div className="px-4 md:px-6 pt-4 pb-10">
-      <SectionTabs items={RESEARCH_TABS} label="Research" />
       <Suspense fallback={<UniverseLoading />}>
         <UniverseFromLink />
       </Suspense>

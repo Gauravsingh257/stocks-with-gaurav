@@ -23,8 +23,6 @@ import { StrikeHeatmap } from "./StrikeHeatmap";
 import { ShortCoveringPanel } from "./ShortCoveringPanel";
 import { PCRSparkline, BiasTimeline } from "./HistoryCharts";
 import { OIInterpretationEssentials } from "./OIInterpretationEssentials";
-import SectionTabs from "@/components/SectionTabs";
-import { MARKETS_TABS } from "@/lib/navGroups";
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
@@ -181,7 +179,6 @@ export default function OIIntelligencePage() {
   /* ── Render ─────────────────────────────────────────────── */
   return (
     <StaggerContainer stagger={0.07} className="w-full max-w-screen-2xl mx-auto px-4 md:px-6 lg:px-8 py-6">
-      <SectionTabs items={MARKETS_TABS} label="Markets" />
       {/* Header */}
       <StaggerItem>
       <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">

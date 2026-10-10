@@ -4,14 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Lock } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import SectionTabs from "@/components/SectionTabs";
-import { PORTFOLIO_TABS } from "@/lib/navGroups";
 
 /**
  * Portfolio Intelligence Layer — section shell.
- * A Bloomberg-style sub-navigation across the PIL dashboards. Tabs light up as
- * each capability ships; unimplemented ones render as muted "soon" chips so the
- * roadmap is visible without dead links.
+ *
+ * These are the analytical VIEWS of one dashboard (not route navigation to other
+ * sections), so they correctly stay as an in-page tab row. Sibling sections
+ * (Track Record, Journal) live in the primary sidebar under Portfolio.
  */
 const TABS: { href: string; label: string; enabled: boolean }[] = [
   { href: "/intelligence", label: "Overview", enabled: true },
@@ -50,10 +49,7 @@ export default function IntelligenceLayout({ children }: { children: React.React
             </div>
           </div>
 
-          {/* Portfolio group: Intel · Track Record · Journal */}
-          <SectionTabs items={PORTFOLIO_TABS} />
-
-          {/* PIL sub-tabs */}
+          {/* PIL analytical views (in-page tabs for one dashboard) */}
           <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 pt-2">
             {TABS.map((t) => {
               const active = t.href === path;
