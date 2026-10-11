@@ -1,7 +1,7 @@
 # 🚀 LAUNCH_CHECKLIST.md
 
 > **STATUS: LIVE** · workstream: `platform` · last substantive update: 2026-07-12
-> MASTER launch tracker and the closest thing the repo has to a roadmap. The paid launch has NOT happened: payments, legal pages, secrets audit, backups and monitoring are all still open gates.
+> MASTER launch tracker and the closest thing the repo has to a roadmap. The paid launch has NOT happened: payments, legal pages, secrets audit and monitoring are all still open gates. DB backup + restore drill merged 2026-09-27 (`e34b728`), flag-gated `BACKUP_ENABLED` — flag state on Railway unverified, so the checkbox below is deliberately left as-is pending confirmation.
 > Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
 
 **Single source of truth for the public launch of stockswithgaurav.com (₹1,200/mo).**

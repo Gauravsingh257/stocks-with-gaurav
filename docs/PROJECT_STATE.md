@@ -621,7 +621,9 @@ protective, not costly.
 
 **NEXT** — ordered:
 1. **`TRADES_SYNC_KEY` on the engine service** — closed trades still never reach the dashboard journal (401).
-2. **Railway `watchPatterns`** — stop docs/frontend/bot commits restarting the live engine.
+2. ~~**Railway `watchPatterns`**~~ — **DONE 2026-09-27** (`3f05f08`, validated by `6d4a32f`): engine/web/scanner
+   now each watch only their own import-graph closure (0 uncovered), so docs/frontend/bot-only commits
+   should no longer restart the live engine. Deploy behaviour not independently reverified this check.
 3. **`detect_session_low` — OPEN, deliberately NOT fixed.** `BankNiftySignalEngine._collect_morning_signals`
    calls `self.detect_session_low(...)`, which does not exist (the method is `detect_session_low_break`),
    so the OI directional bias raises silently, `bias_locked` never becomes True, and the OI bias filter on
@@ -634,8 +636,9 @@ protective, not costly.
 *(The former item "SRB duplicate guard" is obsolete: the SRB live path no longer exists, so a restart
 cannot replay it.)* No new engine features during the validation phase.
 
-**BLOCKED** — all four operational fixes need Gaurav: three touch production config, one touches
-the trading path.
+**BLOCKED** — of the three remaining operational fixes, two need Gaurav because they touch
+production config (`TRADES_SYNC_KEY`, Kite static IP); the third touches the trading path
+(`detect_session_low`, deliberately deferred). Railway `watchPatterns` no longer needs Gaurav — done.
 
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
@@ -801,9 +804,11 @@ name like "watchlist" put a fake WATCHLIST stock above the real page. Now:
    watchlist, held, screener hit, sector leadership), quick actions (chart, add to watchlist, analyze),
    and recents + trending on the empty state.
 3. **Phase 3:** move the Research, Universe and Terminal search boxes onto the shared core.
-4. **Before surfacing analysis more widely:** the on-demand analysis labels stocks "Strong Buy /
-   Watchlist / Avoid" (`services/stock_search_analysis._recommendation`). Relabel within the
-   analytics-not-advice positioning.
+4. ~~**Before surfacing analysis more widely:** relabel the public-facing tiers~~ — **DONE 2026-09-27**
+   (`b6db69a`): `/stock/<symbol>` and the public `/terminal` now render through `lib/displayLabels.ts`
+   (confluence / setup-quality / direction wording) instead of "Strong Buy / Watchlist / Avoid" or
+   "BUY"/"SELL". `services/stock_search_analysis._recommendation` (the internal value) is unchanged —
+   only the public display differs.
 
 **NEXT**
 1. Full responsive matrix — [`../MOBILE_AUDIT_FINDINGS.md`](../MOBILE_AUDIT_FINDINGS.md) still has
@@ -843,7 +848,10 @@ is a business" — remains the largest unstarted body of work.
 1. **Legal pages** — Privacy, Terms, Refund, standalone Disclaimer. Cheapest gate to close.
 2. **Payments** — Razorpay Subscriptions, lifecycle, webhooks + idempotency, GST invoices, trial.
 3. **Secrets audit** — full sweep, rotate anything exposed.
-4. **Monitoring + backups** — uptime/error alerting; DB backup + restore drill.
+4. **Monitoring + backups** — uptime/error alerting still unstarted. DB backup + restore drill
+   **merged 2026-09-27** (`e34b728`: daily off-volume `dashboard.db` backup to a Railway bucket,
+   restore-test script, RPO ≤24h), flag-gated `BACKUP_ENABLED` — flag state on Railway not verified
+   this check, so do not mark this gate closed without confirming it live.
 5. Optional: point `api.stockswithgaurav.com` at the Railway backend (currently NXDOMAIN; DNS is on
    **Hostinger**, not Vercel).
 
