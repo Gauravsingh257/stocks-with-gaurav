@@ -98,6 +98,24 @@ Universe → factors → ranking → gates → ideas → portfolio:
 - `services/outcome_labeling.py`, `research_outcome_tracker.py`, `validation_engine.py` — labels
   and forward outcomes that feed calibration.
 
+### Three sector systems — do not confuse them
+All three write the **same** Redis key `sector:strength:<date>` (6h TTL), so **last writer wins**:
+1. `sector_rotation_engine.py` → the public `/sectors` page. RRG `rs_ratio` = RS vs the sector's
+   **own 50-day mean**, *not* a 20-day return — so "Finance lagging" there is fully compatible with
+   Finance outperforming over 20 days. 22 sectors, no "Banking".
+2. `sector_strength.compute_sector_strength()` → the yfinance index path. Keys include **"Banking"
+   and "Insurance", which are NOT stock labels** (`resolve_sector()` classifies every bank as
+   `Finance`), so bands under those keys attach to zero stocks. `SECTOR_STRENGTH_CANONICAL=1`
+   swaps it for a canonical path built on `index_ohlc.INDEX_REGISTRY`.
+3. `sector_strength.compute_sector_strength_from_candles()` → the **constituent** path, canonical
+   labels, ~99% coverage. `run_validation_scan` writes it *before* reading the cache, so **in-scan
+   this one always wins** — selection is served by the constituent bands, not the index ones.
+
+Band mechanics: in `exceptionalism.qualifies()`, `unknown`/`neutral`/`leading` are **identical**;
+only `lagging` bites (needs score ≥ `EXC_OVERRIDE_MIN`). In `regime_governor.sector_multiplier()`,
+`leading` ×1.15, `neutral`/`unknown` ×1.0, `lagging` ×0.6. A band helps by *avoiding* `lagging`,
+never by gaining `leading`. → `docs/validation/sector-canonical-activation-2026-10-11.md`
+
 ## Portfolio Intelligence Layer (PIL)
 Additive, **read-only** PMS layer above the three books — it only observes/measures/reports and
 **never influences an engine**. Flag-gated (`PIL_ENABLED`). Code: `services/pil/` (accounting,
