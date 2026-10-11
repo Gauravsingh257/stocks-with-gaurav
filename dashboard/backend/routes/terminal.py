@@ -13,10 +13,11 @@ Phase 2 + 3 — REST endpoints for the AI Trade Opportunity Terminal.
     GET  /api/summary            → AI summary panel (top 3, best, market bias)
     GET  /api/preferences        → user preferences (default user)
     POST /api/preferences        → upsert user preferences
-    GET  /api/journal            → user trade journal entries
-    POST /api/journal            → add a journal entry
-    PATCH/api/journal/{id}       → update an entry (close, edit pnl, notes)
-    DELETE /api/journal/{id}     → remove a journal entry
+    GET  /api/terminal/journal   → the caller's own trade journal entries
+    POST /api/terminal/journal   → add a journal entry
+    PATCH/api/terminal/journal/{id}  → update an entry (close, edit pnl, notes)
+    DELETE /api/terminal/journal/{id} → remove a journal entry
+      (NOT /api/journal — that is the PUBLIC engine trade journal.)
     GET  /api/performance        → win rate, avg RR, best/worst setups
     GET  /api/alerts             → recent lifecycle alerts (bell icon)
 
@@ -277,8 +278,6 @@ def get_summary(user: dict | None = Depends(get_optional_user)):
 
 
 # ── User-scoped: verified JWT required; identity never comes from the client ──
-# (GET /api/journal is shadowed in practice by journal_router's public engine
-# journal, which is registered first — it is secured here anyway.)
 
 @router.get("/preferences")
 def get_user_preferences(user: dict = Depends(get_current_user)):
@@ -292,7 +291,15 @@ def post_user_preferences(payload: dict = Body(...), user: dict = Depends(get_cu
     return set_preferences(_store_key(user), payload)
 
 
-@router.get("/journal")
+# The PERSONAL journal lives under /api/terminal/journal, NOT /api/journal.
+# /api/journal is the PUBLIC engine trade journal (routes/journal.py), which
+# main.py registers first — so a personal handler mounted there was shadowed
+# and unreachable for GET, while POST/PATCH/DELETE silently resolved here.
+# One path, two meanings (public engine trades vs one user's private notes) is
+# the bug; a distinct prefix fixes it rather than papering over it. Nothing
+# called the personal write endpoints, and the public journal is untouched.
+
+@router.get("/terminal/journal")
 def get_user_journal(
     status: Optional[str] = Query(default=None, pattern="^(OPEN|CLOSED|open|closed)$"),
     limit: int = Query(default=200, ge=1, le=2000),
@@ -303,7 +310,7 @@ def get_user_journal(
     return {"entries": rows, "count": len(rows)}
 
 
-@router.post("/journal")
+@router.post("/terminal/journal")
 def post_user_journal(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import add_journal_entry
     rec = add_journal_entry(_store_key(user), payload)
@@ -312,7 +319,7 @@ def post_user_journal(payload: dict = Body(...), user: dict = Depends(get_curren
     return rec
 
 
-@router.patch("/journal/{entry_id}")
+@router.patch("/terminal/journal/{entry_id}")
 def patch_user_journal(entry_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import update_journal_entry
     # update/delete are scoped by (user_id, id), so another user's entry id
@@ -323,7 +330,7 @@ def patch_user_journal(entry_id: int, payload: dict = Body(...), user: dict = De
     return rec
 
 
-@router.delete("/journal/{entry_id}")
+@router.delete("/terminal/journal/{entry_id}")
 def delete_user_journal(entry_id: int, user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import delete_journal_entry
     ok = delete_journal_entry(_store_key(user), entry_id)
