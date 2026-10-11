@@ -112,12 +112,15 @@ class TestPaperDailySummary:
         assert "No trades" in result
 
     def test_summary_with_trades(self, tmp_path, monkeypatch):
-        from datetime import datetime
+        from datetime import datetime, timedelta, timezone
         out_file = str(tmp_path / "outcomes.csv")
         monkeypatch.setattr(paper_mode, "PAPER_OUTCOMES_LOG", out_file)
 
-        # Write some outcomes for today
-        today = datetime.now().strftime("%Y-%m-%d")
+        # Write some outcomes for today. paper_daily_summary() filters rows by
+        # datetime.now(IST), so the rows must carry the IST date: a naive
+        # datetime.now() is the RUNNER's date, one day behind IST on a UTC CI
+        # runner between 18:30 and 24:00 UTC, which matched zero rows.
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
         with open(out_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_OUTCOME_FIELDS)
             writer.writeheader()
