@@ -177,12 +177,7 @@ def compute_sector_strength_from_index_snapshot(*, cache: bool = True) -> dict[s
         "_served_from": "index_snapshot_canonical",
     }
     if cache:
-        try:
-            from dashboard.backend.cache import set as cache_set
-
-            cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
-        except Exception as exc:
-            log.debug("canonical sector strength cache write failed: %s", exc)
+        cache_put(result, SOURCE_CANONICAL_INDEX)
     log.info(
         "[sector_strength] canonical: %d sectors banded (%d leading), %d unmapped, orphan keys dropped: %s",
         len(sectors), len(result["leading"]), len(unmapped), orphan_sector_keys(),
@@ -234,6 +229,136 @@ def _ret(closes: list[float], n: int) -> float | None:
     if a <= 0:
         return None
     return (b - a) / a * 100.0
+
+
+# ── Deterministic cache contract (2026-10-12) ────────────────────────────────
+# THREE producers write the SAME day-scoped key and the last one wins:
+#   compute_sector_strength_from_candles()  constituent, canonical labels, ~99%
+#   compute_sector_strength_from_index_snapshot()  canonical index, ~46%
+#   compute_sector_strength()               legacy yfinance index, ~13%, orphan keys
+# Observed consequence: `ranking_engine` runs BEFORE the validation scan every day
+# (03:02 vs 03:04 UTC) and is always the cold-cache caller, so it read the 13%
+# legacy bands while every later consumer read the 99% constituent bands — the
+# same engine, same day, different inputs (LONGTERM 2026-10-11: 00:02 selected 0,
+# 00:04 selected 1).
+#
+# This contract makes the write MONOTONIC: a lower-confidence source can never
+# overwrite a higher-confidence one for the same day. It is deliberately
+# behaviour-PRESERVING — it does not change which source a cold caller computes,
+# only that a good result cannot be clobbered by a worse one.
+SOURCE_CONSTITUENT = "constituent"
+SOURCE_CANONICAL_INDEX = "canonical_index"
+SOURCE_LEGACY_INDEX = "legacy_index"
+SOURCE_RANK: dict[str, int] = {
+    SOURCE_LEGACY_INDEX: 1,
+    SOURCE_CANONICAL_INDEX: 2,
+    SOURCE_CONSTITUENT: 3,
+}
+
+# Atomic compare-and-set: store only when the incoming rank is >= the stored rank
+# for the SAME day. Different day, missing key or corrupt value ⇒ always store.
+_CAS_LUA = """
+local cur = redis.call('GET', KEYS[1])
+if cur then
+  local ok, prev = pcall(cjson.decode, cur)
+  if ok and type(prev) == 'table' and prev['_provenance'] then
+    local p = prev['_provenance']
+    if p['generated_for'] == ARGV[3] then
+      -- a lower-confidence producer may never replace a higher-confidence one
+      if tonumber(p['rank']) > tonumber(ARGV[2]) then
+        return 0
+      end
+      -- a blackout (zero banded sectors) may never erase real bands, even at equal rank
+      if tonumber(ARGV[5]) == 0 and tonumber(p['banded_sectors']) > 0 then
+        return 0
+      end
+    end
+  end
+end
+redis.call('SETEX', KEYS[1], ARGV[4], ARGV[1])
+return 1
+"""
+
+
+def _coverage(sectors: dict) -> tuple[int, float]:
+    """(banded_sectors, % of emitted sectors carrying a usable band)."""
+    if not sectors:
+        return 0, 0.0
+    banded = sum(1 for v in sectors.values() if (v or {}).get("band") in ("leading", "lagging", "neutral"))
+    return banded, round(banded * 100.0 / len(sectors), 1)
+
+
+def _stamp(result: dict, source: str) -> dict:
+    """Attach provenance so every consumer can see WHICH producer it is reading."""
+    banded, pct = _coverage(result.get("sectors") or {})
+    result["_provenance"] = {
+        "source": source,
+        "rank": SOURCE_RANK.get(source, 0),
+        "banded_sectors": banded,
+        "emitted_sectors": len(result.get("sectors") or {}),
+        "coverage_pct": pct,
+        "built_at": time.time(),
+        "generated_for": result.get("generated_for") or date.today().isoformat(),
+    }
+    return result
+
+
+def cache_put(result: dict, source: str) -> bool:
+    """Monotonic, atomic write. Returns True when stored, False when refused.
+
+    Refusal means a higher-confidence source already holds the day — which is a
+    correct outcome, not an error. Never raises.
+    """
+    _stamp(result, source)
+    prov = result["_provenance"]
+    try:
+        from dashboard.backend.cache import _get_redis
+        from dashboard.backend.cache import set as cache_set
+
+        client = _get_redis()
+        if client is None:                      # Redis down → in-memory fallback
+            cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
+            return True
+        import json as _json
+
+        stored = client.eval(
+            _CAS_LUA, 1, _redis_key(),
+            _json.dumps(result, default=str), str(prov["rank"]),
+            str(prov["generated_for"]), str(_REDIS_TTL), str(prov["banded_sectors"]),
+        )
+        if not stored:
+            log.info("[sector_strength] write REFUSED: %s (rank %d, cov %.0f%%) — a "
+                     "higher-confidence source already holds %s",
+                     source, prov["rank"], prov["coverage_pct"], prov["generated_for"])
+        return bool(stored)
+    except Exception as exc:
+        log.debug("sector strength cache_put failed (%s): %s", source, exc)
+        return False
+
+
+def sector_strength_status() -> dict:
+    """What is actually cached right now, and from which producer. Read-only."""
+    try:
+        from dashboard.backend.cache import get as cache_get
+
+        cached = cache_get(_redis_key())
+        if not isinstance(cached, dict) or not cached.get("sectors"):
+            return {"available": False, "key": _redis_key()}
+        prov = cached.get("_provenance") or {}
+        return {
+            "available": True,
+            "key": _redis_key(),
+            "source": prov.get("source", "unknown_legacy_write"),
+            "rank": prov.get("rank"),
+            "coverage_pct": prov.get("coverage_pct"),
+            "emitted_sectors": prov.get("emitted_sectors", len(cached.get("sectors") or {})),
+            "built_at": prov.get("built_at"),
+            "age_sec": round(time.time() - prov["built_at"], 1) if prov.get("built_at") else None,
+            "generated_for": prov.get("generated_for") or cached.get("generated_for"),
+            "leading": cached.get("leading", []),
+        }
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
 
 
 def _redis_key() -> str:
@@ -306,12 +431,7 @@ def compute_sector_strength(*, refresh: bool = False) -> dict[str, Any]:
         "_built_at": time.time(),
         "_served_from": "fresh",
     }
-    try:
-        from dashboard.backend.cache import set as cache_set
-
-        cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
-    except Exception as exc:
-        log.debug("sector strength cache write failed: %s", exc)
+    cache_put(result, SOURCE_LEGACY_INDEX)
     return result
 
 
@@ -410,11 +530,7 @@ def compute_sector_strength_from_candles(
         "_served_from": "constituents",
     }
     if cache:
-        try:
-            from dashboard.backend.cache import set as cache_set
-            cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
-        except Exception as exc:
-            log.debug("constituent sector strength cache write failed: %s", exc)
+        cache_put(result, SOURCE_CONSTITUENT)
     log.info(
         "sector_strength_from_candles: %d stocks, breadth20=%.2f%%, %d leading (%s)",
         len(ret20), breadth20, len(result["leading"]), ", ".join(result["leading"]) or "none",
