@@ -1785,6 +1785,14 @@ def get_data_health():
         except Exception as exc:
             payload["index_ohlc"] = {"available": False, "usable": False,
                                      "reason": f"error: {str(exc)[:120]}"}
+        # Which sector-strength producer actually holds today's cache, and how
+        # much coverage it has. Three producers share one key; before this was
+        # surfaced, the winner was invisible and varied by run order.
+        try:
+            from services.sector_strength import sector_strength_status
+            payload["sector_strength"] = sector_strength_status()
+        except Exception as exc:
+            payload["sector_strength"] = {"available": False, "reason": f"error: {str(exc)[:120]}"}
         return _safe_json_response(payload)
     except Exception as exc:
         log.exception("data-health endpoint failed")
