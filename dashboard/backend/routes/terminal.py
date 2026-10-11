@@ -20,9 +20,15 @@ Phase 2 + 3 — REST endpoints for the AI Trade Opportunity Terminal.
     GET  /api/performance        → win rate, avg RR, best/worst setups
     GET  /api/alerts             → recent lifecycle alerts (bell icon)
 
-Optional API-key gate via env var ``TERMINAL_API_KEY``. When unset, endpoints
-are open (matches the rest of the dashboard). When set, callers must send
-``X-API-Key`` header or ``?api_key=`` query param.
+Optional API-key gate via env var ``TERMINAL_API_KEY`` on the PUBLIC market-data
+endpoints. When unset, those endpoints are open (matches the rest of the
+dashboard). When set, callers must send ``X-API-Key`` header or ``?api_key=``.
+
+USER-SCOPED endpoints (preferences, journal, performance, trades/{sym}/taken)
+are NOT behind that key: they require a verified JWT, and the user is ALWAYS
+derived from the token. Until 2026-10-11 they took ``?user_id=`` from the
+client (default "default") behind the open-mode key, so anyone could read,
+write or delete any user's data, and every visitor shared one "default" row.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
+from dashboard.backend.routes.auth import get_current_user, get_optional_user
 from dashboard.backend.terminal_events import (
     EVENTS_RING_SIZE,
     get_recent_events,
@@ -59,6 +66,25 @@ def _require_api_key(
         raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
+def _store_key(user: dict) -> str:
+    """user_store key for a verified JWT user.
+
+    Namespaced ("uid:<id>") rather than the bare id: while these endpoints were
+    open, anyone could have written rows under "1", "2", … — a bare-id key would
+    hand those planted rows to the real account. Legacy rows (including the
+    shared "default") stay orphaned and untouched; nothing is deleted.
+    """
+    return f"uid:{int(user['sub'])}"
+
+
+def _prefs_for(user: dict | None) -> dict:
+    """The caller's preferences, or the built-in defaults when anonymous."""
+    from dashboard.backend.user_store import DEFAULT_PREFERENCES, get_preferences
+    if user is None:
+        return dict(DEFAULT_PREFERENCES)
+    return get_preferences(_store_key(user))
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────
@@ -73,8 +99,8 @@ def list_trades(
     strategy: Optional[str] = Query(default=None, description="intraday | swing | all"),
     risk: Optional[str] = Query(default=None, description="conservative | aggressive"),
     symbol: Optional[str] = Query(default=None, description="Case-insensitive partial ticker match, e.g. REL or RELIANCE"),
-    user_id: str = Query(default="default"),
     apply_prefs: bool = Query(default=True),
+    user: dict | None = Depends(get_optional_user),
 ):
     """Ranked standardized signals — active trades first, then today's queue.
 
@@ -108,8 +134,7 @@ def list_trades(
     prefs = None
     if apply_prefs:
         try:
-            from dashboard.backend.user_store import get_preferences
-            prefs = get_preferences(user_id)
+            prefs = _prefs_for(user)
             # `direction=BOTH` means no filter — drop it before passing to ranker
             if (prefs.get("direction") or "BOTH").upper() == "BOTH":
                 prefs = {**prefs, "direction": ""}
@@ -221,15 +246,17 @@ def terminal_health():
 # ─────────────────────────────────────────────────────────────────────────
 
 @router.get("/summary", dependencies=[Depends(_require_api_key)])
-def get_summary(user_id: str = Query(default="default")):
-    """AI summary panel: top 3 trades, best opportunity, market bias."""
+def get_summary(user: dict | None = Depends(get_optional_user)):
+    """AI summary panel: top 3 trades, best opportunity, market bias.
+
+    Public. Personalised with the caller's preferences when a valid token is
+    sent; built-in defaults otherwise (never another user's row)."""
     try:
         from dashboard.backend.intelligence import summarize
         from dashboard.backend.state_bridge import get_engine_snapshot
-        from dashboard.backend.user_store import get_preferences
         snap = get_engine_snapshot() or {}
         regime = snap.get("regime") or snap.get("market_regime") or {}
-        prefs = get_preferences(user_id)
+        prefs = _prefs_for(user)
         if (prefs.get("direction") or "BOTH").upper() == "BOTH":
             prefs = {**prefs, "direction": ""}
         active = read_active_trades()
@@ -249,63 +276,66 @@ def get_summary(user_id: str = Query(default="default")):
         raise HTTPException(status_code=500, detail=f"summary_failed: {exc}")
 
 
-@router.get("/preferences", dependencies=[Depends(_require_api_key)])
-def get_user_preferences(user_id: str = Query(default="default")):
+# ── User-scoped: verified JWT required; identity never comes from the client ──
+# (GET /api/journal is shadowed in practice by journal_router's public engine
+# journal, which is registered first — it is secured here anyway.)
+
+@router.get("/preferences")
+def get_user_preferences(user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import get_preferences
-    return get_preferences(user_id)
+    return get_preferences(_store_key(user))
 
 
-@router.post("/preferences", dependencies=[Depends(_require_api_key)])
-def post_user_preferences(
-    payload: dict = Body(...),
-    user_id: str = Query(default="default"),
-):
+@router.post("/preferences")
+def post_user_preferences(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import set_preferences
-    return set_preferences(user_id, payload)
+    return set_preferences(_store_key(user), payload)
 
 
-@router.get("/journal", dependencies=[Depends(_require_api_key)])
+@router.get("/journal")
 def get_user_journal(
-    user_id: str = Query(default="default"),
     status: Optional[str] = Query(default=None, pattern="^(OPEN|CLOSED|open|closed)$"),
     limit: int = Query(default=200, ge=1, le=2000),
+    user: dict = Depends(get_current_user),
 ):
     from dashboard.backend.user_store import list_journal
-    rows = list_journal(user_id=user_id, limit=limit, status=status)
+    rows = list_journal(user_id=_store_key(user), limit=limit, status=status)
     return {"entries": rows, "count": len(rows)}
 
 
-@router.post("/journal", dependencies=[Depends(_require_api_key)])
-def post_user_journal(payload: dict = Body(...), user_id: str = Query(default="default")):
+@router.post("/journal")
+def post_user_journal(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import add_journal_entry
-    rec = add_journal_entry(user_id, payload)
+    rec = add_journal_entry(_store_key(user), payload)
     if not rec:
         raise HTTPException(status_code=400, detail="invalid_journal_payload")
     return rec
 
 
-@router.patch("/journal/{entry_id}", dependencies=[Depends(_require_api_key)])
-def patch_user_journal(entry_id: int, payload: dict = Body(...), user_id: str = Query(default="default")):
+@router.patch("/journal/{entry_id}")
+def patch_user_journal(entry_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import update_journal_entry
-    rec = update_journal_entry(user_id, entry_id, payload)
+    # update/delete are scoped by (user_id, id), so another user's entry id
+    # simply doesn't match → 404, indistinguishable from "doesn't exist".
+    rec = update_journal_entry(_store_key(user), entry_id, payload)
     if not rec:
         raise HTTPException(status_code=404, detail="journal_entry_not_found")
     return rec
 
 
-@router.delete("/journal/{entry_id}", dependencies=[Depends(_require_api_key)])
-def delete_user_journal(entry_id: int, user_id: str = Query(default="default")):
+@router.delete("/journal/{entry_id}")
+def delete_user_journal(entry_id: int, user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import delete_journal_entry
-    ok = delete_journal_entry(user_id, entry_id)
+    ok = delete_journal_entry(_store_key(user), entry_id)
     if not ok:
         raise HTTPException(status_code=404, detail="journal_entry_not_found")
     return {"ok": True, "id": entry_id}
 
 
-@router.get("/performance", dependencies=[Depends(_require_api_key)])
-def get_user_performance(user_id: str = Query(default="default")):
+@router.get("/performance")
+def get_user_performance(user: dict = Depends(get_current_user)):
     from dashboard.backend.user_store import compute_performance
-    return compute_performance(user_id)
+    return compute_performance(_store_key(user))
 
 
 @router.get("/alerts", dependencies=[Depends(_require_api_key)])
@@ -319,11 +349,11 @@ def get_user_alerts(limit: int = Query(default=50, ge=1, le=200)):
 # Decision Engine — user feedback loop
 # ─────────────────────────────────────────────────────────────────────────
 
-@router.post("/trades/{symbol}/taken", dependencies=[Depends(_require_api_key)])
+@router.post("/trades/{symbol}/taken")
 def mark_trade_taken(
     symbol: str,
     payload: dict = Body(default={}),
-    user_id: str = Query(default="default"),
+    user: dict = Depends(get_current_user),
 ):
     """
     Mark a signal as 'trade taken' — creates a OPEN journal entry.
@@ -338,6 +368,7 @@ def mark_trade_taken(
     if not record:
         # Allow user to mark without a live signal (manual entry).
         record = {"symbol": sym}
+    user_id = _store_key(user)
     try:
         from dashboard.backend.user_store import add_journal_entry, list_journal
         # Check if already open to avoid duplicate.
@@ -370,8 +401,8 @@ def mark_trade_taken(
 
 @router.get("/pnl/daily", dependencies=[Depends(_require_api_key)])
 def get_daily_pnl(
-    user_id: str = Query(default="default"),
     date: Optional[str] = Query(default=None, description="YYYY-MM-DD, defaults to today IST"),
+    user: dict | None = Depends(get_optional_user),
 ):
     """
     Daily PnL summary for the user loop.
@@ -391,10 +422,11 @@ def get_daily_pnl(
 
     trades_today: list[dict] = []
 
-    # ── Source 1: journal closed today (reliable, authoritative) ────────
+    # ── Source 1: the caller's own journal closed today (authenticated only)
+    # Anonymous callers skip straight to the engine's public daily P&L below.
     try:
         from dashboard.backend.user_store import list_journal
-        entries = list_journal(user_id=user_id, status="CLOSED", limit=500)
+        entries = list_journal(user_id=_store_key(user), status="CLOSED", limit=500) if user else []
         for e in entries:
             closed_at = e.get("closed_at")
             if isinstance(closed_at, (int, float)):

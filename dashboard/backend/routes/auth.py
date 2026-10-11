@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header, Request
 from pydantic import BaseModel
 
 from dashboard.backend.db import get_connection
@@ -298,14 +298,26 @@ def register(req: RegisterRequest):
 
 
 @router.post("/api/auth/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, request: Request):
+    from dashboard.backend.auth_throttle import (
+        check_login_allowed,
+        record_login_failure,
+        record_login_success,
+    )
+    from dashboard.backend.rate_limit import _client_ip
+
+    ip = _client_ip(request)
+    # Checked before the DB/bcrypt so a locked-out attacker costs us nothing.
+    check_login_allowed(req.email, ip)
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM users WHERE email = ?", (req.email.lower(),)).fetchone()
-        if not row:
+        # Unknown email and wrong password count and answer identically, so
+        # neither the 401 nor a later 429 reveals whether an account exists.
+        if not row or not _verify_password(req.password, row["password_hash"]):
+            record_login_failure(req.email, ip)
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        if not _verify_password(req.password, row["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+        record_login_success(req.email)
         token = _create_token(row["id"], row["email"], row["role"])
         return {"ok": True, "token": token, "user": {"id": row["id"], "email": row["email"], "name": row["name"], "role": row["role"]}}
     finally:
