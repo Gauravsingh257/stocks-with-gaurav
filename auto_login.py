@@ -27,6 +27,7 @@ Schedule (Windows Task Scheduler):
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sys
@@ -370,7 +371,8 @@ def _store_token(access_token: str) -> None:
     if sync_failures:
         fail_msg = ", ".join(sync_failures)
         log.error("⚠️ Token saved locally but REMOTE SYNC FAILED: %s", fail_msg)
-        _send_telegram(
+        _send_telegram_throttled(
+            f"token_sync_failed:{fail_msg}",
             f"⚠️ <b>Token Sync FAILED</b>\n"
             f"Login OK but token NOT pushed to: <b>{fail_msg}</b>\n"
             f"Engine on Railway will NOT have a valid token!\n"
@@ -480,6 +482,7 @@ def _mark_auto_login_success() -> None:
 def _send_telegram(message: str) -> None:
     """Send Telegram notification (best-effort, never throws)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        log.error("[Telegram] BOT_TOKEN not set — cannot send message")
         return
     try:
         import requests
@@ -491,6 +494,79 @@ def _send_telegram(message: str) -> None:
         }, timeout=10)
     except Exception:
         pass
+
+
+# ── Failure-alert throttling ───────────────────────────────────────
+# THE 2026-10-11 FLOOD: the engine's Kite health gate calls auto_login()
+# every recovery cycle. The "all attempts exhausted" alert below had no
+# cooldown and no market-closed gate, so one stuck credential produced
+# hundreds of identical Telegram messages between 07:09 and 13:00 IST on a
+# Sunday. (Root cause of the stuck login: KITE_API_SECRET was updated in
+# Railway while the engine process was running. A variable change does not
+# restart the service, and os.environ is frozen at process start, so the
+# live process kept computing generate_session's checksum with the stale
+# secret → "Invalid checksum" forever. A redeploy fixed it.)
+#
+# The engine already solved this shape of problem for its own token alerts
+# (_maybe_alert_token_issue, 1h per reason). The difference here is that the
+# flood survived process restarts, so the dedupe state must too — it lives in
+# Redis, with an in-process fallback when Redis is unavailable.
+_ALERT_COOLDOWN_TRADING_SEC = 3600    # 1h on a trading day — matches the engine
+_ALERT_COOLDOWN_CLOSED_SEC = 43200    # 12h when the market is closed/weekend
+_ALERT_DEDUPE_PREFIX = "kite:auto_login:alert"
+_LOCAL_ALERT_SENT: dict[str, float] = {}
+
+
+def _is_trading_day() -> bool:
+    """Mon–Fri in IST. Holidays are not modelled here on purpose: a wrong
+    'holiday' guess would silence a real outage, and the cooldown already
+    caps a holiday to one message."""
+    try:
+        return datetime.now(_IST).weekday() < 5
+    except Exception:
+        return True  # fail-loud: treat as a trading day
+
+
+def _alert_cooldown_sec() -> int:
+    return _ALERT_COOLDOWN_TRADING_SEC if _is_trading_day() else _ALERT_COOLDOWN_CLOSED_SEC
+
+
+def _send_telegram_throttled(reason: str, message: str) -> bool:
+    """Send `message` at most once per cooldown window per (reason, message).
+
+    Keeps exactly one actionable alert — the first failure still pings
+    immediately, so a genuine "manual login required" is never lost — while
+    every identical repeat inside the window is dropped. Returns True if sent.
+
+    Dedupe state is a Redis key with NX+EX so it is shared across the engine,
+    the web scheduler and the GitHub Actions runner, and survives the restarts
+    that defeated an in-process guard. Falls back to a per-process dict only
+    when Redis is unreachable (best-effort; never raises)."""
+    cooldown = _alert_cooldown_sec()
+    fingerprint = hashlib.sha256(f"{reason}|{message}".encode()).hexdigest()[:16]
+    key = f"{_ALERT_DEDUPE_PREFIX}:{reason}:{fingerprint}"
+
+    r = _redis_client()
+    if r is not None:
+        try:
+            if not r.set(key, str(time.time()), nx=True, ex=cooldown):
+                log.info("Alert suppressed (%s): identical alert already sent "
+                         "within %ds", reason, cooldown)
+                return False
+            _send_telegram(message)
+            return True
+        except Exception as e:
+            log.warning("Alert dedupe via Redis failed (%s) — using in-process "
+                        "guard for this attempt", e)
+
+    now = time.time()
+    if now - _LOCAL_ALERT_SENT.get(key, 0.0) < cooldown:
+        log.info("Alert suppressed (%s): in-process cooldown %ds active",
+                 reason, cooldown)
+        return False
+    _LOCAL_ALERT_SENT[key] = now
+    _send_telegram(message)
+    return True
 
 
 # ── Main ───────────────────────────────────────────────────────────
@@ -587,7 +663,8 @@ def auto_login() -> bool:
                 log.warning("Auto-login: missing config pre-open — suppressing "
                             "false alarm (not market hours). %s", audit)
                 return False
-            _send_telegram(
+            _send_telegram_throttled(
+                "missing_config",
                 f"❌ <b>Auto-Login FAILED</b>\n{msg}\n"
                 f"<i>No fresh token in Redis either.</i>\n"
                 f"<code>src: {_host}</code>")
@@ -633,9 +710,13 @@ def auto_login() -> bool:
             except Exception:
                 pass
 
-    # All retries exhausted
+    # All retries exhausted. Throttled: the engine's recovery loop calls this
+    # every cycle, so an unguarded send here is a Telegram flood (2026-10-11).
+    # The first failure still alerts immediately; repeats are suppressed for
+    # the cooldown window, which is longer when the market is closed.
     log.error("❌ ALL %d LOGIN ATTEMPTS FAILED", MAX_RETRIES)
-    _send_telegram(
+    _send_telegram_throttled(
+        "all_attempts_failed",
         f"🚨 <b>Auto-Login FAILED</b>\n"
         f"User: {USER_ID}\n"
         f"All {MAX_RETRIES} attempts exhausted.\n"
