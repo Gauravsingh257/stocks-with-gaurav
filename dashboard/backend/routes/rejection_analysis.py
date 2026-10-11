@@ -65,7 +65,7 @@ def signals_log_export(
             f"""
             SELECT scan_id, horizon, symbol, date, cmp, entry, stop_loss, target,
                    confidence, layer1_pass, layer2_pass, layer3_pass, final_selected,
-                   rejection_reason
+                   rejection_reason, layer_details
             FROM signals_log
             WHERE date >= ? {hz} AND {cond}
             ORDER BY date DESC
@@ -80,6 +80,22 @@ def signals_log_export(
                 d["rejection_reason"] = json.loads(d.get("rejection_reason") or "[]")
             except Exception:
                 d["rejection_reason"] = []
+            # Surface the exceptionalism verdict that already lives in
+            # `layer_details` (written at scan time by `score_and_qualify`).
+            # Without it a row cannot be attributed to the exceptionalism gate:
+            # "not qualified" and "qualified but ranked below the ceiling" are
+            # indistinguishable, which blocked the 2026-10-11 ceiling study.
+            # Scalars only — the full blob stays out of the payload.
+            exc = {}
+            try:
+                exc = (json.loads(d.pop("layer_details", "") or "{}") or {}).get("exceptionalism") or {}
+            except Exception:
+                exc = {}
+            d["exc_score"] = exc.get("exceptionalism")
+            d["exc_threshold"] = exc.get("threshold")
+            d["exc_qualifies"] = exc.get("qualifies")
+            d["exc_reason"] = exc.get("reason")
+            d["exc_sector_band"] = exc.get("sector_band")
             out.append(d)
         return {"availability": availability, "kind": kind, "days": days,
                 "returned": len(out), "rows": out}
