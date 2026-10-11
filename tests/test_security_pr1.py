@@ -199,9 +199,15 @@ def test_daily_pnl_never_shows_another_users_journal_to_anonymous(client):
 # /api/terminal/journal. These assert the real main:app wiring, because the
 # bug being guarded against is invisible to an isolated-router test.
 
-def _routes_for(path: str, method: str):
-    from dashboard.backend.main import app
-    return [r for r in app.routes
+def _routes_for(client, path: str, method: str):
+    """Routes on the app THIS CLIENT serves.
+
+    Deliberately not `from dashboard.backend.main import app`: in a full-suite
+    run that re-import did not yield the same route set as the app under test
+    (0 matches in CI while requests to those very paths succeeded). Inspecting
+    client.app removes the ambiguity and checks the object actually serving.
+    """
+    return [r for r in client.app.routes
             if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or ())]
 
 
@@ -210,9 +216,9 @@ def _routes_for(path: str, method: str):
     ("GET", "/api/terminal/journal"), ("POST", "/api/terminal/journal"),
     ("PATCH", "/api/terminal/journal/{entry_id}"), ("DELETE", "/api/terminal/journal/{entry_id}"),
 ])
-def test_no_duplicate_route_registrations(method, path):
+def test_no_duplicate_route_registrations(client, method, path):
     """No path+method may be registered twice: the second is unreachable."""
-    matches = _routes_for(path, method)
+    matches = _routes_for(client, path, method)
     assert len(matches) <= 1, (
         f"{method} {path} registered {len(matches)}x: "
         + ", ".join(f"{r.endpoint.__module__}.{r.endpoint.__name__}" for r in matches)
@@ -222,18 +228,18 @@ def test_no_duplicate_route_registrations(method, path):
 def test_public_journal_is_served_by_the_public_handler(client):
     """GET /api/journal must remain the public engine journal, not the
     personal one — and must NOT start demanding a token."""
-    matches = _routes_for("/api/journal", "GET")
-    assert len(matches) == 1
+    matches = _routes_for(client, "/api/journal", "GET")
+    assert len(matches) == 1, f"expected exactly one handler, got {len(matches)}"
     assert matches[0].endpoint.__module__.endswith("routes.journal")
     assert client.get("/api/journal?limit=1").status_code == 200  # still public
 
 
-def test_personal_journal_is_served_by_the_terminal_handler():
+def test_personal_journal_is_served_by_the_terminal_handler(client):
     for method, path in [("GET", "/api/terminal/journal"), ("POST", "/api/terminal/journal"),
                          ("PATCH", "/api/terminal/journal/{entry_id}"),
                          ("DELETE", "/api/terminal/journal/{entry_id}")]:
-        matches = _routes_for(path, method)
-        assert len(matches) == 1, f"{method} {path}"
+        matches = _routes_for(client, path, method)
+        assert len(matches) == 1, f"{method} {path}: got {len(matches)}"
         assert matches[0].endpoint.__module__.endswith("routes.terminal")
 
 
@@ -255,7 +261,7 @@ def test_public_journal_write_endpoints_are_unaffected(client):
     """POST /api/journal/trade and /api/journal/sync belong to the public
     router and must not have been captured by the terminal's auth."""
     for path in ("/api/journal/trade", "/api/journal/sync"):
-        matches = _routes_for(path, "POST")
+        matches = _routes_for(client, path, "POST")
         assert len(matches) == 1 and matches[0].endpoint.__module__.endswith("routes.journal")
         # reachable without a bearer token (not 401/403 from our new guards)
         assert client.post(path, json={}).status_code not in (401, 403)
