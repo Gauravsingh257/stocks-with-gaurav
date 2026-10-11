@@ -39,7 +39,10 @@ log = logging.getLogger("auto_content")
 
 # ── Config ─────────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CONTENT_CHAT_ID = os.getenv("TELEGRAM_CONTENT_CHAT_ID", "-1003831117587")
+# Environment-only: a hardcoded destination fallback is a credential committed
+# to a public repo, and it silently keeps posting to the baked-in chat when the
+# env var is missing. Empty means "not configured" — callers must handle that.
+CONTENT_CHAT_ID = os.getenv("TELEGRAM_CONTENT_CHAT_ID", "")
 PYTHON = str(ROOT / ".venv" / "Scripts" / "python.exe")
 CONTENT_MAIN = str(ROOT / "Content Creation" / "main.py")
 OUTPUT_DIR = ROOT / "Content Creation" / "output"
@@ -218,6 +221,11 @@ def main():
 
     if not BOT_TOKEN:
         log.error("TELEGRAM_BOT_TOKEN not set in .env")
+        sys.exit(1)
+
+    if not CONTENT_CHAT_ID:
+        log.error("TELEGRAM_CONTENT_CHAT_ID not set in .env — refusing to post "
+                  "(the hardcoded destination fallback was removed)")
         sys.exit(1)
 
     log.info(f"=== {mode_label} Content Pipeline ===")
