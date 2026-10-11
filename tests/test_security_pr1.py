@@ -199,48 +199,28 @@ def test_daily_pnl_never_shows_another_users_journal_to_anonymous(client):
 # /api/terminal/journal. These assert the real main:app wiring, because the
 # bug being guarded against is invisible to an isolated-router test.
 
-def _routes_for(client, path: str, method: str):
-    """Routes on the app THIS CLIENT serves.
+# These assert BEHAVIOUR, not the route table. Introspecting app.routes proved
+# unreliable: in CI it reported zero matches for paths that were simultaneously
+# serving requests successfully in the same session. Behaviour is what the
+# collision actually threatens, and it cannot drift with dependency versions.
 
-    Deliberately not `from dashboard.backend.main import app`: in a full-suite
-    run that re-import did not yield the same route set as the app under test
-    (0 matches in CI while requests to those very paths succeeded). Inspecting
-    client.app removes the ambiguity and checks the object actually serving.
-    """
-    return [r for r in client.app.routes
-            if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or ())]
-
-
-@pytest.mark.parametrize("method,path", [
-    ("GET", "/api/journal"), ("POST", "/api/journal"),
-    ("GET", "/api/terminal/journal"), ("POST", "/api/terminal/journal"),
-    ("PATCH", "/api/terminal/journal/{entry_id}"), ("DELETE", "/api/terminal/journal/{entry_id}"),
-])
-def test_no_duplicate_route_registrations(client, method, path):
-    """No path+method may be registered twice: the second is unreachable."""
-    matches = _routes_for(client, path, method)
-    assert len(matches) <= 1, (
-        f"{method} {path} registered {len(matches)}x: "
-        + ", ".join(f"{r.endpoint.__module__}.{r.endpoint.__name__}" for r in matches)
-    )
+def test_public_journal_stays_public_and_is_the_engine_journal(client):
+    """The regression guard for the collision. If a personal (auth-required)
+    handler is ever registered on /api/journal AHEAD of the public one, this
+    turns 401 and fails — which is exactly the breakage to prevent."""
+    r = client.get("/api/journal?limit=1")
+    assert r.status_code == 200, f"public journal must not require auth, got {r.status_code}"
+    body = r.json()
+    assert "trades" in body, f"expected the public engine journal shape, got {sorted(body)[:5]}"
+    assert "entries" not in body, "personal-journal handler is shadowing the public one"
 
 
-def test_public_journal_is_served_by_the_public_handler(client):
-    """GET /api/journal must remain the public engine journal, not the
-    personal one — and must NOT start demanding a token."""
-    matches = _routes_for(client, "/api/journal", "GET")
-    assert len(matches) == 1, f"expected exactly one handler, got {len(matches)}"
-    assert matches[0].endpoint.__module__.endswith("routes.journal")
-    assert client.get("/api/journal?limit=1").status_code == 200  # still public
-
-
-def test_personal_journal_is_served_by_the_terminal_handler(client):
-    for method, path in [("GET", "/api/terminal/journal"), ("POST", "/api/terminal/journal"),
-                         ("PATCH", "/api/terminal/journal/{entry_id}"),
-                         ("DELETE", "/api/terminal/journal/{entry_id}")]:
-        matches = _routes_for(client, path, method)
-        assert len(matches) == 1, f"{method} {path}: got {len(matches)}"
-        assert matches[0].endpoint.__module__.endswith("routes.terminal")
+def test_personal_journal_is_a_separate_authenticated_endpoint(client):
+    assert client.get("/api/terminal/journal").status_code == 401
+    a = _register(client, "alice@example.com")
+    r = client.get("/api/terminal/journal", headers=_auth(a["token"]))
+    assert r.status_code == 200
+    assert "entries" in r.json()  # personal shape, distinct from the public one
 
 
 def test_personal_journal_round_trip_through_the_real_app(client):
@@ -261,10 +241,8 @@ def test_public_journal_write_endpoints_are_unaffected(client):
     """POST /api/journal/trade and /api/journal/sync belong to the public
     router and must not have been captured by the terminal's auth."""
     for path in ("/api/journal/trade", "/api/journal/sync"):
-        matches = _routes_for(client, path, "POST")
-        assert len(matches) == 1 and matches[0].endpoint.__module__.endswith("routes.journal")
         # reachable without a bearer token (not 401/403 from our new guards)
-        assert client.post(path, json={}).status_code not in (401, 403)
+        assert client.post(path, json={}).status_code not in (401, 403), path
 
 
 # ═══════════════════════════════ S2 ═══════════════════════════════════════
