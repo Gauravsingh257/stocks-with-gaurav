@@ -39,6 +39,156 @@ SECTOR_INDEX_TICKER: dict[str, str] = {
 }
 NIFTY_TICKER = "^NSEI"
 
+# ── Canonical taxonomy (2026-10-11) ──────────────────────────────────────────
+# The ONE taxonomy is whatever `sector_classification.resolve_sector()` emits,
+# because that is what every stock is actually labelled with. `SECTOR_INDEX_TICKER`
+# above predates it and contains keys that are NOT stock labels — "Banking" and
+# "Insurance" classify as "Finance", so a band computed under those keys can never
+# attach to a single stock. Measured 2026-10-11: the only sector flagged `leading`
+# was "Banking" (rel20 +2.04) and it reached 0 of 2,425 stocks.
+#
+# `index_ohlc.INDEX_REGISTRY` already carries the correct bridge (NSE index ->
+# canonical stock sector) and is populated by the `scanner` service from Kite, so
+# it is also immune to the yfinance datacenter block that leaves most sectors
+# "unknown" on Railway.
+#
+# Flag-gated: SECTOR_STRENGTH_CANONICAL=0 (default) keeps today's behaviour exactly.
+CANONICAL_INDEX_SOURCE = "index_ohlc.INDEX_REGISTRY"
+
+# Sectors referenced by several NSE indices need ONE deterministic primary.
+# Chosen as the broadest index for the label, never the narrowest:
+#   Finance -> NIFTY FIN SERVICE (banks + NBFCs + insurers, matching the label's
+#              membership) rather than NIFTY BANK, which is a subset.
+SECTOR_PRIMARY_INDEX: dict[str, str] = {
+    "Finance": "NIFTY FIN SERVICE",
+    "Pharma": "NIFTY PHARMA",
+    "Energy": "NIFTY ENERGY",
+    "Capital Goods": "NIFTY IND DEFENCE",
+}
+CANONICAL_BENCHMARK_INDEX = "NIFTY 50"
+
+
+def canonical_sectors() -> set[str]:
+    """Every sector label a stock can actually carry. Source of truth."""
+    try:
+        from services.sector_classification import _NSE_TO_LEGACY, UNKNOWN
+
+        return set(_NSE_TO_LEGACY.values()) | {UNKNOWN}
+    except Exception:
+        return set()
+
+
+def canonical_strength_enabled() -> bool:
+    return os.getenv("SECTOR_STRENGTH_CANONICAL", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def orphan_sector_keys() -> list[str]:
+    """`SECTOR_INDEX_TICKER` keys that are not real stock labels (dead bands)."""
+    canon = canonical_sectors()
+    if not canon:
+        return []
+    return sorted(k for k in SECTOR_INDEX_TICKER if k not in canon)
+
+
+def sector_index_map() -> dict[str, str]:
+    """canonical sector -> primary NSE index name, from INDEX_REGISTRY."""
+    try:
+        from services.index_ohlc import INDEX_REGISTRY, SECTOR
+    except Exception:
+        return {}
+    canon = canonical_sectors()
+    out: dict[str, str] = {}
+    for name, role, sector in INDEX_REGISTRY:
+        if role != SECTOR or not sector:
+            continue
+        if canon and sector not in canon:
+            log.warning("[sector_strength] index %s references non-canonical sector %r — ignored", name, sector)
+            continue
+        preferred = SECTOR_PRIMARY_INDEX.get(sector)
+        if preferred:
+            if name == preferred:
+                out[sector] = name
+        elif sector not in out:
+            out[sector] = name
+    # A configured primary that is missing from the registry must not drop the sector.
+    for sector, preferred in SECTOR_PRIMARY_INDEX.items():
+        if sector not in out and any(n == preferred for n, _r, _s in INDEX_REGISTRY):
+            out[sector] = preferred
+    return out
+
+
+def compute_sector_strength_from_index_snapshot(*, cache: bool = True) -> dict[str, Any]:
+    """Bands from OUR index snapshot, keyed by canonical stock-sector labels.
+
+    Same formulas and the same `_LEAD_REL20_PCT` / `_LAG_REL20_PCT` thresholds as
+    the yfinance path — only the taxonomy and the data source change. Sectors with
+    no index are reported explicitly in `unmapped_sectors`, never faked.
+    """
+    from services.index_ohlc import load_index_ohlc
+
+    mapping = sector_index_map()
+    wanted = sorted({CANONICAL_BENCHMARK_INDEX, *mapping.values()})
+    series = load_index_ohlc(wanted) or {}
+
+    def _idx_closes(name: str) -> list[float] | None:
+        bars = series.get(name)
+        if not bars:
+            return None
+        cl = [float(b["close"]) for b in bars if b.get("close") is not None]
+        return cl if len(cl) >= 21 else None
+
+    nifty = _idx_closes(CANONICAL_BENCHMARK_INDEX)
+    n20 = _ret(nifty, 20) if nifty else None
+    n50 = _ret(nifty, 50) if nifty else None
+
+    sectors: dict[str, dict[str, Any]] = {}
+    for sector, index_name in sorted(mapping.items()):
+        cl = _idx_closes(index_name)
+        if cl is None or n20 is None:
+            sectors[sector] = SectorScore(sector, "unknown", None, None, False).to_dict()
+            continue
+        s20, s50 = _ret(cl, 20), _ret(cl, 50)
+        rel20 = None if (s20 is None or n20 is None) else s20 - n20
+        rel50 = None if (s50 is None or n50 is None) else s50 - n50
+        if rel20 is None:
+            band, lead = "unknown", False
+        elif rel20 >= _LEAD_REL20_PCT and (rel50 is None or rel50 >= 0):
+            band, lead = "leading", True
+        elif rel20 <= _LAG_REL20_PCT:
+            band, lead = "lagging", False
+        else:
+            band, lead = "neutral", False
+        sectors[sector] = SectorScore(sector, band, rel20, rel50, lead).to_dict()
+
+    unmapped = sorted(s for s in canonical_sectors() if s not in sectors and s != "Unknown")
+    result = {
+        "generated_for": date.today().isoformat(),
+        "nifty_ret_20d_pct": None if n20 is None else round(n20, 2),
+        "nifty_ret_50d_pct": None if n50 is None else round(n50, 2),
+        "sectors": sectors,
+        "leading": sorted(
+            [s for s, v in sectors.items() if v["is_leading"]],
+            key=lambda s: sectors[s]["rel_20d_pct"] or 0,
+            reverse=True,
+        ),
+        "unmapped_sectors": unmapped,
+        "sector_index_map": mapping,
+        "_built_at": time.time(),
+        "_served_from": "index_snapshot_canonical",
+    }
+    if cache:
+        try:
+            from dashboard.backend.cache import set as cache_set
+
+            cache_set(_redis_key(), result, ttl_seconds=_REDIS_TTL)
+        except Exception as exc:
+            log.debug("canonical sector strength cache write failed: %s", exc)
+    log.info(
+        "[sector_strength] canonical: %d sectors banded (%d leading), %d unmapped, orphan keys dropped: %s",
+        len(sectors), len(result["leading"]), len(unmapped), orphan_sector_keys(),
+    )
+    return result
+
 _LOOKBACK_DAYS = 90
 _LEAD_REL20_PCT = float(os.getenv("SECTOR_LEAD_REL20", "2.0"))   # +2% rel vs NIFTY (20d) = leading
 _LAG_REL20_PCT = float(os.getenv("SECTOR_LAG_REL20", "-2.0"))
@@ -103,6 +253,17 @@ def compute_sector_strength(*, refresh: bool = False) -> dict[str, Any]:
         except Exception:
             pass
 
+    # Canonical path: our own index snapshot, keyed by real stock-sector labels.
+    # Falls through to the legacy yfinance map if the snapshot yields nothing.
+    if canonical_strength_enabled():
+        try:
+            canon = compute_sector_strength_from_index_snapshot()
+            if canon.get("sectors"):
+                return canon
+            log.warning("[sector_strength] canonical path returned no sectors — falling back to yfinance")
+        except Exception as exc:
+            log.warning("[sector_strength] canonical path failed (%s) — falling back to yfinance", exc)
+
     nifty = _closes(NIFTY_TICKER)
     n20 = _ret(nifty, 20) if nifty else None
     n50 = _ret(nifty, 50) if nifty else None
@@ -139,6 +300,9 @@ def compute_sector_strength(*, refresh: bool = False) -> dict[str, Any]:
             key=lambda s: sectors[s]["rel_20d_pct"] or 0,
             reverse=True,
         ),
+        # Observability only (no behaviour change): keys here that are not real
+        # stock labels produce bands nothing can consume.
+        "orphan_sector_keys": orphan_sector_keys(),
         "_built_at": time.time(),
         "_served_from": "fresh",
     }
