@@ -422,13 +422,9 @@ def main() -> int:
         "l1_counterfactual": l1_counterfactual(args.horizon, args.days, args.min_labelled),
     }
     if _COVERAGE:
-        report["outcome_coverage"] = {
-            "queries_enriched": len(_COVERAGE),
-            "total": sum(c["total"] for c in _COVERAGE),
-            "priced": sum(c["priced"] for c in _COVERAGE),
-            "unpriceable": sum(c["unpriceable"] for c in _COVERAGE),
-            "note": _COVERAGE[0]["note"],
-        }
+        from services.forward_eval import merge_coverage
+        rep_cov = merge_coverage(_COVERAGE, label="queries_enriched")
+        report["outcome_coverage"] = rep_cov
     text = json.dumps(report, indent=2, default=str)
     print(text)
     if args.json_out:

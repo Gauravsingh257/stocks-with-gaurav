@@ -73,11 +73,73 @@ join produced, so all downstream stats code is untouched. Excess return is
 benchmark-relative against the NIFTY 50 index snapshot. Both now emit
 `outcome_coverage` so unpriceable rows are visible.
 
-> **Parity for these two is NOT verified end-to-end from here.** Their tables
-> (`signals_log`, `lt_shadow_runs`, `forward_returns`) live on the production
-> volume, which this environment cannot reach. That is exactly why the
-> `--returns-source` switch exists: run each script twice server-side and diff.
-> The arithmetic itself is pinned by unit tests.
+#### Parity was run — and it found a real defect
+
+A genuine production snapshot was restored read-only
+(`scripts/restore_test_dashboard_db.py`, `dashboard-20261012-023000.db.gz`,
+`signals_log` 1,233,305 rows, `forward_returns` 212,709) and both scripts were
+run in both modes against it.
+
+**`phase1_calibration --returns-source ohlc` crashed**: `KeyError: 'mae_10d_pct'`.
+`enrich_rows` only wrote `mae_`/`mfe_` on horizons that had matured, but a
+`LEFT JOIN` yields its columns on **every** row, and `outcomes()` indexes
+`r["mae_10d_pct"]` directly. No fixture caught it because in a fixture
+everything matures.
+
+The same root cause was **silently** degrading `lt_shadow_report`:
+`_entry_trigger_rate()` reads `base_close` and `mae_5d_pct`, which the OHLC path
+never populated, so it reported zero triggers instead of failing loudly.
+
+Fixed: `enrich_rows` now seeds every join column to `None` before any branch,
+fills `mae_`/`mfe_` alongside each return, sets `base_close` from the observation
+date, and takes `mae_windows` for horizons where only the excursions are wanted
+(`lt_shadow_report` passes `(5, 20)`). Two regression tests pin the contract.
+
+Two further honesty defects surfaced from the same run and were fixed:
+
+* **`merge_coverage()`** — both consumers summed only total/priced/unpriceable
+  across their queries, discarding the `no_series` / `no_bar` / `immature`
+  breakdown, which is the entire point of reporting coverage.
+* **`_trigger()` 20d denominator** — `triggered_20d_pct` divided 20d hits by the
+  **5d** count, so a pick whose 20th bar has not happened yet was reported as
+  `0.0%` triggered. It now carries `n_labelled_20d` and withholds the rate when
+  that is zero.
+
+**This is why the parity run mattered.** The OHLC default had never been executed
+end-to-end against real data before — only against fixtures.
+
+#### Results, both modes, same restored snapshot
+
+`phase1_calibration --days 14 --horizon SWING` — **85 shared keys, 10 differ**:
+
+| | table | ohlc |
+|---|---|---|
+| funnel counts (16,343 / 4,266 / 12,077, dropped 73.9%) | identical | identical |
+| `entry_gap`, `sector_bypass`, `l1_counterfactual` n | identical | identical |
+| 5d outcomes, `legacy_final` | `labelled: 0` | **10,002** labelled, median −1.38%, win 37.5% |
+| 5d outcomes, `strict_final_kept` | `labelled: 0` | **2,547**, median −1.08%, win 42.0% |
+| 5d outcomes, `dropped_by_strict` | `labelled: 0` | **7,455**, median −1.46%, win 36.0% |
+| 10d / 20d | null | null — genuinely immature in a 14-day window |
+| `outcome_coverage` | absent | priced 34,385/83,600 (41.1%) |
+
+`lt_shadow_report` — **81 shared keys, 7 differ**: `returns_source` plus the six
+`trigger_expiry_approx.*.n_labelled`, which go from **0** to **88–93**. The 20d
+and 60d forward blocks are withheld in *both* modes, for different reasons:
+the table's labels stop at **2026-08-14** while the picks are 09-28 → 10-11, and
+OHLC has only ~10 bars after the earliest pick. Coverage:
+`no_series 6, no_bar_on_date 60 (all market_closed), immature 304`.
+
+**The difference is the whole point of the PR**: where the stale table answered
+nothing, OHLC answers 10,002 five-day outcomes and 91 entry-trigger rates.
+
+> **Caveat on reproducibility.** The `dashboard.db` snapshot is frozen, so both
+> modes saw identical DB input. The `ohlc:universe` snapshot is **live** — it
+> gained today's bar mid-session between two runs, moving matured 5d counts from
+> 8,758 to 10,002. OHLC-mode figures are as-of-run-time by construction.
+
+> **Not a tuning signal.** All three 5d medians are negative; that is the
+> late-September/October tape in a 14-day window, not evidence about the strict
+> funnel. Per the validation-phase rule, nothing is tuned on it.
 
 ### 5. stagnation — new evaluation, first answer
 
@@ -97,9 +159,30 @@ block:  5d diff −1.18pp CI [−7.36,+5.91] -> NO measurable difference
        20d only 1 comparable date -> withheld
 ```
 
-**No evidence that culling would have helped**, on a small sample. The 27
-`no_bar_on_date` rows are worth a look — likely logged dates that are not
-trading days for those symbols.
+**No evidence that culling would have helped**, on a small sample.
+
+#### The 27 `no_bar_on_date` rows — resolved, zero data defects
+
+All 57 unpriceable observations were classified against the snapshot:
+
+| class | n | evidence |
+|---|---|---|
+| market closed (weekend/holiday) | **27** | **2026-08-30** (a Sunday, 19 obs) and **2026-10-02** (Gandhi Jayanti, 8 obs). *Zero* bars exist on either date across all 2,168 symbols |
+| symbol absent from the universe | 3 | `BODALCHEM` on 08-31 and 09-01 — not in the snapshot nor in `data/nse_universe_full.json`. Reported as `no_series`, not dropped |
+| missing OHLC for a trading date | **0** | — |
+| symbol-mapping problem | **0** | every other logged symbol resolved |
+| genuine data defect | **0** | — |
+
+The cause is the **collector, not the data**: `stagnation-shadow.yml` runs on
+calendar days, so it logs on weekends and holidays, where by definition nothing
+can be priced. 22 of the 24 logged dates are real trading days.
+
+`Coverage` now proves this instead of leaving it open —
+`PriceBook.market_closed_on()` splits `no_bar_on_date` into
+`no_bar_market_closed` + `no_bar_symbol_gap`, so a future run distinguishes a
+holiday from an actual gap without a manual investigation. A fetcher-backed book
+has no calendar and never claims a closure. Reporting only: the stagnation
+numbers above are **byte-identical** before and after, and no exit rule changed.
 
 ## Tests
 

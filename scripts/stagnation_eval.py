@@ -95,7 +95,11 @@ def main() -> int:
     priced, cov = evaluate(obs, book, horizons=HORIZONS)
     c = cov.to_dict()
     print(f"priced: {c['priced']}/{c['total']} ({c['priced_pct']}%) | unpriceable {c['unpriceable']} "
-          f"(no_series {c['no_series']}, no_bar_on_date {c['no_bar_on_date']}) — {c['note']}")
+          f"(no_series {c['no_series']}, no_bar_on_date {c['no_bar_on_date']} "
+          f"= market_closed {c['no_bar_market_closed']} + symbol_gap {c['no_bar_symbol_gap']}) — {c['note']}")
+    if c["no_bar_market_closed"]:
+        print(f"  note: the collector logs on calendar days, so {c['no_bar_market_closed']} rows fall on "
+              f"a weekend/holiday. Not a data defect — nothing to price.")
 
     for h in HORIZONS:
         stats = cohort_stats(priced, h)

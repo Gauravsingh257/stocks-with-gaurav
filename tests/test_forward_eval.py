@@ -8,6 +8,7 @@ Replaces four separate implementations (two of which read the stale
 import pytest
 
 from services.forward_eval import (
+    Coverage,
     Observation,
     PriceBook,
     block_bootstrap,
@@ -255,3 +256,95 @@ def test_enrich_rows_excess_is_none_when_benchmark_lacks_the_date():
     rows = [{"symbol": "X", "date": "2026-01-01"}]
     enrich_rows(rows, book, windows=(2,), benchmark=bars([100.0, 105.0], start_day=20))
     assert rows[0]["fwd_2d_pct"] is not None and rows[0]["excess_2d_pct"] is None
+
+
+def test_market_closure_is_separated_from_a_symbol_gap():
+    """A date no symbol traded is a holiday, not a data defect (PR #225 check 2)."""
+    def b(day, close):
+        return {"date": day, "close": close, "high": close, "low": close}
+
+    book = PriceBook.from_mapping({
+        "AAA": [b("2026-01-01", 100), b("2026-01-02", 101), b("2026-01-05", 102)],
+        "BBB": [b("2026-01-01", 50), b("2026-01-05", 51)],
+    })
+    # 2026-01-03 is closed for everyone; 2026-01-02 is a genuine gap in BBB only.
+    assert book.market_closed_on("2026-01-03") is True
+    assert book.market_closed_on("2026-01-02") is False
+
+    obs = [Observation(symbol="AAA", date="2026-01-03"),
+           Observation(symbol="BBB", date="2026-01-02")]
+    _priced, cov = evaluate(obs, book, horizons=(1,))
+    c = cov.to_dict()
+    assert c["no_bar_on_date"] == 2
+    assert c["no_bar_market_closed"] == 1
+    assert c["no_bar_symbol_gap"] == 1
+
+
+def test_fetcher_book_never_claims_a_market_closure():
+    """No snapshot means no calendar — silence beats a guess."""
+    book = PriceBook.from_fetcher(lambda _s, _d: [])
+    assert book.market_closed_on("2026-01-03") is False
+
+
+def test_enrich_emits_every_join_column_even_when_nothing_matures():
+    """A LEFT JOIN yields its columns on every row; so must this.
+
+    Regression: phase1_calibration indexes r["mae_10d_pct"] directly. When the
+    horizon had not matured the key was absent and the script died with KeyError
+    on real production data — invisible to fixtures where everything matures.
+    """
+    from services.forward_eval import enrich_rows
+
+    book = PriceBook.from_mapping({"X": bars([100, 101])})      # only 2 bars
+    rows = [{"symbol": "X", "date": "2026-01-01"},               # immature
+            {"symbol": "GONE", "date": "2026-01-01"},            # absent symbol
+            {"symbol": "X", "date": "2026-01-09"}]               # closed date
+    cov = enrich_rows(rows, book, windows=(10,), mae_windows=(5,))
+    outcome_keys = ("fwd_10d_pct", "excess_10d_pct", "mae_10d_pct",
+                    "mfe_10d_pct", "mae_5d_pct", "mfe_5d_pct")
+    for r in rows:
+        for key in ("base_close", *outcome_keys):
+            assert key in r, f"{key} missing on {r['symbol']}"
+        for key in outcome_keys:
+            assert r[key] is None, f"{key} should be null on {r['symbol']}"
+    # base_close is known whenever the observation date itself traded — that is
+    # what the table column held; it is null only when there is no bar at all.
+    assert rows[0]["base_close"] == pytest.approx(100.0)
+    assert rows[1]["base_close"] is None
+    assert rows[2]["base_close"] is None
+    assert cov.priced == 0
+
+
+def test_mae_windows_do_not_add_a_forward_series():
+    """mae_windows asks for excursions only — not another return column."""
+    from services.forward_eval import enrich_rows
+
+    book = PriceBook.from_mapping({"X": bars([100, 90, 120, 103, 104, 110, 111])})
+    rows = [{"symbol": "X", "date": "2026-01-01"}]
+    enrich_rows(rows, book, windows=(5,), mae_windows=(2,))
+    r = rows[0]
+    assert r["fwd_5d_pct"] == pytest.approx(10.0)
+    assert r["fwd_2d_pct"] is None            # seeded, never filled
+    assert r["mae_2d_pct"] == pytest.approx(-10.0)   # the dip to 90
+    assert r["mfe_2d_pct"] == pytest.approx(20.0)    # the spike to 120
+    assert r["base_close"] == pytest.approx(100.0)
+
+
+def test_merge_coverage_keeps_the_breakdown():
+    """Summing only total/priced/unpriceable discarded the survivorship detail."""
+    from services.forward_eval import merge_coverage
+
+    a = Coverage(total=10, priced=4, no_series=2, no_bar_on_date=3,
+                 market_closed=2, immature={5: 1, 20: 3}).to_dict()
+    b = Coverage(total=5, priced=1, no_series=0, no_bar_on_date=1,
+                 market_closed=0, immature={5: 0, 20: 2}).to_dict()
+    m = merge_coverage([a, b], label="runs_enriched")
+    assert m["runs_enriched"] == 2
+    assert (m["total"], m["priced"]) == (15, 5)
+    assert m["priced_pct"] == 33.3
+    assert m["no_series"] == 2
+    assert m["no_bar_on_date"] == 4
+    assert m["no_bar_market_closed"] == 2
+    assert m["no_bar_symbol_gap"] == 2
+    assert m["immature_by_horizon"] == {5: 1, 20: 5}
+    assert merge_coverage([]) == {}

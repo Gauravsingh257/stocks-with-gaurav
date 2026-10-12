@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dashboard.backend.db.schema import get_connection  # noqa: E402
 
 WINDOWS = (20, 60)
+MAE_WINDOWS = (5, 20)        # horizons the entry-trigger stat needs mae for
 
 
 def _stats(rows: list[dict], w: int) -> dict:
@@ -59,19 +60,32 @@ def _reached(mae: float | None, need: float) -> bool:
 
 
 def _trigger(rows: list[dict]) -> dict:
-    n = trig5 = trig20 = 0
+    """Share of picks whose entry was actually tapped within the window.
+
+    The 20d horizon carries its OWN denominator. Dividing its hits by the 5d
+    count reported a confident `triggered_20d_pct: 0.0` for picks whose 20th bar
+    simply has not happened yet — "not matured" rendered as "never triggered".
+    """
+    n = trig5 = n20 = trig20 = 0
     for r in rows:
         entry, base = r.get("entry"), r.get("base_close")
         if entry is None or base is None or r.get("mae_5d_pct") is None:
             continue
         need = (entry / base - 1) * 100            # <0 when the entry sits below the close
         trig5 += _reached(r.get("mae_5d_pct"), need)
-        trig20 += _reached(r.get("mae_20d_pct"), need)
+        if r.get("mae_20d_pct") is not None:
+            n20 += 1
+            trig20 += _reached(r.get("mae_20d_pct"), need)
         n += 1
     if not n:
         return {"n_labelled": 0}
-    return {"n_labelled": n, "triggered_5d_pct": round(trig5 / n * 100, 1),
-            "triggered_20d_pct": round(trig20 / n * 100, 1), "expired_5d_pct": round((n - trig5) / n * 100, 1)}
+    out = {"n_labelled": n, "triggered_5d_pct": round(trig5 / n * 100, 1),
+           "expired_5d_pct": round((n - trig5) / n * 100, 1), "n_labelled_20d": n20}
+    if n20:
+        out["triggered_20d_pct"] = round(trig20 / n20 * 100, 1)
+    else:
+        out["triggered_20d_withheld"] = "no pick has a matured 20th bar yet"
+    return out
 
 
 def _rows(conn, sql: str, args: tuple) -> list[dict]:
@@ -104,7 +118,10 @@ def _enrich(rows: list[dict]) -> None:
             _BENCH = benchmark_series()
         except Exception:
             _BENCH = None
-    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=WINDOWS, benchmark=_BENCH).to_dict())
+    # mae_windows: _entry_trigger_rate() reads mae_5d_pct / mae_20d_pct, which the
+    # old table join supplied. Without them it would silently report zero triggers.
+    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=WINDOWS, benchmark=_BENCH,
+                                 mae_windows=MAE_WINDOWS).to_dict())
 
 
 def _fr_cols(source: str, alias: str) -> tuple[str, str]:
@@ -188,13 +205,9 @@ def main() -> int:
         rep = build_report(conn, args.since, source=args.returns_source)
         rep["returns_source"] = args.returns_source
         if _COVERAGE:
-            rep["outcome_coverage"] = {
-                "runs_enriched": len(_COVERAGE),
-                "total": sum(c["total"] for c in _COVERAGE),
-                "priced": sum(c["priced"] for c in _COVERAGE),
-                "unpriceable": sum(c["unpriceable"] for c in _COVERAGE),
-                "note": _COVERAGE[0]["note"],
-            }
+            from services.forward_eval import merge_coverage
+            rep_cov = merge_coverage(_COVERAGE, label="runs_enriched")
+            rep["outcome_coverage"] = rep_cov
     finally:
         conn.close()
     if args.json:

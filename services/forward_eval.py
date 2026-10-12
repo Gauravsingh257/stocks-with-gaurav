@@ -66,6 +66,7 @@ class Coverage:
     priced: int = 0
     no_series: int = 0              # symbol absent from the book  -> survivorship
     no_bar_on_date: int = 0         # date was not a trading day for this symbol
+    market_closed: int = 0          # of those, the market itself was shut (subset)
     immature: dict[int, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -77,6 +78,8 @@ class Coverage:
             "unpriceable": self.total - self.priced,
             "no_series": self.no_series,
             "no_bar_on_date": self.no_bar_on_date,
+            "no_bar_market_closed": self.market_closed,
+            "no_bar_symbol_gap": self.no_bar_on_date - self.market_closed,
             "immature_by_horizon": dict(sorted(self.immature.items())),
             "note": "unpriceable rows are reported, not dropped silently (survivorship)",
         }
@@ -102,6 +105,19 @@ class PriceBook:
         self._series = series or {}
         self._fetcher = fetcher
         self._fetch_cache: dict[tuple[str, str], list[dict]] = {}
+        self._calendar: set[str] | None = None
+
+    def market_closed_on(self, date: str) -> bool:
+        """True when NO symbol in the book traded on `date` — a holiday or weekend.
+
+        Distinguishes a market-wide closure from a per-symbol gap, which is a data
+        defect. Always False for a fetcher-backed book, which has no calendar.
+        """
+        if self._fetcher is not None or not self._series:
+            return False
+        if self._calendar is None:
+            self._calendar = {str(b.get("date"))[:10] for bars in self._series.values() for b in bars}
+        return str(date)[:10] not in self._calendar
 
     # -- constructors ---------------------------------------------------------
     @classmethod
@@ -219,6 +235,7 @@ def evaluate(observations: Iterable[Observation], book: PriceBook, *,
             continue
         if not bars:
             cov.no_bar_on_date += 1
+            cov.market_closed += int(book.market_closed_on(o.date))
             continue
         res: dict[int, Outcome] = {}
         for h in horizons:
@@ -301,26 +318,75 @@ def benchmark_series(name: str = "NIFTY 50", day: str | None = None) -> list[dic
     return (load_index_ohlc([name], day=day) or {}).get(name) or []
 
 
+def merge_coverage(reports: Sequence[dict], *, label: str = "queries_enriched") -> dict:
+    """Combine several `Coverage.to_dict()`s without losing the breakdown.
+
+    A consumer that enriches more than one query used to sum only total/priced/
+    unpriceable, which threw away exactly the survivorship detail the coverage
+    exists to report.
+    """
+    reports = [r for r in reports if r]
+    if not reports:
+        return {}
+    immature: dict[int, int] = {}
+    for r in reports:
+        for h, n in (r.get("immature_by_horizon") or {}).items():
+            immature[int(h)] = immature.get(int(h), 0) + int(n)
+    total = sum(r["total"] for r in reports)
+    priced = sum(r["priced"] for r in reports)
+    return {
+        label: len(reports),
+        "total": total,
+        "priced": priced,
+        "priced_pct": round(priced * 100.0 / total, 1) if total else 0.0,
+        "unpriceable": sum(r["unpriceable"] for r in reports),
+        "no_series": sum(r.get("no_series", 0) for r in reports),
+        "no_bar_on_date": sum(r.get("no_bar_on_date", 0) for r in reports),
+        "no_bar_market_closed": sum(r.get("no_bar_market_closed", 0) for r in reports),
+        "no_bar_symbol_gap": sum(r.get("no_bar_symbol_gap", 0) for r in reports),
+        "immature_by_horizon": dict(sorted(immature.items())),
+        "note": reports[0].get("note", ""),
+    }
+
+
 def enrich_rows(rows: Sequence[dict], book: PriceBook, *,
                 windows: Sequence[int] = (20, 60),
                 benchmark: list[dict] | None = None,
                 symbol_key: str = "symbol", date_key: str = "date",
-                base_key: str | None = None) -> Coverage:
+                base_key: str | None = None,
+                mae_windows: Sequence[int] = ()) -> Coverage:
     """Populate `fwd_{w}d_pct` (and `excess_{w}d_pct`) on each row, in place.
 
     Drop-in replacement for the `LEFT JOIN forward_returns` those consumers used,
-    so their downstream stats code is untouched. Rows that cannot be priced get
-    `None` — exactly what an unlabelled join produced — and are counted in the
-    returned `Coverage` so the gap is reported rather than silently absorbed.
+    so their downstream stats code is untouched. A join yields its columns on
+    EVERY row (NULL when unmatched), so every key is seeded to `None` up front —
+    a consumer indexing `r["mae_10d_pct"]` must not meet a KeyError just because
+    that row's horizon has not matured.
+
+    `mae_windows` adds horizons for which only `mae_`/`mfe_` are wanted, without
+    adding a forward-return series to the report.
+
+    Rows that cannot be priced get `None` — exactly what an unlabelled join
+    produced — and are counted in the returned `Coverage` so the gap is reported
+    rather than silently absorbed.
     """
     bench = PriceBook.from_mapping({"__BENCH__": list(benchmark)}) if benchmark else None
     bench_dates = [str(b.get("date"))[:10] for b in (benchmark or [])]
     cov = Coverage(immature={w: 0 for w in windows})
+    all_w = list(dict.fromkeys(list(windows) + list(mae_windows)))
     for r in rows:
         cov.total += 1
         sym, date = str(r.get(symbol_key) or ""), str(r.get(date_key) or "")[:10]
         base = _f(r.get(base_key)) if base_key else None
         priced_any = False
+        # A LEFT JOIN always produces its columns. Seed them before any branch so
+        # no consumer can KeyError on an unmatured horizon.
+        r.setdefault("base_close", None)
+        for w in all_w:
+            r.setdefault(f"fwd_{w}d_pct", None)
+            r.setdefault(f"excess_{w}d_pct", None)
+            r.setdefault(f"mae_{w}d_pct", None)
+            r.setdefault(f"mfe_{w}d_pct", None)
         if not book.has_symbol(sym):
             cov.no_series += 1
         else:
@@ -329,26 +395,26 @@ def enrich_rows(rows: Sequence[dict], book: PriceBook, *,
                 cov.no_series += 1
             elif not bars:
                 cov.no_bar_on_date += 1
+                cov.market_closed += int(book.market_closed_on(date))
             else:
-                for w in windows:
+                if r.get("base_close") is None:
+                    r["base_close"] = base if base is not None else _f(bars[0].get("close"))
+                for w in all_w:
                     oc = book.outcome(sym, date, w, base=base)
                     if oc is None or oc.ret is None:
-                        r[f"fwd_{w}d_pct"] = None
-                        cov.immature[w] = cov.immature.get(w, 0) + 1
+                        if w in windows:
+                            cov.immature[w] = cov.immature.get(w, 0) + 1
                         continue
+                    r[f"mae_{w}d_pct"] = round(oc.mae, 4) if oc.mae is not None else None
+                    r[f"mfe_{w}d_pct"] = round(oc.mfe, 4) if oc.mfe is not None else None
+                    if w not in windows:
+                        continue        # mae/mfe only — no forward series wanted
                     r[f"fwd_{w}d_pct"] = round(oc.ret, 4)
-                    r.setdefault(f"mae_{w}d_pct", round(oc.mae, 4) if oc.mae is not None else None)
                     priced_any = True
                     if bench is not None and date in bench_dates:
                         b = bench.outcome("__BENCH__", date, w)
                         r[f"excess_{w}d_pct"] = (round(oc.ret - b.ret, 4)
                                                  if b is not None and b.ret is not None else None)
-                    else:
-                        r[f"excess_{w}d_pct"] = None
         if priced_any:
             cov.priced += 1
-        else:
-            for w in windows:
-                r.setdefault(f"fwd_{w}d_pct", None)
-                r.setdefault(f"excess_{w}d_pct", None)
     return cov
