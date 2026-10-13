@@ -49,13 +49,13 @@ what measurable result ends it?*
 
 | Stage | Status | Evidence so far | Exit criteria |
 |---|---|---|---|
-| **1 — Reliable operation & stock coverage** | **CURRENT · one item left** | Snapshot freeze root-caused and reproduced; `eff_universe=2 / stocks=0` **verified intentional**; **stock universe confirmed scanned** — `scan_health` green on all three checks | ~~intended universe demonstrably scanned~~ ✅ → remaining: `SNAPSHOT_MIN_SYMBOLS=1` applied and the snapshot stays fresh through a full session **while 1–4 positions are held** |
-| **2 — Trustworthy measurement** | exit criteria **met** for the evaluator; one PR open | `services/forward_eval.py` merged (`b758ad5`), prod-verified; coverage 90.6% with survivorship reported; four consumers off the stale label table | ✅ one shared evaluator, maturity-gated, survivorship reported, no stale labels. Remaining: merge #227 |
+| **1 — Reliable operation & stock coverage** | **CURRENT · fix applied, awaiting its operational test** | Snapshot freeze root-caused and reproduced; fix `SNAPSHOT_MIN_SYMBOLS=1` **applied + handover-verified 2026-10-13**; `eff_universe=2 / stocks=0` **verified intentional**; **stock universe confirmed scanned** — `scan_health` green on all three checks | ~~intended universe demonstrably scanned~~ ✅ · ~~fix applied~~ ✅ · **remaining:** one live session **holding 1–4 tracked positions** in which `snapshot:write_status` never reads `skipped_invalid` and the snapshot stays fresh |
+| **2 — Trustworthy measurement** | **exit criteria MET** | `services/forward_eval.py` merged (`b758ad5`), prod-verified; coverage 90.6% with survivorship reported; four consumers off the stale label table | ✅ one shared evaluator, maturity-gated, survivorship reported, no stale labels — **all met by `b758ad5`.** PR #227 is a **separately pending research PR, not a stage-2 dependency**: it changes how one *study* sources prices and does not affect evaluator completeness |
 | **3 — Prove selection quality** | in progress — **directional only, not proof** | L1 counterfactual answers for the first time; exceptionalism **NO-GO**; stagnation null; ceiling-20 null | A selected-vs-rejected gap that survives date-block bootstrap, sample-size and regime checks |
 | **4 — Evidence-based improvement** | not started (gated on 3) | — | A filter changed or retired on evidence strong enough to survive a disabled-rule control; ineffective experiments retired |
 | **5 — Repeatability & product readiness** | not started | — | Improvement persists across regimes **and** production runs reliably; only then does other work get prioritised |
 
-**The honest read:** stage 2 is essentially done, stage 3 has produced four *null or negative*
+**The honest read:** stage 2 is done, stage 3 has produced four *null or negative*
 results, and none of them justifies a strategy change. That is a legitimate outcome, not a stall —
 knowing exceptionalism does not beat legacy is worth as much as a win would have been.
 
@@ -74,20 +74,27 @@ knowing exceptionalism does not beat legacy is worth as much as a win would have
 | Stock-universe scanning | **VERIFIED 2026-10-13 23:41 IST** via the existing `python -m scripts.scan_health --hours 30` (no new tooling): snapshot `2026-10-13` usable, **9/9 shards, 2,166 symbols**, expiring Sat 17 Oct — *after* the next scan; **no zero-pass ranking runs** and **no Layer-1 collapse** in 30h (2 runs). So the index-only engine is not the stock path, and the stock path is healthy → [[universe-ohlc-snapshot-weekend-expiry]] trap is not currently armed |
 | Strategy state | **unchanged.** No threshold, weight, flag, exit rule or selection logic altered. Stagnation and exceptionalism both argue for no change |
 
-**Immediate objective, in order:** (1) make snapshot reliability safe — apply
-`SNAPSHOT_MIN_SYMBOLS=1` (env-only, verified by probe, no code change) in a post-16:10 window and
-verify the handover; then confirm the snapshot stays fresh through a session **while positions are
-open**, which closes stage 1. (2) Spend research effort on **stage 3**: prove which of the
-*existing* selection mechanisms pick better stocks than the alternatives. Not new instrumentation —
-the four results so far are null or negative, and the open question is which mechanism, if any,
-actually earns its place.
+**Immediate objective, in order:**
 
-### The two pending decisions — keep these visible
+1. **Snapshot reliability — the fix is in, the proof is not.** `SNAPSHOT_MIN_SYMBOLS=1` was
+   **applied 2026-10-13 23:43 IST** and the handover was verified. It has **not been exercised**:
+   `symbol_count` was 0 at the time, so the harmful 1–4 band was never entered. The real operational
+   test is to observe a live session **holding 1–4 tracked positions** and confirm
+   `snapshot:write_status` never reads `skipped_invalid` and `engine:snapshot` stays fresh
+   throughout. Observation is read-only — it needs no deploy and no restart. **Stage 1 stays open
+   until that condition actually occurs.**
+2. **Then stage 3:** prove which of the *existing* selection mechanisms pick better stocks than the
+   alternatives. Not new instrumentation — the four results so far are null or negative, and the
+   open question is which mechanism, if any, earns its place.
 
-| Decision | State 2026-10-13 | Conditions set by Gaurav |
+### Decisions on record — one closed, one still pending
+
+| Decision | State | Conditions Gaurav set, and how they were honoured |
 |---|---|---|
-| **Snapshot fix** — `SNAPSHOT_MIN_SYMBOLS=1` on `engine` | **technical direction APPROVED** | Apply **only in a safe window after 16:10 IST**; never restart the live engine during market hours. Then verify the new `SUCCESS` deployment, **lock ownership and engine handover**, and a **fresh snapshot** |
-| **PR #227** — exceptionalism calibration off the snapshot | **open, NOT merged** | **Exceptionalism stays disabled.** Review and merge the *research* PR separately, in a safe window, and only on explicit approval. Merging the PR does **not** enable the mechanism — the calibration result is a NO-GO |
+| **Snapshot fix** — `SNAPSHOT_MIN_SYMBOLS=1` on `engine` | **APPROVED and APPLIED** 2026-10-13 23:43 IST. *Nothing left to apply* — only its operational test is outstanding | Required a post-16:10 window with no restart during market hours: applied 23:43, market closed. Verified as required — newer `SUCCESS` deployment (23:44:24), **lock ownership and handover** (`engine_lock` == `engine:lock:meta.instance_id`, `engine_started_at` 23:45:59), fresh snapshot (`write_status: success`), no unintended trading or Telegram activity |
+| **PR #227** — exceptionalism calibration off the snapshot | **PENDING — open, NOT merged** | **Exceptionalism stays disabled.** Review and merge the *research* PR separately, in a safe window, and only on explicit approval. Merging it does **not** enable the mechanism — the calibration result is a NO-GO, and this is **not** a stage-2 dependency |
+
+**Also unmerged:** PR #228, the documentation change that records this frame.
 
 **Still open, not blocking:** the Vercel *preview* check has been red since 2026-10-12 and is
 undiagnosed. The frontend tree is byte-identical to a passing build, so it is not the content of
