@@ -17,6 +17,11 @@ Method (2026-10-11 audit):
   bootstrapping across days (a block bootstrap), not across raw observations.
 - Symbols missing from the current universe snapshot are counted and reported
   as a survivorship caveat rather than silently dropped.
+- ALL THREE cohort pairs are bootstrapped, not just SELECTED vs CEILING_CUT.
+  The PHASE2_CUT gap is the large one and previously had no confidence interval.
+- `--by-regime` repeats every pair inside RISK_ON / RISK_OFF, where the regime is
+  classified from the NIFTY 50 benchmark on the scan date — independent of
+  `signals_log`, so it cannot inherit a selection-side bias.
 
     python -m scripts.ceiling_cohort_study [--days 60] [--horizon SWING]
 
@@ -71,12 +76,18 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=60)
     ap.add_argument("--horizon", default="SWING", choices=["SWING", "LONGTERM"])
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--by-regime", action="store_true",
+                    help="also split every pair by market regime, classified from the "
+                         "NIFTY 50 benchmark on the scan date (independent of signals_log)")
+    ap.add_argument("--min-days", type=int, default=5,
+                    help="withhold a bootstrap below this many comparable scan days")
     args = ap.parse_args()
 
     sys.path.insert(0, os.getcwd())
     from services.forward_eval import (
         Observation,
         PriceBook,
+        benchmark_series,
         block_bootstrap,
         dedupe,
         evaluate,
@@ -115,19 +126,67 @@ def main() -> int:
             if grouped[coh]:
                 print(f"  {coh:12s} {_describe(grouped[coh])}")
 
-    print("\n=== DATE-BLOCK analysis (per scan day, bootstrapped across days) ===")
-    for n in HORIZONS:
-        r = block_bootstrap(priced, "SELECTED", "CEILING_CUT", n,
-                            iters=BOOTSTRAP, seed=args.seed, min_days=5)
-        if r.get("withheld"):
-            print(f"  {n}d: only {r['days']} comparable days — withheld")
-            continue
-        lo, hi = r["ci95"]
-        verdict = "NO measurable edge" if not r["significant"] else "SIGNIFICANT"
-        print(f"  {n:2d}d: days={r['days']} SELECTED {r['SELECTED_day_mean']:+.2f}% "
-              f"CEILING_CUT {r['CEILING_CUT_day_mean']:+.2f}% "
-              f"diff {r['diff']:+.2f}pp 95%CI [{lo:+.2f},{hi:+.2f}] "
-              f"days CUT won {r['days_b_higher']}/{r['days']} -> {verdict}")
+    # Every pair, not just SELECTED vs CEILING_CUT. The original study bootstrapped
+    # only the ceiling comparison, so the PHASE2_CUT gap — the one that is actually
+    # large — was reported as raw means with no confidence interval.
+    PAIRS = (("SELECTED", "CEILING_CUT"),
+             ("SELECTED", "PHASE2_CUT"),
+             ("CEILING_CUT", "PHASE2_CUT"))
+
+    def run_pairs(rows, label: str) -> None:
+        print(f"\n=== DATE-BLOCK analysis — {label} "
+              f"(per scan day, bootstrapped across days) ===")
+        for a, b in PAIRS:
+            for n in HORIZONS:
+                r = block_bootstrap(rows, a, b, n, iters=BOOTSTRAP,
+                                    seed=args.seed, min_days=args.min_days)
+                if r.get("withheld"):
+                    print(f"  {a:11s} vs {b:11s} {n:2d}d: "
+                          f"{r.get('reason') or 'too few days'} — withheld")
+                    continue
+                lo, hi = r["ci95"]
+                verdict = "SIGNIFICANT" if r["significant"] else "no measurable difference"
+                print(f"  {a:11s} vs {b:11s} {n:2d}d: days={r['days']:3d} "
+                      f"{r[a + '_day_mean']:+.2f}% vs {r[b + '_day_mean']:+.2f}% "
+                      f"diff {r['diff']:+.2f}pp 95%CI [{lo:+.2f},{hi:+.2f}] "
+                      f"B-won {r['days_b_higher']}/{r['days']} -> {verdict}")
+
+    run_pairs(priced, "ALL DAYS")
+
+    if args.by_regime:
+        # Regime from the NIFTY 50 benchmark, NOT from signals_log — the export
+        # carries no regime field, and an independent classifier cannot inherit a
+        # selection-side bias. RISK_ON = benchmark closed at or above its own
+        # trailing 50-bar mean on the scan date.
+        try:
+            bench = benchmark_series() or []
+        except Exception as e:
+            print(f"\n::warning::regime split skipped — benchmark unavailable ({e})")
+            return 0
+        closes: list[float] = []
+        regime: dict[str, str] = {}
+        for bar in bench:
+            c = bar.get("close")
+            if c is None:
+                continue
+            closes.append(float(c))
+            if len(closes) >= 50:
+                mean50 = sum(closes[-50:]) / 50.0
+                regime[str(bar.get("date"))[:10]] = (
+                    "RISK_ON" if float(c) >= mean50 else "RISK_OFF")
+        if not regime:
+            print("\n::warning::regime split skipped — fewer than 50 benchmark bars")
+            return 0
+        tagged = collections.Counter(regime.get(o.date, "UNKNOWN") for o, _ in priced)
+        print(f"\nregime tagging: {dict(tagged)} "
+              f"(RISK_ON = NIFTY 50 >= its trailing 50-bar mean on the scan date)")
+        for want in ("RISK_ON", "RISK_OFF"):
+            subset = [(o, res) for o, res in priced if regime.get(o.date) == want]
+            days = len({o.date for o, _ in subset})
+            if days < args.min_days:
+                print(f"\n=== {want}: only {days} scan days — withheld ===")
+                continue
+            run_pairs(subset, f"{want} ({days} scan days)")
     return 0
 
 
