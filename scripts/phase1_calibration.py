@@ -78,8 +78,14 @@ def _fr_join(alias: str) -> str:
     return ""
 
 
-def _enrich(rows: list) -> None:
-    """Populate fwd_* straight from OHLC — no stale-label dependency."""
+def _enrich(rows: list, *, symbol_key: str = "symbol") -> None:
+    """Populate fwd_* straight from OHLC — no stale-label dependency.
+
+    `symbol_key` must name the column the query actually produced. The
+    l1_counterfactual query aliases it `sym`; passing the default `symbol` there
+    made every row look like a missing symbol, so the counterfactual stayed
+    withheld and `no_series` was inflated by ~119k rows.
+    """
     if RETURNS_SOURCE == "table" or not rows:
         return
     from services.forward_eval import PriceBook, benchmark_series, enrich_rows
@@ -90,7 +96,8 @@ def _enrich(rows: list) -> None:
             _BENCH = benchmark_series()
         except Exception:
             _BENCH = None
-    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=(5, 10, 20), benchmark=_BENCH).to_dict())
+    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=(5, 10, 20), benchmark=_BENCH,
+                                 symbol_key=symbol_key).to_dict())
     # l1_counterfactual's aggregate query names its columns fwd_10d / fwd_20d /
     # excess_20d (no _pct suffix) — keep those readers working unchanged.
     for r in rows:
@@ -164,11 +171,19 @@ def funnel_comparison(horizon: str | None, days: int) -> dict:
                 "median_pct": _median(vals),
                 "win_rate_pct": round(sum(1 for v in vals if v > 0) / len(vals) * 100, 2) if vals else None,
             }
-        touched = [r for r in bucket if r["days_to_target"] is not None]
-        have_label = [r for r in bucket if r["fwd_10d_pct"] is not None]
-        out["target_touch_pct"] = (
-            round(len(touched) / len(have_label) * 100, 2) if have_label else None
-        )
+        # `days_to_target` exists only in the label table; the OHLC path cannot
+        # derive it (it needs each row's target level, which is not selected
+        # here). Withhold it rather than divide zero hits by the labelled count
+        # and report a confident 0.0% touch rate.
+        if RETURNS_SOURCE == "table":
+            touched = [r for r in bucket if r["days_to_target"] is not None]
+            have_label = [r for r in bucket if r["fwd_10d_pct"] is not None]
+            out["target_touch_pct"] = (
+                round(len(touched) / len(have_label) * 100, 2) if have_label else None
+            )
+        else:
+            out["target_touch_pct"] = None
+            out["target_touch_withheld"] = "days_to_target is label-table only"
         maes = [float(r["mae_10d_pct"]) for r in bucket if r["mae_10d_pct"] is not None]
         out["median_mae_10d_pct"] = _median(maes)
         return out
@@ -338,7 +353,7 @@ def l1_counterfactual(horizon: str | None, days: int, min_labelled: int = 30) ->
             """,
             params,
         ).fetchall()
-        rows = [dict(r) for r in rows]
+        rows = [dict(r) for r in rows]      # NB: symbol column is aliased `sym`
         # Informational only. Reported whatever the outcome source is, so the
         # staleness of the label table stays visible even though the OHLC-direct
         # path no longer depends on it.
@@ -350,7 +365,7 @@ def l1_counterfactual(horizon: str | None, days: int, min_labelled: int = 30) ->
 
     if not rows:
         return {"available": False, "reason": "no signals_log rows in window"}
-    _enrich(rows)
+    _enrich(rows, symbol_key="sym")
 
     pre_pass: list = []
     pre_readmitted: list = []
