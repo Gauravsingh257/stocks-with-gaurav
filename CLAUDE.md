@@ -189,6 +189,24 @@ analysis) is best-effort. Four rules protect the long tail — any per-page fail
   pages and JSON-LD must stay in that lane — no `Review`/`AggregateRating`/`FinancialService`
   schema, which would read as a rated advisory product.
 
+## Deploying to production (operational contract)
+
+- **Production merges need explicit approval from Gaurav** and must avoid **09:15–16:10 IST**. The
+  trading session ends 15:30, but the engine's *signals* window runs to **16:10**
+  ([smc_mtf_engine_v4.py:1056](smc_mtf_engine_v4.py#L1056)) — a restart inside it has produced a
+  duplicate Telegram alert (2026-10-13). 16:10 is the cutoff that matters, not 15:30.
+- **A merge costs ~2 minutes of live engine.** Railway starts the new container before draining the
+  old one, so the new instance loses the `SET engine_lock NX` race and sits in **standby, retrying
+  every 2 min** until the old one exits. Measured 2026-10-13: deploy → lock acquired 3.5 min later,
+  with `engine_heartbeat` genuinely absent in between.
+- **After any deploy, verify in this order:** a *newer* `SUCCESS` deployment on each of `engine`,
+  `web`, `scanner` → `/health` → **`engine_lock` shows the new `instance_id` and `engine_started_at`
+  is recent** → heartbeat fresh → `engine:snapshot` fresh → no unintended Telegram or signal rows.
+  Checking the heartbeat alone is not enough: right after a merge a fresh heartbeat can still be the
+  **old** container.
+- Engine logs are **UTC**; Redis and `signals:today` timestamps are **IST**. Misreading the prefix
+  invents incidents.
+
 ## Working with flags
 Most new capability ships behind an env flag that defaults to current behaviour, so merging is a
 no-op until the flag is deliberately flipped. Rollback = remove the env var, usually with no

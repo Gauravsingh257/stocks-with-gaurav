@@ -108,6 +108,21 @@ is live and proven — see CANONICAL_ARCHITECTURE.md TASK 9 / G2-8.)
 > Build a **clean, high-trust, planned-execution, risk-aware,
 > lifecycle-driven, professional trading operating system.**
 
+### The success criterion (added 2026-10-13)
+
+> Reliably **identify promising NSE stocks early**, select better candidates than
+> the alternatives, **measure forward performance honestly**, and manage
+> downside risk.
+>
+> **Success is demonstrable, repeatable improvement in stock-selection quality —
+> not more infrastructure, and not more dashboards.**
+
+A shipped subsystem is not progress; a *measured* selection improvement that
+survives bootstrap, sample-size and regime checks is. Null and negative results
+count as progress too — they retire an idea. The staging of this goal, with
+status and exit criteria per stage, lives in
+[`PROJECT_STATE.md`](PROJECT_STATE.md) and is not duplicated here.
+
 ## How this is enforced (auditability)
 
 - Implementation roadmap & per-phase reversibility: see

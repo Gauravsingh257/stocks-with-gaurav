@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-27**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-10-13**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -32,6 +32,68 @@ move is validating that over two live sessions, then finishing SEO Phase 2. Late
 **Sector Rotation** end to end — a public, indexed `/sectors` page plus a homepage widget — and closed
 it on 2026-09-27. The largest *unstarted* body of work is the commercial launch: payments, legal
 pages, monitoring.
+
+## North star & the five stages
+
+> Set 2026-10-13. Durable product intent lives in [`PRODUCT_VISION.md`](PRODUCT_VISION.md); this is
+> the **staging** of it. One stage is current at a time. A stage is only marked complete when its
+> exit criteria are met by evidence, not by effort spent.
+
+**North star.** Build StocksWithGaurav into a reliable NSE stock-discovery engine that identifies
+promising stocks early, selects better candidates than the alternatives, measures forward
+performance honestly, and manages downside risk. **Success means demonstrable, repeatable
+improvement in stock-selection quality — not more infrastructure or dashboards.**
+
+Every task answers three questions: *which stage does this serve, what decision does it unlock, and
+what measurable result ends it?*
+
+| Stage | Status | Evidence so far | Exit criteria |
+|---|---|---|---|
+| **1 — Reliable operation & stock coverage** | **CURRENT · one item left** | Snapshot freeze root-caused and reproduced; `eff_universe=2 / stocks=0` **verified intentional**; **stock universe confirmed scanned** — `scan_health` green on all three checks | ~~intended universe demonstrably scanned~~ ✅ → remaining: `SNAPSHOT_MIN_SYMBOLS=1` applied and the snapshot stays fresh through a full session **while 1–4 positions are held** |
+| **2 — Trustworthy measurement** | exit criteria **met** for the evaluator; one PR open | `services/forward_eval.py` merged (`b758ad5`), prod-verified; coverage 90.6% with survivorship reported; four consumers off the stale label table | ✅ one shared evaluator, maturity-gated, survivorship reported, no stale labels. Remaining: merge #227 |
+| **3 — Prove selection quality** | in progress — **directional only, not proof** | L1 counterfactual answers for the first time; exceptionalism **NO-GO**; stagnation null; ceiling-20 null | A selected-vs-rejected gap that survives date-block bootstrap, sample-size and regime checks |
+| **4 — Evidence-based improvement** | not started (gated on 3) | — | A filter changed or retired on evidence strong enough to survive a disabled-rule control; ineffective experiments retired |
+| **5 — Repeatability & product readiness** | not started | — | Improvement persists across regimes **and** production runs reliably; only then does other work get prioritised |
+
+**The honest read:** stage 2 is essentially done, stage 3 has produced four *null or negative*
+results, and none of them justifies a strategy change. That is a legitimate outcome, not a stall —
+knowing exceptionalism does not beat legacy is worth as much as a win would have been.
+
+---
+
+## Current checkpoint — 2026-10-13
+
+**Three items in the previous checkpoint were stale and are corrected here.**
+
+| Item | Status |
+|---|---|
+| PR #225 — shared forward-return evaluator | **MERGED** `b758ad5`; engine/web/scanner all `SUCCESS`; `/health` 200, `engine_version v4.2.1`, heartbeat + snapshot fresh, no unintended Telegram or SRB replay |
+| Snapshot freeze | ~~cause unknown~~ → **ROOT-CAUSED AND REPRODUCED.** Not a wedged loop. `SNAPSHOT_MIN_SYMBOLS` defaults to 5, so `write_engine_snapshot` **skips every write while 1–4 symbols are tracked**, and `_snapshot_refresher_loop` keeps the stale key alive forever so nothing alarms → [[snapshot-min-symbols-freeze]] |
+| `eff_universe=2, stocks=0` | ~~unverified~~ → **VERIFIED INTENTIONAL.** `INDEX_ONLY = True` is hardcoded ([smc_mtf_engine_v4.py:1079](../smc_mtf_engine_v4.py#L1079)), unchanged since the initial commit. The live engine is index-only; **stock selection runs in `services/` on `web`/`scanner`** → [[engine-is-index-only-by-design]] |
+| Exceptionalism calibration | ~~unstarted~~ → **DONE, PR #227 open.** Priced from `PriceBook.from_universe_snapshot()` as instructed: 237,458 rows in 104 s, zero provider calls, 90.6% coverage. **Result: NO-GO** — `exceptionalism_qualified` (n=1500, hit 37.9%, avg −1.85%) does not beat `legacy_final_selected` (n=769, hit 38.9%, avg −1.31%) and has a worse worst-case drawdown |
+| Stock-universe scanning | **VERIFIED 2026-10-13 23:41 IST** via the existing `python -m scripts.scan_health --hours 30` (no new tooling): snapshot `2026-10-13` usable, **9/9 shards, 2,166 symbols**, expiring Sat 17 Oct — *after* the next scan; **no zero-pass ranking runs** and **no Layer-1 collapse** in 30h (2 runs). So the index-only engine is not the stock path, and the stock path is healthy → [[universe-ohlc-snapshot-weekend-expiry]] trap is not currently armed |
+| Strategy state | **unchanged.** No threshold, weight, flag, exit rule or selection logic altered. Stagnation and exceptionalism both argue for no change |
+
+**Immediate objective, in order:** (1) make snapshot reliability safe — apply
+`SNAPSHOT_MIN_SYMBOLS=1` (env-only, verified by probe, no code change) in a post-16:10 window and
+verify the handover; then confirm the snapshot stays fresh through a session **while positions are
+open**, which closes stage 1. (2) Spend research effort on **stage 3**: prove which of the
+*existing* selection mechanisms pick better stocks than the alternatives. Not new instrumentation —
+the four results so far are null or negative, and the open question is which mechanism, if any,
+actually earns its place.
+
+### The two pending decisions — keep these visible
+
+| Decision | State 2026-10-13 | Conditions set by Gaurav |
+|---|---|---|
+| **Snapshot fix** — `SNAPSHOT_MIN_SYMBOLS=1` on `engine` | **technical direction APPROVED** | Apply **only in a safe window after 16:10 IST**; never restart the live engine during market hours. Then verify the new `SUCCESS` deployment, **lock ownership and engine handover**, and a **fresh snapshot** |
+| **PR #227** — exceptionalism calibration off the snapshot | **open, NOT merged** | **Exceptionalism stays disabled.** Review and merge the *research* PR separately, in a safe window, and only on explicit approval. Merging the PR does **not** enable the mechanism — the calibration result is a NO-GO |
+
+**Still open, not blocking:** the Vercel *preview* check has been red since 2026-10-12 and is
+undiagnosed. The frontend tree is byte-identical to a passing build, so it is not the content of
+either PR; reading the build log needs `vercel login` (browser OAuth from Gaurav).
+
+---
 
 ## Aug-end → Sep-1st-week change audit — 2026-09-13 (read-only)
 
@@ -181,9 +243,11 @@ the current engine. No risk-logic change is warranted.
 recycled; no market-cap field, so the small-cap concentration in `NEW_SELECTION` cannot be
 quantified. Fixing capture is a prerequisite for ever answering "are we picking better stocks?".
 
-## North-star objective — portfolio quality, OLD vs NEW
+## Portfolio-quality instrument (OLD vs NEW) — the stage-3 measuring tool
 
 > Set 2026-09-13. **MEASURE FIRST → COMPARE FAIRLY → IDENTIFY CAUSE → THEN CHANGE.**
+> This is no longer phrased as the north star — it is the **instrument stage 3 uses**. The north
+> star is the section at the top of this file.
 
 The question that now governs this project: **did the late-Aug / early-Sep 2026 engine changes
 actually improve (1) stock selection, (2) entry quality, (3) risk/SL quality, (4) portfolio
