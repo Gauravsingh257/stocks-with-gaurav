@@ -87,6 +87,41 @@ knowing exceptionalism does not beat legacy is worth as much as a win would have
    alternatives. Not new instrumentation — the four results so far are null or negative, and the
    open question is which mechanism, if any, earns its place.
 
+### STOP LINE — research is frozen here (set 2026-10-14)
+
+Investigation was looping: each review spawned another review, and the measurement
+infrastructure kept getting rebuilt instead of used. **It is now good enough. Stop building
+and start accumulating.**
+
+**Exact stopping point.** Stage 2 is done. Stage 3 has one provisional positive
+(rank-budget) and one underpowered inconclusive (ceiling). Three PRs are open and unmerged:
+**#227** (exceptionalism, mechanism stays disabled), **#228** (this document), **#229**
+(stage-3 instrument). The snapshot fix is live but unexercised. Nothing else is in flight.
+
+**Next evidence triggers — the only two things that change any answer:**
+
+| Trigger | Current | Needed | Why it matters |
+|---|---|---|---|
+| Snapshot fix proven | 0 qualifying samples | **one live session holding 1–4 positions** with `snapshot:write_status` never `skipped_invalid` | closes **stage 1** |
+| Stage-3 rank budget corroborated | **2** RISK_ON comparable days · **15** comparable days at 20d | **≥15** RISK_ON comparable days **and ≥30** comparable days at 20d | the result is currently inseparable from RISK_OFF; ~15 more trading days of maturity, plus a tape that actually turns RISK_ON |
+
+Both are **waiting**, not work. Neither can be accelerated by writing code.
+
+**Stop conditions — do none of these without a decision that needs them:**
+
+1. **No new experiments or shadow systems.** The audit of all 14 is done.
+2. **No rebuilding measurement tooling.** `services/forward_eval.py` plus the cohort study
+   are sufficient; they have been reviewed three times.
+3. **No re-running completed audits** — snapshot freeze, `INDEX_ONLY`, universe scanning,
+   exceptionalism, stagnation and the ceiling are all closed. New evidence only.
+4. **No strategy change.** Thresholds, flags, exits and selection logic stay exactly as they
+   are, pending explicit approval.
+5. **No merges** without Gaurav's approval, and never as a bundle.
+
+**Every future task must state, before starting:** what decision it unlocks · what evidence
+is missing · what exact condition ends it. **If it unlocks no new decision, it does not get
+done.**
+
 ### Decisions on record — one closed, one still pending
 
 | Decision | State | Conditions Gaurav set, and how they were honoured |
