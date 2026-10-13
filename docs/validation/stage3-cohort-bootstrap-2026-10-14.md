@@ -2,110 +2,108 @@
 
 > **STATUS: LIVE** · workstream: `selection` · 2026-10-14 · measurement only
 > No threshold, weight, flag, exit rule or selection logic changed by this document.
+>
+> **Revised after independent review.** The first version of this report claimed the
+> ceiling result rested on 120 days and ~24,800 observations. That was wrong, and the
+> corrections are recorded in "What the review found" below rather than quietly dropped.
 
 ## The question
 
-Stage 3 asks whether the *existing* selection mechanisms actually beat the candidates
-they reject. Two mechanisms sit at the end of the funnel:
+Does the *existing* funnel beat the candidates it rejects? Two mechanisms sit at the end:
 
-| Cohort | Meaning |
+| Cohort | Definition (after review) |
 |---|---|
-| `SELECTED` | `final_selected=1` — the served top-20 |
-| `CEILING_CUT` | passed L1∧L2∧entry **and** the Phase-2 rank budget, then lost at the exceptionalism ceiling (`EXCEPTIONALISM_SOFT_CEILING`, default 20) |
-| `PHASE2_CUT` | eligible but `below_rank_budget` — cut by the Phase-2 ranker |
+| `SELECTED` | `final_selected=1`, **scan date ≥ 2026-08-23 only** |
+| `CEILING_CUT` | L1∧L2∧entry and **`rejection_reason` empty** — eligible, un-rejected, so the exceptionalism ceiling is what kept it out |
+| `PHASE2_CUT` | eligible but `below_rank_budget` |
 
-So `SELECTED` vs `CEILING_CUT` isolates **the ceiling**, and `CEILING_CUT` vs
-`PHASE2_CUT` isolates **the rank budget**.
+`SELECTED` vs `CEILING_CUT` isolates **the ceiling**; `CEILING_CUT` vs `PHASE2_CUT`
+isolates **the rank budget**.
 
-## What changed in the instrument
+## What the review found (and this version fixes)
 
-`scripts/ceiling_cohort_study.py` already had the right method — entry at the scan-date
-close, maturity gating, one observation per `(date, symbol)`, survivorship reported, and
-a **date-block bootstrap** that resamples scan days rather than observations. Two gaps:
+1. **`SELECTED` changed meaning mid-window.** Before Phase 0/1 went live, `final_selected=1`
+   marked *thousands* of rows a day — 2026-07-03 carries **3,863**, 07-06 carries **8,088** —
+   against **20/day** afterwards. A 120-day window pooled two different things. Fixed with an
+   era guard at **2026-08-23** (`--selected-since`).
+2. **The export truncated silently.** Both kinds return **exactly 50,000 rows** at 120 days,
+   and the endpoint returns an **empty list** above its own cap, so a truncated page was
+   indistinguishable from a complete one. Now a `TruncatedExportError` — verified to fire at
+   `--days 120`.
+3. **`CEILING_CUT` was a residual bucket.** It was "eligible and not `below_rank_budget`",
+   which swept in ~27% of rows carrying SMC rejects (`no_BOS`, `no_liquidity_sweep`,
+   `weak_trend`, `no_order_block`). Those were cut for structure, not by the ceiling. Now it
+   requires an empty `rejection_reason`.
+   **Honest nuance:** in the valid 52-day window this excluded **zero** rows — the
+   contamination lived entirely in the pre-era data. The fix corrects the label and protects
+   future runs; it does not move the numbers below.
 
-1. It bootstrapped **only** `SELECTED` vs `CEILING_CUT`. The `PHASE2_CUT` gap — the large
-   one — was printed as raw means with **no confidence interval**.
-2. No regime check.
+## Run — `--days 52 --horizon SWING --by-regime`, 2026-10-14
 
-Both are now closed: all three pairs are bootstrapped, and `--by-regime` repeats every
-pair inside RISK_ON / RISK_OFF. Regime is classified from the **NIFTY 50 benchmark** on
-the scan date (`RISK_ON` = close ≥ its own trailing 50-bar mean), deliberately
-**independent of `signals_log`** so it cannot inherit a selection-side bias.
-
-## Run
-
-`--days 120 --horizon SWING --by-regime`, 2026-10-14. 2,166 price series, last bar
-2026-10-13. 30,570 deduped observations (`SELECTED` 12,707 · `CEILING_CUT` 13,368 ·
-`PHASE2_CUT` 4,495); 24,815 priced, **19% unpriceable — survivorship caveat**.
-
-### Raw distributions (matured only)
+2,166 price series, last bar 2026-10-13. Deduped: `SELECTED` 714 · `CEILING_CUT` 7,521 ·
+`PHASE2_CUT` 4,495. Priced 9,843; **23% unpriceable — survivorship caveat**.
 
 | horizon | cohort | n | win | mean | median |
 |---|---|---|---|---|---|
-| 5d | SELECTED | 10,271 | 45.3% | +0.08% | −0.45% |
-| | CEILING_CUT | 11,044 | 46.3% | +0.12% | −0.43% |
-| | PHASE2_CUT | 3,500 | **38.8%** | **−0.51%** | −1.10% |
-| 10d | SELECTED | 10,195 | 43.9% | −0.03% | −0.83% |
-| | CEILING_CUT | 10,463 | 45.5% | +0.29% | −0.69% |
-| | PHASE2_CUT | 2,954 | **35.4%** | **−1.04%** | −1.90% |
-| 20d | SELECTED | 10,013 | 47.4% | +0.74% | −0.51% |
-| | CEILING_CUT | 8,647 | 44.7% | +0.35% | −1.14% |
+| 5d | SELECTED | 505 | 43.8% | +0.18% | −0.73% |
+| | CEILING_CUT | 5,838 | 43.1% | −0.30% | −0.91% |
+| | PHASE2_CUT | 3,500 | 38.8% | −0.51% | −1.10% |
+| 10d | SELECTED | 429 | 42.2% | −0.03% | −1.94% |
+| | CEILING_CUT | 5,257 | 41.1% | −0.54% | −1.50% |
+| | PHASE2_CUT | 2,954 | 35.4% | −1.04% | −1.90% |
+| 20d | SELECTED | **247** | 40.9% | −0.95% | −2.16% |
+| | CEILING_CUT | 3,441 | 40.6% | −0.83% | −2.49% |
 | | PHASE2_CUT | 2,071 | **31.0%** | **−2.12%** | **−3.75%** |
 
-### Date-block bootstrap, all days (`diff` = B − A; negative means B is worse)
+### Date-block bootstrap (`diff` = B − A; negative means B is worse)
 
 | pair | 5d | 10d | 20d |
 |---|---|---|---|
-| SELECTED vs CEILING_CUT | −0.10pp [−0.61,+0.45] | +0.08pp [−0.79,+0.91] | +0.52pp [−0.83,+1.84] |
-| SELECTED vs PHASE2_CUT | −0.65pp [−1.41,+0.14] | −1.11pp [−2.44,+0.26] | −0.95pp [−2.12,+0.17] |
-| CEILING_CUT vs PHASE2_CUT | −0.18pp [−0.51,+0.15] | **−0.52pp [−0.92,−0.14]** | **−1.26pp [−1.91,−0.62]** |
+| SELECTED vs CEILING_CUT | −0.47pp [−1.17,+0.24] · 30d | −0.59pp [−1.87,+0.69] · 25d | +0.31pp [−1.08,+1.64] · 15d |
+| SELECTED vs PHASE2_CUT | −0.65pp [−1.41,+0.14] · 30d | −1.11pp [−2.44,+0.26] · 25d | −0.95pp [−2.12,+0.17] · 15d |
+| CEILING_CUT vs PHASE2_CUT | −0.18pp [−0.51,+0.15] · 30d | **−0.52pp [−0.92,−0.14]** · 25d | **−1.26pp [−1.91,−0.62]** · 15d |
 
 ## Findings
 
-**1. The top-20 exceptionalism ceiling does not discriminate.** `SELECTED` vs
-`CEILING_CUT` shows no measurable difference at any horizon, every CI straddles zero, and
-the cut cohort wins on roughly half the days (30/63, 32/58, 28/48). This holds in **both**
-regimes. On 120 days this is a much larger sample than the 2026-10-11 finding and points
-the same way — the ceiling is not selecting better stocks, it is just selecting fewer.
+**1. The ceiling comparison is inconclusive — underpowered, not disproven.** Every CI
+straddles zero, but the honest reason is **power**: 505 / 429 / **247** matured `SELECTED`
+observations over 30 / 25 / **15** comparable days. The 20d interval spans ±1.4pp, so any
+effect smaller than that is undetectable here. This neither supports nor refutes the ceiling.
+It does *not* add weight to the 2026-10-11 finding, as the earlier version of this report
+claimed.
 
-**2. The Phase-2 rank budget does discriminate.** `CEILING_CUT` vs `PHASE2_CUT` is
-significant at **10d (−0.52pp, CI [−0.92,−0.14])** and **20d (−1.26pp, CI [−1.91,−0.62])**,
-with `PHASE2_CUT` lower on 3 of 15 days at 20d. The raw distributions agree and the effect
-**grows monotonically with horizon** (win 38.8% → 35.4% → 31.0%). This is the one
-mechanism in the funnel with evidence that it earns its place.
+**2. The rank budget is the one positive signal — and it is provisional.**
+`CEILING_CUT` vs `PHASE2_CUT` is significant at **10d (−0.52pp [−0.92,−0.14])** and
+**20d (−1.26pp [−1.91,−0.62])**, `PHASE2_CUT` lower on 3 of 15 days at 20d, effect growing
+monotonically with horizon (win 38.8% → 35.4% → 31.0%). It is **identical** at `--days 52`
+and the old `--days 120`, and stable across seeds 7 and 101 — it never depended on the broken
+`SELECTED` cohort.
 
-**3. `SELECTED` vs `PHASE2_CUT` is *not* significant**, even though
-`CEILING_CUT` vs `PHASE2_CUT` is. That is not a contradiction: the comparison rests on
-fewer comparable days (30/25/15) and `SELECTED`'s day-means are noisier, so the interval
-widens past zero. It is a sample-size result, not evidence that the ranker fails.
+**3. `SELECTED` vs `PHASE2_CUT` is not significant** despite (2). Fewer comparable days and
+noisier day-means widen the interval past zero. A power result, not a contradiction.
 
-## Limitations — none of this is proof of consistent outperformance
+## Why finding 2 stays provisional
 
-* **The `PHASE2_CUT` result is effectively RISK_OFF-only.** The regime split is what
-  revealed it: of 30 comparable days, **28 are RISK_OFF and 2 are RISK_ON**, so every
-  `PHASE2_CUT` pair is withheld in RISK_ON. The finding survives RISK_OFF (10d
-  [−0.81,−0.05], 20d [−1.68,−0.48]) but is **regime-unproven**, not regime-robust.
-* **Thin day counts at the long horizon** — 15 comparable days at 20d for the significant
-  pair. The bootstrap accounts for overlap but cannot manufacture independent days.
-* **19% of observations are unpriceable**, mostly symbols no longer in the universe
-  snapshot. Reported, not dropped, but it is a survivorship caveat on every number here.
-* **These are scanned candidates, not executed trades** — no entry trigger, stop or sizing.
-  They do not describe book performance.
-* Every cohort's median is negative. That is the tape over the window.
+* **Time- and regime-confounded, and they are the same confound.** `PHASE2_CUT` exists only
+  from **2026-08-23** (`below_rank_budget` was not logged before Phase 0/1), and that window
+  is overwhelmingly RISK_OFF — **9,011 observations vs 832**, and only **2 RISK_ON scan days**,
+  so every RISK_ON comparison is withheld. The regime split cannot corroborate the finding;
+  it can only show that it is inseparable from RISK_OFF.
+* **13–15 comparable days** at 20d. The bootstrap handles overlap; it cannot invent
+  independent days.
+* **23% unpriceable**, mostly symbols gone from the universe snapshot.
+* **Scanned candidates, not executed trades** — no entry trigger, stop or sizing. These are
+  not book returns.
+* Every cohort median is negative. That is the tape in this window.
 
-## What this does and does not license
+## What the evidence licenses
 
-It licenses a **Stage 4 conversation** about the ceiling, with no change yet:
-two independent studies now agree it does not discriminate, and the honest options are
-retire it or re-derive it — not tune it. Per `ceiling-20-not-discriminating`, raising the
-cap is the wrong lever; the ranker is where the signal is.
-
-It licenses **nothing** on the rank budget except "keep collecting". The effect is real in
-this window but concentrated in one regime, and the rule is that no flag moves without
-measurable improvement that survives a regime check.
-
-**No change is proposed here.** Reproduce with:
+* On the **rank budget**: keep collecting. Real in this window, one regime, few days.
+  **No flag moves.**
+* On the **ceiling**: nothing. The comparison needs more post-era days before it can speak.
+* **No strategy change is proposed**, and nothing here is proof of consistent outperformance.
 
 ```bash
-python -m scripts.ceiling_cohort_study --days 120 --horizon SWING --by-regime
+python -m scripts.ceiling_cohort_study --days 52 --horizon SWING --by-regime
+# --days 120 now fails loudly: the export cap makes that window incomplete.
 ```
