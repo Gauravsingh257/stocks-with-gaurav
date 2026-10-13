@@ -74,19 +74,38 @@ def ingest_event(body: EventIn, user: Optional[dict] = Depends(get_optional_user
     return {"ok": True}
 
 
+# `include_internal=true` adds our own accounts back in — for reconciling a
+# figure against the raw table, not for reporting. Internal accounts come from
+# an explicit list (PRODUCT_HEALTH_INTERNAL_EMAILS), NOT from having ADMIN: an
+# admin may also be a real customer whose usage belongs in the numbers.
+_INCLUDE_INTERNAL = Query(False, description="Include internal accounts (debug/reconciliation only)")
+
+
 @router.get("/health")
-def health(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_admin)):
-    return store.health_kpis(days)
+def health(
+    days: int = Query(7, ge=1, le=90),
+    include_internal: bool = _INCLUDE_INTERNAL,
+    _admin: dict = Depends(require_admin),
+):
+    return store.health_kpis(days, include_internal=include_internal)
 
 
 @router.get("/funnel")
-def funnel(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_admin)):
-    return store.activation_funnel(days)
+def funnel(
+    days: int = Query(7, ge=1, le=90),
+    include_internal: bool = _INCLUDE_INTERNAL,
+    _admin: dict = Depends(require_admin),
+):
+    return store.activation_funnel(days, include_internal=include_internal)
 
 
 @router.get("/adoption")
-def adoption(days: int = Query(7, ge=1, le=90), _admin: dict = Depends(require_admin)):
-    return store.feature_adoption(days)
+def adoption(
+    days: int = Query(7, ge=1, le=90),
+    include_internal: bool = _INCLUDE_INTERNAL,
+    _admin: dict = Depends(require_admin),
+):
+    return store.feature_adoption(days, include_internal=include_internal)
 
 
 @router.get("/business")

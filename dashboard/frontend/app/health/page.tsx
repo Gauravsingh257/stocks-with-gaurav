@@ -3,37 +3,62 @@
 /**
  * /health — Product Health Dashboard (internal, admin-only).
  *
- * Reads our first-party event store (/api/product-analytics/*) to show the 16
- * validation KPIs + the activation funnel with stage-to-stage conversion. This
- * is the primary PMF-signal surface for the Sprint-1 validation window.
+ * Reads our first-party event store (/api/product-analytics/*).
+ *
+ * The page keeps six entities strictly apart — ACCOUNTS, USERS, BROWSERS,
+ * TAB SESSIONS, EVENTS and ENGAGEMENT — because conflating them is exactly how
+ * this dashboard previously reported 228 "users" when 12 accounts existed.
+ * Anything derived from a browser id is labelled "browsers (approx.)" and is
+ * never called a user.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Activity, RefreshCw, TrendingDown, IndianRupee, Layers, HeartPulse, Zap, RotateCw, LogOut } from "lucide-react";
+import {
+  Activity, RefreshCw, TrendingDown, Layers, HeartPulse, Zap, RotateCw, LogOut,
+  Users, Monitor, Info, Building2,
+} from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 const ADMIN_EMAILS = new Set(["hellogaurav2577@gmail.com"]);
 
-interface Health {
+interface Basis {
   window_days: number; since: string;
-  total_users: number; active_users: number; new_signups: number; returning_users: number;
-  command_center_views: number; nba_clicks: number; nba_ctr_pct: number;
-  watchlist_adds: number; watchlist_opens: number; research_searches: number; ai_research_usage: number;
-  avg_session_seconds: number; pages_per_session: number; telegram_link_clicks: number;
-  day1_retention_pct: number | null; day1_cohort: number; day7_retention_pct: number | null;
+  unique_user_data_from: string; accounts_data_from: string | null;
+  internal_accounts_excluded: number; correction_note: string;
+  entities: Record<string, string>;
+}
+interface Health extends Basis {
+  include_internal: boolean;
+  accounts: { registered_total: number; by_role: Record<string, number>; new_today: number; new_7d: number; new_30d: number };
+  users: {
+    dau: number; wau: number; mau: number;
+    engaged_dau: number; engaged_wau: number; engaged_mau: number;
+    active_in_window: number; returning: number; ever_authenticated: number;
+  };
+  browsers: { anonymous_in_window: number; distinct_all_time: number; note: string };
+  tab_sessions: number; events: number;
+  engagement_events: Record<string, number>;
+  nba_ctr_pct: number; avg_tab_session_seconds: number; pages_per_tab_session: number;
   session_endings?: Record<string, number>;
+  day1_retention_pct: number | null; day1_cohort: number; day1_unavailable_reason: string | null;
+  day7_retention_pct: number | null; day7_unavailable_reason: string | null;
+  auth_signals: {
+    login_events_client_reported: number; signup_events_client_reported: number;
+    new_accounts_db_truth: number | null; failed_logins: number | null; note: string;
+  };
+  verified_users: number | null; verified_users_unavailable_reason: string;
 }
-interface FunnelStage { stage: string; count: number; conversion_pct: number; overall_pct: number; }
-interface Funnel { window_days: number; since: string; stages: FunnelStage[]; note: string; }
+interface FunnelStage { stage: string; count: number; entity: string; conversion_pct: number; of_base_pct: number; }
+interface Funnel extends Basis { anonymous_phase: FunnelStage[]; authenticated_phase: FunnelStage[]; note: string; }
 interface FeatureRow {
-  feature: string; event: string; unique_users: number; daily_uses: number; weekly_uses: number;
-  avg_session_seconds: number; repeat_usage_pct: number; adoption_pct: number;
+  feature: string; event: string; unique_users: number; browsers: number; uses: number; adoption_pct: number | null;
 }
-interface Adoption { window_days: number; active_users: number; features: FeatureRow[]; }
+interface Adoption extends Basis { active_users: number; features: FeatureRow[]; note: string }
 interface Business {
-  registered_users: number; premium_accounts: number; free_users: number; admin_users: number;
-  subscription_price_inr: number; mrr_estimate_inr: number; arpu_estimate_inr: number; estimate_note: string;
-  coming_soon: Record<string, string>;
+  registered_users: number; accounts_by_role: Record<string, number>;
+  new_accounts_today: number; new_accounts_7d: number; new_accounts_30d: number;
+  accounts_data_from: string | null;
+  billing: { status: string; note: string }; role_note: string;
 }
 
 function fmtDuration(s: number): string {
@@ -43,16 +68,10 @@ function fmtDuration(s: number): string {
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
 }
 
-function fmtINR(n: number): string {
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)}Cr`;
-  if (n >= 100000) return `₹${(n / 100000).toFixed(2)}L`;
-  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}k`;
-  return `₹${n}`;
-}
-
 export default function HealthPage() {
   const { user, token, loading: authLoading } = useAuth();
   const [days, setDays] = useState(7);
+  const [includeInternal, setIncludeInternal] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [funnel, setFunnel] = useState<Funnel | null>(null);
   const [adoption, setAdoption] = useState<Adoption | null>(null);
@@ -67,10 +86,11 @@ export default function HealthPage() {
     setLoading(true); setErr(null);
     try {
       const h: Record<string, string> = { Authorization: `Bearer ${token}` };
+      const q = `days=${days}&include_internal=${includeInternal}`;
       const [hr, fr, ar, br] = await Promise.all([
-        fetch(`${API_BASE}/api/product-analytics/health?days=${days}`, { headers: h, cache: "no-store" }),
-        fetch(`${API_BASE}/api/product-analytics/funnel?days=${days}`, { headers: h, cache: "no-store" }),
-        fetch(`${API_BASE}/api/product-analytics/adoption?days=${days}`, { headers: h, cache: "no-store" }),
+        fetch(`${API_BASE}/api/product-analytics/health?${q}`, { headers: h, cache: "no-store" }),
+        fetch(`${API_BASE}/api/product-analytics/funnel?${q}`, { headers: h, cache: "no-store" }),
+        fetch(`${API_BASE}/api/product-analytics/adoption?${q}`, { headers: h, cache: "no-store" }),
         fetch(`${API_BASE}/api/product-analytics/business`, { headers: h, cache: "no-store" }),
       ]);
       if (hr.status === 403 || fr.status === 403) { setErr("Admin access required."); return; }
@@ -84,7 +104,7 @@ export default function HealthPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, days]);
+  }, [token, days, includeInternal]);
 
   useEffect(() => { if (isAdmin) load(); else setLoading(false); }, [isAdmin, load]);
 
@@ -92,26 +112,7 @@ export default function HealthPage() {
   if (!user) return <Centered>Sign in required.</Centered>;
   if (!isAdmin) return <Centered>This dashboard is internal (admin only).</Centered>;
 
-  const kpis: { label: string; value: string; sub?: string; accent?: boolean }[] = health ? [
-    { label: "Total Users", value: String(health.total_users), sub: "unique, all-time" },
-    { label: "Active Users", value: String(health.active_users), sub: `last ${health.window_days}d` },
-    { label: "New Signups", value: String(health.new_signups) },
-    { label: "Returning Users", value: String(health.returning_users) },
-    { label: "Command Center Views", value: String(health.command_center_views) },
-    { label: "NBA Clicks", value: String(health.nba_clicks) },
-    { label: "NBA CTR", value: `${health.nba_ctr_pct}%`, sub: "clicks / CC views", accent: true },
-    { label: "Watchlist Adds", value: String(health.watchlist_adds) },
-    { label: "Watchlist Opens", value: String(health.watchlist_opens) },
-    { label: "Research Searches", value: String(health.research_searches) },
-    { label: "AI Research Usage", value: String(health.ai_research_usage), sub: "not wired yet" },
-    { label: "Avg Session", value: fmtDuration(health.avg_session_seconds) },
-    { label: "Pages / Session", value: String(health.pages_per_session) },
-    { label: "Telegram Clicks", value: String(health.telegram_link_clicks), sub: "no CTA yet" },
-    { label: "Day-1 Retention", value: health.day1_retention_pct == null ? "—" : `${health.day1_retention_pct}%`, sub: `cohort ${health.day1_cohort}`, accent: true },
-    { label: "Day-7 Retention", value: health.day7_retention_pct == null ? "— soon" : `${health.day7_retention_pct}%`, sub: "needs 7d data" },
-  ] : [];
-
-  const maxCount = funnel ? Math.max(1, ...funnel.stages.map((s) => s.count)) : 1;
+  const windowLabel = `last ${health?.window_days ?? days}d`;
 
   return (
     <div className="w-full max-w-screen-xl mx-auto flex flex-col gap-5">
@@ -121,11 +122,11 @@ export default function HealthPage() {
           <div>
             <h1 className="text-lg md:text-xl font-extrabold m-0" style={{ color: "var(--text-primary)" }}>Product Health</h1>
             <p className="m-0" style={{ fontSize: "0.72rem", color: "var(--text-dim)" }}>
-              First-party KPIs · Sprint-1 validation {health?.since ? `· since ${health.since}` : ""}
+              First-party analytics {health?.since ? `· since ${health.since}` : ""}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {[1, 7, 30].map((d) => (
             <button key={d} onClick={() => setDays(d)}
               className="badge" style={{ cursor: "pointer", padding: "5px 11px", fontSize: "0.72rem",
@@ -135,27 +136,40 @@ export default function HealthPage() {
               {d}d
             </button>
           ))}
+          <button
+            onClick={() => setIncludeInternal((v) => !v)}
+            title="Add our own accounts back in. For reconciling a number against the raw table — not for reporting."
+            className="badge"
+            style={{ cursor: "pointer", padding: "5px 11px", fontSize: "0.72rem",
+              background: includeInternal ? "var(--warning)" : "transparent",
+              border: `1px solid ${includeInternal ? "var(--warning)" : "var(--border)"}`,
+              color: includeInternal ? "#1a1205" : "var(--text-secondary)" }}>
+            {includeInternal ? "incl. internal" : "excl. internal"}
+          </button>
           <button onClick={load} className="btn-accent" style={{ padding: "5px 12px", fontSize: "0.72rem" }}>
             <RefreshCw size={12} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} /> Refresh
           </button>
         </div>
       </div>
 
-      {/* Founder summary — the four questions this page must answer at a glance */}
+      {/* How these numbers are counted — the correction, stated plainly. */}
       {health && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <FounderCard icon={HeartPulse} q="Is the product healthy?"
-            value={`${health.active_users} active`} sub={`last ${health.window_days}d`}
-            tone={health.active_users > 0 ? "good" : "dim"} />
-          <FounderCard icon={Zap} q="Are users engaged?"
-            value={`${health.nba_ctr_pct}% NBA CTR`} sub={`${health.pages_per_session} pages/session`}
-            tone={health.nba_ctr_pct >= 15 ? "good" : health.nba_ctr_pct > 0 ? "warn" : "dim"} />
-          <FounderCard icon={RotateCw} q="Are users returning?"
-            value={health.day1_retention_pct == null ? "—" : `${health.day1_retention_pct}% D1`} sub={`cohort ${health.day1_cohort}`}
-            tone={(health.day1_retention_pct ?? 0) >= 25 ? "good" : (health.day1_retention_pct ?? 0) > 0 ? "warn" : "dim"} />
-          <FounderCard icon={IndianRupee} q="Are subscriptions growing?"
-            value={business ? `${business.premium_accounts} paid` : "—"} sub={business ? `${fmtINR(business.mrr_estimate_inr)} MRR est` : ""}
-            tone={(business?.premium_accounts ?? 0) > 0 ? "good" : "dim"} />
+        <div className="rounded-xl" style={{ padding: "12px 15px", border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex items-start gap-2">
+            <Info size={14} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <div style={{ fontSize: "0.74rem", fontWeight: 700, color: "var(--text-primary)" }}>How these numbers are counted</div>
+              <p style={{ fontSize: "0.68rem", color: "var(--text-secondary)", margin: "4px 0 0", lineHeight: 1.55 }}>
+                {health.correction_note}
+              </p>
+              <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "6px 0 0" }}>
+                Accounts since {health.accounts_data_from?.slice(0, 10) ?? "—"} · unique-user analytics since {health.unique_user_data_from}
+                {health.internal_accounts_excluded > 0 && !health.include_internal
+                  ? ` · ${health.internal_accounts_excluded} internal account(s) excluded`
+                  : health.include_internal ? " · internal accounts INCLUDED (debug)" : ""}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -164,102 +178,111 @@ export default function HealthPage() {
       )}
       {loading && !health && <Centered>Loading product health…</Centered>}
 
-      {/* KPI grid */}
+      {/* The four questions, each answered with ONE entity */}
       {health && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {kpis.map((k) => (
-            <div key={k.label} className="glass rounded-xl" style={{ padding: "14px 16px" }}>
-              <div style={{ fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)" }}>{k.label}</div>
-              <div style={{ fontSize: "1.35rem", fontWeight: 800, marginTop: 4, color: k.accent ? "var(--accent)" : "var(--text-primary)" }}>{k.value}</div>
-              {k.sub && <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", marginTop: 2 }}>{k.sub}</div>}
-            </div>
-          ))}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <FounderCard icon={Users} q="How many people signed up?"
+            value={`${health.accounts.registered_total} accounts`} sub={`${health.accounts.new_30d} new in 30d`}
+            tone={health.accounts.registered_total > 0 ? "good" : "dim"} />
+          <FounderCard icon={HeartPulse} q="How many came back signed in?"
+            value={`${health.users.wau} users`} sub={`WAU · ${health.users.engaged_wau} used a feature`}
+            tone={health.users.wau > 0 ? "good" : "dim"} />
+          <FounderCard icon={Zap} q="Are they engaging?"
+            value={`${health.nba_ctr_pct}% NBA CTR`} sub={`${health.pages_per_tab_session} pages / tab session`}
+            tone={health.nba_ctr_pct >= 15 ? "good" : health.nba_ctr_pct > 0 ? "warn" : "dim"} />
+          <FounderCard icon={Monitor} q="How much anonymous traffic?"
+            value={`${health.browsers.anonymous_in_window} browsers`} sub={`${windowLabel} · approx., not people`}
+            tone="dim" />
         </div>
       )}
 
-      {/* Activation funnel */}
-      {funnel && (
-        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingDown size={15} color="var(--accent)" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Activation Funnel</span>
-          </div>
-          <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 14px" }}>{funnel.note}</p>
-          <div className="flex flex-col gap-2">
-            {funnel.stages.map((s, i) => (
-              <div key={s.stage} className="flex items-center gap-3">
-                <div style={{ width: 130, fontSize: "0.78rem", color: "var(--text-secondary)", flexShrink: 0 }}>{s.stage}</div>
-                <div style={{ flex: 1, position: "relative", height: 30, background: "rgba(255,255,255,0.03)", borderRadius: 7, overflow: "hidden" }}>
-                  <div style={{ position: "absolute", inset: 0, width: `${Math.max(2, (s.count / maxCount) * 100)}%`,
-                    background: "linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent), color-mix(in srgb, var(--accent) 20%, transparent))",
-                    borderRadius: 7 }} />
-                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px" }}>
-                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--text-primary)" }}>{s.count}</span>
-                    <span style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>{s.overall_pct}% of visitors</span>
-                  </div>
-                </div>
-                <div style={{ width: 58, textAlign: "right", fontSize: "0.72rem", flexShrink: 0,
-                  color: i === 0 ? "var(--text-dim)" : s.conversion_pct >= 50 ? "var(--success)" : s.conversion_pct >= 20 ? "var(--warning)" : "var(--danger)" }}>
-                  {i === 0 ? "—" : `${s.conversion_pct}%`}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "12px 0 0" }}>
-            Right column = conversion from the stage above. The most important product KPI.
-          </p>
-        </div>
-      )}
-
-      {/* Business Health */}
-      {business && (
-        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
-          <div className="flex items-center gap-2 mb-1">
-            <IndianRupee size={15} color="var(--accent)" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Business Health</span>
-          </div>
-          <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 14px" }}>{business.estimate_note}</p>
+      {/* ACCOUNTS */}
+      {health && (
+        <Section icon={Users} title="Accounts" caption="People who registered. Source: the users table — not events.">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MiniStat label="MRR (est.)" value={fmtINR(business.mrr_estimate_inr)} sub={`${business.premium_accounts} × ${fmtINR(business.subscription_price_inr)}`} accent />
-            <MiniStat label="Paid / Premium" value={String(business.premium_accounts)} sub="role-based (real)" />
-            <MiniStat label="Registered Users" value={String(business.registered_users)} sub={`${business.free_users} free`} />
-            <MiniStat label="ARPU (est.)" value={fmtINR(business.arpu_estimate_inr)} sub="MRR / registered" />
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-            {Object.entries(business.coming_soon).map(([k, v]) => (
-              <div key={k} className="rounded-xl" style={{ padding: "12px 14px", border: "1px dashed var(--border)", opacity: 0.7 }}>
-                <div style={{ fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)" }}>{k.replace(/_/g, " ").replace(/pct/, "%")}</div>
-                <div style={{ fontSize: "0.82rem", fontWeight: 700, marginTop: 4, color: "var(--text-dim)" }}>{v}</div>
-              </div>
+            <Stat label="Registered total" value={String(health.accounts.registered_total)} accent />
+            <Stat label="New today" value={String(health.accounts.new_today)} />
+            <Stat label="New · 7d" value={String(health.accounts.new_7d)} />
+            <Stat label="New · 30d" value={String(health.accounts.new_30d)} />
+            <Stat label="Verified users" value="—"
+              sub={health.verified_users_unavailable_reason} />
+            <Stat label="Ever signed in" value={String(health.users.ever_authenticated)} sub="accounts seen in events" />
+            {Object.entries(health.accounts.by_role).map(([role, n]) => (
+              <Stat key={role} label={`Role · ${role}`} value={String(n)} />
             ))}
           </div>
-          <p style={{ fontSize: "0.62rem", color: "var(--text-dim)", margin: "12px 0 0" }}>
-            Dashed cards unlock when a billing system (Razorpay) ships — MRR/ARPU become real, and churn/renewal/refund/LTV/CAC become measurable.
-          </p>
-        </div>
+        </Section>
       )}
 
-      {/* Feature Adoption */}
-      {adoption && (
-        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
-          <div className="flex items-center gap-2 mb-1">
-            <Layers size={15} color="var(--accent)" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Feature Adoption</span>
+      {/* AUTHENTICATED USERS */}
+      {health && (
+        <Section icon={HeartPulse} title="Authenticated users"
+          caption="DISTINCT signed-in people. One person is one user no matter how many logins, tabs or devices.">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="DAU" value={String(health.users.dau)} accent sub={`engaged ${health.users.engaged_dau}`} />
+            <Stat label="WAU" value={String(health.users.wau)} accent sub={`engaged ${health.users.engaged_wau}`} />
+            <Stat label="MAU" value={String(health.users.mau)} accent sub={`engaged ${health.users.engaged_mau}`} />
+            <Stat label="Returning" value={String(health.users.returning)} sub="active now + seen before" />
+            <Stat label="Day-1 retention"
+              value={health.day1_retention_pct == null ? "—" : `${health.day1_retention_pct}%`}
+              sub={health.day1_unavailable_reason ?? `cohort ${health.day1_cohort}`} />
+            <Stat label="Day-7 retention" value="—" sub={health.day7_unavailable_reason ?? ""} />
+            <Stat label="Logins (reported)" value={String(health.auth_signals.login_events_client_reported)} sub="browser-sent, under-counts" />
+            <Stat label="Failed logins" value="—" sub="not recorded server-side yet" />
           </div>
-          <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 12px" }}>
-            Sorted by adoption. {adoption.active_users} active users in window. Use this to prioritise the roadmap.
-          </p>
+          <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>{health.auth_signals.note}</p>
+        </Section>
+      )}
+
+      {/* ANONYMOUS TRAFFIC + VOLUME */}
+      {health && (
+        <Section icon={Monitor} title="Anonymous traffic & volume"
+          caption="Browser ids and raw counts. Useful for reach — but a browser is not a person.">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label={`Anonymous browsers · ${windowLabel}`} value={String(health.browsers.anonymous_in_window)} sub="approx." />
+            <Stat label="Distinct browsers all-time" value={String(health.browsers.distinct_all_time)} sub="approx." />
+            <Stat label="Tab sessions" value={String(health.tab_sessions)} sub="one browser TAB, not a login" />
+            <Stat label="Events" value={String(health.events)} sub={windowLabel} />
+            <Stat label="Avg tab session" value={fmtDuration(health.avg_tab_session_seconds)} />
+            <Stat label="Pages / tab session" value={String(health.pages_per_tab_session)} />
+          </div>
+          <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "10px 0 0" }}>{health.browsers.note}</p>
+        </Section>
+      )}
+
+      {/* ENGAGEMENT EVENT COUNTS */}
+      {health && (
+        <Section icon={Zap} title="Engagement" caption="Event counts — how often something happened, not how many people.">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {Object.entries(health.engagement_events).map(([k, v]) => (
+              <Stat key={k} label={k.replace(/_/g, " ")} value={String(v)} />
+            ))}
+            <Stat label="NBA CTR" value={`${health.nba_ctr_pct}%`} sub="clicks / CC views" accent />
+          </div>
+        </Section>
+      )}
+
+      {/* Activation funnel — two phases, because the entity changes */}
+      {funnel && (
+        <Section icon={TrendingDown} title="Activation funnel" caption={funnel.note}>
+          <FunnelPhase title="Anonymous phase — browsers (approx.)" stages={funnel.anonymous_phase} />
+          <div style={{ height: 14 }} />
+          <FunnelPhase title="Authenticated phase — signed-in users" stages={funnel.authenticated_phase} />
+        </Section>
+      )}
+
+      {/* Feature adoption */}
+      {adoption && (
+        <Section icon={Layers} title="Feature adoption" caption={adoption.note}>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", minWidth: 640 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", minWidth: 620 }}>
               <thead>
                 <tr style={{ color: "var(--text-dim)", fontSize: "0.64rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   <th style={{ textAlign: "left", padding: "6px 8px" }}>Feature</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Unique</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Daily</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Weekly</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg time</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Repeat</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px", width: 150 }}>Adoption</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Users</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Browsers</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Uses</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", width: 170 }}>Adoption (of {adoption.active_users} users)</th>
                 </tr>
               </thead>
               <tbody>
@@ -267,33 +290,44 @@ export default function HealthPage() {
                   <tr key={f.event} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "8px", fontWeight: 600, color: "var(--text-primary)" }}>{f.feature}</td>
                     <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.unique_users}</td>
-                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.daily_uses}</td>
-                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{f.weekly_uses}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)" }}>{fmtDuration(f.avg_session_seconds)}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)" }}>{f.repeat_usage_pct}%</td>
+                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-dim)" }}>{f.browsers}</td>
+                    <td style={{ padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{f.uses}</td>
                     <td style={{ padding: "8px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
-                          <div style={{ width: `${Math.min(100, f.adoption_pct)}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
+                      {f.adoption_pct == null ? (
+                        <span style={{ fontSize: "0.72rem", color: "var(--text-dim)" }}>— no active users</span>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+                            <div style={{ width: `${Math.min(100, f.adoption_pct)}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
+                          </div>
+                          <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--accent)", minWidth: 38, textAlign: "right" }}>{f.adoption_pct}%</span>
                         </div>
-                        <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--accent)", minWidth: 38, textAlign: "right" }}>{f.adoption_pct}%</span>
-                      </div>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
+        </Section>
+      )}
+
+      {/* Accounts & billing */}
+      {business && (
+        <Section icon={Building2} title="Accounts & billing" caption={business.billing.note}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Registered users" value={String(business.registered_users)} accent />
+            <Stat label="New · today" value={String(business.new_accounts_today)} />
+            <Stat label="New · 7d" value={String(business.new_accounts_7d)} />
+            <Stat label="New · 30d" value={String(business.new_accounts_30d)} />
+          </div>
+          <p style={{ fontSize: "0.64rem", color: "var(--text-dim)", margin: "12px 0 0" }}>{business.role_note}</p>
+        </Section>
       )}
 
       {/* Session endings (churn signal) */}
       {health && health.session_endings && Object.keys(health.session_endings).length > 0 && (
-        <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
-          <div className="flex items-center gap-2 mb-3">
-            <LogOut size={15} color="var(--accent)" />
-            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>Session Endings</span>
-          </div>
+        <Section icon={LogOut} title="Tab-session endings" caption="Why browser tabs ended — an event count.">
           <div className="flex flex-wrap gap-2">
             {Object.entries(health.session_endings).map(([reason, count]) => (
               <div key={reason} className="rounded-lg" style={{ padding: "8px 12px", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}>
@@ -302,8 +336,52 @@ export default function HealthPage() {
               </div>
             ))}
           </div>
-        </div>
+        </Section>
       )}
+    </div>
+  );
+}
+
+function FunnelPhase({ title, stages }: { title: string; stages: FunnelStage[] }) {
+  const max = Math.max(1, ...stages.map((s) => s.count));
+  return (
+    <div>
+      <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--text-secondary)", marginBottom: 8 }}>{title}</div>
+      <div className="flex flex-col gap-2">
+        {stages.map((s, i) => (
+          <div key={s.stage} className="flex items-center gap-3">
+            <div style={{ width: 170, fontSize: "0.78rem", color: "var(--text-secondary)", flexShrink: 0 }}>{s.stage}</div>
+            <div style={{ flex: 1, position: "relative", height: 30, background: "rgba(255,255,255,0.03)", borderRadius: 7, overflow: "hidden" }}>
+              <div style={{ position: "absolute", inset: 0, width: `${Math.max(2, (s.count / max) * 100)}%`,
+                background: "linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent), color-mix(in srgb, var(--accent) 20%, transparent))",
+                borderRadius: 7 }} />
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px" }}>
+                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--text-primary)" }}>{s.count}</span>
+                <span style={{ fontSize: "0.66rem", color: "var(--text-dim)" }}>{s.entity}</span>
+              </div>
+            </div>
+            <div style={{ width: 58, textAlign: "right", fontSize: "0.72rem", flexShrink: 0,
+              color: i === 0 ? "var(--text-dim)" : s.conversion_pct >= 50 ? "var(--success)" : s.conversion_pct >= 20 ? "var(--warning)" : "var(--danger)" }}>
+              {i === 0 ? "—" : `${s.conversion_pct}%`}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Section({ icon: Icon, title, caption, children }: {
+  icon: typeof HeartPulse; title: string; caption?: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="glass rounded-xl" style={{ padding: "16px 18px" }}>
+      <div className="flex items-center gap-2 mb-1">
+        <Icon size={15} color="var(--accent)" />
+        <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" }}>{title}</span>
+      </div>
+      {caption && <p style={{ fontSize: "0.68rem", color: "var(--text-dim)", margin: "0 0 14px" }}>{caption}</p>}
+      {children}
     </div>
   );
 }
@@ -322,7 +400,7 @@ function FounderCard({ icon: Icon, q, value, sub, tone }: { icon: typeof HeartPu
   );
 }
 
-function MiniStat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
+function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
   return (
     <div className="rounded-xl" style={{ padding: "12px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
       <div style={{ fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-dim)" }}>{label}</div>
