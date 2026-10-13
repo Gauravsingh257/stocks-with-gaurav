@@ -11,7 +11,7 @@ Tests:
 """
 
 import pytest
-from datetime import datetime, date, timedelta, time
+from datetime import datetime, date, timedelta, time, timezone
 from unittest.mock import patch, MagicMock
 
 from engine.expiry_manager import (
@@ -29,6 +29,23 @@ from engine.expiry_manager import (
     ExpiryRolloverState,
     reset_rollover_state,
 )
+
+# engine/expiry_manager.py computes "today" as datetime.now(IST).date(). Tests
+# that compare against the implementation's notion of *today* must use the SAME
+# clock: plain date.today() is the RUNNER's local date, which on a UTC CI runner
+# is one day BEHIND IST between 18:30 and 24:00 UTC. That skew — not any code
+# change — failed four of these tests in CI on 2026-10-11 19:23 UTC, where the
+# runner saw 2026-10-11 while the code saw 2026-10-12.
+#
+# Only the date-sensitive assertions were switched. Tests that merely build
+# relative expiry fixtures still use date.today() on purpose: changing them
+# would alter which branches their assertions take, which is out of scope here.
+_IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def ist_today() -> date:
+    """Today in IST — the same day the implementation uses."""
+    return datetime.now(_IST_TZ).date()
 
 
 # =====================================================
@@ -228,7 +245,7 @@ class TestNearExpiry:
         assert is_near_expiry(tomorrow, days=3) is True
 
     def test_today_is_near(self):
-        assert is_near_expiry(date.today(), days=3) is True
+        assert is_near_expiry(ist_today(), days=3) is True
 
     def test_far_future_is_not_near(self):
         far = date.today() + timedelta(days=30)
@@ -239,9 +256,9 @@ class TestNearExpiry:
         assert is_near_expiry(past, days=3) is False
 
     def test_three_days_boundary(self):
-        exactly_3 = date.today() + timedelta(days=3)
+        exactly_3 = ist_today() + timedelta(days=3)
         assert is_near_expiry(exactly_3, days=3) is True
-        four_days = date.today() + timedelta(days=4)
+        four_days = ist_today() + timedelta(days=4)
         assert is_near_expiry(four_days, days=3) is False
 
     def test_accepts_datetime(self):
@@ -250,8 +267,8 @@ class TestNearExpiry:
         assert is_near_expiry(dt, days=3) is True
 
     def test_is_expiry_today(self):
-        assert is_expiry_today(date.today()) is True
-        assert is_expiry_today(date.today() + timedelta(1)) is False
+        assert is_expiry_today(ist_today()) is True
+        assert is_expiry_today(ist_today() + timedelta(1)) is False
 
     @patch("engine.expiry_manager.datetime")
     def test_post_expiry_cutoff(self, mock_dt):
@@ -465,7 +482,7 @@ class TestEdgeCases:
 
     def test_holiday_week_wider_preload(self):
         """3 calendar days handles most holiday scenarios."""
-        today = date.today()
+        today = ist_today()
         # 3-day-away expiry should trigger preload
         exp = today + timedelta(days=3)
         assert is_near_expiry(exp, days=3)

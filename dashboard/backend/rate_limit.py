@@ -40,7 +40,25 @@ _MAX_IPS = 10_000
 
 
 def _client_ip(request: Request) -> str:
-    """Prefer X-Forwarded-For (Railway/Vercel) else request.client.host."""
+    """Client IP: the LEFTMOST X-Forwarded-For entry, else the socket peer.
+
+    VERIFIED 2026-10-11 against production (do not "fix" this to rightmost):
+    Railway's edge STRIPS any caller-supplied X-Forwarded-For and rebuilds it
+    as ``[real client, CDN hop]``. Measured with this limiter's own
+    X-RateLimit-Remaining: requests carrying spoofed X-Forwarded-For (and
+    X-Real-IP) values kept decrementing the caller's existing bucket instead of
+    opening a fresh one — the spoof never reached the app.
+
+    Consequences:
+      * leftmost = the real client, and is not spoofable through the edge;
+      * rightmost = a SHARED CDN hop — keying on it would put every visitor in
+        one bucket and 429 legitimate users;
+      * the socket peer is Railway's proxy (100.x), equally shared.
+    This trust relies on traffic arriving through Railway's edge. Anything that
+    reaches the container another way (Railway private networking) could set
+    the header freely — which is why login is ALSO throttled per account
+    (auth_throttle.py), a key no header can influence.
+    """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()

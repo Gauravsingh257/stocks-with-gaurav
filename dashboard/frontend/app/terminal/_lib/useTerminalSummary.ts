@@ -89,6 +89,18 @@ export interface DailyPnL {
 const SUMMARY_REFRESH_MS = 45_000;
 const PNL_REFRESH_MS = 60_000;
 
+/** Bearer header for the signed-in user. The backend derives the user from
+ *  this token — preferences/journal/performance are per-account and return
+ *  401 without it; summary and daily P&L fall back to public defaults. */
+function authHeaders(): Record<string, string> {
+  try {
+    const token = typeof window !== "undefined" ? localStorage.getItem("swg-auth-token") : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 export function useTerminalSummary() {
   const base = getBackendBase();
   const [summary, setSummary] = useState<AISummaryPayload | null>(null);
@@ -98,7 +110,7 @@ export function useTerminalSummary() {
 
   const fetchSummary = useCallback(async () => {
     try {
-      const res = await fetch(`${base}/api/summary`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/summary`, { cache: "no-store", headers: authHeaders() });
       if (res.ok) setSummary(await res.json());
     } catch {
       /* ignore */
@@ -107,7 +119,7 @@ export function useTerminalSummary() {
 
   const fetchPrefs = useCallback(async () => {
     try {
-      const res = await fetch(`${base}/api/preferences`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/preferences`, { cache: "no-store", headers: authHeaders() });
       if (res.ok) setPrefs(await res.json());
     } catch {
       /* ignore */
@@ -119,7 +131,7 @@ export function useTerminalSummary() {
       try {
         const res = await fetch(`${base}/api/preferences`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ ...(prefs ?? {}), ...next }),
         });
         if (res.ok) setPrefs(await res.json());
@@ -132,7 +144,7 @@ export function useTerminalSummary() {
 
   const fetchPerf = useCallback(async () => {
     try {
-      const res = await fetch(`${base}/api/performance`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/performance`, { cache: "no-store", headers: authHeaders() });
       if (res.ok) setPerf(await res.json());
     } catch {
       /* ignore */
@@ -141,7 +153,7 @@ export function useTerminalSummary() {
 
   const fetchDailyPnl = useCallback(async () => {
     try {
-      const res = await fetch(`${base}/api/pnl/daily`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/pnl/daily`, { cache: "no-store", headers: authHeaders() });
       if (res.ok) setDailyPnl(await res.json());
     } catch {
       /* ignore */
@@ -153,7 +165,7 @@ export function useTerminalSummary() {
       try {
         const res = await fetch(`${base}/api/trades/${encodeURIComponent(symbol)}/taken`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify(opts ?? {}),
         });
         if (res.ok) {
