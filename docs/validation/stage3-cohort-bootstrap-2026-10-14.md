@@ -27,9 +27,12 @@ isolates **the rank budget**.
    against **20/day** afterwards. A 120-day window pooled two different things. Fixed with an
    era guard at **2026-08-23** (`--selected-since`).
 2. **The export truncated silently.** Both kinds return **exactly 50,000 rows** at 120 days,
-   and the endpoint returns an **empty list** above its own cap, so a truncated page was
-   indistinguishable from a complete one. Now a `TruncatedExportError` — verified to fire at
-   `--days 120`.
+   and a full page is indistinguishable from a complete window. Now a `TruncatedExportError`
+   — verified to fire at `--days 120`.
+   **Correction to an earlier review note of mine:** I claimed over-limit requests "return an
+   empty list". They do not — the endpoint answers **HTTP 422**, which `raise_for_status`
+   already surfaced, so that path was never silent. The only silent failure was hitting the cap
+   exactly. Pinned by a test so the wrong claim cannot drift back.
 3. **`CEILING_CUT` was a residual bucket.** It was "eligible and not `below_rank_budget`",
    which swept in ~27% of rows carrying SMC rejects (`no_BOS`, `no_liquidity_sweep`,
    `weak_trend`, `no_order_block`). Those were cut for structure, not by the ceiling. Now it
@@ -37,6 +40,13 @@ isolates **the rank budget**.
    **Honest nuance:** in the valid 52-day window this excluded **zero** rows — the
    contamination lived entirely in the pre-era data. The fix corrects the label and protects
    future runs; it does not move the numbers below.
+
+**Cohort purity in the valid window, measured not assumed:** `PHASE2_CUT` is
+**11,369 of 11,369 pure `below_rank_budget`** and `CEILING_CUT` is **18,796 all-empty-reason**.
+So neither side of the significant comparison is contaminated here. Note the latent asymmetry:
+`_cohort` checks `below_rank_budget` *before* requiring an empty reason, so a row carrying both
+a rank-budget cut and an SMC reject would land in `PHASE2_CUT`. No such row exists in this
+window, but the precedence is worth remembering if that ever changes.
 
 ## Run — `--days 52 --horizon SWING --by-regime`, 2026-10-14
 
@@ -76,8 +86,12 @@ claimed.
 `CEILING_CUT` vs `PHASE2_CUT` is significant at **10d (−0.52pp [−0.92,−0.14])** and
 **20d (−1.26pp [−1.91,−0.62])**, `PHASE2_CUT` lower on 3 of 15 days at 20d, effect growing
 monotonically with horizon (win 38.8% → 35.4% → 31.0%). It is **identical** at `--days 52`
-and the old `--days 120`, and stable across seeds 7 and 101 — it never depended on the broken
-`SELECTED` cohort.
+and the old `--days 120`, and stable across seeds 7 and 101 — which shows it never depended on
+the broken `SELECTED` cohort.
+
+**That repetition is consistency, not independent confirmation.** All of those runs read the
+same underlying rows and carry the same regime limitation, so agreeing with each other adds no
+new evidence. Only more diverse, matured observations can corroborate it.
 
 **3. `SELECTED` vs `PHASE2_CUT` is not significant** despite (2). Fewer comparable days and
 noisier day-means widen the interval past zero. A power result, not a contradiction.

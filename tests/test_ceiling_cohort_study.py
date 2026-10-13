@@ -121,7 +121,28 @@ def test_export_returns_rows_below_the_cap(monkeypatch):
 
 
 def test_export_does_not_mistake_an_empty_page_for_truncation(monkeypatch):
-    """Over-limit requests come back empty; that is a different failure."""
+    """A genuinely empty window is not truncation and must not raise."""
     import requests
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(0))
     assert _export("http://x", "selected", 52, "SWING", limit=500) == []
+
+
+def test_export_propagates_an_over_limit_http_error(monkeypatch):
+    """Asking above the endpoint's 50k ceiling is a 422, not a silent empty page.
+
+    An earlier review note of mine claimed over-limit requests came back empty.
+    They do not — raise_for_status surfaces the 422 — so that path was never the
+    silent one. Pinned here so the claim cannot drift back.
+    """
+    import requests
+
+    class _Err:
+        def raise_for_status(self):
+            raise requests.exceptions.HTTPError("422 Client Error: Unprocessable Entity")
+
+        def json(self):                      # pragma: no cover - never reached
+            return {"rows": []}
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Err())
+    with pytest.raises(requests.exceptions.HTTPError):
+        _export("http://x", "selected", 52, "SWING", limit=120000)

@@ -54,9 +54,11 @@ class TruncatedExportError(RuntimeError):
 def _export(api: str, kind: str, days: int, horizon: str, limit: int = 50000) -> list[dict]:
     """Fetch the signals-log export, refusing to return a truncated page.
 
-    The endpoint caps at 50k rows per kind and returns an EMPTY list when asked
-    for more, so a truncated pull looks exactly like a complete one. A 120-day
-    pull hit the cap and silently analysed a partial window; that is now fatal.
+    The endpoint serves at most 50k rows per kind. Asking for MORE is rejected
+    with HTTP 422, which `raise_for_status` already turns into an exception — that
+    path was never silent. The silent one is hitting the cap *exactly*: a full
+    page is indistinguishable from a complete window, and a 120-day pull did
+    precisely that and was analysed as if whole. That is now fatal.
     """
     import requests
 
@@ -73,8 +75,8 @@ def _export(api: str, kind: str, days: int, horizon: str, limit: int = 50000) ->
         raise TruncatedExportError(
             f"export '{kind}' returned {len(rows)} rows at limit={limit} — the cap was hit, "
             f"so this window is incomplete and any cohort comparison built on it is invalid. "
-            f"Narrow --days (the cap binds around 120 days) rather than raising --limit: the "
-            f"endpoint returns an EMPTY list above its own ceiling."
+            f"Narrow --days (the cap binds around 120 days). Raising --limit will not help: "
+            f"the endpoint rejects anything above 50000 with HTTP 422."
         )
     return rows
 
