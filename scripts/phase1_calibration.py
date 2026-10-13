@@ -41,6 +41,75 @@ def _median(values: list[float]) -> float | None:
     return round(st.median(values), 3) if values else None
 
 
+
+# ── outcome source ───────────────────────────────────────────────────────────
+# `forward_returns` is written only by the MANUAL scripts/backfill_forward_returns.py,
+# which is scheduled nowhere and has been stale since 2026-09-13 — that is what
+# silently stalled this counterfactual. Default is now OHLC-direct via
+# services/forward_eval.py; --returns-source table restores the old join so the
+# two can be compared.
+RETURNS_SOURCE = "ohlc"
+_BOOK = None
+_COVERAGE: list = []
+
+
+def _fr_select() -> str:
+    if RETURNS_SOURCE == "table":
+        return ("f.fwd_5d_pct, f.fwd_10d_pct, f.fwd_20d_pct, "
+                "f.mfe_10d_pct, f.mae_10d_pct, f.days_to_target")
+    return "NULL AS days_to_target"
+
+
+def _fr_agg_select() -> str:
+    if RETURNS_SOURCE == "table":
+        return "MAX(f.fwd_10d_pct) AS fwd_10d, MAX(f.fwd_20d_pct) AS fwd_20d,"
+    return "NULL AS fwd_10d, NULL AS fwd_20d,"
+
+
+def _fr_excess_select() -> str:
+    return "MAX(f.excess_20d_pct) AS excess_20d" if RETURNS_SOURCE == "table" else "NULL AS excess_20d"
+
+
+def _fr_join(alias: str) -> str:
+    if RETURNS_SOURCE == "table":
+        return (f"LEFT JOIN forward_returns f "
+                f"ON REPLACE(f.symbol, 'NSE:', '') = REPLACE({alias}.symbol, 'NSE:', '') "
+                f"AND f.date = {alias}.date")
+    return ""
+
+
+def _enrich(rows: list, *, symbol_key: str = "symbol") -> None:
+    """Populate fwd_* straight from OHLC — no stale-label dependency.
+
+    `symbol_key` must name the column the query actually produced. The
+    l1_counterfactual query aliases it `sym`; passing the default `symbol` there
+    made every row look like a missing symbol, so the counterfactual stayed
+    withheld and `no_series` was inflated by ~119k rows.
+    """
+    if RETURNS_SOURCE == "table" or not rows:
+        return
+    from services.forward_eval import PriceBook, benchmark_series, enrich_rows
+    global _BOOK, _BENCH
+    if _BOOK is None:
+        _BOOK = PriceBook.from_universe_snapshot()
+        try:
+            _BENCH = benchmark_series()
+        except Exception:
+            _BENCH = None
+    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=(5, 10, 20), benchmark=_BENCH,
+                                 symbol_key=symbol_key).to_dict())
+    # l1_counterfactual's aggregate query names its columns fwd_10d / fwd_20d /
+    # excess_20d (no _pct suffix) — keep those readers working unchanged.
+    for r in rows:
+        for w in (10, 20):
+            if f"fwd_{w}d" in r:
+                r[f"fwd_{w}d"] = r.get(f"fwd_{w}d_pct")
+        if "excess_20d" in r:
+            r["excess_20d"] = r.get("excess_20d_pct")
+
+
+_BENCH = None
+
 def funnel_comparison(horizon: str | None, days: int) -> dict:
     """Legacy vs strict selection over the logged scans, with forward outcomes.
 
@@ -67,21 +136,20 @@ def funnel_comparison(horizon: str | None, days: int) -> dict:
             f"""
             SELECT s.symbol, s.date, s.layer1_pass, s.layer2_pass, s.layer3_pass,
                    s.confidence, s.cmp, s.entry,
-                   f.fwd_5d_pct, f.fwd_10d_pct, f.fwd_20d_pct,
-                   f.mfe_10d_pct, f.mae_10d_pct, f.days_to_target
+                   {_fr_select()}
               FROM signals_log s
-              LEFT JOIN forward_returns f
-                     ON REPLACE(f.symbol, 'NSE:', '') = REPLACE(s.symbol, 'NSE:', '')
-                    AND f.date = s.date
+              {_fr_join('s')}
              WHERE {clause}
             """,
             params,
         ).fetchall()
+        rows = [dict(r) for r in rows]
     finally:
         conn.close()
 
     if not rows:
         return {"available": False, "reason": "no signals_log rows in window"}
+    _enrich(rows)
 
     legacy, strict, dropped = [], [], []
     for r in rows:
@@ -103,11 +171,19 @@ def funnel_comparison(horizon: str | None, days: int) -> dict:
                 "median_pct": _median(vals),
                 "win_rate_pct": round(sum(1 for v in vals if v > 0) / len(vals) * 100, 2) if vals else None,
             }
-        touched = [r for r in bucket if r["days_to_target"] is not None]
-        have_label = [r for r in bucket if r["fwd_10d_pct"] is not None]
-        out["target_touch_pct"] = (
-            round(len(touched) / len(have_label) * 100, 2) if have_label else None
-        )
+        # `days_to_target` exists only in the label table; the OHLC path cannot
+        # derive it (it needs each row's target level, which is not selected
+        # here). Withhold it rather than divide zero hits by the labelled count
+        # and report a confident 0.0% touch rate.
+        if RETURNS_SOURCE == "table":
+            touched = [r for r in bucket if r["days_to_target"] is not None]
+            have_label = [r for r in bucket if r["fwd_10d_pct"] is not None]
+            out["target_touch_pct"] = (
+                round(len(touched) / len(have_label) * 100, 2) if have_label else None
+            )
+        else:
+            out["target_touch_pct"] = None
+            out["target_touch_withheld"] = "days_to_target is label-table only"
         maes = [float(r["mae_10d_pct"]) for r in bucket if r["mae_10d_pct"] is not None]
         out["median_mae_10d_pct"] = _median(maes)
         return out
@@ -268,17 +344,19 @@ def l1_counterfactual(horizon: str | None, days: int, min_labelled: int = 30) ->
                                        THEN json_extract(s.layer_details, '$.exceptionalism.qualifies')
                                   END) = 1
                             THEN 1 ELSE 0 END) AS excluded_exceptional,
-                   MAX(f.fwd_10d_pct) AS fwd_10d, MAX(f.fwd_20d_pct) AS fwd_20d,
-                   MAX(f.excess_20d_pct) AS excess_20d
+                   {_fr_agg_select()}
+                   {_fr_excess_select()}
               FROM signals_log s
-              LEFT JOIN forward_returns f
-                     ON REPLACE(f.symbol, 'NSE:', '') = REPLACE(s.symbol, 'NSE:', '')
-                    AND f.date = s.date
+              {_fr_join('s')}
              WHERE s.date >= date('now', ?) {hz}
              GROUP BY sym, s.date
             """,
             params,
         ).fetchall()
+        rows = [dict(r) for r in rows]      # NB: symbol column is aliased `sym`
+        # Informational only. Reported whatever the outcome source is, so the
+        # staleness of the label table stays visible even though the OHLC-direct
+        # path no longer depends on it.
         labelled_through = conn.execute(
             "SELECT MAX(date) FROM forward_returns WHERE fwd_20d_pct IS NOT NULL"
         ).fetchone()[0]
@@ -287,6 +365,7 @@ def l1_counterfactual(horizon: str | None, days: int, min_labelled: int = 30) ->
 
     if not rows:
         return {"available": False, "reason": "no signals_log rows in window"}
+    _enrich(rows, symbol_key="sym")
 
     pre_pass: list = []
     pre_readmitted: list = []
@@ -343,15 +422,24 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=180)
     parser.add_argument("--gap-pct", type=float, default=8.0)
     parser.add_argument("--min-labelled", type=int, default=30)
+    parser.add_argument("--returns-source", choices=["ohlc", "table"], default="ohlc",
+                        help="ohlc (default, services/forward_eval) or table (stale forward_returns)")
     parser.add_argument("--json", dest="json_out", default=None)
     args = parser.parse_args()
 
+    global RETURNS_SOURCE
+    RETURNS_SOURCE = args.returns_source
     report = {
+        "returns_source": args.returns_source,
         "funnel": funnel_comparison(args.horizon, args.days),
         "entry_gap": entry_gap_impact(args.horizon, args.days, args.gap_pct),
         "sector_bypass": sector_bypass_impact(args.horizon, args.days),
         "l1_counterfactual": l1_counterfactual(args.horizon, args.days, args.min_labelled),
     }
+    if _COVERAGE:
+        from services.forward_eval import merge_coverage
+        rep_cov = merge_coverage(_COVERAGE, label="queries_enriched")
+        report["outcome_coverage"] = rep_cov
     text = json.dumps(report, indent=2, default=str)
     print(text)
     if args.json_out:

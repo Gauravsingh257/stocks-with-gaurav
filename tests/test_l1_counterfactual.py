@@ -60,6 +60,21 @@ def label(path, sym, date, fwd20):
 
 
 def run(**kw):
+    """These tests seed the `forward_returns` table, so they pin table mode.
+
+    The OHLC-direct path (the new default, services/forward_eval) is covered by
+    tests/test_forward_eval.py and by test_ohlc_default_ignores_the_stale_table
+    below — the withholding contract must hold under BOTH sources.
+    """
+    pc.RETURNS_SOURCE = "table"
+    try:
+        return pc.l1_counterfactual(None, 3650, **kw)
+    finally:
+        pc.RETURNS_SOURCE = "ohlc"
+
+
+def run_ohlc(**kw):
+    pc.RETURNS_SOURCE = "ohlc"
     return pc.l1_counterfactual(None, 3650, **kw)
 
 
@@ -112,3 +127,19 @@ def test_reports_label_freshness_and_survives_malformed_details(db):
 
 def test_empty_window_is_explicit(db):
     assert run() == {"available": False, "reason": "no signals_log rows in window"}
+
+
+def test_ohlc_default_ignores_the_stale_table_and_still_withholds(db):
+    """The new default must not read seeded labels, and must withhold honestly.
+
+    `forward_returns` is filled only by a manual backfill that is scheduled
+    nowhere; OHLC-direct deliberately ignores it. With no price snapshot in the
+    test environment nothing matures, so the outcome must be withheld rather
+    than silently reported from the stale table.
+    """
+    for sym in ("A1", "A2"):
+        scan(db, sym, "2026-09-01", l1=0, selected=0, qualifies=True)
+        label(db, sym, "2026-09-01", 4.0)      # seeded, and must be IGNORED
+    excluded = run_ohlc(min_labelled=3)["post_fix"]["excluded_l1_fail_exceptional"]
+    assert excluded["outcome"] is None
+    assert "0 labelled" in excluded["withheld"]

@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dashboard.backend.db.schema import get_connection  # noqa: E402
 
 WINDOWS = (20, 60)
+MAE_WINDOWS = (5, 20)        # horizons the entry-trigger stat needs mae for
 
 
 def _stats(rows: list[dict], w: int) -> dict:
@@ -59,30 +60,78 @@ def _reached(mae: float | None, need: float) -> bool:
 
 
 def _trigger(rows: list[dict]) -> dict:
-    n = trig5 = trig20 = 0
+    """Share of picks whose entry was actually tapped within the window.
+
+    The 20d horizon carries its OWN denominator. Dividing its hits by the 5d
+    count reported a confident `triggered_20d_pct: 0.0` for picks whose 20th bar
+    simply has not happened yet — "not matured" rendered as "never triggered".
+    """
+    n = trig5 = n20 = trig20 = 0
     for r in rows:
         entry, base = r.get("entry"), r.get("base_close")
         if entry is None or base is None or r.get("mae_5d_pct") is None:
             continue
         need = (entry / base - 1) * 100            # <0 when the entry sits below the close
         trig5 += _reached(r.get("mae_5d_pct"), need)
-        trig20 += _reached(r.get("mae_20d_pct"), need)
+        if r.get("mae_20d_pct") is not None:
+            n20 += 1
+            trig20 += _reached(r.get("mae_20d_pct"), need)
         n += 1
     if not n:
         return {"n_labelled": 0}
-    return {"n_labelled": n, "triggered_5d_pct": round(trig5 / n * 100, 1),
-            "triggered_20d_pct": round(trig20 / n * 100, 1), "expired_5d_pct": round((n - trig5) / n * 100, 1)}
+    out = {"n_labelled": n, "triggered_5d_pct": round(trig5 / n * 100, 1),
+           "expired_5d_pct": round((n - trig5) / n * 100, 1), "n_labelled_20d": n20}
+    if n20:
+        out["triggered_20d_pct"] = round(trig20 / n20 * 100, 1)
+    else:
+        out["triggered_20d_withheld"] = "no pick has a matured 20th bar yet"
+    return out
 
 
 def _rows(conn, sql: str, args: tuple) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
-FR = ("f.base_close, f.fwd_20d_pct, f.excess_20d_pct, f.fwd_60d_pct, f.excess_60d_pct, "
-      "f.mae_5d_pct, f.mae_20d_pct")
+# `forward_returns` is filled only by the MANUAL scripts/backfill_forward_returns.py,
+# which is scheduled nowhere and has been stale since 2026-09-13. The default now
+# computes outcomes directly from OHLC via services/forward_eval.py; the table
+# remains available as --returns-source table so old vs new can be compared.
+FR_TABLE = ("f.base_close, f.fwd_20d_pct, f.excess_20d_pct, f.fwd_60d_pct, f.excess_60d_pct, "
+            "f.mae_5d_pct, f.mae_20d_pct")
+FR_JOIN = " LEFT JOIN forward_returns f ON f.symbol = {a}.symbol AND f.date = {a}.date "
 
 
-def build_report(conn, since: str | None = None) -> dict:
+_COVERAGE: list = []
+_BOOK = None
+_BENCH = None
+
+
+def _enrich(rows: list[dict]) -> None:
+    """Outcomes straight from OHLC — no dependency on the stale label table."""
+    if not rows:
+        return
+    from services.forward_eval import PriceBook, benchmark_series, enrich_rows
+    global _BOOK, _BENCH
+    if _BOOK is None:
+        _BOOK = PriceBook.from_universe_snapshot()
+        try:
+            _BENCH = benchmark_series()
+        except Exception:
+            _BENCH = None
+    # mae_windows: _entry_trigger_rate() reads mae_5d_pct / mae_20d_pct, which the
+    # old table join supplied. Without them it would silently report zero triggers.
+    _COVERAGE.append(enrich_rows(rows, _BOOK, windows=WINDOWS, benchmark=_BENCH,
+                                 mae_windows=MAE_WINDOWS).to_dict())
+
+
+def _fr_cols(source: str, alias: str) -> tuple[str, str]:
+    """(select-list, join-clause) for the chosen outcome source."""
+    if source == "table":
+        return ", " + FR_TABLE, FR_JOIN.format(a=alias)
+    return "", ""
+
+
+def build_report(conn, since: str | None = None, source: str = "ohlc") -> dict:
     runs = _rows(conn, "SELECT * FROM lt_shadow_runs WHERE date >= ? ORDER BY date, scan_id", (since or "",))
     groups: dict[str, list[dict]] = {"control": [], "shadow": [], "shadow_only": [], "control_only": [], "both": [],
                                      "control_shadow_eligible": [], "control_shadow_ineligible": []}
@@ -90,12 +139,14 @@ def build_report(conn, since: str | None = None) -> dict:
     latest_diff: dict = {}
     for run in runs:
         sid, d = run["scan_id"], run["date"]
-        control = _rows(conn, f"SELECT s.symbol, s.date, s.entry, {FR} FROM signals_log s LEFT JOIN forward_returns f "
-                              "ON f.symbol = s.symbol AND f.date = s.date WHERE s.scan_id = ? AND s.final_selected = 1",
-                        (sid,))
-        shadow = _rows(conn, f"SELECT p.symbol, p.date, p.entry, p.rank, {FR} FROM lt_shadow_picks p "
-                             "LEFT JOIN forward_returns f ON f.symbol = p.symbol AND f.date = p.date "
+        c_cols, c_join = _fr_cols(source, "s")
+        p_cols, p_join = _fr_cols(source, "p")
+        control = _rows(conn, f"SELECT s.symbol, s.date, s.entry{c_cols} FROM signals_log s{c_join} "
+                              "WHERE s.scan_id = ? AND s.final_selected = 1", (sid,))
+        shadow = _rows(conn, f"SELECT p.symbol, p.date, p.entry, p.rank{p_cols} FROM lt_shadow_picks p{p_join} "
                              "WHERE p.scan_id = ? AND p.selected = 1", (sid,))
+        if source != "table":
+            _enrich(control + shadow)
         swing = {r["symbol"] for r in _rows(conn, "SELECT DISTINCT symbol FROM signals_log WHERE horizon = 'SWING' "
                                                   "AND date = ? AND final_selected = 1", (d,))}
         ranked = {r["symbol"] for r in _rows(conn, "SELECT symbol FROM lt_shadow_picks WHERE scan_id = ? "
@@ -142,6 +193,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--returns-source", choices=["ohlc", "table"], default="ohlc",
+                    help="ohlc (default, services/forward_eval) or table (stale forward_returns)")
     args = ap.parse_args()
     conn = get_connection()
     try:
@@ -149,7 +202,12 @@ def main() -> int:
         if not exists:
             print("lt_shadow_runs does not exist yet — the shadow selector has not run (LT_SHADOW_SELECTOR_ENABLED).")
             return 0
-        rep = build_report(conn, args.since)
+        rep = build_report(conn, args.since, source=args.returns_source)
+        rep["returns_source"] = args.returns_source
+        if _COVERAGE:
+            from services.forward_eval import merge_coverage
+            rep_cov = merge_coverage(_COVERAGE, label="runs_enriched")
+            rep["outcome_coverage"] = rep_cov
     finally:
         conn.close()
     if args.json:

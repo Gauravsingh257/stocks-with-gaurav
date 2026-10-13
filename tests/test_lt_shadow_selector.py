@@ -306,7 +306,10 @@ def test_report_compares_shadow_and_control_on_shared_labels(tmp_db):
         (sid, d, "NSE:B", 3, 0.1, 0, 1, 100.0, "{}", "{}"),
     ])
     c.commit()
-    rep = build_report(c)
+    # This test seeds `forward_returns`, so it pins table mode. The new default
+    # (OHLC-direct via services/forward_eval) is covered by tests/test_forward_eval.py;
+    # the stale label table is no longer a dependency of this report.
+    rep = build_report(c, source="table")
     assert rep["runs"] == 1 and rep["per_run"][0]["overlap"] == 1
     assert rep["latest_differences"] == {"scan_id": sid, "shadow_only": ["NSE:C"], "control_only": ["NSE:B"]}
     assert rep["swing_lt_overlap"]["shadow_picks_also_swing_final"] == 1

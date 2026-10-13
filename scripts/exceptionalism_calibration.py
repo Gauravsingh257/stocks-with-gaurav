@@ -117,36 +117,25 @@ def attach_forward_returns(rows: list[ShadowRow], fetch_bars, *, horizons=HORIZO
     are the worst/best intraday excursions over that window. A horizon with fewer
     than N+1 bars is left absent (pending), never guessed.
     """
-    cache: dict[tuple[str, str], list[dict]] = {}
+    # Arithmetic lives in services/forward_eval.py — ONE evaluator shared with the
+    # ceiling study, LT shadow, the Phase-1 counterfactual and stagnation, so the
+    # maturity, look-ahead and survivorship rules cannot drift between them.
+    # `row.forward[h]` keeps its original {ret, mae, mfe} shape and 2dp rounding.
+    from services.forward_eval import PriceBook
+
+    book = PriceBook.from_fetcher(fetch_bars)
     for row in rows:
         if not row.symbol or not row.cmp or row.cmp <= 0 or not row.date:
             continue
-        key = (row.symbol, row.date)
-        bars = cache.get(key)
-        if bars is None:
-            try:
-                bars = fetch_bars(row.symbol, row.date) or []
-            except Exception:
-                bars = []
-            cache[key] = bars
-        if not bars:
-            continue
-        base = row.cmp
         for h in horizons:
-            if len(bars) <= h:      # need bar[h] (h trading days AFTER the scan day)
-                continue
-            window = bars[1:h + 1]
-            close_h = _f(bars[h].get("close"))
-            if close_h is None:
-                continue
-            ret = (close_h - base) / base * 100.0
-            lows = [_f(b.get("low")) for b in window if _f(b.get("low")) is not None]
-            highs = [_f(b.get("high")) for b in window if _f(b.get("high")) is not None]
-            mae = ((min(lows) - base) / base * 100.0) if lows else None
-            mfe = ((max(highs) - base) / base * 100.0) if highs else None
-            row.forward[h] = {"ret": round(ret, 2),
-                              "mae": round(mae, 2) if mae is not None else None,
-                              "mfe": round(mfe, 2) if mfe is not None else None}
+            oc = book.outcome(row.symbol, row.date, h, base=row.cmp)
+            if oc is None or oc.ret is None:
+                continue        # immature / unpriceable — pending, never guessed
+            row.forward[h] = {
+                "ret": round(oc.ret, 2),
+                "mae": round(oc.mae, 2) if oc.mae is not None else None,
+                "mfe": round(oc.mfe, 2) if oc.mfe is not None else None,
+            }
 
 
 # ── metrics ───────────────────────────────────────────────────────────────────
@@ -431,8 +420,9 @@ def render_markdown(report: dict) -> str:
 
 def _kite_or_yf_fetch(symbol: str, from_date: str) -> list[dict]:
     """Fetch daily bars on/after from_date via the project's DataIngestion."""
-    from data.ingestion import DataIngestion
     import pandas as pd
+
+    from data.ingestion import DataIngestion
     src = __import__("os").getenv("RESEARCH_DATA_SOURCE", "yfinance")
     df = DataIngestion(source=src).fetch_historical(symbol, interval="day", days=60)
     if df is None or df.empty:
