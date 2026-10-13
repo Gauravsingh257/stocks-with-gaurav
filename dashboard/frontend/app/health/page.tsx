@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
-  Activity, RefreshCw, TrendingDown, Layers, HeartPulse, Zap, RotateCw, LogOut,
+  Activity, RefreshCw, TrendingDown, Layers, HeartPulse, Zap, LogOut,
   Users, Monitor, Info, Building2,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
