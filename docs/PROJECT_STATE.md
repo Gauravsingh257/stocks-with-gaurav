@@ -87,6 +87,50 @@ knowing exceptionalism does not beat legacy is worth as much as a win would have
    alternatives. Not new instrumentation — the four results so far are null or negative, and the
    open question is which mechanism, if any, earns its place.
 
+## CLOSED — portfolio-performance investigation (2026-10-14 → 2026-10-17)
+
+> Decision recorded 2026-10-17. **This line of enquiry is closed.** Four hypotheses were
+> tested against *real executed trades* (not scanned candidates) using bar replay with costs,
+> slippage, gap fills and no lookahead. Three failed outright; the fourth is unprovable on the
+> data rate we have.
+
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| **Stop width** — the 5% stop sits in the noise band, widen to 6% | **NO-GO** | Bar replay: 5% stop → mean −0.45%; 6% stop → **−0.66%**. Of 97 trades the 5% stop closed, a 6% stop also stopped **89 (91.8%)** and converted **2**. The MAE "cliff" (52.7%→25.5%) was an artefact — **MAE on a stopped trade is censored at the stop** |
+| **Delayed entry** (1/2/3 sessions) | **NO-GO** | −0.240 / −0.100 / −0.166R vs baseline −0.130R |
+| **Re-entry on reclaim** | **NO-GO** | −0.230R, and it only triggers on 39 of 97 stopped trades |
+| **PULLBACK_3** (limit 3% below signal) | **PARKED — promising, unproven** | +0.267R paired, but **95% CI [−0.026,+0.564]** straddles zero; holdout half still negative (−0.188R); skips 62 of 147 signals worth **+38.18R** |
+
+**Why PULLBACK_3 is parked, not pursued:** no hindsight-free feature separates the 33 skipped
+winners from the 29 skipped losers (20d return 10.46 vs 10.38; distance below the 20-day high
+−3.50 vs −3.39; the engine's own confidence *lower* on the winners, 72.5 vs 74.6), so the
+opportunity cost is unmanageable. And a credible test needs **~1,196 signals ≈ 30 months** at
+the measured ~40 closed signals/month. Frozen protocol:
+[`pullback3-protocol-2026-10-17.md`](validation/pullback3-protocol-2026-10-17.md).
+
+**UN-PARK TRIGGER (preserved exactly):** if the closed-SWING ledger reaches **600+ trades**
+and a re-run of the existing replay shows the paired difference holding at **≥ +0.20R with a
+CI excluding zero**, reopen the protocol unchanged and start the holdout. Nothing else should
+reopen it.
+
+> **That trigger is a REVIEW trigger, not approval to deploy.** 600 trades plus a
+> statistically significant result means *reassess the evidence then* — it does not authorise
+> a live change. Any strategy change still needs explicit approval on the evidence as it
+> stands at that time.
+
+**Durable gain:** the lifecycle timing fix in **PR #230** — `time_to_stop_days`,
+`time_to_target_days` and `target_1_hit_at` were declared and selected but never written
+(0 of 165 closed SMC trades). That gap is why MAE/MFE was the only witness to an excursion,
+and MAE/MFE carries no ordering. The fix is what made every verdict above measurable.
+
+**What was NOT established:** that stock *selection* deteriorated. Matched on holding period
+the favourable-excursion collapse disappears (at ≤7d the recent cohort is *better*: +2.79 vs
++0.84), and NIFTY was **+2.14%/+1.21%** across the two "good" cohort windows against
+**−3.39%/−1.72%** across the two "bad" ones. The apparent decline is substantially regime and
+exposure-window censoring.
+
+---
+
 ### STOP LINE — research is frozen here (set 2026-10-14)
 
 Investigation was looping: each review spawned another review, and the measurement
