@@ -82,6 +82,22 @@ def _exit_reason_to_status(reason: str | None) -> str:
         return "TIME_EXIT"          # closed by a time rule, not by price
     if r in ("STRUCTURE_BREAK", "TREND_BREAK", "FORCED_EXIT") or r.startswith("MANUAL:"):
         return "FORCED_EXIT"        # risk/structure override closed it
+    # A rule closed it, not a person. The momentum book exits almost entirely
+    # this way — 72 TRAIL_STOP and 13 REPLACED of its 91 recorded exits — and all
+    # 85 were falling through to MANUAL_CLOSED below, which made the book look as
+    # though a human closed everything and no exit rule had ever fired.
+    #
+    # Deliberately NOT folded into STOP_HIT: a trailing stop usually exits in
+    # profit, so counting it as a stop-loss would distort every stop statistic.
+    # `exit_reason` keeps the specific rule, so nothing is lost.
+    if r in ("TRAIL_STOP", "TRAILING_STOP", "REPLACED", "ROTATED"):
+        return "FORCED_EXIT"
+    if r:
+        # The catch-all is how the above went unnoticed for 85 exits. Say so, so
+        # the next unmapped reason is visible instead of silently becoming a
+        # human close.
+        logger.warning("[Lifecycle] unmapped exit_reason %r -> MANUAL_CLOSED; "
+                       "add it to _exit_reason_to_status if a rule produced it", reason)
     return "MANUAL_CLOSED"
 
 
