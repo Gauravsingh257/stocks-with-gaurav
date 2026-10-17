@@ -298,9 +298,14 @@ def register(req: RegisterRequest, request: Request):
     from dashboard.backend.rate_limit import _client_ip
 
     ip = _client_ip(request)
-    check_signup_allowed(ip)
-    record_signup_attempt(ip)
 
+    # Validate BEFORE spending throttle budget. A malformed request cannot
+    # create an account, so charging for it only punishes someone fumbling
+    # their own email or password — five typos would lock them out for an hour
+    # without a single account being made. Rejecting the shape first costs an
+    # attacker nothing they could have used anyway (no DB access, no account
+    # information), while a duplicate-email probe DOES spend budget, because
+    # that check happens below against the database.
     email = (req.email or "").strip().lower()
     # Any string used to be accepted, so unreachable addresses could register —
     # production already holds one such row.
@@ -311,6 +316,9 @@ def register(req: RegisterRequest, request: Request):
             status_code=400,
             detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
         )
+
+    check_signup_allowed(ip)
+    record_signup_attempt(ip)
 
     conn = get_connection()
     try:

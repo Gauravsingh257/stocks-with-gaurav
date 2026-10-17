@@ -123,6 +123,29 @@ def test_short_passwords_are_rejected_with_the_configured_minimum(client):
     assert _register(client, "pw@example.com", password="a" * auth_routes.MIN_PASSWORD_LENGTH).status_code == 200
 
 
+# ── budget is spent on real attempts, not on typos ───────────────────────────
+
+def test_invalid_input_does_not_spend_throttle_budget(client):
+    """Found in review: charging for malformed requests would lock out a user
+    who fumbles their own email five times, without a single account created.
+    A rejected shape cannot create an account, so it must cost nothing."""
+    for i in range(auth_throttle.SIGNUP_IP_MAX + 3):
+        assert _register(client, f"not-an-email-{i}").status_code == 400
+    for i in range(auth_throttle.SIGNUP_IP_MAX):
+        assert _register(client, f"short{i}@example.com", password="abc").status_code == 400
+    # budget untouched: a genuine sign-up still succeeds
+    assert _register(client, "finally@example.com").status_code == 200
+
+
+def test_duplicate_email_probe_does_spend_budget(client):
+    """The enumeration probe hits the database, so it must cost — otherwise the
+    409 could be mined for free."""
+    assert _register(client, "known@example.com").status_code == 200
+    for _ in range(auth_throttle.SIGNUP_IP_MAX - 1):
+        assert _register(client, "known@example.com").status_code == 409
+    assert _register(client, "someone-new@example.com").status_code == 429
+
+
 # ── what is NOT fixed (kept visible on purpose) ──────────────────────────────
 
 def test_enumeration_via_409_is_still_open_and_documented(client):
