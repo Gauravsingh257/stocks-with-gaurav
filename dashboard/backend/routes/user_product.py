@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from dashboard.backend.entitlements import FEATURE_EVOLUTION_TIMELINE, is_entitled
 from dashboard.backend.routes.auth import get_current_user
 
 router = APIRouter(tags=["user-product"])
@@ -138,12 +139,15 @@ def evolution_timeline(
     user: dict = Depends(get_current_user),
     limit: int = 32,
 ):
-    """Per-symbol evolution story (Redis timeline). FREE: shorter cap."""
+    """Per-symbol evolution story (Redis timeline).
+
+    This endpoint already requires a verified JWT, so every caller here is
+    signed in and entitled. It previously capped non-PREMIUM callers at 24 —
+    i.e. every real user, for a plan that does not exist (see entitlements.py).
+    """
     uid = int(user["sub"])
-    role = str(user.get("role") or "FREE").upper()
-    cap = min(80, max(8, limit))
-    if role not in ("PREMIUM", "ADMIN"):
-        cap = min(cap, 24)
+    entitled = is_entitled(user, FEATURE_EVOLUTION_TIMELINE)
+    cap = min(80, max(8, limit)) if entitled else min(24, max(8, limit))
     try:
         from dashboard.backend.services.retention_engine_service import get_evolution_timeline
 
@@ -153,7 +157,8 @@ def evolution_timeline(
             "symbol": symbol.replace("NSE:", "").strip().upper(),
             "items": items,
             "cap": cap,
-            "premium": role in ("PREMIUM", "ADMIN"),
+            "premium": entitled,  # deprecated field name; means "full access"
+            "authenticated": entitled,
         }
     except Exception as exc:
         return {"ok": False, "items": [], "error": str(exc)}
