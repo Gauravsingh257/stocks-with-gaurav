@@ -17,6 +17,7 @@ validate on another. We resolve this by:
 
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timezone, timedelta
 
@@ -97,6 +98,11 @@ def _resolve_jwt_secret() -> str:
     env_val = os.getenv("JWT_SECRET", "").strip()
     return env_val or _EPHEMERAL_PROCESS_SECRET
 
+
+# Minimum password length for NEW registrations. Existing accounts are not
+# affected. 6 was below any current guidance and there is no second factor.
+MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 7
@@ -274,25 +280,53 @@ class LoginRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/api/auth/register")
-def register(req: RegisterRequest):
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+def register(req: RegisterRequest, request: Request):
+    """Create an account.
+
+    Sign-up previously had no throttle of any kind, so one script could mint
+    unlimited accounts — an abuse vector on its own, and one that corrupts the
+    user metrics. It is now capped per IP, counting ATTEMPTS, so a successful
+    sign-up spends budget too.
+
+    Account enumeration is NOT closed here: the 409 below still reveals that an
+    address is registered. Hiding it would mean reporting a sign-up that did
+    not happen, which breaks the flow. Closing it properly needs email
+    verification — the same "check your inbox" either way. Until then the
+    per-IP cap bounds how fast a list of addresses can be probed.
+    """
+    from dashboard.backend.auth_throttle import check_signup_allowed, record_signup_attempt
+    from dashboard.backend.rate_limit import _client_ip
+
+    ip = _client_ip(request)
+    check_signup_allowed(ip)
+    record_signup_attempt(ip)
+
+    email = (req.email or "").strip().lower()
+    # Any string used to be accepted, so unreachable addresses could register —
+    # production already holds one such row.
+    if len(email) > 254 or not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(req.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
 
     conn = get_connection()
     try:
-        existing = conn.execute("SELECT id FROM users WHERE email = ?", (req.email.lower(),)).fetchone()
+        existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="Email already registered")
 
         hashed = _hash_password(req.password)
         cur = conn.execute(
             "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-            (req.email.lower(), hashed, req.name),
+            (email, hashed, req.name),
         )
         conn.commit()
         user_id = cur.lastrowid
-        token = _create_token(user_id, req.email.lower(), "FREE")
-        return {"ok": True, "token": token, "user": {"id": user_id, "email": req.email.lower(), "name": req.name, "role": "FREE"}}
+        token = _create_token(user_id, email, "FREE")
+        return {"ok": True, "token": token, "user": {"id": user_id, "email": email, "name": req.name, "role": "FREE"}}
     finally:
         conn.close()
 
