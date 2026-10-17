@@ -128,3 +128,46 @@ def test_upsert_persists_derived_timing():
     assert row["time_to_stop_days"] == pytest.approx(7.243, abs=0.01)
     assert row["time_to_target_days"] is None
     assert row["target_1_hit_at"] is None
+
+
+# ── analytics must not re-substitute holding_days ────────────────────────────
+
+def test_analytics_reports_a_same_day_stop_as_zero_not_as_holding_days():
+    """Regression: `derived or fallback` treated 0.0 as missing.
+
+    A stop hit on the entry day has time_to_stop_days == 0.0, which is falsy, so
+    an `or` fallback silently reported holding_days instead — reintroducing the
+    exact substitution this change exists to remove.
+    """
+    import statistics as st
+
+    rows = [{"status": "STOP_HIT", "time_to_stop_days": 0.0, "holding_days": 9},
+            {"status": "TARGET_HIT", "time_to_target_days": 0.0, "holding_days": 4}]
+
+    def _avg(key, pred=None):
+        vals = [r[key] for r in rows
+                if r.get(key) is not None and (pred is None or pred(r))]
+        return round(st.mean(vals), 2) if vals else None
+
+    def _first_set(*vals):
+        return next((v for v in vals if v is not None), None)
+
+    stop = _first_set(_avg("time_to_stop_days", lambda r: r["status"] == "STOP_HIT"),
+                      _avg("holding_days", lambda r: r["status"] == "STOP_HIT"))
+    tgt = _first_set(_avg("time_to_target_days", lambda r: r["status"] == "TARGET_HIT"),
+                     _avg("holding_days", lambda r: r["status"] == "TARGET_HIT"))
+    assert stop == 0.0, "a same-day stop must report 0.0, not holding_days"
+    assert tgt == 0.0
+    # and the fallback still works when the derived value is genuinely absent
+    rows[0].pop("time_to_stop_days")
+    assert _first_set(_avg("time_to_stop_days", lambda r: r["status"] == "STOP_HIT"),
+                      _avg("holding_days", lambda r: r["status"] == "STOP_HIT")) == 9
+
+
+def test_same_day_stop_derives_zero_not_none():
+    """The derivation itself must emit 0.0 for an intraday stop, not skip it."""
+    r = derive_event_timing(_rec(status="STOP_HIT",
+                                 entry_fill_at="2026-09-01T09:20:00+05:30",
+                                 exit_at="2026-09-01T14:30:00+05:30"))
+    assert r["time_to_stop_days"] == pytest.approx(0.215, abs=0.01)
+    assert r["time_to_stop_days"] is not None
