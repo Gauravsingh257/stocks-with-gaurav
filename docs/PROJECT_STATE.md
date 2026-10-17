@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-09-27**
+> **STATUS: LIVE** · the authoritative answer to *"where are we?"* · last checkpoint: **2026-10-13**
 >
 > **Keep this file short.** It answers five questions — where are we, what are we doing, where did
 > we stop, what's next, what's blocked — and then gets out of the way. Everything else is a link.
@@ -32,6 +32,201 @@ move is validating that over two live sessions, then finishing SEO Phase 2. Late
 **Sector Rotation** end to end — a public, indexed `/sectors` page plus a homepage widget — and closed
 it on 2026-09-27. The largest *unstarted* body of work is the commercial launch: payments, legal
 pages, monitoring.
+
+## North star & the five stages
+
+> Set 2026-10-13. Durable product intent lives in [`PRODUCT_VISION.md`](PRODUCT_VISION.md); this is
+> the **staging** of it. One stage is current at a time. A stage is only marked complete when its
+> exit criteria are met by evidence, not by effort spent.
+
+**North star.** Build StocksWithGaurav into a reliable NSE stock-discovery engine that identifies
+promising stocks early, selects better candidates than the alternatives, measures forward
+performance honestly, and manages downside risk. **Success means demonstrable, repeatable
+improvement in stock-selection quality — not more infrastructure or dashboards.**
+
+Every task answers three questions: *which stage does this serve, what decision does it unlock, and
+what measurable result ends it?*
+
+| Stage | Status | Evidence so far | Exit criteria |
+|---|---|---|---|
+| **1 — Reliable operation & stock coverage** | **CURRENT · fix applied, awaiting its operational test** | Snapshot freeze root-caused and reproduced; fix `SNAPSHOT_MIN_SYMBOLS=1` **applied + handover-verified 2026-10-13**; `eff_universe=2 / stocks=0` **verified intentional**; **stock universe confirmed scanned** — `scan_health` green on all three checks | ~~intended universe demonstrably scanned~~ ✅ · ~~fix applied~~ ✅ · **remaining:** one live session **holding 1–4 tracked positions** in which `snapshot:write_status` never reads `skipped_invalid` and the snapshot stays fresh |
+| **2 — Trustworthy measurement** | **exit criteria MET** | `services/forward_eval.py` merged (`b758ad5`), prod-verified; coverage 90.6% with survivorship reported; four consumers off the stale label table | ✅ one shared evaluator, maturity-gated, survivorship reported, no stale labels — **all met by `b758ad5`.** PR #227 is a **separately pending research PR, not a stage-2 dependency**: it changes how one *study* sources prices and does not affect evaluator completeness |
+| **3 — Prove selection quality** | in progress — **directional only, not proof** | L1 counterfactual answers for the first time; exceptionalism **NO-GO**; stagnation null; ceiling-20 null | A selected-vs-rejected gap that survives date-block bootstrap, sample-size and regime checks |
+| **4 — Evidence-based improvement** | not started (gated on 3) | — | A filter changed or retired on evidence strong enough to survive a disabled-rule control; ineffective experiments retired |
+| **5 — Repeatability & product readiness** | not started | — | Improvement persists across regimes **and** production runs reliably; only then does other work get prioritised |
+
+**The honest read:** stage 2 is done, stage 3 has produced four *null or negative*
+results, and none of them justifies a strategy change. That is a legitimate outcome, not a stall —
+knowing exceptionalism does not beat legacy is worth as much as a win would have been.
+
+---
+
+## Current checkpoint — 2026-10-13
+
+**Three items in the previous checkpoint were stale and are corrected here.**
+
+| Item | Status |
+|---|---|
+| PR #225 — shared forward-return evaluator | **MERGED** `b758ad5`; engine/web/scanner all `SUCCESS`; `/health` 200, `engine_version v4.2.1`, heartbeat + snapshot fresh, no unintended Telegram or SRB replay |
+| Snapshot freeze | ~~cause unknown~~ → **ROOT-CAUSED AND REPRODUCED.** Not a wedged loop. `SNAPSHOT_MIN_SYMBOLS` defaults to 5, so `write_engine_snapshot` **skips every write while 1–4 symbols are tracked**, and `_snapshot_refresher_loop` keeps the stale key alive forever so nothing alarms → [[snapshot-min-symbols-freeze]] |
+| `eff_universe=2, stocks=0` | ~~unverified~~ → **VERIFIED INTENTIONAL.** `INDEX_ONLY = True` is hardcoded ([smc_mtf_engine_v4.py:1079](../smc_mtf_engine_v4.py#L1079)), unchanged since the initial commit. The live engine is index-only; **stock selection runs in `services/` on `web`/`scanner`** → [[engine-is-index-only-by-design]] |
+| Exceptionalism calibration | ~~unstarted~~ → **DONE, PR #227 open.** Priced from `PriceBook.from_universe_snapshot()` as instructed: 237,458 rows in 104 s, zero provider calls, 90.6% coverage. **Result: NO-GO** — `exceptionalism_qualified` (n=1500, hit 37.9%, avg −1.85%) does not beat `legacy_final_selected` (n=769, hit 38.9%, avg −1.31%) and has a worse worst-case drawdown |
+| Stock-universe scanning | **VERIFIED 2026-10-13 23:41 IST** via the existing `python -m scripts.scan_health --hours 30` (no new tooling): snapshot `2026-10-13` usable, **9/9 shards, 2,166 symbols**, expiring Sat 17 Oct — *after* the next scan; **no zero-pass ranking runs** and **no Layer-1 collapse** in 30h (2 runs). So the index-only engine is not the stock path, and the stock path is healthy → [[universe-ohlc-snapshot-weekend-expiry]] trap is not currently armed |
+| Strategy state | **unchanged.** No threshold, weight, flag, exit rule or selection logic altered. Stagnation and exceptionalism both argue for no change |
+
+**Immediate objective, in order:**
+
+1. **Snapshot reliability — the fix is in, the proof is not.** `SNAPSHOT_MIN_SYMBOLS=1` was
+   **applied 2026-10-13 23:43 IST** and the handover was verified. It has **not been exercised**:
+   `symbol_count` was 0 at the time, so the harmful 1–4 band was never entered. The real operational
+   test is to observe a live session **holding 1–4 tracked positions** and confirm
+   `snapshot:write_status` never reads `skipped_invalid` and `engine:snapshot` stays fresh
+   throughout. Observation is read-only — it needs no deploy and no restart. **Stage 1 stays open
+   until that condition actually occurs.**
+2. **Then stage 3:** prove which of the *existing* selection mechanisms pick better stocks than the
+   alternatives. Not new instrumentation — the four results so far are null or negative, and the
+   open question is which mechanism, if any, earns its place.
+
+## CLOSED — portfolio-performance investigation (2026-10-14 → 2026-10-17)
+
+> Decision recorded 2026-10-17. **This line of enquiry is closed.** Four hypotheses were
+> tested against *real executed trades* (not scanned candidates) using bar replay with costs,
+> slippage, gap fills and no lookahead. Three failed outright; the fourth is unprovable on the
+> data rate we have.
+
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| **Stop width** — the 5% stop sits in the noise band, widen to 6% | **NO-GO** | Bar replay: 5% stop → mean −0.45%; 6% stop → **−0.66%**. Of 97 trades the 5% stop closed, a 6% stop also stopped **89 (91.8%)** and converted **2**. The MAE "cliff" (52.7%→25.5%) was an artefact — **MAE on a stopped trade is censored at the stop** |
+| **Delayed entry** (1/2/3 sessions) | **NO-GO** | −0.240 / −0.100 / −0.166R vs baseline −0.130R |
+| **Re-entry on reclaim** | **NO-GO** | −0.230R, and it only triggers on 39 of 97 stopped trades |
+| **PULLBACK_3** (limit 3% below signal) | **PARKED — promising, unproven** | +0.267R paired, but **95% CI [−0.026,+0.564]** straddles zero; holdout half still negative (−0.188R); skips 62 of 147 signals worth **+38.18R** |
+
+**Why PULLBACK_3 is parked, not pursued:** no hindsight-free feature separates the 33 skipped
+winners from the 29 skipped losers (20d return 10.46 vs 10.38; distance below the 20-day high
+−3.50 vs −3.39; the engine's own confidence *lower* on the winners, 72.5 vs 74.6), so the
+opportunity cost is unmanageable. And a credible test needs **~1,196 signals ≈ 30 months** at
+the measured ~40 closed signals/month. Frozen protocol:
+[`pullback3-protocol-2026-10-17.md`](validation/pullback3-protocol-2026-10-17.md).
+
+**UN-PARK TRIGGER (preserved exactly):** if the closed-SWING ledger reaches **600+ trades**
+and a re-run of the existing replay shows the paired difference holding at **≥ +0.20R with a
+CI excluding zero**, reopen the protocol unchanged and start the holdout. Nothing else should
+reopen it.
+
+> **That trigger is a REVIEW trigger, not approval to deploy.** 600 trades plus a
+> statistically significant result means *reassess the evidence then* — it does not authorise
+> a live change. Any strategy change still needs explicit approval on the evidence as it
+> stands at that time.
+
+**Durable gain:** the lifecycle timing fix in **PR #230** — `time_to_stop_days`,
+`time_to_target_days` and `target_1_hit_at` were declared and selected but never written
+(0 of 165 closed SMC trades). That gap is why MAE/MFE was the only witness to an excursion,
+and MAE/MFE carries no ordering. The fix is what made every verdict above measurable.
+
+**What was NOT established:** that stock *selection* deteriorated. Matched on holding period
+the favourable-excursion collapse disappears (at ≤7d the recent cohort is *better*: +2.79 vs
++0.84), and NIFTY was **+2.14%/+1.21%** across the two "good" cohort windows against
+**−3.39%/−1.72%** across the two "bad" ones. The apparent decline is substantially regime and
+exposure-window censoring.
+
+---
+
+### STOP LINE — research is frozen here (set 2026-10-14)
+
+Investigation was looping: each review spawned another review, and the measurement
+infrastructure kept getting rebuilt instead of used. **It is now good enough. Stop building
+and start accumulating.**
+
+**Exact stopping point.** Stage 2 is done. Stage 3 has one provisional positive
+(rank-budget) and one underpowered inconclusive (ceiling). Three PRs are open and unmerged:
+**#227** (exceptionalism, mechanism stays disabled), **#228** (this document), **#229**
+(stage-3 instrument). The snapshot fix is live but unexercised. Nothing else is in flight.
+
+**Next evidence triggers — the only two things that change any answer:**
+
+| Trigger | Current | Needed | Why it matters |
+|---|---|---|---|
+| Snapshot fix proven | 0 qualifying samples | **one live session holding 1–4 positions** with `snapshot:write_status` never `skipped_invalid` | closes **stage 1** |
+| Stage-3 rank budget corroborated | **2** RISK_ON comparable days · **15** comparable days at 20d | **≥15** RISK_ON comparable days **and ≥30** comparable days at 20d | the result is currently inseparable from RISK_OFF; ~15 more trading days of maturity, plus a tape that actually turns RISK_ON |
+
+Both are **waiting**, not work. Neither can be accelerated by writing code.
+
+**Stop conditions — do none of these without a decision that needs them:**
+
+1. **No new experiments or shadow systems.** The audit of all 14 is done.
+2. **No rebuilding measurement tooling.** `services/forward_eval.py` plus the cohort study
+   are sufficient; they have been reviewed three times.
+3. **No re-running completed audits** — snapshot freeze, `INDEX_ONLY`, universe scanning,
+   exceptionalism, stagnation and the ceiling are all closed. New evidence only.
+4. **No strategy change.** Thresholds, flags, exits and selection logic stay exactly as they
+   are, pending explicit approval.
+5. **No merges** without Gaurav's approval, and never as a bundle.
+
+**Every future task must state, before starting:** what decision it unlocks · what evidence
+is missing · what exact condition ends it. **If it unlocks no new decision, it does not get
+done.**
+
+### Verified outcomes since the stop line — 2026-10-18
+
+The line held: nothing below ran an experiment, rebuilt measurement tooling, re-ran a closed
+audit, changed strategy, or merged. Platform work continued because it is a *different*
+workstream; the two research triggers were **checked, not forced**.
+
+| Item | Verified | Evidence |
+|---|---|---|
+| PR #223 security controls | **still live** | terminal endpoints 401 incl. the `?user_id=` bypass · four `/api/system/debug/*` 403 · `/api/auth/upgrade` 403 · public `/api/journal` 200 |
+| PR #226 metric truth | **deployed** | web/scanner on `b758ad5`, a descendant of `31b0103`; Product Health reports accounts 12 / WAU 1–2, not 228 / 23 |
+| Stage 1 — snapshot fix | **mechanism proven · exit criterion NOT met** | prod shows `write_status: success`, `meta.ok: true`, **`symbol_count: 1`**, snapshot fresh — at 1 symbol the old default of 5 would have written `skipped_invalid`. But this was a **Saturday**, not a live session, and the 499 retained engine log lines do not reach the 14–16 Oct sessions, so those cannot be proven retrospectively. **Still waiting on one live session.** |
+| Stage 3 triggers | **unmet, unchanged** | RISK_ON comparable days still **2** (need ≥15); 20d comparable days still **15** (need ≥30). ~3 trading days have passed since the line was drawn — re-running the cohort study now would only make an underpowered result look more confident |
+| `test_preload_when_near_expiry` | **not a regression** | passes on `9eeb06a` on a Saturday; still the Mon/Tue calendar flake. It also explains the stale `pytest: FAILURE` badges on #227/#229 — those runs are from **Tue 2026-10-13**; later runs on both branches concluded success |
+
+**Platform PRs — both MERGED and verified in production 2026-10-18 (Sunday, markets closed):**
+
+- **#231** — one entitlement rule: anonymous preview, signed-in full access. Four call sites gated on
+  `role in (PREMIUM, ADMIN)` while no plan exists and all 12 accounts are FREE, so signed-in users were
+  served the anonymous payload. Checked **first** that the locked UI does not leak: an anonymous
+  screener call returns `rows: []` plus score/tier/flip only — no symbols, entry, stop, target or price —
+  and research truncates server-side before serialisation. **There was no leak**; the defect was
+  product-correctness, not exposure.
+- **#232** — sign-up had no throttle of any kind, accepted any string as an email, and allowed
+  6-character passwords. Now per-IP capped, format-validated, floor 8 for new accounts only. Diff review
+  then caught that the throttle was charged *before* validation, which would have locked out a user who
+  typo'd their email five times; fixed so only attempts that could actually create an account cost
+  budget. Account enumeration via the 409 is **deliberately still open** and asserted in a test, because
+  closing it honestly needs email verification.
+
+Merged in stages, each verified before the next: **#231 → `8394dea`**, **#232 → `b034cd3`**. All three
+services redeployed and settled `SUCCESS` on each. Post-deploy checks after both: `/health`,
+`/api/system/health`, `/api/snapshot` and public `/api/journal` 200 · PR #223 controls intact (401/403)
+· anonymous screener preview still leak-free · command centre reports `tier: PREVIEW`,
+`authenticated: false`, `preview_reason: sign_in_required` · an invalid email and a short password both
+rejected 400 **without creating an account** (users still **12**, latest signup unchanged at
+2026-09-17). The engine's startup `TOKEN TOO OLD` self-healed via auto-login — token refreshed
+`02:29:47 IST`, `Health Check Passed NIFTY 23146.15`, `write_status: success`, heartbeat present.
+
+**Open at launch, by decision:** the sign-up cap is **5/hour/IP** (`SIGNUP_IP_MAX_PER_WINDOW`). Indian
+carriers use CGNAT, so many real users share one address — harmless at today's ~1 signup/month, but it
+is the number to revisit **alongside email verification** before registration is opened wider.
+**Resend** is the chosen email provider; **no DNS record has been created and OTP is not enabled**,
+pending explicit approval of the setup.
+
+**Also done:** the redacted production analytics snapshot taken for the PR #226 reconciliation was a
+temporary artifact; the reconciliation is recorded, so it has been deleted. Source data untouched.
+
+### Decisions on record — one closed, one still pending
+
+| Decision | State | Conditions Gaurav set, and how they were honoured |
+|---|---|---|
+| **Snapshot fix** — `SNAPSHOT_MIN_SYMBOLS=1` on `engine` | **APPROVED and APPLIED** 2026-10-13 23:43 IST. *Nothing left to apply* — only its operational test is outstanding | Required a post-16:10 window with no restart during market hours: applied 23:43, market closed. Verified as required — newer `SUCCESS` deployment (23:44:24), **lock ownership and handover** (`engine_lock` == `engine:lock:meta.instance_id`, `engine_started_at` 23:45:59), fresh snapshot (`write_status: success`), no unintended trading or Telegram activity |
+| **PR #227** — exceptionalism calibration off the snapshot | **PENDING — open, NOT merged** | **Exceptionalism stays disabled.** Review and merge the *research* PR separately, in a safe window, and only on explicit approval. Merging it does **not** enable the mechanism — the calibration result is a NO-GO, and this is **not** a stage-2 dependency |
+
+**Also unmerged:** PR #228, the documentation change that records this frame.
+
+**Still open, not blocking:** the Vercel *preview* check has been red since 2026-10-12 and is
+undiagnosed. The frontend tree is byte-identical to a passing build, so it is not the content of
+either PR; reading the build log needs `vercel login` (browser OAuth from Gaurav).
+
+---
 
 ## Aug-end → Sep-1st-week change audit — 2026-09-13 (read-only)
 
@@ -181,9 +376,11 @@ the current engine. No risk-logic change is warranted.
 recycled; no market-cap field, so the small-cap concentration in `NEW_SELECTION` cannot be
 quantified. Fixing capture is a prerequisite for ever answering "are we picking better stocks?".
 
-## North-star objective — portfolio quality, OLD vs NEW
+## Portfolio-quality instrument (OLD vs NEW) — the stage-3 measuring tool
 
 > Set 2026-09-13. **MEASURE FIRST → COMPARE FAIRLY → IDENTIFY CAUSE → THEN CHANGE.**
+> This is no longer phrased as the north star — it is the **instrument stage 3 uses**. The north
+> star is the section at the top of this file.
 
 The question that now governs this project: **did the late-Aug / early-Sep 2026 engine changes
 actually improve (1) stock selection, (2) entry quality, (3) risk/SL quality, (4) portfolio
