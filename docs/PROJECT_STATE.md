@@ -180,7 +180,7 @@ workstream; the two research triggers were **checked, not forced**.
 | Stage 3 triggers | **unmet, unchanged** | RISK_ON comparable days still **2** (need ≥15); 20d comparable days still **15** (need ≥30). ~3 trading days have passed since the line was drawn — re-running the cohort study now would only make an underpowered result look more confident |
 | `test_preload_when_near_expiry` | **not a regression** | passes on `9eeb06a` on a Saturday; still the Mon/Tue calendar flake. It also explains the stale `pytest: FAILURE` badges on #227/#229 — those runs are from **Tue 2026-10-13**; later runs on both branches concluded success |
 
-**Platform PRs opened (open, CI green, unmerged):**
+**Platform PRs — both MERGED and verified in production 2026-10-18 (Sunday, markets closed):**
 
 - **#231** — one entitlement rule: anonymous preview, signed-in full access. Four call sites gated on
   `role in (PREMIUM, ADMIN)` while no plan exists and all 12 accounts are FREE, so signed-in users were
@@ -194,6 +194,21 @@ workstream; the two research triggers were **checked, not forced**.
   typo'd their email five times; fixed so only attempts that could actually create an account cost
   budget. Account enumeration via the 409 is **deliberately still open** and asserted in a test, because
   closing it honestly needs email verification.
+
+Merged in stages, each verified before the next: **#231 → `8394dea`**, **#232 → `b034cd3`**. All three
+services redeployed and settled `SUCCESS` on each. Post-deploy checks after both: `/health`,
+`/api/system/health`, `/api/snapshot` and public `/api/journal` 200 · PR #223 controls intact (401/403)
+· anonymous screener preview still leak-free · command centre reports `tier: PREVIEW`,
+`authenticated: false`, `preview_reason: sign_in_required` · an invalid email and a short password both
+rejected 400 **without creating an account** (users still **12**, latest signup unchanged at
+2026-09-17). The engine's startup `TOKEN TOO OLD` self-healed via auto-login — token refreshed
+`02:29:47 IST`, `Health Check Passed NIFTY 23146.15`, `write_status: success`, heartbeat present.
+
+**Open at launch, by decision:** the sign-up cap is **5/hour/IP** (`SIGNUP_IP_MAX_PER_WINDOW`). Indian
+carriers use CGNAT, so many real users share one address — harmless at today's ~1 signup/month, but it
+is the number to revisit **alongside email verification** before registration is opened wider.
+**Resend** is the chosen email provider; **no DNS record has been created and OTP is not enabled**,
+pending explicit approval of the setup.
 
 **Also done:** the redacted production analytics snapshot taken for the PR #226 reconciliation was a
 temporary artifact; the reconciliation is recorded, so it has been deleted. Source data untouched.
