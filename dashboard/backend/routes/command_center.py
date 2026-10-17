@@ -6,6 +6,7 @@ import time
 
 from fastapi import APIRouter, Depends
 
+from dashboard.backend.entitlements import FEATURE_COMMAND_CENTER_FEED, is_entitled
 from dashboard.backend.routes.auth import get_optional_user
 from dashboard.backend.global_state_version import attach_snapshot_meta
 from dashboard.backend.services.command_center_service import (
@@ -22,7 +23,7 @@ def api_command_center(user: dict | None = Depends(get_optional_user)):
     """Snapshot-first trader OS dashboard — richer when authenticated (watchlist Redis)."""
     uid = int(user["sub"]) if user else None
     role = user.get("role") if user else None
-    payload = build_command_center_payload(user_id=uid, role=role)
+    payload = build_command_center_payload(user_id=uid, role=role, entitled=is_entitled(user, FEATURE_COMMAND_CENTER_FEED))
     ref = None
     try:
         es = get_engine_snapshot()

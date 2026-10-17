@@ -14,13 +14,19 @@ import logging
 
 logger = logging.getLogger("dashboard.command_center")
 
-FREE_FEED_LIMIT = int(os.getenv("COMMAND_CENTER_FEED_LIMIT_FREE", "6"))
-PREMIUM_FEED_LIMIT = int(os.getenv("COMMAND_CENTER_FEED_LIMIT_PREMIUM", "24"))
+# Anonymous visitors get a shorter PREVIEW feed; signed-in users get the full
+# one. These were FREE vs PREMIUM, which locked signed-in users out of a tier
+# that cannot be bought — see entitlements.py. Old env names still honoured.
+ANON_FEED_LIMIT = int(os.getenv("COMMAND_CENTER_FEED_LIMIT_ANON",
+                                os.getenv("COMMAND_CENTER_FEED_LIMIT_FREE", "6")))
+FULL_FEED_LIMIT = int(os.getenv("COMMAND_CENTER_FEED_LIMIT_FULL",
+                                os.getenv("COMMAND_CENTER_FEED_LIMIT_PREMIUM", "24")))
+FREE_FEED_LIMIT = ANON_FEED_LIMIT        # deprecated alias
+PREMIUM_FEED_LIMIT = FULL_FEED_LIMIT     # deprecated alias
 
 
-def _tier_limit(role: Optional[str]) -> int:
-    r = (role or "FREE").upper()
-    return PREMIUM_FEED_LIMIT if r in ("PREMIUM", "ADMIN") else FREE_FEED_LIMIT
+def _feed_limit(entitled: bool) -> int:
+    return FULL_FEED_LIMIT if entitled else ANON_FEED_LIMIT
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -123,7 +129,14 @@ def build_command_center_payload(
     *,
     user_id: Optional[int],
     role: Optional[str],
+    entitled: Optional[bool] = None,
 ) -> Dict[str, Any]:
+    """`entitled` is the caller's access decision (see entitlements.py). It is
+    passed in rather than re-derived from `role`, so this service never has to
+    know what a plan is. Default keeps older callers working: a caller with a
+    role at all was authenticated."""
+    if entitled is None:
+        entitled = role is not None
     try:
         from dashboard.backend.state_bridge import get_engine_snapshot
 
@@ -138,7 +151,7 @@ def build_command_center_payload(
     except Exception:
         discovery, final_snap = {}, {}
 
-    limit = _tier_limit(role)
+    limit = _feed_limit(entitled)
     regime = es.get("market_regime")
     signals_today = es.get("signals_today") or es.get("signals_count")
 
@@ -267,11 +280,17 @@ def build_command_center_payload(
     if portfolios:
         rot_note = "Virtual desks rotate by competition score — weakest slots yield when deterioration dominates."
 
+    # Not a paid tier: `access` says whether the caller is signed in. The
+    # "premium" key is kept so existing clients keep parsing, but it no longer
+    # advertises a plan that cannot be bought.
     premium_gating = {
-        "tier": (role or "FREE").upper(),
+        "tier": "FULL" if entitled else "PREVIEW",
         "feed_limit": limit,
-        "full_watchlist_intel": (role or "FREE").upper() in ("PREMIUM", "ADMIN"),
-        "note": "FREE tier sees a shorter priority feed; PREMIUM unlocks longer feeds and full desk transitions.",
+        "full_watchlist_intel": entitled,
+        "authenticated": entitled,
+        "preview_reason": None if entitled else "sign_in_required",
+        "note": ("Signed in — full feed and desk transitions." if entitled
+                 else "Anonymous preview — sign in for the full feed. No paid plan exists."),
     }
 
     # Dedupe priority lines by headline (keep order)

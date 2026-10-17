@@ -14,6 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from dashboard.backend.db import get_connection, get_ranking_runs, get_stock_recommendations, list_running_trades
+from dashboard.backend.entitlements import FEATURE_RESEARCH_IDEAS, is_entitled
 from services.universe_manager import load_nse_universe
 from services.price_resolver import resolve_cmp
 from dashboard.backend.redis_endpoint_cache import (
@@ -201,7 +202,11 @@ STALE_THRESHOLD_HOURS = 12  # auto-trigger scan if last run older than this
 RESEARCH_MAX_INVENTORY = int(os.getenv("RESEARCH_MAX_INVENTORY", "50"))
 # Back-compat alias: legacy responses still expose the field as "max".
 MAX_LONGTERM_SLOTS = RESEARCH_MAX_INVENTORY
-FREE_TIER_LIMIT = 3  # free users see this many ideas per horizon
+# How many ideas an ANONYMOUS visitor sees per horizon — a public preview, not
+# a paid tier. Signed-in users get the full list; see entitlements.py for why
+# the old `role in (PREMIUM, ADMIN)` gate was wrong while no plan exists.
+ANON_PREVIEW_LIMIT = 3
+FREE_TIER_LIMIT = ANON_PREVIEW_LIMIT  # deprecated alias, kept for any external reader
 DECISION_CACHE_SECONDS = int(os.getenv("RESEARCH_DECISION_CACHE_SECONDS", "600"))
 
 # GET /swing /longterm: Redis snapshot + LKG only (no DB assembly / resolve_cmp on request).
@@ -1112,19 +1117,23 @@ def _overlay_live_cmp(snapshot: dict) -> dict:
     return out
 
 
-def _gate_research_items(result: dict, is_premium: bool) -> dict:
-    """Apply free-tier item cap without building a live DB payload."""
-    if is_premium:
+def _gate_research_items(result: dict, entitled: bool) -> dict:
+    """Cap the list for an ANONYMOUS visitor; signed-in callers get it whole.
+
+    The truncation happens here, server-side, so the hidden ideas are never
+    serialised — a blurred UI cannot leak what it is covering."""
+    if entitled:
         return result
     items = list(result.get("items") or [])
-    if len(items) <= FREE_TIER_LIMIT:
+    if len(items) <= ANON_PREVIEW_LIMIT:
         return result
     out = dict(result)
     total_avail = len(items)
-    out["items"] = items[:FREE_TIER_LIMIT]
+    out["items"] = items[:ANON_PREVIEW_LIMIT]
     out["gated"] = True
+    out["gated_reason"] = "sign_in_required"
     out["total_available"] = total_avail
-    out["count"] = FREE_TIER_LIMIT
+    out["count"] = ANON_PREVIEW_LIMIT
     return out
 
 
@@ -1137,15 +1146,15 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
     try:
         if not RESEARCH_SNAPSHOT_ONLY:
             _maybe_auto_scan("SWING")
-        is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+        entitled = is_entitled(user, FEATURE_RESEARCH_IDEAS)
 
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("swing")
             if snap is not None:
                 served = _overlay_live_cmp(_finalize_research_snapshot("swing", dict(snap)))
-                return _safe_json_response(_gate_research_items(served, is_premium))
+                return _safe_json_response(_gate_research_items(served, entitled))
             merged = finalize_endpoint("swing", {}, valid_research_list_payload)
-            return _safe_json_response(_gate_research_items(dict(merged), is_premium))
+            return _safe_json_response(_gate_research_items(dict(merged), entitled))
 
         full = _swing_payload(limit)
         snap = serve_cached_endpoint("swing")
@@ -1153,12 +1162,12 @@ def get_swing_research(limit: int = Query(10, ge=1, le=100), user: dict | None =
             result = dict(snap)
         else:
             result = dict(full)
-        if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+        if not entitled and len(result.get("items") or []) > ANON_PREVIEW_LIMIT:
             result = dict(result)
-            result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
+            result["items"] = list(result.get("items", []))[:ANON_PREVIEW_LIMIT]
             result["gated"] = True
             result["total_available"] = full.get("count", len(full.get("items", [])))
-            result["count"] = FREE_TIER_LIMIT
+            result["count"] = ANON_PREVIEW_LIMIT
         if snap is not None:
             return _safe_json_response(result)
         return _safe_json_response(finalize_endpoint("swing", full, valid_research_list_payload))
@@ -1206,15 +1215,15 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
     try:
         if not RESEARCH_SNAPSHOT_ONLY:
             _maybe_auto_scan("LONGTERM")
-        is_premium = bool(user and user.get("role") in ("PREMIUM", "ADMIN"))
+        entitled = is_entitled(user, FEATURE_RESEARCH_IDEAS)
 
         if RESEARCH_SNAPSHOT_ONLY:
             snap = serve_cached_research_list("longterm")
             if snap is not None:
                 served = _overlay_live_cmp(_finalize_research_snapshot("longterm", dict(snap)))
-                return _safe_json_response(_gate_research_items(served, is_premium))
+                return _safe_json_response(_gate_research_items(served, entitled))
             merged = finalize_endpoint("longterm", {}, valid_research_list_payload)
-            return _safe_json_response(_gate_research_items(dict(merged), is_premium))
+            return _safe_json_response(_gate_research_items(dict(merged), entitled))
 
         full = _longterm_payload(limit)
         snap = serve_cached_endpoint("longterm")
@@ -1222,12 +1231,12 @@ def get_longterm_research(limit: int = Query(10, ge=1, le=100), user: dict | Non
             result = dict(snap)
         else:
             result = dict(full)
-        if not is_premium and len(result.get("items") or []) > FREE_TIER_LIMIT:
+        if not entitled and len(result.get("items") or []) > ANON_PREVIEW_LIMIT:
             result = dict(result)
-            result["items"] = list(result.get("items", []))[:FREE_TIER_LIMIT]
+            result["items"] = list(result.get("items", []))[:ANON_PREVIEW_LIMIT]
             result["gated"] = True
             result["total_available"] = full.get("count", len(full.get("items", [])))
-            result["count"] = FREE_TIER_LIMIT
+            result["count"] = ANON_PREVIEW_LIMIT
         if snap is not None:
             return _safe_json_response(result)
         return _safe_json_response(finalize_endpoint("longterm", full, valid_research_list_payload))
