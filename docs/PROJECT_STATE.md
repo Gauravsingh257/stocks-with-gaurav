@@ -166,6 +166,38 @@ Both are **waiting**, not work. Neither can be accelerated by writing code.
 is missing · what exact condition ends it. **If it unlocks no new decision, it does not get
 done.**
 
+### Verified outcomes since the stop line — 2026-10-18
+
+The line held: nothing below ran an experiment, rebuilt measurement tooling, re-ran a closed
+audit, changed strategy, or merged. Platform work continued because it is a *different*
+workstream; the two research triggers were **checked, not forced**.
+
+| Item | Verified | Evidence |
+|---|---|---|
+| PR #223 security controls | **still live** | terminal endpoints 401 incl. the `?user_id=` bypass · four `/api/system/debug/*` 403 · `/api/auth/upgrade` 403 · public `/api/journal` 200 |
+| PR #226 metric truth | **deployed** | web/scanner on `b758ad5`, a descendant of `31b0103`; Product Health reports accounts 12 / WAU 1–2, not 228 / 23 |
+| Stage 1 — snapshot fix | **mechanism proven · exit criterion NOT met** | prod shows `write_status: success`, `meta.ok: true`, **`symbol_count: 1`**, snapshot fresh — at 1 symbol the old default of 5 would have written `skipped_invalid`. But this was a **Saturday**, not a live session, and the 499 retained engine log lines do not reach the 14–16 Oct sessions, so those cannot be proven retrospectively. **Still waiting on one live session.** |
+| Stage 3 triggers | **unmet, unchanged** | RISK_ON comparable days still **2** (need ≥15); 20d comparable days still **15** (need ≥30). ~3 trading days have passed since the line was drawn — re-running the cohort study now would only make an underpowered result look more confident |
+| `test_preload_when_near_expiry` | **not a regression** | passes on `9eeb06a` on a Saturday; still the Mon/Tue calendar flake. It also explains the stale `pytest: FAILURE` badges on #227/#229 — those runs are from **Tue 2026-10-13**; later runs on both branches concluded success |
+
+**Platform PRs opened (open, CI green, unmerged):**
+
+- **#231** — one entitlement rule: anonymous preview, signed-in full access. Four call sites gated on
+  `role in (PREMIUM, ADMIN)` while no plan exists and all 12 accounts are FREE, so signed-in users were
+  served the anonymous payload. Checked **first** that the locked UI does not leak: an anonymous
+  screener call returns `rows: []` plus score/tier/flip only — no symbols, entry, stop, target or price —
+  and research truncates server-side before serialisation. **There was no leak**; the defect was
+  product-correctness, not exposure.
+- **#232** — sign-up had no throttle of any kind, accepted any string as an email, and allowed
+  6-character passwords. Now per-IP capped, format-validated, floor 8 for new accounts only. Diff review
+  then caught that the throttle was charged *before* validation, which would have locked out a user who
+  typo'd their email five times; fixed so only attempts that could actually create an account cost
+  budget. Account enumeration via the 409 is **deliberately still open** and asserted in a test, because
+  closing it honestly needs email verification.
+
+**Also done:** the redacted production analytics snapshot taken for the PR #226 reconciliation was a
+temporary artifact; the reconciliation is recorded, so it has been deleted. Source data untouched.
+
 ### Decisions on record — one closed, one still pending
 
 | Decision | State | Conditions Gaurav set, and how they were honoured |
