@@ -87,11 +87,12 @@ def _read(key: str) -> tuple[int, int]:
         return n, int(exp - now)
 
 
-def _incr(key: str) -> None:
+def _incr(key: str, ttl: int | None = None) -> None:
+    window = WINDOW_SECONDS if ttl is None else ttl
     r = _redis()
     if r is not None:
         try:
-            r.set(key, 0, ex=WINDOW_SECONDS, nx=True)
+            r.set(key, 0, ex=window, nx=True)
             r.incr(key)
             return
         except Exception as exc:
@@ -100,7 +101,7 @@ def _incr(key: str) -> None:
         now = time.time()
         n, exp = _local.get(key, (0, 0.0))
         if exp <= now:
-            n, exp = 0, now + WINDOW_SECONDS
+            n, exp = 0, now + window
         _local[key] = (n + 1, exp)
 
 
@@ -134,6 +135,41 @@ def record_login_failure(email: str, ip: str | None) -> None:
 
 def record_login_success(email: str) -> None:
     _clear(_account_key(email))
+
+
+# ── Registration ─────────────────────────────────────────────────────────────
+# Sign-up had no limit of any kind, so one script could mint unlimited
+# accounts. That is an abuse vector on its own, and it silently corrupts the
+# user metrics PR #226 just made honest. This counts ATTEMPTS, not failures: a
+# successful sign-up is exactly what an abuser wants, so it must spend budget.
+
+SIGNUP_IP_MAX = int(os.getenv("SIGNUP_IP_MAX_PER_WINDOW", "5"))
+SIGNUP_WINDOW_SECONDS = int(os.getenv("SIGNUP_THROTTLE_WINDOW_SECONDS", "3600"))  # 1 hour
+_SIGNUP_PREFIX = "auth:signup_attempt"
+
+
+def _signup_ip_key(ip: str) -> str:
+    return f"{_SIGNUP_PREFIX}:ip:{_h(ip or 'unknown')}"
+
+
+def check_signup_allowed(ip: str | None) -> None:
+    """Raise 429 when this IP has made too many sign-up attempts recently.
+
+    Per-IP only: there is no account to key on yet, and keying on the submitted
+    email would let an attacker reset their budget just by varying it.
+    """
+    n, retry = _read(_signup_ip_key(ip or ""))
+    if n >= SIGNUP_IP_MAX:
+        retry = max(retry, 1)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many sign-up attempts. Please try again in {max(1, -(-retry // 60))} minute(s).",
+            headers={"Retry-After": str(retry)},
+        )
+
+
+def record_signup_attempt(ip: str | None) -> None:
+    _incr(_signup_ip_key(ip or ""), ttl=SIGNUP_WINDOW_SECONDS)
 
 
 def _reset_for_tests() -> None:
