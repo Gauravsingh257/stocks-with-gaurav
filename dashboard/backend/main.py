@@ -190,33 +190,33 @@ async def lifespan(app: FastAPI):
         # the one piece that stays inline.
         bind_loop(_asyncio.get_running_loop())
     except Exception:
-        logger.debug("[Lifecycle] bus loop bind skipped", exc_info=True)
+        log.debug("[Lifecycle] bus loop bind skipped", exc_info=True)
 
     def _lifecycle_warmup() -> None:
         try:
             from dashboard.backend.db.trade_lifecycle import init_lifecycle_db
             from dashboard.backend.db.trade_lifecycle_migrate import backfill as _lifecycle_backfill
             init_lifecycle_db()
-            logger.info("[Lifecycle] ledger ready: %s", _lifecycle_backfill())
+            log.info("[Lifecycle] ledger ready: %s", _lifecycle_backfill())
         except Exception:
-            logger.exception("[Lifecycle] init/backfill failed (non-fatal)")
+            log.exception("[Lifecycle] init/backfill failed (non-fatal)")
         try:
             from dashboard.backend.db.lifecycle_chain import link_chains
             link_chains()
         except Exception:
-            logger.debug("[Lifecycle] chain link skipped", exc_info=True)
+            log.debug("[Lifecycle] chain link skipped", exc_info=True)
         try:
             from dashboard.backend.db.lifecycle_analytics import snapshot_stats
             snapshot_stats()
         except Exception:
-            logger.debug("[Lifecycle] initial snapshot skipped", exc_info=True)
+            log.debug("[Lifecycle] initial snapshot skipped", exc_info=True)
 
     try:
         import threading as _threading
         _threading.Thread(target=_lifecycle_warmup, daemon=True,
                           name="lifecycle-warmup").start()
     except Exception:
-        logger.exception("[Lifecycle] warmup thread failed to start (non-fatal)")
+        log.exception("[Lifecycle] warmup thread failed to start (non-fatal)")
 
     # ── Portfolio system ─────────────────────────────────────────────────────
     try:
