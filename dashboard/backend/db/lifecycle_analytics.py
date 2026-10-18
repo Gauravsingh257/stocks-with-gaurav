@@ -143,6 +143,13 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
                 if r.get(key) is not None and (pred is None or pred(r))]
         return round(st.mean(vals), 2) if vals else None
 
+    def _first_set(*vals):
+        """First non-None value. NOT `a or b`: a same-day stop averages to 0.0,
+        which is falsy, so `or` would silently fall back to holding_days and
+        report the very substitution this is meant to avoid.
+        """
+        return next((v for v in vals if v is not None), None)
+
     return {
         "closed_trades": n,
         "win_rate_pct": round(win_rate * 100, 1),
@@ -167,8 +174,17 @@ def analytics(portfolio: str | None = None, since: str | None = None) -> dict:
         "avg_mae_pct": _avg("mae_pct"),
         "avg_mfe_pct": _avg("mfe_pct"),
         "avg_holding_days": _avg("holding_days"),
-        "avg_time_to_target_days": _avg("holding_days", lambda r: r["status"] == "TARGET_HIT"),
-        "avg_time_to_stop_days": _avg("holding_days", lambda r: r["status"] == "STOP_HIT"),
+        # Prefer the derived event timing, which is computed from the two
+        # timestamps and so is finer than integer holding_days. Falling back to
+        # holding_days is sound ONLY because the filter pins the status: a
+        # STOP_HIT exited at its stop, so its holding period *is* its
+        # time-to-stop. Never widen these filters without changing the fallback.
+        "avg_time_to_target_days": _first_set(
+            _avg("time_to_target_days", lambda r: r["status"] == "TARGET_HIT"),
+            _avg("holding_days", lambda r: r["status"] == "TARGET_HIT")),
+        "avg_time_to_stop_days": _first_set(
+            _avg("time_to_stop_days", lambda r: r["status"] == "STOP_HIT"),
+            _avg("holding_days", lambda r: r["status"] == "STOP_HIT")),
         "basis": (f"closed, genuinely-executed positions only; unfilled ideas contribute "
                   f"no return. Return and drawdown are book-weighted over {slots} slots — "
                   f"each position is 1/{slots} of capital, so a sum of trade percentages "

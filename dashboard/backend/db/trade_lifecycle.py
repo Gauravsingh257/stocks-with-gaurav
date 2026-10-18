@@ -331,6 +331,65 @@ def _f(v):
         return None
 
 
+def _ts(v):
+    """Parse an ISO-ish timestamp, or None. Tolerates ' ' and 'Z' separators."""
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace(" ", "T").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _days_between(a, b) -> float | None:
+    """Calendar days from `a` to `b`, or None if either is unparseable."""
+    ta, tb = _ts(a), _ts(b)
+    if ta is None or tb is None:
+        return None
+    # Parenthesised deliberately: `a is None != b` chains into
+    # `(a is None) and (None != b)`, which rejected two naive timestamps.
+    if (ta.tzinfo is None) != (tb.tzinfo is None):    # don't mix naive and aware
+        return None
+    delta = (tb - ta).total_seconds() / 86400.0
+    return round(delta, 3) if delta >= 0 else None
+
+
+def derive_event_timing(rec: dict) -> dict:
+    """Fill time-to-stop / time-to-target ONLY where the event is certain.
+
+    The source journals record entry time, exit time and the running high/low —
+    never *when* a level was touched. So timing is knowable in exactly one case:
+    when the level terminated the trade. A STOP_HIT exited at its stop and a
+    TARGET_HIT exited at its target, so for those the exit timestamp IS the event
+    timestamp.
+
+    Everything else stays NULL on purpose. A trade that traded through its target
+    intrabar and later closed on time has a real target touch with an unknown
+    date, and `mfe_pct` is the only honest witness to it.
+
+    Deliberately NOT done: substituting `holding_days`. `lifecycle_analytics`
+    used to report `avg_time_to_stop_days` as the mean `holding_days` of STOP_HIT
+    rows, which silently answers a different question for any other status. Here
+    the value is computed from the two timestamps or left absent.
+
+    Caller-supplied values always win — this only fills gaps.
+    """
+    status = str(rec.get("status") or "").upper()
+    span = _days_between(rec.get("entry_fill_at"), rec.get("exit_at"))
+    if span is None:
+        return rec
+    if status == "STOP_HIT" and rec.get("time_to_stop_days") is None:
+        rec["time_to_stop_days"] = span
+    elif status == "TARGET_HIT":
+        if rec.get("time_to_target_days") is None:
+            rec["time_to_target_days"] = span
+        # The published target_1 is what a TARGET_HIT closed on; if no target_1
+        # was ever recorded there is nothing to timestamp.
+        if rec.get("target_1_hit_at") is None and rec.get("target_1") is not None:
+            rec["target_1_hit_at"] = rec.get("exit_at")
+    return rec
+
+
 # ── Writing ──────────────────────────────────────────────────────────────────
 
 def record_event(lifecycle_id: str, event: str, *, from_status: str | None = None,
@@ -391,6 +450,11 @@ def upsert(rec: dict, *, conn=None, event: str | None = None) -> str:
         # A duplicate is soft-deleted, never removed.
         if rec.get("is_duplicate") and rec.get("record_state") == "ACTIVE":
             rec["record_state"] = "DUPLICATE"
+        # Stop/target event timing. Every producer routes through here, so the
+        # derivation lives here rather than in each mapper. Columns were declared
+        # and selected but nothing ever wrote them: 0 of 165 closed SMC trades
+        # carried time_to_stop_days, including all 71 STOP_HITs.
+        derive_event_timing(rec)
 
         prev = conn.execute("SELECT status FROM trade_lifecycle WHERE uuid = ?", (lid,)).fetchone()
         cols = ["uuid", "source", "portfolio", "engine", "setup", "strategy", "symbol",
