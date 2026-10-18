@@ -835,8 +835,14 @@ protective, not costly.
 *(The former item "SRB duplicate guard" is obsolete: the SRB live path no longer exists, so a restart
 cannot replay it.)* No new engine features during the validation phase.
 
-**BLOCKED** — all four operational fixes need Gaurav: three touch production config, one touches
-the trading path.
+**BLOCKED** — **three** operational fixes need Gaurav: two touch production config
+(`TRADES_SYNC_KEY`, Kite static IP), one touches the trading path (`detect_session_low`,
+deliberately deferred). Railway `watchPatterns` is **no longer blocked** — shipped 2026-09-27 as a
+config-file change (PR #207, `3f05f08`), so no dashboard access was needed. Self-verified by PR #208
+(`6d4a32f`): a `services/**`-only commit still redeploys all three services, as expected. **Not**
+independently confirmed that a docs-only commit skips a redeploy — the nightly `chore(shadow)` /
+`chore(signals)` commits and the docs-only PR #228 merge (2026-10-17) are the live test cases;
+check Railway's deploy history, not this file, before relying on it.
 
 **Why** → `[[fvg-tap-live-alert-mode]]`, `[[risk-engine]]`, `[[regime-governor-phase1]]`,
 `[[component-failure-not-system-failure]]`.
