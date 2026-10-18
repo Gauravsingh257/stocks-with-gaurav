@@ -58,6 +58,11 @@ _lock_holder = False
 _lock_lost = False
 _lock_refresh_at = 0.0
 _lock_renewer_thread_started = False
+# Values this process published, so the refresher can restore a key that
+# expired or was deleted without ever inventing one.
+_engine_version_value: Optional[str] = None
+_engine_started_at_value: Optional[str] = None
+_IDENTITY_TTL_SEC = 86400
 _shutdown_registered = False
 _heartbeat_thread_started = False
 _watchdog_thread_started = False
@@ -148,7 +153,9 @@ def acquire_engine_lock() -> bool:
             _lock_holder = True
             _lock_lost = False
             _lock_refresh_at = time.time()
-            r.set(ENGINE_STARTED_AT_KEY, str(time.time()), ex=86400)  # 24h TTL for uptime display
+            global _engine_started_at_value
+            _engine_started_at_value = str(time.time())
+            r.set(ENGINE_STARTED_AT_KEY, _engine_started_at_value, ex=_IDENTITY_TTL_SEC)
             r.hset("engine:lock:meta", mapping={
                 "instance_id": _engine_instance_id,
                 "pid": str(os.getpid()),
@@ -177,6 +184,8 @@ def acquire_engine_lock() -> bool:
 
 def set_engine_version(version: str) -> None:
     """Write running engine version to Redis (call after acquiring lock). TTL 24h."""
+    global _engine_version_value
+    _engine_version_value = str(version)
     r = _get_redis()
     if r is None:
         return
@@ -185,6 +194,41 @@ def set_engine_version(version: str) -> None:
         log.info("Engine version written to Redis: %s", version)
     except Exception as e:
         log.debug("set_engine_version failed: %s", e)
+
+
+def refresh_identity_keys() -> None:
+    """Keep `engine_version` / `engine_started_at` alive while this engine runs.
+
+    Both are written once, on lock acquisition, with a 24h TTL and no refresh. A
+    healthy engine is supposed to run for days, so in steady state the keys
+    expire and the dashboard loses the running version and uptime — observed
+    2026-10-17, `engine_version` read as absent after ~24h with no restart, and
+    it only came back because a deploy restarted the process. The value was
+    never wrong; it simply vanished, which is worse during an incident.
+
+    Refresh-ahead, the same shape as `_snapshot_refresher_loop`: extend only when
+    the remaining TTL has fallen below half, so this costs about one call per key
+    per 12h rather than one per renewer tick. If a key has gone missing
+    altogether it is rewritten from the value this process published, never
+    invented — and only ever by the process that holds the lock, so a dead
+    engine's identity is not resurrected.
+    """
+    if not _lock_holder:
+        return
+    r = _get_redis()
+    if r is None:
+        return
+    for key, value in ((ENGINE_VERSION_KEY, _engine_version_value),
+                       (ENGINE_STARTED_AT_KEY, _engine_started_at_value)):
+        if value is None:
+            continue
+        try:
+            ttl = r.ttl(key)
+            if isinstance(ttl, int) and 0 < ttl >= _IDENTITY_TTL_SEC // 2:
+                continue                      # plenty of life left
+            r.set(key, str(value), ex=_IDENTITY_TTL_SEC)
+        except Exception as e:
+            log.debug("refresh_identity_keys(%s) failed: %s", key, e)
 
 
 def refresh_engine_lock() -> bool:
@@ -248,6 +292,7 @@ def _lock_renewer_loop() -> None:
         try:
             if _lock_holder and not refresh_engine_lock():
                 log.critical("Engine lock renewer detected lost ownership; main loop will enter standby")
+            refresh_identity_keys()
         except Exception as e:
             log.warning("Engine lock renewer error: %s", e)
         time.sleep(max(1, ENGINE_LOCK_REFRESH_INTERVAL_SEC))
