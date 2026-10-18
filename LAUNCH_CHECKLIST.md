@@ -1,7 +1,7 @@
 # 🚀 LAUNCH_CHECKLIST.md
 
 > **STATUS: LIVE** · workstream: `platform` · last substantive update: 2026-07-12
-> MASTER launch tracker and the closest thing the repo has to a roadmap. The paid launch has NOT happened: payments, legal pages, secrets audit, backups and monitoring are all still open gates.
+> MASTER launch tracker and the closest thing the repo has to a roadmap. The paid launch has NOT happened: payments, legal pages, secrets audit and monitoring are all still open gates. The DB backup + restore drill merged 2026-09-27 (`e34b728`) but is flag-gated on `BACKUP_ENABLED`, whose live state is unverified — so its checkbox stays open pending confirmation.
 > Current project state lives in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
 
 **Single source of truth for the public launch of stockswithgaurav.com (₹1,200/mo).**
@@ -52,7 +52,9 @@ Everything else can trail launch by up to a week (fast-follow).
 - [x] ✅ **Authorization** — PIL/holdings private (login-only, PR #100); `/health` + product-analytics admin-gated.
 - [ ] 🟡 **Rate limiting** — limiter exists (`dashboard/backend`); verify coverage on auth, ingest, and public endpoints; tune limits for launch traffic.
 - [ ] 🔲 🔒 **Secrets** — full audit: no secrets in repo; all in `.env`/Redis; rotate any exposed; confirm `.gitignore`.
-- [ ] 🔲 **Backup** — DB (Railway volume) backup + restore drill; document RPO/RTO.
+- [ ] 🟡 **Backup** — daily off-volume `dashboard.db` backup to a Railway bucket + restore-test
+      script **merged 2026-09-27** (`e34b728`), RPO ≤24h. Flag-gated `BACKUP_ENABLED`, and the
+      flag state on Railway is **unverified** — do not close this gate without confirming it live.
 - [ ] 🔲 **Monitoring** — uptime + error alerting (engine heartbeat, backend 5xx, deploy failures). Currently only in-app health statuses.
 - [ ] 🔲 HTTPS/headers review (CSP, HSTS), dependency/vuln scan.
 
