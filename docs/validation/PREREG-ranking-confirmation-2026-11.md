@@ -178,8 +178,61 @@ rather than continue under a new split.
   are all fixed above.
 - Any deviation is an **amendment** appended below, timestamped, committed before the run.
 
-> **Frozen analysis script:** _to be committed before the window opens; hash recorded here._
+> **Frozen analysis script:** [`scripts/ranking_confirmation.py`](../../scripts/ranking_confirmation.py)
+> at commit **`82274f9864f8e45eb446ec71578b6530a2ba2046`** (`82274f9`), with
+> [`tests/test_ranking_confirmation.py`](../../tests/test_ranking_confirmation.py) — 41 tests, all
+> passing, synthetic data only. **Frozen as of 2026-10-19, before the window opened.** No edits
+> after this point except via an amendment in §11.
+
+### Reproducing the run
+
+Locally against a database copy:
+
+```bash
+python -m scripts.ranking_confirmation --db /path/to/dashboard.db
+```
+
+On the service, where the database, the Redis snapshot and `services/forward_eval` already live
+(`railway ssh` eats the first stdout line and mangles nested quotes, so the file is base64'd):
+
+```bash
+B64=$(base64 -w0 < scripts/ranking_confirmation.py)
+railway ssh --service web -- sh -lc   "echo SAC; echo $B64 | base64 -d > /tmp/rc.py; cd /app && python3 /tmp/rc.py --db /data/dashboard.db"
+```
+
+Deterministic: the same database and OHLC snapshot produce byte-identical output. Seed 7
+throughout; comparator C derives a per-day seed by SHA-256 of `"7|<date>"` rather than `hash()`,
+which Python salts per process.
+
+**Gate verified against production on 2026-10-19:** 21 scan dates after 2026-09-17, **0 matured**,
+so the script printed `INSUFFICIENT EVIDENCE` and computed no basket statistic. The confirmation
+cohort has not been inspected.
 
 ## 11. Amendments
 
-_None._
+### A1 — 2026-10-19, before the window opened: five under-specified points resolved
+
+Writing the frozen script surfaced five things this document did not specify. Each is resolved the
+neutral, deterministic way; each is printed in the run output; **none can favour B over A**, because
+all five apply identically to every comparator.
+
+| | Gap | Resolution |
+|---|---|---|
+| **R1** | Tie at the Nth basket place | Ascending symbol, for A, B, C and D alike |
+| **R2** | Is `score_breakdown.composite` required? | **Yes** — basket A is undefined without it, so a row missing it leaves the pool entirely and all four comparators always choose from an identical set |
+| **R3** | What makes a *scan date* matured? | Judged at the **benchmark**: the date is matured when NIFTY has a bar 20 trading days later. A symbol missing its own D+20 bar is counted unpriceable against the ≥75% gate, never silently dropped |
+| **R4** | "the identical bar span" | The index's **own** 20-bar forward return from the same base date — the only definition that does not vary per symbol |
+| **R5** | Duplicate `(scan_date, symbol)` | **Lowest `id`** — the earliest persisted scan of that date, closest to when the ranking was published |
+
+**R5 matters more than it looks.** Running the gate against production showed that **57,200 of
+103,400 rows** in the window are repeats of a symbol already seen that day, because the scanner runs
+several times daily. The first implementation relied on unordered `SELECT` iteration, which would
+have let SQLite's physical row order decide which scan won — a determinism defect in a script whose
+entire value is determinism. It is now `ORDER BY date, symbol, id`, with two tests pinning it.
+
+**Open for Gaurav.** R1–R4 are routine and I would not expect disagreement. **R5 is a real
+methodological choice**: keeping the *earliest* scan of the day rather than the *latest* is
+defensible (it is what was published pre-open, and the outcome is measured from that day's close),
+but the opposite choice is arguable. If you prefer the latest scan, say so **before the window
+opens** and it becomes amendment A2. After the window opens, changing it would be exactly the
+post-hoc discretion this document exists to prevent.
