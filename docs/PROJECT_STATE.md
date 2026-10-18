@@ -426,6 +426,18 @@ Both improvements land exactly on the 07-09 boundary and neither can be produced
 sector-adjusted outcomes. `risk` is 62% resolved, `selection` 42%, `anchor10` has no positions.
 **Do not read the outcome columns until the audit says `mature=True`.**
 
+> **CORRECTION, 2026-10-18 — every resolution percentage above is measured over a denominator
+> that was ~47% phantom.** The ledger never retired position rows whose source row left the
+> mapper's `WHERE status IN ('ACTIVE','PENDING','EXPIRED')` scope, so 271 departed rows (169 of
+> them frozen at `ACTIVE`) sat in the cohort: 201 positions were published as open against 32
+> real ones. Recomputed with them excluded, **swing is 87.2% resolved and momentum 91.0% — both
+> already `mature=True`** — while long-term is genuinely 67.7%. The per-cohort splits
+> (`risk` 62% / `selection` 42%) have **not** been recomputed yet and must not be trusted until
+> they are. Fix in PR #237; method and figures in
+> [`validation/phantom-active-ledger-rows-2026-10-18.md`](validation/phantom-active-ledger-rows-2026-10-18.md).
+> Re-run `scripts/portfolio_quality_audit.py` once that PR is deployed, then replace this block
+> with the real numbers.
+
 **Open measurement gaps:** (a) `context_json` sector/regime is not yet populated in production —
 sector lands on the next `web` restart via the backfill, regime needs
 `python -m scripts.lifecycle_enrich_context` run against the prod DB; (b) `entry_gap_pct` is not
