@@ -41,10 +41,21 @@ can favour B over A: they apply identically to every comparator.
   R2  `score_breakdown.composite` must also be present, not just F1-F3 — basket
       A is undefined without it. A row missing it is excluded from ALL baskets,
       so every comparator always chooses from an identical pool.
-  R3  Scan-date maturity. Resolved at market level: a scan date is matured when
-      the BENCHMARK has a bar 20 trading days after it. A symbol missing its own
-      D+20 bar is counted unpriceable and charged against the >=75% coverage
-      gate, not silently dropped.
+  R3  Scan-date maturity, and the two coverage DENOMINATORS, both fixed here.
+      Maturity is judged at market level: a scan date is matured when the
+      BENCHMARK has a bar 20 trading days after it.
+        * ELIGIBLE POOL for a date = rows surviving dedup (R5) and the R2
+          feature/incumbent requirement. The >=30-candidates-per-day gate is
+          applied to THIS pool, not to the raw row count, because a basket is
+          drawn from the pool and nothing else.
+        * Price coverage = (eligible-pool rows with a priceable D+20 outcome) /
+          (eligible-pool rows on matured days that passed the >=30 gate).
+          A symbol missing its own D+20 bar is counted unpriceable in that
+          denominator, never silently dropped. Gate: >=75%.
+        * Feature coverage is measured against the DEDUPLICATED PRE-EXCLUSION
+          candidate set, i.e. before R2 removes rows. Measuring it inside the
+          eligible pool would be 100% by construction and would say nothing.
+          Gate: each of F1-F3 on >=80% of that day's deduplicated candidates.
   R4  Benchmark span. "the identical bar span" is implemented as NIFTY 50's own
       20-trading-day forward return from the same base date. A symbol with
       trading gaps can therefore span slightly different calendar days from the
@@ -357,24 +368,31 @@ def main() -> int:
         return 0
 
     # From here the gate is met; price, score, select and compare.
+    # R3: the >=30 gate applies to the ELIGIBLE POOL (post-dedup, post-R2),
+    # because that is what a basket is drawn from. The price-coverage
+    # denominator is the eligible-pool rows on days that passed that gate.
     rows_by_day: dict[str, list[dict]] = {}
-    priced_n = total_n = 0
+    priced_n = eligible_n = 0
+    dropped_small_pool = 0
     for d in matured:
-        if meta["per_day_total"][d] < MIN_CANDIDATES_PER_DAY:
+        pool = panel[d]
+        if len(pool) < MIN_CANDIDATES_PER_DAY:
+            dropped_small_pool += 1
             continue
         keep = []
-        for r in panel[d]:
-            total_n += 1
+        for r in pool:
+            eligible_n += 1
             oc = pb.outcome(r["symbol"], d, HORIZON)
             if oc is None or oc.ret is None:
                 continue
             priced_n += 1
-            r = dict(r, excess=oc.ret - bench_fwd[d])
-            keep.append(r)
+            keep.append(dict(r, excess=oc.ret - bench_fwd[d]))
         if len(keep) >= MIN_CANDIDATES_PER_DAY:
             rows_by_day[d] = keep
+        else:
+            dropped_small_pool += 1
 
-    priced_pct = 100.0 * priced_n / total_n if total_n else 0.0
+    priced_pct = 100.0 * priced_n / eligible_n if eligible_n else 0.0
     feat_cov_ok = True
     for f in CANDIDATE_FEATURES:
         pct = [100.0 * meta["feat_present"][f][d] / meta["per_day_total"][d]
@@ -384,8 +402,10 @@ def main() -> int:
         feat_cov_ok = feat_cov_ok and ok
         print(f"  coverage {f:34s} worst day {worst:5.1f}% "
               f"({'ok' if ok else 'FAILS'} vs {MIN_FEATURE_COVERAGE_PCT}%)")
-    print(f"  priceable {priced_pct:.1f}% (required {MIN_PRICED_PCT}%) | "
-          f"usable days {len(rows_by_day)}")
+    print(f"  priceable {priced_n}/{eligible_n} = {priced_pct:.1f}% "
+          f"(required {MIN_PRICED_PCT}%; denominator = eligible-pool rows on "
+          f"gated matured days) | usable days {len(rows_by_day)} | "
+          f"days dropped for a pool < {MIN_CANDIDATES_PER_DAY}: {dropped_small_pool}")
 
     cov_ok = (len(rows_by_day) >= MIN_MATURED_DAYS and priced_pct >= MIN_PRICED_PCT
               and feat_cov_ok)

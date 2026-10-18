@@ -386,3 +386,48 @@ def test_row_missing_one_candidate_feature_is_excluded(tmp_path):
     panel, meta = rc.build_panel(db, {}, "SWING")
     assert meta["counts"]["excluded_missing_feature"] == 1
     assert panel.get("2026-09-18", []) == []
+
+
+# ── R3: the two coverage denominators are different, on purpose ──────────────
+
+def test_r3_eligible_pool_and_preexclusion_count_are_tracked_separately(tmp_path):
+    """Two gates, two denominators, and conflating them would be wrong.
+
+    * price coverage divides by the ELIGIBLE POOL (post-dedup, post-R2),
+      because a basket is drawn from the pool and nothing else;
+    * feature coverage divides by the DEDUPLICATED PRE-EXCLUSION set, because
+      inside the pool every feature is present by construction and the number
+      would always be 100%.
+
+    `build_panel` must therefore expose both, and they must differ as soon as a
+    row is excluded.
+    """
+    good = _payload(1.0)
+    missing_incumbent = {"discovery": {"momentum_50d_pct": 1.0, "breakout_score": 1.0,
+                                       "discovery_score": 1.0}, "_pad": "x" * 60}
+    db = _mk_db(tmp_path, [(1, "2026-09-18", "NSE:AAA", good),
+                           (2, "2026-09-18", "NSE:BBB", good),
+                           (3, "2026-09-18", "NSE:CCC", missing_incumbent)])
+    panel, meta = rc.build_panel(db, {}, "SWING")
+
+    # pre-exclusion, deduplicated: all three candidates were scanned
+    assert meta["per_day_total"]["2026-09-18"] == 3
+    # eligible pool: only the two carrying every required field
+    assert len(panel["2026-09-18"]) == 2
+    assert meta["counts"]["excluded_missing_feature"] == 1
+    # feature coverage uses the pre-exclusion denominator, so it is NOT 100%
+    for f in rc.CANDIDATE_FEATURES:
+        assert meta["feat_present"][f]["2026-09-18"] == 3   # all three carry F1-F3
+    # ...and the row still left the pool, because R2 also requires the incumbent
+
+
+def test_r3_duplicates_do_not_inflate_the_preexclusion_denominator(tmp_path):
+    """A symbol scanned three times in a day is ONE candidate, so neither
+    denominator may count it three times."""
+    db = _mk_db(tmp_path, [(1, "2026-09-18", "NSE:AAA", _payload(1.0)),
+                           (2, "2026-09-18", "NSE:AAA", _payload(2.0)),
+                           (3, "2026-09-18", "NSE:AAA", _payload(3.0))])
+    panel, meta = rc.build_panel(db, {}, "SWING")
+    assert meta["per_day_total"]["2026-09-18"] == 1
+    assert len(panel["2026-09-18"]) == 1
+    assert meta["counts"]["duplicate_symbol_day"] == 2
