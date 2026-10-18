@@ -342,14 +342,33 @@ def _ts(v):
 
 
 def _days_between(a, b) -> float | None:
-    """Calendar days from `a` to `b`, or None if either is unparseable."""
+    """Calendar days from `a` to `b`, or None if either is unparseable.
+
+    Real rows mix awareness, which made the first version of this return None
+    for every trade it was supposed to measure: `entry_fill_at` arrives naive
+    (`'2026-10-13 05:56:21'`) while `exit_at` is aware
+    (`'2026-10-16T12:52:16+05:30'`), so 0 of 71 STOP_HITs got a duration.
+
+    A naive value here is **UTC**, not IST. It comes from the SQLite column
+    default `datetime('now')` ([portfolio.py:71](../portfolio.py#L71)), which is
+    UTC; explicit writes use `datetime.now(_IST)` and are aware. The data agrees:
+    read as UTC, that 05:56 is an 11:26 IST fill — plausible mid-session — while
+    read as IST it would be an impossible pre-open fill.
+
+    NB this diverges from `portfolio.py`, which coerces naive -> IST in a few
+    readers (lines 346/348, 642). Those look like a pre-existing 5.5h error
+    against the same column default; deliberately not changed here.
+    """
     ta, tb = _ts(a), _ts(b)
     if ta is None or tb is None:
         return None
     # Parenthesised deliberately: `a is None != b` chains into
     # `(a is None) and (None != b)`, which rejected two naive timestamps.
-    if (ta.tzinfo is None) != (tb.tzinfo is None):    # don't mix naive and aware
-        return None
+    if (ta.tzinfo is None) != (tb.tzinfo is None):
+        if ta.tzinfo is None:
+            ta = ta.replace(tzinfo=timezone.utc)
+        else:
+            tb = tb.replace(tzinfo=timezone.utc)
     delta = (tb - ta).total_seconds() / 86400.0
     return round(delta, 3) if delta >= 0 else None
 
