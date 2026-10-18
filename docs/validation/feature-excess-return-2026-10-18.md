@@ -1,6 +1,16 @@
 # Can any feature we already have pick stocks that end up higher than the market?
 
-**STATUS: LIVE** · 2026-10-18 · `scripts/feature_excess_return_study.py` · read-only
+**STATUS: SUPERSEDED IN PART** · 2026-10-18 · `scripts/feature_excess_return_study.py` · read-only
+
+> **CORRECTION, 2026-10-19.** This document's conclusion that `layer_details` history was too short
+> — "exposing the column would unblock the study *in about two months*, not today" — **was wrong.**
+> It was inferred from a stale partial local copy of `signals_log`. Production has `layer_details`
+> on **100% of all 1,270,705 rows, 2026-04-25 → 2026-10-16, across 129 scan dates**, and it was
+> readable with no new endpoint. The study was run the same night and **found four features that
+> clear a pre-registered bar** — see
+> [`ranking-inputs-2026-10-19.md`](ranking-inputs-2026-10-19.md). Everything below about the
+> *available export* feature set (the constant 3.000 RR, the null result on seven features,
+> `exc_score`'s short history) still holds; only the "wait two months" inference is retracted.
 
 ## Verdict first
 
