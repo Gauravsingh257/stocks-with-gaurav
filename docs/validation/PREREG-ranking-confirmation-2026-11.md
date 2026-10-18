@@ -179,10 +179,14 @@ rather than continue under a new split.
 - Any deviation is an **amendment** appended below, timestamped, committed before the run.
 
 > **Frozen analysis script:** [`scripts/ranking_confirmation.py`](../../scripts/ranking_confirmation.py)
-> at commit **`82274f9864f8e45eb446ec71578b6530a2ba2046`** (`82274f9`), with
-> [`tests/test_ranking_confirmation.py`](../../tests/test_ranking_confirmation.py) — 41 tests, all
-> passing, synthetic data only. **Frozen as of 2026-10-19, before the window opened.** No edits
+> at commit **`d7c1a1549e2ccea3b7220c86a58f128a8f6b197e`** (`d7c1a15`), with
+> [`tests/test_ranking_confirmation.py`](../../tests/test_ranking_confirmation.py) — **43 tests**,
+> all passing, synthetic data only. **Frozen as of 2026-10-19, before the window opened.** No edits
 > after this point except via an amendment in §11.
+>
+> Supersedes the first freeze at `82274f9` (41 tests), which was re-frozen once under amendment
+> **A2** to give the price-coverage gate the fixed, documented denominator A2 requires. The window
+> had not opened and no cohort outcome had been computed at either freeze.
 
 ### Reproducing the run
 
@@ -230,9 +234,48 @@ several times daily. The first implementation relied on unordered `SELECT` itera
 have let SQLite's physical row order decide which scan won — a determinism defect in a script whose
 entire value is determinism. It is now `ORDER BY date, symbol, id`, with two tests pinning it.
 
-**Open for Gaurav.** R1–R4 are routine and I would not expect disagreement. **R5 is a real
-methodological choice**: keeping the *earliest* scan of the day rather than the *latest* is
-defensible (it is what was published pre-open, and the outcome is measured from that day's close),
-but the opposite choice is arguable. If you prefer the latest scan, say so **before the window
-opens** and it becomes amendment A2. After the window opens, changing it would be exactly the
-post-hoc discretion this document exists to prevent.
+**Resolved by Gaurav, 2026-10-19.** All five confirmed as written, with R5 conditional on
+verification and R3 required to carry a fixed, documented denominator. See **A2**.
+
+### A2 — 2026-10-19, before the window opened: R1–R5 confirmed, R5 verified, R3 denominators fixed
+
+**R1, R2, R4 — confirmed as written in A1.** No change.
+
+**R5 — confirmed, and the proviso is verified.** The instruction was to keep the earliest persisted
+scan *provided it is genuinely the first eligible published selection, not an incomplete scan or an
+intermediate candidate list*. Verified read-only, from code and from production:
+
+| Evidence | Finding |
+|---|---|
+| Write path — [`services/validation_engine.py:1192-1203`](../../services/validation_engine.py#L1192) | `log_signals_scan(log_rows)` is a **single bulk write of the complete record set after the scan finishes** — coverage and funnel are computed from all records first. **There is no incremental or partial persistence path**, so a persisted `scan_id` is complete by construction or absent entirely. |
+| Which scan supplies the kept rows | **21 scans supply all 46,200 first-rows — exactly one per scan date.** Each has **2,200 of 2,200** rows. No date draws its first-rows from more than one scan. |
+| Was it a real published selection? | Each of those 21 scans has **5–20 `final_selected`** names. Never zero, never an empty or intermediate list. |
+| Was it truncated? | Universe coverage **91.7–93.7%** (2,200 scanned of ~2,350–2,400), consistent across all 21. No outlier suggesting a partial run. |
+| Historical re-scans? | **None.** Every scan in the window has `created_at` on the same calendar day as its scan date (`lag_days = 0`), so no retrospective re-scan contaminates the cohort. |
+| Publication timing | First scan of each date runs at **03:03–03:06 UTC = 08:33–08:36 IST**, i.e. **pre-open** (market opens 09:15 IST). Later same-date scans run as late as **09:20 UTC = 14:50 IST — intraday.** |
+
+That last row makes R5 more than a tie-break convention. The earliest scan **is** the pre-open
+published selection; the later ones are intraday re-runs whose features reflect information after
+the open, while the outcome is measured from that day's close. Keeping the earliest is the only
+choice consistent with "what was published". **R5 stands, verified.**
+
+**R3 — confirmed, and the denominator gap it exposed is now closed.** The gate had no fixed
+denominator: the ≥30-candidates-per-day check was applied to the **raw row count** while a basket
+is drawn from the **eligible pool**. Two denominators are now defined, deliberately different, and
+printed in the run output:
+
+- **Eligible pool** for a date = rows surviving dedup (R5) and the R2 feature/incumbent
+  requirement. **The ≥30 gate applies to this pool**, because that is what a basket is drawn from.
+- **Price coverage** = eligible-pool rows with a priceable D+20 outcome ÷ eligible-pool rows on
+  matured days that passed the ≥30 gate. A symbol missing its own D+20 bar is counted
+  **unpriceable in that denominator**, never silently dropped. Gate ≥75%.
+- **Feature coverage** divides by the **deduplicated pre-exclusion** candidate set, before R2
+  removes anything. Inside the eligible pool it would be 100% by construction and would say
+  nothing. Gate: each of F1–F3 on ≥80% of that day's deduplicated candidates.
+
+The script prints numerator, denominator and the count of days dropped for an undersized pool, so
+the gate is auditable rather than asserted. This required a code change, so the script was
+**re-frozen at `d7c1a15`** (43 tests) before the window opened; §10 records it.
+
+**Gate re-verified after the change:** 21 scan dates after 2026-09-17, **0 matured**,
+`INSUFFICIENT EVIDENCE`, no basket statistic computed, cohort not inspected.
