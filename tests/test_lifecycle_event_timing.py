@@ -97,9 +97,11 @@ def test_days_between_tolerates_space_and_z_separators():
     assert _days_between("2026-09-01T00:00:00Z", "2026-09-02T12:00:00Z") == pytest.approx(1.5)
 
 
-def test_days_between_refuses_mixed_naive_and_aware():
-    """Subtracting those raises; returning None beats a 500 in the ledger."""
-    assert _days_between("2026-09-01T00:00:00", EXIT) is None
+def test_days_between_resolves_mixed_naive_and_aware():
+    """This used to assert None, which was the defect: production stores exactly
+    this mix, so refusing it returned no duration for any real trade. The naive
+    side is UTC (SQLite `datetime('now')`), so the span is now computed."""
+    assert _days_between("2026-09-01T00:00:00", EXIT) == pytest.approx(7.403, abs=0.01)
 
 
 @pytest.mark.parametrize("a,b", [(None, EXIT), (ENTRY, None), ("rubbish", EXIT)])
@@ -171,3 +173,48 @@ def test_same_day_stop_derives_zero_not_none():
                                  exit_at="2026-09-01T14:30:00+05:30"))
     assert r["time_to_stop_days"] == pytest.approx(0.215, abs=0.01)
     assert r["time_to_stop_days"] is not None
+
+
+# ── mixed-awareness timestamps, as production actually stores them ───────────
+
+# Real shapes from the production ledger: entry naive (SQLite `datetime('now')`
+# default, UTC), exit aware (`datetime.now(_IST)`).
+PROD_ENTRY_NAIVE = "2026-10-13 05:56:21"
+PROD_EXIT_AWARE = "2026-10-16T12:52:16.708481+05:30"
+
+
+def test_mixed_naive_and_aware_is_resolved_not_refused():
+    """Refusing this returned None for all 71 STOP_HITs the fix was meant to cover."""
+    d = _days_between(PROD_ENTRY_NAIVE, PROD_EXIT_AWARE)
+    assert d is not None
+    assert d == pytest.approx(3.06, abs=0.01)
+
+
+def test_a_naive_timestamp_is_read_as_utc_not_ist():
+    """The naive side comes from SQLite `datetime('now')`, which is UTC.
+
+    Read as IST instead, the span would be 5.5h shorter and that 05:56 entry
+    would be an impossible pre-open fill.
+    """
+    # 05:56:21 naive-as-UTC vs 11:56:21+05:30 (== 06:26:21Z) is exactly 30 minutes.
+    # Had the naive side been read as IST it would be 5h30m EARLIER than the aware
+    # one, i.e. a negative span, which this helper refuses outright.
+    utc_span = _days_between("2026-10-13 05:56:21", "2026-10-13T11:56:21+05:30")
+    assert utc_span == pytest.approx(30 / 1440, abs=0.001)
+    assert _days_between("2026-10-13 00:00:00", "2026-10-13T05:30:00+05:30") == pytest.approx(0.0, abs=0.001)
+
+
+def test_mixed_awareness_in_either_direction():
+    assert _days_between("2026-10-13 00:00:00", "2026-10-14T05:30:00+05:30") == pytest.approx(1.0, abs=0.01)
+    assert _days_between("2026-10-13T05:30:00+05:30", "2026-10-14 00:00:00") == pytest.approx(1.0, abs=0.01)
+
+
+def test_mixed_awareness_still_refuses_a_reversed_span():
+    assert _days_between(PROD_EXIT_AWARE, PROD_ENTRY_NAIVE) is None
+
+
+def test_a_real_stop_hit_row_derives_its_duration():
+    r = derive_event_timing(_rec(status="STOP_HIT",
+                                 entry_fill_at=PROD_ENTRY_NAIVE,
+                                 exit_at=PROD_EXIT_AWARE))
+    assert r["time_to_stop_days"] == pytest.approx(3.06, abs=0.01)
