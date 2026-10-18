@@ -105,8 +105,9 @@ knowing exceptionalism does not beat legacy is worth as much as a win would have
 winners from the 29 skipped losers (20d return 10.46 vs 10.38; distance below the 20-day high
 −3.50 vs −3.39; the engine's own confidence *lower* on the winners, 72.5 vs 74.6), so the
 opportunity cost is unmanageable. And a credible test needs **~1,196 signals ≈ 30 months** at
-the measured ~40 closed signals/month. Frozen protocol:
-[`pullback3-protocol-2026-10-17.md`](validation/pullback3-protocol-2026-10-17.md).
+the measured ~40 closed signals/month. Frozen protocol: `docs/validation/pullback3-protocol-2026-10-17.md`
+— **not yet on `main`**; it exists only on the still-open PR #230 branch. The un-park trigger
+below is complete on its own in the meantime.
 
 **UN-PARK TRIGGER (preserved exactly):** if the closed-SWING ledger reaches **600+ trades**
 and a re-run of the existing replay shows the paired difference holding at **≥ +0.20R with a
@@ -138,9 +139,11 @@ infrastructure kept getting rebuilt instead of used. **It is now good enough. St
 and start accumulating.**
 
 **Exact stopping point.** Stage 2 is done. Stage 3 has one provisional positive
-(rank-budget) and one underpowered inconclusive (ceiling). Three PRs are open and unmerged:
-**#227** (exceptionalism, mechanism stays disabled), **#228** (this document), **#229**
-(stage-3 instrument). The snapshot fix is live but unexercised. Nothing else is in flight.
+(rank-budget) and one underpowered inconclusive (ceiling). At the time this was written three
+PRs were open and unmerged: #227, #228 and #229. **#228 (this document) has since merged**
+(2026-10-17) — only **#227** (exceptionalism, mechanism stays disabled) and **#229**
+(stage-3 instrument) remain open. The snapshot fix is live but unexercised. Nothing else is in
+flight.
 
 **Next evidence triggers — the only two things that change any answer:**
 
@@ -220,7 +223,8 @@ temporary artifact; the reconciliation is recorded, so it has been deleted. Sour
 | **Snapshot fix** — `SNAPSHOT_MIN_SYMBOLS=1` on `engine` | **APPROVED and APPLIED** 2026-10-13 23:43 IST. *Nothing left to apply* — only its operational test is outstanding | Required a post-16:10 window with no restart during market hours: applied 23:43, market closed. Verified as required — newer `SUCCESS` deployment (23:44:24), **lock ownership and handover** (`engine_lock` == `engine:lock:meta.instance_id`, `engine_started_at` 23:45:59), fresh snapshot (`write_status: success`), no unintended trading or Telegram activity |
 | **PR #227** — exceptionalism calibration off the snapshot | **PENDING — open, NOT merged** | **Exceptionalism stays disabled.** Review and merge the *research* PR separately, in a safe window, and only on explicit approval. Merging it does **not** enable the mechanism — the calibration result is a NO-GO, and this is **not** a stage-2 dependency |
 
-**Also unmerged:** PR #228, the documentation change that records this frame.
+**PR #228**, the documentation change that recorded this frame, **merged 2026-10-17** — no
+longer unmerged.
 
 **Still open, not blocking:** the Vercel *preview* check has been red since 2026-10-12 and is
 undiagnosed. The frontend tree is byte-identical to a passing build, so it is not the content of
