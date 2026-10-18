@@ -37,6 +37,19 @@ log = logging.getLogger(__name__)
 DEST_KEY_PREFIX = "telegram:health:dest:"
 DESTS_SET_KEY = "telegram:health:dests"
 EVENTS_KEY = "telegram:health:failures"
+# Per-STREAM counters, keyed by the `source` tag each caller passes. The
+# destination hashes answer "is Telegram working"; these answer the question
+# that actually came up — "which stream sent this, and to which chat?".
+# Eight independent senders share one bot: web_portfolio_armed/_triggered/
+# _entry/_exit and web_entry_tap ARE the portfolio, while web_fvg_tap,
+# web_equity_sm and web_research_exit are validation-mode or research streams
+# that by design never become portfolio positions. Without a per-source
+# record, an alert the owner sees in the chat cannot be attributed to a
+# stream, so "Telegram does not match the portfolio" was unanswerable except
+# by reading Railway env vars by hand. Successes were never recorded at all —
+# only failures — so the healthy case was the blind one.
+SOURCE_KEY_PREFIX = "telegram:health:source:"
+SOURCES_SET_KEY = "telegram:health:sources"
 RETENTION_SEC = 14 * 86400
 EVENTS_MAX = 200
 
@@ -44,6 +57,22 @@ EVENTS_MAX = 200
 # success in between. One send already includes the caller's own retries, so 2
 # means two independent messages were lost — not a single network blip.
 FAILING_AFTER = 2
+
+# Which streams are supposed to correspond to a portfolio position. Stated here
+# rather than inferred from the name so that a reader of the health endpoint can
+# tell an expected mismatch from a real one.
+SOURCE_KINDS = {
+    "web_portfolio_armed": "portfolio",
+    "web_portfolio_triggered": "portfolio",
+    "web_portfolio_entry": "portfolio",
+    "web_portfolio_exit": "portfolio",
+    "web_entry_tap": "portfolio",
+    "web_research_exit": "research",
+    "web_fvg_tap": "validation",
+    "web_equity_sm": "validation",
+    "engine": "engine-index",
+    "manual": "manual",
+}
 
 
 @dataclass
@@ -119,6 +148,17 @@ def record_send_result(source: str, chat_id, result: SendResult) -> None:
                                                "error": result.error}, default=str))
             pipe.ltrim(EVENTS_KEY, -EVENTS_MAX, -1)
             pipe.expire(EVENTS_KEY, RETENTION_SEC)
+        if source:
+            skey = SOURCE_KEY_PREFIX + str(source)
+            pipe.sadd(SOURCES_SET_KEY, str(source))
+            pipe.expire(SOURCES_SET_KEY, RETENTION_SEC)
+            # last_chat is masked: this is read through a public-ish ops endpoint
+            # and a full chat id is a credential-adjacent value.
+            pipe.hset(skey, mapping={"source": str(source), "last_chat": mask_chat(chat),
+                                     "last_attempt_ts": now})
+            pipe.hincrby(skey, "total_ok" if result.ok else "total_fail", 1)
+            pipe.hset(skey, mapping={("last_ok_ts" if result.ok else "last_fail_ts"): now})
+            pipe.expire(skey, RETENTION_SEC)
         pipe.expire(key, RETENTION_SEC)
         pipe.execute()
     except Exception as e:
@@ -195,6 +235,21 @@ def get_health(now: float | None = None) -> dict:
                 "total_ok": int(_f(h.get("total_ok")) or 0),
                 "total_fail": int(_f(h.get("total_fail")) or 0),
             })
+        sources = []
+        for name in sorted(r.smembers(SOURCES_SET_KEY) or []):
+            h = r.hgetall(SOURCE_KEY_PREFIX + name) or {}
+            if not h:
+                continue
+            last_ok, last_fail = _f(h.get("last_ok_ts")), _f(h.get("last_fail_ts"))
+            sources.append({
+                "source": name,
+                "kind": SOURCE_KINDS.get(name, "unknown"),
+                "last_chat": h.get("last_chat"),
+                "total_ok": int(_f(h.get("total_ok")) or 0),
+                "total_fail": int(_f(h.get("total_fail")) or 0),
+                "last_ok_age_h": round((now - last_ok) / 3600, 1) if last_ok else None,
+                "last_fail_age_h": round((now - last_fail) / 3600, 1) if last_fail else None,
+            })
         recent = []
         for raw in (r.lrange(EVENTS_KEY, -10, -1) or []):
             with contextlib.suppress(Exception):
@@ -205,9 +260,13 @@ def get_health(now: float | None = None) -> dict:
             "ok": not failing,
             "failing": failing,
             "destinations": dests,
+            "sources": sources,
             "recent_failures": recent,
             "checked_at": now,
             "rule": f"FAILING after {FAILING_AFTER} consecutive failed sends; success = HTTP 200 and ok:true",
+            "source_kinds": ("`portfolio` streams appear in the portfolio; `research` and "
+                             "`validation` streams are alert-only and by design never do, so an "
+                             "alert from those will not match a position"),
         }
     except Exception as e:
         return {"available": False, "ok": None, "reason": f"error: {e}", "destinations": []}

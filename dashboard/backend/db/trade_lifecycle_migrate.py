@@ -31,7 +31,7 @@ import logging
 import os
 
 from .schema import get_connection
-from .trade_lifecycle import init_lifecycle_db, upsert, _f
+from .trade_lifecycle import _f, _now, init_lifecycle_db, make_uuid, upsert
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,87 @@ def _rr(entry, sl, pnl_pct):
     return None
 
 
+def _reconcile_departed(conn, source_table: str, seen: set[str], *,
+                        dry_run: bool = False) -> dict:
+    """Retire lifecycle rows whose source row has left the live-position scope.
+
+    The positions mappers select `WHERE status IN ('ACTIVE','PENDING','EXPIRED')`
+    and upsert whatever matches. Nothing ever retired the rows they had already
+    written, so when a position closed its source row fell out of that WHERE and
+    the lifecycle row it had created was simply orphaned — frozen at
+    status='ACTIVE' with whatever pnl_pct and holding_days it carried on its
+    last sync. The real close then arrived from the *journal* under a different
+    deterministic UUID, so the same trade appeared twice: once closed, once
+    permanently "open". That put ~200 phantom ACTIVE rows on the public track
+    record (RAYMOND showed as both Target Hit +43.41% and Active +41.45%) and
+    silently corrupted every "% resolved" denominator computed over the ledger.
+
+    Departed rows are moved to record_state='ARCHIVED' — not deleted, and not
+    given a terminal status. We know the source row is gone; we do NOT know how
+    it ended, and inventing an exit_reason or a P&L would fabricate a trade
+    outcome. The genuine outcome already exists as the journal row. Every read
+    path filters on record_state='ACTIVE' (trade_lifecycle_query.stats/list and
+    lifecycle_analytics._closed_rows), so archiving removes the phantom from the
+    page and from every metric while keeping the audit trail.
+
+    Two guards, because this is the one place in the backfill that can
+    un-publish history in bulk:
+
+    1. An ENTIRELY EMPTY source table never archives anything. That — not an
+       empty live scope — is the signature of a fresh or ephemeral database,
+       exactly the 2026-09-02 duplicate-Railway-project failure mode, and
+       trusting it would wipe the whole track record. A table that holds rows
+       but none in scope is a different thing: a book that has genuinely closed
+       every position, which Momentum did for three weeks in July 2026. That
+       case MUST still reconcile, so the guard counts rows in the table, not
+       rows in the WHERE.
+    2. A cap (LIFECYCLE_RECONCILE_MAX_ARCHIVE, default 2000) refuses runs that
+       would archive implausibly many rows at once.
+
+    Either guard trips → archive nothing and say so loudly. A visible phantom is
+    recoverable; a silently emptied ledger is not.
+    """
+    existing = [r["uuid"] for r in conn.execute(
+        "SELECT uuid FROM trade_lifecycle "
+        "WHERE source_table = ? AND COALESCE(record_state,'ACTIVE') = 'ACTIVE'",
+        (source_table,)).fetchall()]
+    departed = [u for u in existing if u not in seen]
+    out = {"scope": len(seen), "candidates": len(departed), "archived": 0, "skipped": None}
+    if not departed:
+        return out
+    source_rows = conn.execute(
+        f"SELECT COUNT(*) n FROM {source_table}").fetchone()["n"]
+    if not source_rows:
+        out["skipped"] = "empty_source_table"
+        logger.warning(
+            "[Lifecycle] reconcile %s: the source table is COMPLETELY EMPTY while %d ACTIVE "
+            "ledger rows reference it - archiving nothing. That is the fingerprint of a fresh "
+            "or ephemeral database, not of a book that closed every position.",
+            source_table, len(departed))
+        return out
+    cap = int(os.getenv("LIFECYCLE_RECONCILE_MAX_ARCHIVE", "2000"))
+    if len(departed) > cap:
+        out["skipped"] = f"over_cap:{cap}"
+        logger.warning(
+            "[Lifecycle] reconcile %s: %d rows would be archived, over the cap of %d "
+            "- archiving nothing. Raise LIFECYCLE_RECONCILE_MAX_ARCHIVE deliberately if "
+            "this is a genuine one-off backlog.", source_table, len(departed), cap)
+        return out
+    if dry_run:
+        return out
+    now = _now()
+    for i in range(0, len(departed), 400):
+        chunk = departed[i:i + 400]
+        conn.execute(
+            f"UPDATE trade_lifecycle SET record_state = 'ARCHIVED', updated_at = ? "
+            f"WHERE uuid IN ({','.join('?' * len(chunk))})",
+            [now, *chunk])
+    out["archived"] = len(departed)
+    logger.info("[Lifecycle] reconcile %s: archived %d departed rows (live scope %d)",
+                source_table, len(departed), len(seen))
+    return out
+
+
 def backfill(dry_run: bool = False) -> dict:
     init_lifecycle_db()
     conn = get_connection()
@@ -178,6 +259,7 @@ def backfill(dry_run: bool = False) -> dict:
 
         # ── 2. Live / armed / expired SWING / LONGTERM ───────────────────────
         if _has("portfolio_positions"):
+            seen_pp: set[str] = set()
             for r in conn.execute(
                 "SELECT id, symbol, horizon, direction, entry_price, stop_loss, target_1, "
                 "target_2, profit_loss, profit_loss_pct, days_held, confidence_score, status, "
@@ -208,6 +290,12 @@ def backfill(dry_run: bool = False) -> dict:
                         "is_legacy": 1, "created_at": d.get("created_at"),
                     }, conn=conn, event="BACKFILL")
                 c["portfolio_positions"] += 1
+                # Collected for every row in scope — ACTIVE, PENDING and EXPIRED
+                # alike — because the mapper upserts all three. Anything in the
+                # ledger that is NOT here has left the source table.
+                seen_pp.add(make_uuid(d["horizon"], "portfolio_positions", str(d["id"])))
+            c["reconcile_portfolio_positions"] = _reconcile_departed(
+                conn, "portfolio_positions", seen_pp, dry_run=dry_run)
 
         # ── 3. MOMENTUM ──────────────────────────────────────────────────────
         if _has("momentum_journal"):
@@ -246,6 +334,7 @@ def backfill(dry_run: bool = False) -> dict:
                 c["momentum_journal"] += 1
 
         if _has("momentum_positions"):
+            seen_mp: set[str] = set()
             for r in conn.execute(
                 "SELECT id, symbol, entry_price, stop_loss, target_1, profit_loss, "
                 "profit_loss_pct, days_held, quality_score, entry_model, regime, status, "
@@ -275,6 +364,9 @@ def backfill(dry_run: bool = False) -> dict:
                         "is_legacy": 1, "created_at": d.get("created_at"),
                     }, conn=conn, event="BACKFILL")
                 c["momentum_positions"] += 1
+                seen_mp.add(make_uuid("MOMENTUM", "momentum_positions", str(d["id"])))
+            c["reconcile_momentum_positions"] = _reconcile_departed(
+                conn, "momentum_positions", seen_mp, dry_run=dry_run)
 
         # ── 4. Research ideas ────────────────────────────────────────────────
         if _has("stock_recommendations"):
