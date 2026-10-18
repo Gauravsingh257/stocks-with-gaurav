@@ -132,3 +132,74 @@ def test_destination_becomes_failing_and_recovers(redis):
 def test_check_script_fails_when_health_unavailable():
     assert verdict({"available": False, "reason": "redis_unavailable"})[0] == 2
     assert verdict({"available": True, "ok": True, "failing": [], "destinations": []})[0] == 0
+
+
+# ── per-source stream accounting ─────────────────────────────────────────────
+# Eight independent senders share one bot. Five of them ARE the portfolio; three
+# (web_fvg_tap, web_equity_sm, web_research_exit) are validation- or
+# research-only and by design never become positions. Before this, only failures
+# were recorded per message and successes only per chat, so an alert the owner
+# saw in the chat could not be attributed to a stream at all — which is why
+# "Telegram does not match the portfolio" could only be answered by reading
+# Railway env vars by hand.
+
+def test_successful_sends_are_recorded_per_source(monkeypatch, redis):
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(200, {"ok": True,
+                        "result": {"message_id": 1}}))
+    th.send_message("tok", "-1003268636791", "armed", source="web_portfolio_armed")
+    th.send_message("tok", "-1003268636791", "armed2", source="web_portfolio_armed")
+    th.send_message("tok", "9255000718", "fvg", source="web_fvg_tap")
+
+    h = th.get_health()
+    by = {s["source"]: s for s in h["sources"]}
+    assert by["web_portfolio_armed"]["total_ok"] == 2
+    assert by["web_fvg_tap"]["total_ok"] == 1
+    # The chat each stream reached is the answer to "where did this land?"...
+    assert by["web_portfolio_armed"]["last_chat"] != by["web_fvg_tap"]["last_chat"]
+    # ...and it is masked, because a full chat id is credential-adjacent and this
+    # is served over an ops endpoint.
+    assert "3268636791" not in by["web_portfolio_armed"]["last_chat"]
+
+
+def test_source_kind_separates_an_expected_mismatch_from_a_real_one(monkeypatch, redis):
+    """A web_fvg_tap alert that never appears in the portfolio is correct
+    behaviour — FVG-Tap has been in alert mode since 2026-05-26 and is not
+    auto-traded. A web_portfolio_triggered alert with no position is a defect.
+    The endpoint must let the reader tell them apart without reading the code."""
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(200, {"ok": True,
+                        "result": {"message_id": 1}}))
+    for src in ("web_portfolio_triggered", "web_fvg_tap", "web_equity_sm",
+                "web_research_exit", "engine"):
+        th.send_message("tok", "-1003268636791", "x", source=src)
+
+    by = {s["source"]: s["kind"] for s in th.get_health()["sources"]}
+    assert by["web_portfolio_triggered"] == "portfolio"
+    assert by["web_fvg_tap"] == "validation"
+    assert by["web_equity_sm"] == "validation"
+    assert by["web_research_exit"] == "research"
+    assert by["engine"] == "engine-index"
+
+
+def test_unknown_source_is_labelled_not_silently_called_portfolio(monkeypatch, redis):
+    """A new sender must not inherit a reassuring label. If someone adds a
+    stream and forgets SOURCE_KINDS, it shows as `unknown` rather than looking
+    like a portfolio alert."""
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(200, {"ok": True,
+                        "result": {"message_id": 1}}))
+    th.send_message("tok", "-1003268636791", "x", source="web_brand_new_thing")
+    by = {s["source"]: s["kind"] for s in th.get_health()["sources"]}
+    assert by["web_brand_new_thing"] == "unknown"
+
+
+def test_failed_sends_count_against_the_source_too(monkeypatch, redis):
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(400, {"ok": False,
+                        "description": "Bad Request: PEER_ID_INVALID"}))
+    th.send_message("tok", "-1003268636791", "x", source="web_portfolio_entry")
+    by = {s["source"]: s for s in th.get_health()["sources"]}
+    assert by["web_portfolio_entry"]["total_fail"] == 1
+    assert by["web_portfolio_entry"]["total_ok"] == 0
+    assert by["web_portfolio_entry"]["last_ok_age_h"] is None
