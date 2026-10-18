@@ -127,3 +127,37 @@ from what the mapper upserts (the failure mode that would archive an entire book
    `stop_hits: 1`, `cut_early: 90` of 91. Momentum has no fixed target by design (TARGET is `—`),
    so `target_hits: 0` is expected — but labelling a trailing-stop exit `cut_early` is misleading
    and makes the book look undisciplined.
+
+---
+
+## Recomputed resolution rate — the December estimate was wrong
+
+Computed **read-only against production** on 2026-10-18 by applying the same rule as
+`_reconcile_departed` to the live API: a positions-sourced ledger row whose `source_id` is no
+longer a live position has departed, so it was never a cohort member. Live ids came from
+`/api/portfolio/summary` (38 = swing 11+7, LT 19+1) and `/api/momentum-portfolio/holdings` +
+`/pending` (9 = 2+7); the ledger came from `/api/lifecycle/trades` paginated to all 1,120 rows.
+`resolved` uses `scripts/portfolio_quality_audit.py`'s own `is_resolved` and its
+`MIN_RESOLVED_PCT=80` / `MIN_N=30` gate, not a definition invented here.
+
+| Book | Position rows | Phantom | Real cohort | Resolved | **True %** | Dirty % | Gate |
+|------|--------------:|--------:|------------:|---------:|-----------:|--------:|------|
+| All | 574 | 271 | 303 | 256 | **84.5%** | 61.8% | **MATURE** |
+| Swing | 243 | 102 | 141 | 123 | **87.2%** | 62.1% | **MATURE** |
+| Long-term | 121 | 59 | 62 | 42 | **67.7%** | 59.5% | not yet |
+| Momentum | 210 | 110 | 100 | 91 | **91.0%** | 62.9% | **MATURE** |
+
+Phantoms by status: `ACTIVE` 169, `EXPIRED` 99, `AWAITING_ENTRY` 3. The 169 independently
+reproduces the per-book table above (74 + 29 + 66 = 169) from a different query path.
+
+**Consequence.** The swing and momentum cohorts **already pass the maturity gate**. The
+December–January estimate was an artefact of a denominator inflated by departed rows; it was
+derived from the ~44% figure, which is visible in the "dirty" column's earlier
+terminal-status-only form. Long-term at 67.7% genuinely is not mature, which is expected of a
+longer-horizon book.
+
+Excluding the phantoms is not survivorship bias: their real outcomes are present in the cohort as
+`portfolio_journal` rows under their own UUIDs. What is removed is the duplicate, not the trade.
+
+Confirm these figures from `portfolio_quality_audit.py` directly once PR #237 is deployed — at
+that point the ledger itself is clean and no external reconciliation is needed.
