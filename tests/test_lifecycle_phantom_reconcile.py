@@ -27,17 +27,49 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 
-os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="lifecycle_phantom_"))
+# Must precede the schema import: DB_PATH is resolved from DATA_DIR at import
+# time, and whichever test module imports schema first fixes it for the whole
+# process. Dropping this line does not make the module isolated — it makes every
+# module in the run fall back to the real repo-root dashboard.db.
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="lifecycle_shared_"))
 
 import pytest  # noqa: E402
 
+from dashboard.backend.db import schema  # noqa: E402
+from dashboard.backend.db import trade_lifecycle as tl  # noqa: E402
 from dashboard.backend.db import trade_lifecycle_migrate as mig  # noqa: E402
 from dashboard.backend.db.schema import get_connection  # noqa: E402
-from dashboard.backend.db.trade_lifecycle import (  # noqa: E402
-    init_lifecycle_db,
-    make_uuid,
-)
+from dashboard.backend.db.trade_lifecycle import init_lifecycle_db, make_uuid  # noqa: E402
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _isolated_db():
+    """A database of this module's own.
+
+    These tests wipe `trade_lifecycle` and run the full backfill, so they cannot
+    share the process-wide dashboard.db: run alongside the other lifecycle
+    modules they would delete the rows those modules seeded (37 of them failed
+    exactly that way). `DATA_DIR` cannot fix it — DB_PATH is resolved when
+    schema is first imported, and another module may already have imported it —
+    so patch the resolved path instead. Every reader goes through
+    get_connection(), which reads the module global at call time.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="lifecycle_phantom_"))
+    original = schema.DB_PATH
+    schema.DB_PATH = tmp / "dashboard.db"
+    try:
+        # `_initialised` is a module global, so it has to be cleared on the way
+        # IN (this database is new) and again on the way OUT — otherwise the
+        # guard stays satisfied and a later module's init_lifecycle_db() skips
+        # the DDL for its own, still-empty database.
+        tl._initialised = False
+        init_lifecycle_db(force=True)
+        yield
+    finally:
+        schema.DB_PATH = original
+        tl._initialised = False
 
 _POSITIONS_DDL = """
 CREATE TABLE IF NOT EXISTS portfolio_positions (
