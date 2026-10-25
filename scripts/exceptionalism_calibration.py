@@ -35,6 +35,10 @@ import argparse
 import json
 import statistics
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:          # import-time cost stays zero for the CLI
+    from services.forward_eval import Coverage
 
 HORIZONS = (1, 3, 5, 10, 20)
 EXC_BANDS = [(0, 60), (60, 70), (70, 80), (80, 90), (90, 101)]
@@ -108,34 +112,76 @@ def _f(v):
 
 # ── forward returns ───────────────────────────────────────────────────────────
 
-def attach_forward_returns(rows: list[ShadowRow], fetch_bars, *, horizons=HORIZONS) -> None:
+def attach_forward_returns(rows: list[ShadowRow], fetch_bars=None, *,
+                           horizons=HORIZONS, book=None) -> Coverage | None:
     """Populate row.forward[h] = {ret, mae, mfe} for each horizon.
+
+    Pass EITHER `book` (a ready `PriceBook`, normally
+    `PriceBook.from_universe_snapshot()`) OR `fetch_bars`.
+
+    `book` is strongly preferred. This query has no LIMIT and no
+    `final_selected` filter, so it returns every scanned row in the window —
+    roughly 4,400 a day. Through a per-symbol fetcher that is tens of thousands
+    of network calls, which is how the Yahoo throttling in
+    `docs/` was earned. The `ohlc:universe` snapshot answers the same question
+    in one read.
 
     `fetch_bars(symbol, from_date) -> list[dict(date, high, low, close)]` returns
     the trading bars ON/AFTER `from_date`, ascending. Bar 0 is the scan day. The
     N-day forward return uses the CLOSE of the Nth bar after the scan day; MAE/MFE
     are the worst/best intraday excursions over that window. A horizon with fewer
     than N+1 bars is left absent (pending), never guessed.
+
+    Returns a `Coverage` when a snapshot book is used, so unpriceable rows are
+    reported rather than silently absorbed; `None` for the fetcher path, whose
+    survivorship cannot be known (a fetcher answers for any symbol).
     """
     # Arithmetic lives in services/forward_eval.py — ONE evaluator shared with the
     # ceiling study, LT shadow, the Phase-1 counterfactual and stagnation, so the
     # maturity, look-ahead and survivorship rules cannot drift between them.
     # `row.forward[h]` keeps its original {ret, mae, mfe} shape and 2dp rounding.
+    from services.forward_eval import Coverage as _Cov
     from services.forward_eval import PriceBook
 
-    book = PriceBook.from_fetcher(fetch_bars)
+    if book is None:
+        if fetch_bars is None:
+            raise ValueError("attach_forward_returns needs either book= or fetch_bars=")
+        book = PriceBook.from_fetcher(fetch_bars)
+        cov = None
+    else:
+        cov = _Cov(immature={h: 0 for h in horizons})
     for row in rows:
         if not row.symbol or not row.cmp or row.cmp <= 0 or not row.date:
             continue
+        if cov is not None:
+            cov.total += 1
+            if not book.has_symbol(row.symbol):
+                cov.no_series += 1
+                continue
+            bars = book._bars_from(row.symbol, row.date)
+            if bars is None:
+                cov.no_series += 1
+                continue
+            if not bars:
+                cov.no_bar_on_date += 1
+                cov.market_closed += int(book.market_closed_on(row.date))
+                continue
+        priced_any = False
         for h in horizons:
             oc = book.outcome(row.symbol, row.date, h, base=row.cmp)
             if oc is None or oc.ret is None:
+                if cov is not None:
+                    cov.immature[h] = cov.immature.get(h, 0) + 1
                 continue        # immature / unpriceable — pending, never guessed
             row.forward[h] = {
                 "ret": round(oc.ret, 2),
                 "mae": round(oc.mae, 2) if oc.mae is not None else None,
                 "mfe": round(oc.mfe, 2) if oc.mfe is not None else None,
             }
+            priced_any = True
+        if cov is not None and priced_any:
+            cov.priced += 1
+    return cov
 
 
 # ── metrics ───────────────────────────────────────────────────────────────────
@@ -446,6 +492,10 @@ def main() -> None:
     ap.add_argument("--horizon", default=None, help="SWING or LONGTERM (default: both)")
     ap.add_argument("--out", default=None, help="write markdown here (else stdout)")
     ap.add_argument("--json-out", default=None, help="also write the raw report JSON here")
+    ap.add_argument("--prices", choices=["snapshot", "fetch"], default="snapshot",
+                    help="snapshot (default): one read of the ohlc:universe snapshot. "
+                         "fetch: per-symbol via DataIngestion — tens of thousands of "
+                         "calls on a normal window, and it will get you throttled.")
     args = ap.parse_args()
 
     from dashboard.backend.db.schema import get_connection
@@ -455,8 +505,21 @@ def main() -> None:
     finally:
         conn.close()
 
-    attach_forward_returns(rows, _kite_or_yf_fetch)
+    if args.prices == "snapshot":
+        from services.forward_eval import PriceBook
+        book = PriceBook.from_universe_snapshot()
+        if not book._series:
+            print("::error::no ohlc:universe snapshot available (REDIS_URL?) — "
+                  "re-run with --prices fetch only if you accept the per-symbol fetch cost")
+            raise SystemExit(2)
+        cov = attach_forward_returns(rows, book=book)
+    else:
+        cov = attach_forward_returns(rows, _kite_or_yf_fetch)
+
     report = build_report(rows)
+    report["prices_source"] = args.prices
+    if cov is not None:
+        report["outcome_coverage"] = cov.to_dict()
     md = render_markdown(report)
 
     if args.json_out:
