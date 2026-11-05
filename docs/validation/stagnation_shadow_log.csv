@@ -118,3 +118,5 @@ date,book,symbol,days_held,pl_pct,would_fire,book_used,book_max,book_full,candid
 2026-11-03,LONGTERM,SHADOWFAX,35,-1.59,1,8,20,0,3,LAURUSLABS,95.96,277.3,272.9,promote_to_portfolio,1129530
 2026-11-05,LONGTERM,AVTNPL,42,1.05,1,10,20,0,2,SHREEPUSHK,89.53,96.72,97.74,promote_to_portfolio,1127936
 2026-11-05,LONGTERM,SHADOWFAX,37,0.79,1,10,20,0,2,SHREEPUSHK,89.53,277.3,279.5,promote_to_portfolio,1129530
+2026-11-06,LONGTERM,CHENNPETRO,23,-2.31,1,19,20,0,0,,,1452.0,1418.5,promote_to_portfolio,1209526
+2026-11-06,LONGTERM,AVTNPL,43,2.88,1,19,20,0,0,,,96.72,99.51,promote_to_portfolio,1127936
