@@ -723,7 +723,13 @@ Live ideas carry `smc_evidence` (confirmation_score, tier), so Phase 2 is demons
    (`MIN_TURNOVER_CR`, `MAX_ATR_PCT`) must wait for a few sessions of the newly-plumbed seed-door
    metrics — they had zero seed-door coverage before 2026-09-13.
 
-**BLOCKED** — nothing.
+**BLOCKED** — **Telegram-vs-portfolio mismatch, reported by Gaurav, investigated 2026-10-18,
+still unresolved.** Delivery itself is healthy, and the ledger-side cause (phantom ACTIVE rows)
+is fixed by PR #237, but three `web` env values still need Gaurav to check by hand:
+`FVG_TAP_TG_CHAT` and `EQUITY_SM_TG_CHAT` (either equal to `TELEGRAM_CHAT_ID` would land those
+alerts in the main channel) and which channel `TELEGRAM_CHAT_ID` itself is — including whether
+the 2026-09-02 duplicate-Railway-project pattern has recurred. Full detail:
+[`validation/telegram-portfolio-mismatch-2026-10-18.md`](validation/telegram-portfolio-mismatch-2026-10-18.md).
 
 **Why** → `[[duplicate-railway-project-phantom-alerts]]` (why `entry_gate` was never the culprit),
 `[[two-portfolio-gates]]` (the two gates mean *opposite* things by "admission" — the single
@@ -841,8 +847,13 @@ protective, not costly.
    index setups is dormant. This is **index behaviour, not options**, and repairing it would *enable* a
    filter that has never run — it needs an explicit decision plus its own validation, so it was left
    untouched during the 2026-09-23 retirement.
-4. **Kite static IP** — owner has deliberately left it unconfigured; no API order can fill until it is set.
-5. Decide FVG-Tap's fate on soak evidence.
+4. **`get_volatility_regime` — OPEN, deliberately NOT fixed (found 2026-10-18, PR #238).**
+   `smc_mtf_engine_v4.py:4588` calls this undefined function; a bare `except Exception: vol =
+   "NORMAL"` swallows the `NameError`, so the engine's HIGH-volatility branch can never be
+   reached. Same shape as item 3 — wiring it up would change live trading behaviour, so it needs
+   Gaurav's explicit decision rather than a drive-by fix.
+5. **Kite static IP** — owner has deliberately left it unconfigured; no API order can fill until it is set.
+6. Decide FVG-Tap's fate on soak evidence.
 
 *(The former item "SRB duplicate guard" is obsolete: the SRB live path no longer exists, so a restart
 cannot replay it.)* No new engine features during the validation phase.
