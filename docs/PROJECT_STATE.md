@@ -106,7 +106,8 @@ winners from the 29 skipped losers (20d return 10.46 vs 10.38; distance below th
 −3.50 vs −3.39; the engine's own confidence *lower* on the winners, 72.5 vs 74.6), so the
 opportunity cost is unmanageable. And a credible test needs **~1,196 signals ≈ 30 months** at
 the measured ~40 closed signals/month. Frozen protocol: `docs/validation/pullback3-protocol-2026-10-17.md`
-— **not yet on `main`**; it exists only on the still-open PR #230 branch. The un-park trigger
+— **correction, 2026-10-25: merged to `main` via PR #228** (2026-10-17, commit `7030d20`), not PR
+#230 as originally written here — #230 is the unrelated lifecycle-timing fix. The un-park trigger
 below is complete on its own in the meantime.
 
 **UN-PARK TRIGGER (preserved exactly):** if the closed-SWING ledger reaches **600+ trades**
@@ -142,8 +143,10 @@ and start accumulating.**
 (rank-budget) and one underpowered inconclusive (ceiling). At the time this was written three
 PRs were open and unmerged: #227, #228 and #229. **#228 (this document) has since merged**
 (2026-10-17) — only **#227** (exceptionalism, mechanism stays disabled) and **#229**
-(stage-3 instrument) remain open. The snapshot fix is live but unexercised. Nothing else is in
-flight.
+(stage-3 instrument) remain open **as of that date**. The snapshot fix is live but unexercised.
+~~Nothing else is in flight.~~ **Correction, 2026-10-25:** PR **#239** (research/mfe-target-reach,
+opened 2026-10-18, still open and unmerged a week later) is also outstanding and was not
+accounted for above.
 
 **Next evidence triggers — the only two things that change any answer:**
 
