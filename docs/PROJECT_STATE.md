@@ -471,6 +471,11 @@ Verified against the running system, not from docs:
 | `ui-ux` | 🟡 **ACTIVE** | **Sector Rotation CLOSED 2026-09-27** (public `/sectors` + homepage widget, PRs #193–#202) · Search Phase 1 live · a11y + responsive matrix still open |
 | `platform` | 🔵 **largest unstarted** | Commercial launch gates: payments, legal, monitoring, backups |
 
+> **Freshness check, 2026-11-15:** no commit has touched any application path since `a06518c`
+> (2026-10-18 20:26 IST, PR #238) — four weeks of nothing but the daily `chore(shadow)` /
+> `chore(signals)` bot commits. The ACTIVE/steady labels above, and every workstream's NEXT
+> list, predate that gap. Confirm current state before treating any NEXT item as in-progress.
+
 ---
 
 ## `seo` — ACTIVE
