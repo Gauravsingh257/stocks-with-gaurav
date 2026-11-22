@@ -6,11 +6,18 @@ import json
 import sqlite3
 
 from scripts.exceptionalism_calibration import (
-    ShadowRow, attach_forward_returns, bucket_by_exceptionalism, build_report,
-    false_positive_rate, legacy_vs_exceptionalism, load_shadow_rows,
-    metrics_for, optimal_threshold, render_markdown, threshold_sweep,
+    ShadowRow,
+    attach_forward_returns,
+    bucket_by_exceptionalism,
+    build_report,
+    false_positive_rate,
+    legacy_vs_exceptionalism,
+    load_shadow_rows,
+    metrics_for,
+    optimal_threshold,
+    render_markdown,
+    threshold_sweep,
 )
-
 
 # ── metrics math ──────────────────────────────────────────────────────────────
 
@@ -135,3 +142,54 @@ def test_build_report_renders_with_data():
     md = render_markdown(build_report(rows))
     assert "Exceptionalism Calibration Report" in md
     assert "5-Day Forward Horizon" in md
+
+
+def test_attach_forward_returns_from_snapshot_book_reports_coverage():
+    """The snapshot path must price identically AND report survivorship.
+
+    The fetcher path cannot report survivorship (a fetcher answers for any
+    symbol), so coverage is returned only for a book. This is the path the CLI
+    now defaults to: the query has no LIMIT, so a per-symbol fetcher would mean
+    tens of thousands of network calls.
+    """
+    from services.forward_eval import PriceBook
+
+    bars = [{"date": f"2026-01-{d:02d}", "high": c, "low": c, "close": c}
+            for d, c in enumerate([100, 101, 104, 103, 105, 110], start=1)]
+    book = PriceBook.from_mapping({"AAA": bars})
+
+    rows = [
+        ShadowRow("S", "AAA", "2026-01-01", 100.0, True, 85, 78, True, 40, "leading"),
+        ShadowRow("S", "GONE", "2026-01-01", 50.0, False, 55, 78, False, 40, "neutral"),
+    ]
+    cov = attach_forward_returns(rows, book=book, horizons=(5,))
+
+    assert rows[0].forward[5]["ret"] == 10.0          # 100 -> 110
+    assert 5 not in rows[1].forward                   # absent symbol, never guessed
+    c = cov.to_dict()
+    assert c["total"] == 2
+    assert c["priced"] == 1
+    assert c["no_series"] == 1
+
+
+def test_attach_forward_returns_matches_between_book_and_fetcher():
+    """Same arithmetic whichever source — the point of one shared evaluator."""
+    from services.forward_eval import PriceBook
+
+    bars = [{"date": f"2026-01-{d:02d}", "high": c + 1, "low": c - 2, "close": c}
+            for d, c in enumerate([200, 202, 198, 205, 210, 220], start=1)]
+
+    def mk():
+        return [ShadowRow("S", "BBB", "2026-01-01", 200.0, True, 85, 78, True, 40, "leading")]
+
+    via_book, via_fetch = mk(), mk()
+    attach_forward_returns(via_book, book=PriceBook.from_mapping({"BBB": bars}), horizons=(5,))
+    attach_forward_returns(via_fetch, lambda s, d: bars, horizons=(5,))
+    assert via_book[0].forward == via_fetch[0].forward
+
+
+def test_attach_forward_returns_requires_a_source():
+    import pytest
+
+    with pytest.raises(ValueError):
+        attach_forward_returns([], horizons=(5,))
